@@ -25,12 +25,12 @@ const links = [
 
 <template>
   <header
-    class="fixed inset-x-0 top-0 z-50 transition-all duration-500"
-    :class="scrolled ? 'py-2' : 'py-4'"
+    class="fixed inset-x-0 top-0 z-50 py-3 md:transition-[padding] md:duration-500"
+    :class="scrolled ? 'md:py-2' : 'md:py-4'"
   >
     <div class="relative mx-auto max-w-6xl px-4" @keydown.esc="closeMenu">
       <nav
-        class="flex items-center justify-between rounded-full px-4 py-2 transition-all duration-500"
+        class="flex items-center justify-between rounded-full px-4 py-2 md:transition-all md:duration-500"
         :class="scrolled ? 'glass shadow-[0_10px_40px_-20px_rgba(0,0,0,.8)]' : 'border border-transparent'"
       >
         <RouterLink to="/" class="flex items-center gap-2.5 font-semibold tracking-tight">

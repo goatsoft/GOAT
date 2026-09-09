@@ -109,6 +109,10 @@
   ::selection { background: color-mix(in oklab, var(--goat-accent) 40%, transparent); }
 }
 
+@media (hover: none), (pointer: coarse) {
+  html { scroll-behavior: auto; }
+}
+
 @utility text-balance { text-wrap: balance; }
 @utility text-pretty { text-wrap: pretty; }
 
