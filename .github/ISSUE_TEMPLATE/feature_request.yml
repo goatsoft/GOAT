@@ -1,0 +1,30 @@
+name: 🌱 Feature request
+description: An idea to make GOAT greater
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What's the itch?
+      description: The problem or gap you're hitting. What are you trying to do?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Your idea
+      description: How might GOAT solve it? Sketches, flows, or rough thoughts all welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you've considered
+  - type: checkboxes
+    id: pillars
+    attributes:
+      label: Fits the pillars?
+      description: GOAT is local-first. Nothing leaves the herd. (See the README pillars.)
+      options:
+        - label: This keeps GOAT local-first (no telemetry, no required cloud).
+          required: true

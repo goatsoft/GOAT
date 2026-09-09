@@ -1,0 +1,4 @@
+- Preserve existing components and conventions.
+- Use explicit props and event types where useful.
+- Label Vue single-file component fences as vue and TypeScript fences as ts.
+- Validate changes with the project's own checks when tools and authorization permit.

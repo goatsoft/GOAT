@@ -1,0 +1,143 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: goat-release
+  cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: apps/goat-macos
+
+jobs:
+  verify:
+    if: >-
+      github.repository == 'goatsoft/GOAT' &&
+      vars.GOAT_RELEASE_SIGNING_ENABLED == 'true' &&
+      github.actor == vars.GOAT_RELEASE_OWNER &&
+      github.triggering_actor == vars.GOAT_RELEASE_OWNER
+    runs-on: macos-26
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_CHANNEL: Release
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate source, tag, candidate progression and host
+        run: |
+          python3 scripts/check-release-host.py
+          python3 scripts/release-metadata.py check --channel Release --tag "$RELEASE_TAG"
+          python3 scripts/check-distribution-history.py
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Verify tagged source without release credentials
+        run: make verify CONFIG=Release SWIFT_FLAGS='-c release' RELEASE_CHANNEL=Release CODE_SIGN_IDENTITY=-
+      - name: Verify website and docs
+        working-directory: web
+        run: |
+          npm ci
+          npm run test:unit
+          npm run build:all
+          npm run check:content
+
+  release:
+    needs: verify
+    runs-on: macos-26
+    # Configure this environment with the owner's required approval before enabling releases.
+    environment: release-signing
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_CHANNEL: Release
+      RELEASE_TAG: ${{ github.ref_name }}
+      CODE_SIGN_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+      DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate signing configuration
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: python3 scripts/check-release-signing.py
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install notice verification dependencies
+        working-directory: web
+        run: npm ci --ignore-scripts
+      - name: Import approved signing certificate
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          GOAT_KEYCHAIN="$RUNNER_TEMP/goat.keychain-db"
+          security create-keychain -p "" "$GOAT_KEYCHAIN"
+          security set-keychain-settings "$GOAT_KEYCHAIN"
+          security unlock-keychain -p "" "$GOAT_KEYCHAIN"
+          printf '%s' "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$GOAT_KEYCHAIN" \
+            -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security list-keychains -d user -s "$GOAT_KEYCHAIN" "$HOME/Library/Keychains/login.keychain-db"
+          security set-key-partition-list -S apple-tool:,apple: -k "" "$GOAT_KEYCHAIN"
+          rm "$RUNNER_TEMP/cert.p12"
+      - name: Build and inspect release DMG
+        run: make dmg RELEASE_CHANNEL=Release CODE_SIGN_IDENTITY="$CODE_SIGN_IDENTITY" DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM"
+      - name: Verify publisher identity and hardened runtime
+        run: |
+          python3 scripts/check-release-signing.py --verify .build/DerivedData/Build/Products/Release/GOAT.app
+          python3 scripts/check-release-signing.py --verify Modules/.build/release/goat
+      - name: Notarize and staple official release
+        env:
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          VERSION="$(python3 -c 'import json; print(json.load(open("release.json"))["version"])')"
+          DMG="dist/GOAT-$VERSION.dmg" ./scripts/notarize.sh
+      - name: Record final artifact checksums
+        run: |
+          VERSION="$(python3 -c 'import json; print(json.load(open("release.json"))["version"])')"
+          python3 scripts/release-metadata.py manifest --channel Release --tag "$RELEASE_TAG" \
+            --app .build/DerivedData/Build/Products/Release/GOAT.app \
+            --dmg "dist/GOAT-$VERSION.dmg" --cli Modules/.build/release/goat --output dist/release-metadata.json
+          cd dist
+          shasum -a 256 "GOAT-$VERSION.dmg" release-metadata.json > SHA256SUMS.txt
+      - name: Create draft without replacing an existing release
+        run: |
+          python3 scripts/check-distribution-history.py
+          VERSION="$(python3 -c 'import json; print(json.load(open("release.json"))["version"])')"
+          LABEL="$(python3 -c 'import json; print(json.load(open("dist/release-metadata.json"))["label"])')"
+          gh release create "$RELEASE_TAG" --verify-tag --draft --generate-notes --title "GOAT $LABEL" \
+            "dist/GOAT-$VERSION.dmg" dist/SHA256SUMS.txt dist/release-metadata.json
+      - name: Remove temporary signing keychain
+        if: ${{ always() }}
+        run: |
+          rm -f "$RUNNER_TEMP/cert.p12"
+          if [ -f "$RUNNER_TEMP/goat.keychain-db" ]; then
+            security delete-keychain "$RUNNER_TEMP/goat.keychain-db"
+          fi

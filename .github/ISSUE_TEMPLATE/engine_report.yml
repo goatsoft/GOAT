@@ -1,0 +1,41 @@
+name: 🔌 Engine compatibility report
+description: Tell us how GOAT worked (or didn't) with a local engine
+labels: ["engine"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        GOAT speaks the OpenAI chat-completions dialect and should work with any local server
+        that does. This report feeds the scoreboard in [docs/ENGINES.md](../blob/main/docs/ENGINES.md).
+  - type: input
+    id: server
+    attributes:
+      label: Engine / server
+      placeholder: LM Studio 0.3.x · llama.cpp server · vLLM · mlx-lm …
+    validations:
+      required: true
+  - type: dropdown
+    id: result
+    attributes:
+      label: Did it work?
+      options:
+        - Fully (chat, streaming, everything I tried)
+        - Mostly, with caveats (note below)
+        - No, couldn't connect or generate
+    validations:
+      required: true
+  - type: checkboxes
+    id: features
+    attributes:
+      label: Features verified
+      options:
+        - label: Streaming chat
+        - label: Thinking (reasoning) display
+        - label: Tool calls (MCP)
+        - label: Vision (image input)
+        - label: Exact token stats (server reported usage)
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Endpoint shape, quirks, error messages, anything that would help the next person.

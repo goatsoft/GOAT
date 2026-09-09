@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Public preview guide
+    url: https://goatherd.dev/PUBLIC-PREVIEW
+    about: What to try, current limitations and where to send feedback.
+  - name: Documentation
+    url: https://goatherd.dev
+    about: Getting started, engine compatibility, architecture.

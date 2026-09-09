@@ -1,0 +1,334 @@
+/*
+  GOAT docs theme: Caprine tokens (ThemeCatalog.swift) mapped onto VitePress variables.
+  Light = the app's "Light" theme, dark = "Midnight". Surfaces go glassy so the aurora
+  behind the page shows through. Motion is small and stops under reduced-motion.
+*/
+
+/* ---------- tokens ---------- */
+:root {
+  --goat-bg: #f5f6fa;
+  --goat-surface: #ffffff;
+  --goat-ink: #1a1c26;
+  --goat-muted: #646b7e;
+  --goat-accent: #2563c8;
+  --goat-accent2: #7542cb;
+  --goat-glow: #7542cb;
+  --goat-glass: 78%;
+}
+.dark {
+  --goat-bg: #0a0b14;
+  --goat-surface: #151726;
+  --goat-ink: #e9ecf5;
+  --goat-muted: #8e95a8;
+  --goat-accent: #3aa0ff;
+  --goat-accent2: #b44bff;
+  --goat-glow: #7a5cff;
+  --goat-glass: 66%;
+}
+
+:root, .dark {
+  --vp-font-family-base: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Inter", "Segoe UI", system-ui, sans-serif;
+  --vp-font-family-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+
+  --vp-c-bg: var(--goat-bg);
+  --vp-c-bg-alt: color-mix(in oklab, var(--goat-surface) 60%, var(--goat-bg));
+  --vp-c-bg-elv: var(--goat-surface);
+  --vp-c-bg-soft: color-mix(in oklab, var(--goat-surface) 70%, var(--goat-bg));
+
+  --vp-c-text-1: var(--goat-ink);
+  --vp-c-text-2: color-mix(in oklab, var(--goat-ink) 70%, var(--goat-muted));
+  --vp-c-text-3: var(--goat-muted);
+
+  --vp-c-brand-1: var(--goat-accent);
+  --vp-c-brand-2: color-mix(in oklab, var(--goat-accent) 80%, var(--goat-accent2));
+  --vp-c-brand-3: color-mix(in oklab, var(--goat-accent) 60%, var(--goat-accent2));
+  --vp-c-brand-soft: color-mix(in oklab, var(--goat-accent) 16%, transparent);
+
+  --vp-c-border: color-mix(in oklab, var(--goat-muted) 22%, transparent);
+  --vp-c-divider: color-mix(in oklab, var(--goat-muted) 16%, transparent);
+  --vp-c-gutter: color-mix(in oklab, var(--goat-muted) 12%, transparent);
+
+  --vp-c-tip-1: var(--goat-accent);
+  --vp-c-tip-soft: var(--vp-c-brand-soft);
+
+  --vp-button-brand-bg: var(--goat-accent);
+  --vp-button-brand-hover-bg: var(--vp-c-brand-2);
+  --vp-button-brand-active-bg: var(--vp-c-brand-3);
+  --vp-button-brand-text: #ffffff;
+  --vp-button-brand-hover-text: #ffffff;
+  --vp-button-brand-active-text: #ffffff;
+  --vp-button-alt-bg: color-mix(in oklab, var(--goat-surface) 60%, transparent);
+  --vp-button-alt-hover-bg: color-mix(in oklab, var(--goat-surface) 90%, transparent);
+  --vp-button-alt-border: var(--vp-c-border);
+  --vp-button-alt-hover-border: color-mix(in oklab, var(--goat-accent) 50%, transparent);
+
+  /* glass: nav, sidebar and local nav let the aurora bleed through */
+  --vp-nav-bg-color: color-mix(in oklab, var(--goat-bg) var(--goat-glass), transparent);
+  --vp-sidebar-bg-color: color-mix(in oklab, var(--goat-bg) var(--goat-glass), transparent);
+  --vp-local-nav-bg-color: var(--vp-nav-bg-color);
+  --vp-local-search-bg: var(--goat-surface);
+  --vp-local-search-result-selected-bg: var(--vp-c-brand-soft);
+
+  --vp-code-block-bg: color-mix(in oklab, var(--goat-surface) 80%, var(--goat-bg));
+  --vp-code-tab-bg: var(--vp-code-block-bg);
+  --vp-custom-block-tip-bg: var(--vp-c-brand-soft);
+}
+.dark {
+  /* Midnight's accent is bright enough to carry dark text; Light's is not. */
+  --vp-button-brand-text: #05070f;
+  --vp-button-brand-hover-text: #05070f;
+  --vp-button-brand-active-text: #05070f;
+  --vp-code-block-bg: #10121f;
+}
+
+/* ---------- aurora plumbing ---------- */
+/* AuroraCanvas is written against Tailwind utilities; the handful it needs, scoped here. */
+.goat-aurora { pointer-events: none; overflow: hidden; }
+.goat-aurora.goat-aurora-page { position: fixed; inset: 0; z-index: -1; }
+.goat-aurora > .absolute { position: absolute; inset: 0; }
+.goat-aurora > canvas { display: block; width: 100%; height: 100%; }
+.goat-aurora > canvas.hidden { display: none; }
+.goat-aurora:not(.goat-aurora-page) { position: absolute; inset: 0; }
+
+/* Surfaces that must not paint over the page aurora. */
+.Layout, .VPContent, .VPHome, .VPDoc, .VPFooter { background: transparent !important; }
+.VPNav .divider-line, .VPNavBar.has-sidebar .content-body { background: transparent !important; }
+.VPNavBar:not(.home) .content-body { background: transparent !important; }
+.VPNavBar { backdrop-filter: saturate(160%) blur(18px); -webkit-backdrop-filter: saturate(160%) blur(18px); }
+/* Home, at the top: fully transparent so the hero art runs under the nav. */
+.VPNavBar.home.top { background: transparent !important; backdrop-filter: none; -webkit-backdrop-filter: none; }
+.VPNavBar.home.top .content-body { background: transparent !important; }
+.VPNavBar.home.top .divider-line { background: transparent !important; }
+.VPSidebar { backdrop-filter: saturate(160%) blur(18px); -webkit-backdrop-filter: saturate(160%) blur(18px); }
+.VPLocalNav { backdrop-filter: saturate(160%) blur(18px); -webkit-backdrop-filter: saturate(160%) blur(18px); }
+.VPFooter { border-top: 1px solid var(--vp-c-divider); }
+
+/* ---------- home hero (GoatHero.vue) ---------- */
+/* The landing page's hero, condensed: art + aurora behind, masked so it dissolves into
+   the page; masthead left, copy right. */
+.goat-hero { position: relative; isolation: isolate; padding: 56px 24px 24px; }
+/* Midnight art runs up under the (transparent) nav and dissolves into the page. */
+.goat-hero-bg {
+  position: absolute; inset: -64px 0 0 0; z-index: -2; pointer-events: none; overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 45%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 45%, transparent 100%);
+}
+.goat-hero-art {
+  position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: 50% 40%;
+  /* The art's aurora "horns" sit right of its centre; nudge so they land mid-viewport. */
+  /* scale covers the shift: right edge stays off-screen (100 - 7.5 + 10 > 100). */
+  transform: translateX(-7.5%) scale(1.2); transform-origin: center;
+  opacity: .7;
+}
+/* Light: the night art doesn't belong; a soft daylight wash in the Light theme's accents instead. */
+:root:not(.dark) .goat-hero-art { display: none; }
+:root:not(.dark) .goat-hero-bg {
+  background:
+    radial-gradient(60% 70% at 50% 0%, color-mix(in oklab, var(--goat-accent) 22%, transparent), transparent 70%),
+    radial-gradient(45% 55% at 18% 45%, color-mix(in oklab, var(--goat-accent2) 16%, transparent), transparent 70%),
+    radial-gradient(45% 55% at 82% 40%, color-mix(in oklab, var(--goat-accent) 14%, transparent), transparent 70%);
+}
+:root:not(.dark) .goat-hero-title { text-shadow: none; }
+/* Light: the masthead's night-time shadow stack and glow are far too heavy on a pale ground. */
+:root:not(.dark) .masthead .mark { filter: drop-shadow(0 8px 14px rgba(26, 28, 38, .22)) drop-shadow(0 0 18px color-mix(in oklab, var(--goat-glow) 25%, transparent)) !important; }
+:root:not(.dark) .masthead .glow { opacity: .35 !important; filter: blur(30px); }
+/* Light: the aurora tints the page instead of glowing on it. */
+:root:not(.dark) .goat-hero-clouds { mix-blend-mode: multiply; opacity: .55; }
+:root:not(.dark) .goat-aurora-page { mix-blend-mode: multiply; opacity: .6; }
+/* The aurora sits low: it starts under the copy, peaks at the hero's foot and spills
+   into the page, so the masthead and title stay clear of it. */
+.goat-hero-clouds {
+  position: absolute; left: 0; right: 0; top: 55%; height: 130%; z-index: -1; pointer-events: none;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 35%, #000 60%, transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0%, #000 35%, #000 60%, transparent 100%);
+}
+.goat-hero-clouds .goat-aurora { position: absolute; inset: 0; }
+.goat-hero-inner {
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px 40px; align-items: center;
+  max-width: 1152px; margin: 0 auto; text-align: center;
+}
+.goat-hero-mark { width: 240px; height: 240px; margin: 0 auto -32px; }
+@media (min-width: 768px) {
+  .goat-hero { padding-top: 40px; }
+  .goat-hero-inner { grid-template-columns: 300px minmax(0, 1fr); text-align: left; }
+  .goat-hero-mark { width: 300px; height: 300px; margin: 0 0 0 -24px; }
+}
+.goat-hero-title {
+  font-size: clamp(36px, 5vw, 56px); line-height: 1.04; letter-spacing: -0.035em; font-weight: 600;
+  margin: 0; text-shadow: 0 2px 30px rgba(0,0,0,.5);
+}
+.goat-hero-accent {
+  background-image: linear-gradient(100deg, var(--goat-ink) 0%, var(--goat-accent) 45%, var(--goat-accent2) 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.goat-hero-tagline { margin: 16px 0 0; font-size: 18px; line-height: 1.5; color: var(--vp-c-text-2); max-width: 36rem; text-wrap: pretty; }
+.goat-hero-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
+@media (max-width: 767px) { .goat-hero-actions { justify-content: center; } .goat-hero-tagline { margin-inline: auto; } }
+/* VPButton's CSS is scoped to its component, so the hero carries its own. */
+.goat-btn {
+  display: inline-flex; align-items: center; height: 40px; padding: 0 20px; border-radius: 999px;
+  font-size: 14px; font-weight: 600; text-decoration: none; border: 1px solid transparent;
+  transition: background .25s, border-color .25s, transform .25s, color .25s;
+}
+.goat-btn:hover { transform: translateY(-1px); }
+.goat-btn.brand {
+  position: relative; z-index: 1; overflow: hidden; color: #fff;
+  background: linear-gradient(110deg, var(--goat-accent), var(--goat-glow) 55%, var(--goat-accent2));
+  background-size: 200% 100%; background-position: left;
+  box-shadow: 0 10px 40px -10px color-mix(in oklab, var(--goat-glow) 80%, transparent);
+  transition: background-position .5s, box-shadow .5s, transform .25s;
+}
+.goat-btn.brand:hover { background-position: right; }
+
+/* The landing site's DownloadButton ring, ported (web/src/components/site/DownloadButton.vue):
+   a rotating conic ring, a blurred glow behind it, and a shimmer sweep across the label. */
+.goat-ring-cta { position: relative; display: inline-flex; padding: 1px; border-radius: 999px; }
+@property --goat-ring-a { syntax: "<angle>"; inherits: false; initial-value: 0deg; }
+.goat-ring-cta::before, .goat-ring-cta::after {
+  content: ""; position: absolute; border-radius: 999px;
+  animation: goat-ring-spin 4s linear infinite;
+}
+.goat-ring-cta::before {
+  inset: -2px;
+  background: conic-gradient(from var(--goat-ring-a, 0deg), rgba(58,160,255,0) 0%, #7cc4ff 25%, #e08cff 50%, #7a5cff 65%, rgba(58,160,255,0) 100%);
+}
+.goat-ring-cta::after {
+  inset: -8px; filter: blur(14px); opacity: .6;
+  background: conic-gradient(from var(--goat-ring-a, 0deg), transparent 0%, #3aa0ff 25%, #b44bff 50%, transparent 100%);
+}
+:root:not(.dark) .goat-ring-cta::after { opacity: .45; }
+@keyframes goat-ring-spin { to { --goat-ring-a: 360deg; } }
+.goat-shimmer {
+  position: absolute; inset: 0; border-radius: 999px; pointer-events: none;
+  background: linear-gradient(110deg, transparent 30%, rgba(255,255,255,.18) 50%, transparent 70%);
+  background-size: 250% 100%;
+  animation: goat-shimmer 3.2s ease-in-out infinite;
+}
+@keyframes goat-shimmer { from { background-position: 120% 0; } to { background-position: -120% 0; } }
+.goat-btn.alt {
+  background: var(--vp-button-alt-bg); color: var(--vp-c-text-1); border-color: var(--vp-button-alt-border);
+  backdrop-filter: saturate(160%) blur(18px); -webkit-backdrop-filter: saturate(160%) blur(18px);
+}
+.goat-btn.alt:hover { background: var(--vp-button-alt-hover-bg); border-color: var(--vp-button-alt-hover-border); }
+
+/* Glossary page: the Aliases / See lines under each definition. */
+.vp-doc p.goat-gloss-meta { margin-top: 4px; font-size: 13px; color: var(--vp-c-text-3); }
+.vp-doc p.goat-gloss-meta + p.goat-gloss-meta { margin-top: 0; }
+
+/* Masthead.vue is written against Tailwind; the utilities it needs. */
+.masthead { position: relative; display: grid; place-items: center; width: 100%; height: 100%; }
+.masthead .mark { position: relative; width: 100%; height: 100%; }
+
+/* Home content sits flush under the hero. */
+.VPHome .VPHomeContent { padding-top: 8px; }
+
+/* ---------- identity ---------- */
+/* Wordmark cycles blue → violet, same as the landing site. */
+.VPNavBarTitle .title span {
+  background-image: linear-gradient(95deg, #7cc4ff 0%, var(--goat-accent) 20%, var(--goat-accent2) 50%, var(--goat-accent) 80%, #7cc4ff 100%);
+  background-size: 300% 100%;
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  font-weight: 700; letter-spacing: -0.02em;
+  animation: goat-brand-cycle 14s linear infinite;
+}
+.VPNavBarTitle .logo { filter: drop-shadow(0 4px 14px color-mix(in oklab, var(--goat-glow) 55%, transparent)); }
+
+.goat-release {
+  margin-left: 10px; padding: 2px 8px; border-radius: 999px;
+  font: 600 11px/1.6 var(--vp-font-family-mono);
+  color: var(--vp-c-brand-1); background: var(--vp-c-brand-soft);
+  border: 1px solid color-mix(in oklab, var(--goat-accent) 30%, transparent);
+  text-decoration: none; white-space: nowrap;
+  transition: background .2s, transform .2s;
+}
+.goat-release:hover { background: color-mix(in oklab, var(--goat-accent) 28%, transparent); transform: translateY(-1px); }
+
+/* Home.md's own H1 duplicates the hero; the wiki still needs it on GitHub. */
+.VPHomeContent h1:first-child { display: none; }
+
+/* Page title takes the aurora gradient. */
+.vp-doc h1 {
+  background-image: linear-gradient(100deg, var(--goat-ink) 0%, var(--goat-accent) 60%, var(--goat-accent2) 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  letter-spacing: -0.03em;
+}
+.vp-doc h2 { letter-spacing: -0.02em; border-top-color: var(--vp-c-divider); }
+
+/* Wiki links get a hairline so the [[Page]] family reads as internal. */
+.vp-doc a.wikilink { text-decoration-color: color-mix(in oklab, var(--goat-accent2) 55%, transparent); }
+
+/* Cards on the home page and custom blocks go glassy. */
+.VPFeature, .vp-doc .custom-block {
+  background: color-mix(in oklab, var(--goat-surface) 72%, transparent) !important;
+  backdrop-filter: saturate(160%) blur(18px); -webkit-backdrop-filter: saturate(160%) blur(18px);
+  border: 1px solid var(--vp-c-border);
+}
+.VPFeature { transition: transform .35s cubic-bezier(.22,1,.36,1), border-color .35s; }
+.VPFeature:hover { transform: translateY(-3px); border-color: color-mix(in oklab, var(--goat-accent) 45%, transparent); }
+
+/* ---------- details / summary (FAQ) ---------- */
+/* Glass cards with a chevron; the answer fades in. Plain <details> in any page gets this. */
+.vp-doc details {
+  margin: 12px 0; padding: 0; border-radius: 14px;
+  background: color-mix(in oklab, var(--goat-surface) 72%, transparent);
+  backdrop-filter: saturate(160%) blur(18px); -webkit-backdrop-filter: saturate(160%) blur(18px);
+  border: 1px solid var(--vp-c-border);
+  transition: border-color .3s, box-shadow .3s, transform .3s cubic-bezier(.22,1,.36,1);
+}
+.vp-doc details:hover { border-color: color-mix(in oklab, var(--goat-accent) 40%, transparent); }
+.vp-doc details[open] {
+  border-color: color-mix(in oklab, var(--goat-accent) 45%, transparent);
+  box-shadow: 0 12px 40px -24px color-mix(in oklab, var(--goat-glow) 70%, transparent);
+}
+.vp-doc details > summary {
+  position: relative; list-style: none; cursor: pointer; user-select: none;
+  padding: 14px 48px 14px 18px; margin: 0;
+  font-weight: 600; font-size: 15px; line-height: 1.45; color: var(--vp-c-text-1);
+  transition: color .2s;
+}
+.vp-doc details > summary::-webkit-details-marker { display: none; }
+.vp-doc details > summary::after {
+  content: ""; position: absolute; right: 18px; top: 50%;
+  width: 8px; height: 8px; margin-top: -6px;
+  border-right: 2px solid var(--vp-c-text-3); border-bottom: 2px solid var(--vp-c-text-3);
+  transform: rotate(45deg); transition: transform .3s cubic-bezier(.22,1,.36,1), border-color .2s;
+}
+.vp-doc details:hover > summary, .vp-doc details[open] > summary { color: var(--vp-c-brand-1); }
+.vp-doc details:hover > summary::after, .vp-doc details[open] > summary::after { border-color: var(--vp-c-brand-1); }
+.vp-doc details[open] > summary::after { transform: rotate(-135deg); margin-top: -2px; }
+.vp-doc details > summary:focus-visible { outline: 2px solid var(--vp-c-brand-1); outline-offset: -2px; border-radius: 14px; }
+.vp-doc details > :not(summary) { margin-left: 18px; margin-right: 18px; }
+.vp-doc details > summary + * { margin-top: 0; padding-top: 2px; }
+.vp-doc details > :last-child { margin-bottom: 0; padding-bottom: 16px; }
+.vp-doc details[open] > :not(summary) { animation: goat-reveal .45s cubic-bezier(.22,1,.36,1) both; }
+.vp-doc details p { color: var(--vp-c-text-2); }
+.vp-doc details p:last-child { margin-bottom: 0; }
+/* The custom-block rule above would double-glass a details inside a tip; keep it flat there. */
+.vp-doc .custom-block details { background: transparent; backdrop-filter: none; -webkit-backdrop-filter: none; }
+
+/* ADR list component */
+.goat-adrs { list-style: none; padding: 0; margin: 16px 0; }
+.goat-adrs li { display: flex; align-items: baseline; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--vp-c-divider); }
+.goat-adrs a { flex: 1; display: flex; gap: 12px; text-decoration: none; color: var(--vp-c-text-1); }
+.goat-adrs a:hover .goat-adrs-title { color: var(--vp-c-brand-1); }
+.goat-adrs-id { font-family: var(--vp-font-family-mono); font-size: 12px; color: var(--vp-c-text-3); }
+.goat-adrs-status { font-size: 12px; color: var(--vp-c-text-3); white-space: nowrap; }
+.goat-adrs-status[data-status="accepted"] { color: var(--vp-c-brand-1); }
+.goat-adrs-status[data-status="superseded"] { text-decoration: line-through; }
+
+/* ---------- motion ---------- */
+.goat-entering .vp-doc { animation: goat-reveal .7s cubic-bezier(.22,1,.36,1) both; }
+.VPSidebarItem .text, .VPNavBarMenuLink { transition: color .2s, transform .2s; }
+.VPSidebarItem.is-active > .item .text { text-shadow: 0 0 18px color-mix(in oklab, var(--goat-accent) 45%, transparent); }
+
+@keyframes goat-reveal {
+  from { opacity: 0; transform: translateY(14px); filter: blur(6px); }
+  to   { opacity: 1; transform: none; filter: blur(0); }
+}
+@keyframes goat-brand-cycle { from { background-position: 0% 50%; } to { background-position: 300% 50%; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .VPNavBarTitle .title span, .goat-entering .vp-doc, .masthead .glow,
+  .goat-ring-cta::before, .goat-ring-cta::after, .goat-shimmer { animation: none !important; }
+  .VPFeature, .goat-release { transition: none; }
+}

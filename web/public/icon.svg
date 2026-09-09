@@ -1,0 +1,39 @@
+<svg aria-labelledby="title desc" role="img" version="1.1" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+ <title>GOAT glass horns</title>
+ <desc>Transparent cyan, blue, violet and magenta glass goat horns.</desc>
+ <defs>
+  <linearGradient id="rim" x1="86" x2="938" gradientUnits="userSpaceOnUse">
+   <stop stop-color="#23e8ff" offset="0"/>
+   <stop stop-color="#159bff" offset=".22"/>
+   <stop stop-color="#3048ef" offset=".48"/>
+   <stop stop-color="#9142ee" offset=".75"/>
+   <stop stop-color="#ff3eea" offset="1"/>
+  </linearGradient>
+  <linearGradient id="glass" x1="105" x2="925" y1="250" y2="720" gradientUnits="userSpaceOnUse">
+   <stop stop-color="#159cff" stop-opacity=".96" offset="0"/>
+   <stop stop-color="#0751c9" stop-opacity=".92" offset=".28"/>
+   <stop stop-color="#111f7a" stop-opacity=".98" offset=".5"/>
+   <stop stop-color="#5620af" stop-opacity=".94" offset=".72"/>
+   <stop stop-color="#d02be4" stop-opacity=".96" offset="1"/>
+  </linearGradient>
+  <linearGradient id="sheen" x1="160" x2="866" y1="270" y2="690" gradientUnits="userSpaceOnUse">
+   <stop stop-color="#e9fdff" stop-opacity=".9" offset="0"/>
+   <stop stop-color="#6deeff" stop-opacity=".54" offset=".18"/>
+   <stop stop-color="#9cb2ff" stop-opacity=".18" offset=".48"/>
+   <stop stop-color="#f8b5ff" stop-opacity=".48" offset=".78"/>
+   <stop stop-color="#fff0ff" stop-opacity=".92" offset="1"/>
+  </linearGradient>
+  <filter id="glow" x="-.15637" y="-.26066" width="1.3127" height="1.5252" color-interpolation-filters="sRGB">
+   <feGaussianBlur stdDeviation="19"/>
+  </filter>
+  <linearGradient id="linearGradient21" x1="86" x2="938" gradientUnits="userSpaceOnUse" xlink:href="#rim"/>
+ </defs>
+ <g transform="matrix(.94616 0 0 .94616 27.565 24.947)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path d="m172 616c-79-46-95-168-39-258 58-93 181-115 264-41 69 62 77 195 96 376 3 31 12 51 19 62 7-11 16-31 19-62 19-181 27-314 96-376 83-74 206-52 264 41 56 90 40 212-39 258" filter="url(#glow)" opacity=".55" stroke="url(#rim)" stroke-width="164" style="stroke:url(#linearGradient21)"/>
+  <path d="m172 616c-79-46-95-168-39-258 58-93 181-115 264-41 69 62 77 195 96 376 3 31 12 51 19 62 7-11 16-31 19-62 19-181 27-314 96-376 83-74 206-52 264 41 56 90 40 212-39 258" stroke="url(#rim)" stroke-width="142" style="stroke:url(#linearGradient21)"/>
+  <path d="m172 616c-79-46-95-168-39-258 58-93 181-115 264-41 69 62 77 195 96 376 3 31 12 51 19 62 7-11 16-31 19-62 19-181 27-314 96-376 83-74 206-52 264 41 56 90 40 212-39 258" opacity=".96" stroke="#060a26" stroke-width="126"/>
+  <path d="m172 616c-79-46-95-168-39-258 58-93 181-115 264-41 69 62 77 195 96 376 3 31 12 51 19 62 7-11 16-31 19-62 19-181 27-314 96-376 83-74 206-52 264 41 56 90 40 212-39 258" stroke="url(#glass)" stroke-width="112" style="stroke:url(#glass)"/>
+  <path d="m172 616c-79-46-95-168-39-258 58-93 181-115 264-41 69 62 77 195 96 376 3 31 12 51 19 62 7-11 16-31 19-62 19-181 27-314 96-376 83-74 206-52 264 41 56 90 40 212-39 258" opacity=".82" stroke="url(#sheen)" stroke-width="18" style="stroke:url(#sheen)"/>
+  <path d="m184 593c-64-52-73-142-28-212 51-79 151-91 215-35m282 0c64-56 164-44 215 35 45 70 36 160-28 212" opacity=".72" stroke="#ffffff" stroke-width="7"/>
+ </g>
+</svg>

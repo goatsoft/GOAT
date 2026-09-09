@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>GOATCodename</key>
+	<string>$(GOAT_CODENAME)</string>
+	<key>GOATReleaseChannel</key>
+	<string>$(GOAT_RELEASE_CHANNEL)</string>
+	<key>GOATSourceCommit</key>
+	<string>$(GOAT_SOURCE_COMMIT)</string>
+	<key>GOATSourceDirty</key>
+	<string>$(GOAT_SOURCE_DIRTY)</string>
+	<key>GOATSourceTreeSHA256</key>
+	<string>$(GOAT_SOURCE_TREE_SHA256)</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSHumanReadableCopyright</key>
+	<string>GOAT. Private by design.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>GOAT connects to the AI engines, MCP tools and Hindsight memory servers you configure on your local network, including Thunderbolt. It does not scan your network or send telemetry.</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.zip-archive</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>GOATed Package</string>
+			<key>UTTypeIdentifier</key>
+			<string>dev.leet.goat.package</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>goated</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
+</dict>
+</plist>

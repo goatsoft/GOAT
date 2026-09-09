@@ -1,0 +1,206 @@
+{
+  "modules": [
+    {
+      "name": "Bleet",
+      "dependencies": [
+        "Inference",
+        "Persistence"
+      ],
+      "summary": "Observable session and transcript state with incremental live metrics.",
+      "interfaces": "ChatSession, ChatMessage, LiveGenerationMetrics",
+      "security": "No transport or tool execution; streamed display state is coalesced by Shepherd.",
+      "validation": "ComposerStatusTests, ShepherdModelTests, persistence host tests."
+    },
+    {
+      "name": "Caprine",
+      "dependencies": [
+        "Herd",
+        "Pens"
+      ],
+      "summary": "Themes, colour rendering and reusable visual primitives.",
+      "interfaces": "Caprine, ThemeSpec, ThemeStore, ThemeCatalog",
+      "security": "Theme files are bounded local data; font declarations never download assets.",
+      "validation": "ThemeFontTests, theme persistence tests, ReadingFontTests."
+    },
+    {
+      "name": "goat",
+      "dependencies": [
+        "Hitch"
+      ],
+      "summary": "The Hitch command-line executable.",
+      "interfaces": "goat --help",
+      "security": "Connects only to the private local socket; the running app owns persistence and approvals.",
+      "validation": "HitchTests invokes the actual executable."
+    },
+    {
+      "name": "GOATed",
+      "dependencies": [
+        "Tools"
+      ],
+      "summary": "Scoped extension capabilities, registration lifetimes, skills and declarative .goated packages.",
+      "interfaces": "ExtensionRuntime, Extension, ExtensionPackage, ToolHandle, SkillProvider",
+      "security": "Bundled native code remains trusted; handles are scoped, revocable and bounded. User archives are validated in memory without extraction or execution.",
+      "validation": "GOATedTests (including package admission and scope), AppToolRouterTests and UserExtensionTests."
+    },
+    {
+      "name": "Herd",
+      "dependencies": [],
+      "summary": "Local home, credentials, attachment files and user workspace bindings.",
+      "interfaces": "Home, LocalFileStore, CredentialStore, AttachmentStore, HerdWorkspaceFileWorker, GitWorkspaceWorker",
+      "security": "Owner-only credentials and bounded filesystem reads; Git probes stay local and initialization is explicit.",
+      "validation": "PersistenceSecurityTests, AttachmentStoreTests, HerdWorkspaceTests."
+    },
+    {
+      "name": "Hindsight",
+      "dependencies": [
+        "Herd",
+        "JUDAS",
+        "MCPClient",
+        "Memory",
+        "Tools"
+      ],
+      "summary": "Optional bank-scoped memory service transport and store.",
+      "interfaces": "HindsightControlClient, HindsightProviderClient, HindsightMemoryStore, HindsightLimits",
+      "security": "Uses JUDAS and the bounded MCP adapter; bank authority and response limits are explicit. No automatic cross-Pen migration.",
+      "validation": "HindsightBrowserTests, MemoryModelTests, Hindsight configuration tests."
+    },
+    {
+      "name": "Hitch",
+      "dependencies": [
+        "GOATed"
+      ],
+      "summary": "Same-user local control API, replay ledger and Unix socket.",
+      "interfaces": "HitchRequest, HitchReply, HitchDispatcher, HitchServer, LocalSocket",
+      "security": "Off by default; private Unix socket, no TCP, no credentials API, no approval bypass.",
+      "validation": "HitchTests includes real temporary sockets and the built CLI."
+    },
+    {
+      "name": "Hoofprint",
+      "dependencies": [
+        "JUDAS"
+      ],
+      "summary": "Bounded activity history, event-driven audit publication and local rendering signposts.",
+      "interfaces": "ActivityLog, RenderSignposts",
+      "security": "Bounded to 500 in-memory entries; no durable telemetry or endpoint.",
+      "validation": "JudasActivityTests; rendering and Shepherd host tests."
+    },
+    {
+      "name": "Inference",
+      "dependencies": [
+        "Herd",
+        "JUDAS"
+      ],
+      "summary": "Engine contracts, capability discovery, prompt budgets and streaming.",
+      "interfaces": "InferenceEngine, OpenAICompatEngine, PromptBudgeter, EngineLifecycleController",
+      "security": "Configured endpoints through JUDAS; context is data, never permission; no in-process ML.",
+      "validation": "InferenceTests covers wire handling, budgets, capabilities and lifecycle ownership."
+    },
+    {
+      "name": "JUDAS",
+      "dependencies": [],
+      "summary": "Host connection policy, revocation and bounded security events.",
+      "interfaces": "Judas, JudasHTTPClient, JudasRegistration, JudasMode, LocalNetworkAddress",
+      "security": "Configured / local-networks-only / blocked policy; redirects rejected. Not an OS firewall or native-code sandbox.",
+      "validation": "JudasTests, JudasMCPTests, JudasActivityTests and the network boundary checker."
+    },
+    {
+      "name": "MCPClient",
+      "dependencies": [
+        "JUDAS",
+        "Tools"
+      ],
+      "summary": "MCP server configuration, transport and capability-bound invocation.",
+      "interfaces": "MCPServerManager, MCPServerConfig, MCPError",
+      "security": "Only module importing the external MCP SDK. JUDAS admits transports/processes; app approvals bind to configuration identity.",
+      "validation": "MCPClientTests and MCPModelSecurityTests."
+    },
+    {
+      "name": "Memory",
+      "dependencies": [
+        "Herd",
+        "JUDAS"
+      ],
+      "summary": "Provider-neutral memory contracts, scope and local stores.",
+      "interfaces": "MemoryStore, MemoryContext, WikiMemoryStore, LLMWikiMemoryStore, MemoryConfigurationStore",
+      "security": "Exclusive Global or Pen scope, bounded descriptor-relative filesystem operations; provider content does not grant authority.",
+      "validation": "MemoryTests and MemoryModelTests."
+    },
+    {
+      "name": "Paddock",
+      "dependencies": [
+        "Caprine",
+        "JUDAS"
+      ],
+      "summary": "Artifact values, HTML shells, navigation policy and WebKit host.",
+      "interfaces": "PaddockArtifact, PaddockDocumentCache, PaddockHTML, PaddockNavigationPolicy, WebPreview",
+      "security": "Bounded in-memory document preparation; ephemeral WebKit, shared immutable rules, Source-mode document retirement and JUDAS revocation.",
+      "validation": "PaddockTests, PaddockWebRenderingTests, PaddockBenchmarkTests, RenderingPerformanceTests."
+    },
+    {
+      "name": "Pens",
+      "dependencies": [
+        "Herd",
+        "JUDAS",
+        "Tools"
+      ],
+      "summary": "Folder-backed Pen metadata, instructions and serializable colour. Native workspace file operations support the bundled GOATed Herder extension.",
+      "interfaces": "PenSpec, PenStore, PenFileRef, OKLCH, PenFileTools, PenCommandTools",
+      "security": "Validated identifiers, staged writes, explicit workspace binding; no UI framework or database dependency. File tools use a turn-bound workspace and descriptor-relative traversal, reject symlinks and multiple hard links, bound reads, and require host approval before writes. Commands use a deny-default macOS sandbox, isolated environment, separate owner whitelist and JUDAS network admission.",
+      "validation": "PersistenceSecurityTests, PensHomeTests and scope tests. PenFileToolsTests and AppToolRouterTests cover writes, path boundaries and approval revocation."
+    },
+    {
+      "name": "Persistence",
+      "dependencies": [
+        "Herd"
+      ],
+      "summary": "Chat database, migrations, records and tool-grant storage.",
+      "interfaces": "ChatDatabase, ChatRecord, MessageRecord, ToolGrantRecord, PenFileGrantRecord, ToolEventSnapshot",
+      "security": "Async GRDB pool with indexed reads; cached narrow checkpoints preserve independent metadata. Durable records never depend on render caches.",
+      "validation": "DatabaseTests and PersistenceWriterTests."
+    },
+    {
+      "name": "Pronk",
+      "dependencies": [
+        "GOATed",
+        "Herd",
+        "Tools"
+      ],
+      "summary": "The offline, Pen-scoped fictional-goat extension example.",
+      "interfaces": "PronkExtension",
+      "security": "Bundled example using public GOATed contracts; state stays in the selected Pen scope; no network or scripts.",
+      "validation": "CapabilityTests exercises contributions and scope; examples/pronk documents usage."
+    },
+    {
+      "name": "Shepherd",
+      "dependencies": [
+        "Bleet",
+        "GOATed",
+        "Herd",
+        "Hoofprint",
+        "Inference",
+        "MCPClient",
+        "Memory",
+        "Persistence",
+        "Tools"
+      ],
+      "summary": "Single-turn orchestration, worker execution, tool rounds and durable handover.",
+      "interfaces": "ShepherdModel, ShepherdEnvironment, ShepherdToolSource",
+      "security": "One active turn for GUI and Hitch; persistence and capability checks gate progress. Worker I/O stays off MainActor.",
+      "validation": "ShepherdModelTests and turn-ownership host tests."
+    },
+    {
+      "name": "Tools",
+      "dependencies": [],
+      "summary": "Transport-neutral tool discovery, requests and results.",
+      "interfaces": "ToolProvider, ToolSchema, ToolCallRequest, ToolResult",
+      "security": "Contracts carry data only; no transport, database, UI or authority implementation.",
+      "validation": "GOATed, MCPClient and host router contract tests."
+    }
+  ],
+  "planned": [
+    {
+      "name": "Tether",
+      "summary": "Media drafts and contextual Image/Video controls. Separate media engine and job coordination, proposed in ADR-0029."
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "formatVersion": 1,
+  "apiVersion": 1,
+  "id": "example.vue-toolkit",
+  "name": "Vue Toolkit",
+  "version": "1.0.0",
+  "author": "GOAT Examples",
+  "description": "A small declarative package for Vue and TypeScript guidance. No MCP connections or executable code.",
+  "permissions": ["skill-resources", "prompt-context"],
+  "skills": ["vue"],
+  "prompts": ["prompts/vue.md"],
+  "mcp": []
+}

@@ -1,0 +1,64 @@
+name: CI
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: apps/goat-macos
+
+jobs:
+  # Style gate: swift-format is syntactic, so it needs no Xcode SDK and runs fast.
+  lint:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install swift-format
+        run: brew install swift-format
+      - name: Lint
+        run: make lint
+
+  # App tests require the deployment OS as well as a compatible SDK.
+  build-test:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show toolchain
+        run: |
+          python3 scripts/check-release-host.py
+          xcodebuild -version
+          swift --version
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Release verification
+        run: make verify CONFIG=Release SWIFT_FLAGS='-c release'
+
+  website:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run test:unit
+      - name: Check distribution notices
+        run: python3 ../scripts/distribution-notices.py --check
+      - run: npm run build:all
+      - run: npm run check:content

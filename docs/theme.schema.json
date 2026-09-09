@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GOAT Theme Format v1",
+  "type": "object",
+  "required": [
+    "id",
+    "name",
+    "appearance",
+    "mono",
+    "bg",
+    "surface",
+    "ink",
+    "muted",
+    "accent",
+    "accent2",
+    "glow",
+    "selection",
+    "tint",
+    "washOpacity",
+    "bgOpacity",
+    "intensity"
+  ],
+  "properties": {
+    "schema": {
+      "type": "integer",
+      "enum": [
+        1
+      ]
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]{1,128}$"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "author": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "description": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "appearance": {
+      "enum": [
+        "system",
+        "light",
+        "dark"
+      ]
+    },
+    "mono": {
+      "type": "boolean"
+    },
+    "preview": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "bg": {
+      "type": "string",
+      "pattern": "^#[A-Fa-f0-9]{6}$"
+    },
+    "surface": {
+      "type": "string",
+      "pattern": "^#[A-Fa-f0-9]{6}$"
+    },
+    "ink": {
+      "type": "string",
+      "pattern": "^#[A-Fa-f0-9]{6}$"
+    },
+    "muted": {
+      "type": "string",
+      "pattern": "^#[A-Fa-f0-9]{6}$"
+    },
+    "accent": {
+      "type": "string",
+      "pattern": "^#[A-Fa-f0-9]{6}$"
+    },
+    "accent2": {
+      "type": "string",
+      "pattern": "^#[A-Fa-f0-9]{6}$"
+    },
+    "glow": {
+      "type": "string",
+      "pattern": "^#[A-Fa-f0-9]{6}$"
+    },
+    "selection": {
+      "type": "string",
+      "pattern": "^#[A-Fa-f0-9]{6}$"
+    },
+    "tint": {
+      "type": "string",
+      "pattern": "^#[A-Fa-f0-9]{6}$"
+    },
+    "washOpacity": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "bgOpacity": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "intensity": {
+      "type": "number",
+      "minimum": 0.5,
+      "maximum": 2
+    },
+    "fonts": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Optional locally installed PostScript font names or system aliases; no font assets or downloads.",
+      "properties": {
+        "chat": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}$"
+        },
+        "code": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}$"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,1 @@
+For Vue work, follow the user's language preference and existing project conventions. When unspecified, prefer Vue single-file components with TypeScript. This guidance grants no tools or filesystem access.

@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500">
+  <defs>
+    <linearGradient id="cyberGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3a9ad9" />
+      <stop offset="100%" stop-color="#1f5fa8" />
+    </linearGradient>
+  </defs>
+  <g fill="url(#cyberGradient)">
+    <path d="M 250,160 C 130,160 70,250 70,250 C 70,250 130,340 250,340 C 370,340 430,250 430,250 C 430,250 370,160 250,160 Z M 250,315 C 170,315 120,250 120,250 C 120,250 170,185 250,185 C 330,185 380,250 380,250 C 380,250 330,315 250,315 Z" />
+    <circle cx="250" cy="250" r="50" />
+    <circle cx="270" cy="230" r="12" fill="#000000" opacity="0.15" />
+    <path d="M 170,175 C 150,140 100,100 100,60" stroke="url(#cyberGradient)" stroke-width="24" stroke-linecap="round" fill="none" />
+    <circle cx="100" cy="60" r="22" />
+    <circle cx="100" cy="60" r="8" fill="#000000" opacity="0.2" />
+    <path d="M 330,175 C 350,140 400,100 400,60" stroke="url(#cyberGradient)" stroke-width="24" stroke-linecap="round" fill="none" />
+    <circle cx="400" cy="60" r="22" />
+    <circle cx="400" cy="60" r="8" fill="#000000" opacity="0.2" />
+    <path d="M 100,225 C 70,200 40,180 40,130" stroke="url(#cyberGradient)" stroke-width="24" stroke-linecap="round" fill="none" />
+    <circle cx="40" cy="130" r="22" />
+    <circle cx="40" cy="130" r="8" fill="#000000" opacity="0.2" />
+    <path d="M 400,225 C 430,200 460,180 460,130" stroke="url(#cyberGradient)" stroke-width="24" stroke-linecap="round" fill="none" />
+    <circle cx="460" cy="130" r="22" />
+    <circle cx="460" cy="130" r="8" fill="#000000" opacity="0.2" />
+    <path d="M 140,315 C 110,350 50,390 50,430" stroke="url(#cyberGradient)" stroke-width="24" stroke-linecap="round" fill="none" />
+    <circle cx="50" cy="430" r="22" />
+    <circle cx="50" cy="430" r="8" fill="#000000" opacity="0.2" />
+    <path d="M 360,315 C 390,350 450,390 450,430" stroke="url(#cyberGradient)" stroke-width="24" stroke-linecap="round" fill="none" />
+    <circle cx="450" cy="430" r="22" />
+    <circle cx="450" cy="430" r="8" fill="#000000" opacity="0.2" />
+  </g>
+</svg>

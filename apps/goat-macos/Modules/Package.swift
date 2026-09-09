@@ -1,0 +1,58 @@
+// swift-tools-version: 6.0
+import PackageDescription
+
+// One resolver and build graph; each target is an independently compiled domain module.
+let package = Package(
+    name: "Modules",
+    platforms: [.macOS("26.0")],
+    products: [
+        .library(name: "Hoofprint", targets: ["Hoofprint"]),
+        .library(name: "Caprine", targets: ["Caprine"]),
+        .library(name: "Bleet", targets: ["Bleet"]),
+        .library(name: "GOATed", targets: ["GOATed"]),
+        .library(name: "Herd", targets: ["Herd"]),
+        .library(name: "Hindsight", targets: ["Hindsight"]),
+        .library(name: "Hitch", targets: ["Hitch"]),
+        .library(name: "Inference", targets: ["Inference"]),
+        .library(name: "JUDAS", targets: ["JUDAS"]),
+        .library(name: "MCPClient", targets: ["MCPClient"]),
+        .library(name: "Memory", targets: ["Memory"]),
+        .library(name: "Paddock", targets: ["Paddock"]),
+        .library(name: "Pens", targets: ["Pens"]),
+        .library(name: "Persistence", targets: ["Persistence"]),
+        .library(name: "Pronk", targets: ["Pronk"]),
+        .library(name: "Shepherd", targets: ["Shepherd"]),
+        .library(name: "Tools", targets: ["Tools"]),
+        .executable(name: "goat", targets: ["goat"]),
+    ],
+    dependencies: [
+        .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.0.0"),
+        .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.9.0"),
+    ],
+    targets: [
+        .target(name: "Hoofprint", dependencies: ["JUDAS"], exclude: ["README.md"]),
+        .target(name: "Caprine", dependencies: ["Herd", "Pens"], exclude: ["README.md"]),
+        .target(name: "Bleet", dependencies: ["Inference", "Persistence"], exclude: ["README.md"]),
+        .target(name: "GOATed", dependencies: ["Tools"], exclude: ["README.md"]),
+        .target(name: "Herd", dependencies: [], exclude: ["README.md"]),
+        .target(name: "Hindsight", dependencies: ["Herd", "JUDAS", "MCPClient", "Memory", "Tools"], exclude: ["README.md"]),
+        .target(name: "Hitch", dependencies: ["GOATed"], exclude: ["README.md"]),
+        .target(name: "Inference", dependencies: ["Herd", "JUDAS"], exclude: ["README.md"]),
+        .target(name: "JUDAS", dependencies: [], exclude: ["README.md"]),
+        .target(name: "MCPClient", dependencies: ["JUDAS", "Tools", .product(name: "MCP", package: "swift-sdk")], exclude: ["README.md"]),
+        .target(name: "Memory", dependencies: ["Herd", "JUDAS"], exclude: ["README.md"]),
+        .target(name: "Paddock", dependencies: ["Caprine", "JUDAS"], exclude: ["README.md"]),
+        .target(name: "Pens", dependencies: ["Herd", "JUDAS", "Tools"], exclude: ["README.md"]),
+        .target(name: "Persistence", dependencies: ["Herd", .product(name: "GRDB", package: "GRDB.swift")], exclude: ["README.md"]),
+        .target(name: "Pronk", dependencies: ["GOATed", "Herd", "Tools"], exclude: ["README.md"]),
+        .target(name: "Shepherd", dependencies: ["Hoofprint", "Bleet", "GOATed", "Herd", "Inference", "MCPClient", "Memory", "Persistence", "Tools"], exclude: ["README.md"]),
+        .target(name: "Tools", dependencies: [], exclude: ["README.md"]),
+        .executableTarget(name: "goat", dependencies: ["Hitch"]),
+        .testTarget(name: "GOATedTests", dependencies: ["GOATed", "Pronk", "Tools"]),
+        .testTarget(name: "HitchTests", dependencies: ["Hitch"]),
+        .testTarget(name: "InferenceTests", dependencies: ["Herd", "Inference"]),
+        .testTarget(name: "LocalStorageTests", dependencies: ["Caprine", "Herd", "Inference", "JUDAS", "Pens", "Persistence", .product(name: "GRDB", package: "GRDB.swift")]),
+        .testTarget(name: "MCPClientTests", dependencies: ["JUDAS", "MCPClient"]),
+        .testTarget(name: "MemoryTests", dependencies: ["Herd", "Memory"]),
+    ]
+)

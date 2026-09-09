@@ -1,0 +1,32 @@
+{
+  "docsearch": {
+    "url": "https://raw.githubusercontent.com/algolia/docsearch/v4.7.0/LICENSE",
+    "file": "docsearch-4.7.0.txt"
+  },
+  "simple-icons": {
+    "url": "https://raw.githubusercontent.com/simple-icons/simple-icons/develop/LICENSE.md",
+    "file": "simple-icons.txt"
+  },
+  "hindsight": {
+    "url": "https://raw.githubusercontent.com/vectorize-io/hindsight/main/LICENSE",
+    "file": "hindsight.txt"
+  },
+  "hugeicons": {
+    "url": "https://raw.githubusercontent.com/hugeicons/hugeicons-react/main/LICENSE.md",
+    "file": "hugeicons.txt"
+  },
+  "fastdom": {
+    "url": "https://raw.githubusercontent.com/wilsonpage/fastdom/master/README.md",
+    "file": "fastdom-LICENSE.txt",
+    "extraction": "Complete License section of upstream README; package README was also checked."
+  },
+  "strictdom": {
+    "url": "https://raw.githubusercontent.com/wilsonpage/strictdom/master/README.md",
+    "file": "strictdom-LICENSE.txt",
+    "extraction": "Complete License section of upstream README; package README was also checked."
+  },
+  "vue-devtools": {
+    "url": "https://raw.githubusercontent.com/vuejs/devtools-v6/v6.6.4/LICENSE",
+    "file": "vue-devtools-LICENSE"
+  }
+}

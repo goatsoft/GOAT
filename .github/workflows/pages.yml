@@ -1,0 +1,93 @@
+name: Pages
+
+# Two sites from one explicitly authorized manual publication:
+#   - the landing site (web/)      → this repo's GitHub Pages  → https://goatapp.dev
+#   - the docs (VitePress, docs/)  → goatsoft/goatherd.dev → https://goatherd.dev
+# Pages allows one custom domain per site, so the docs deploy into a second repo over a
+# deploy key (secret GOATHERD_DEPLOY_KEY; see web/README.md).
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish both public websites from main
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One in-flight deploy at a time; let a running one finish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  SITE_DOMAIN: goatapp.dev
+  DOCS_DOMAIN: goatherd.dev
+
+jobs:
+  build:
+    # Visibility changes and pushes never deploy. The owner must enable publication
+    # and explicitly request it from main; this gate covers the docs deploy below too.
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && !github.event.repository.private && vars.PAGES_PUBLISH_ENABLED == 'true' && inputs.publish }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      # Both builds see both absolute URLs so cross-links (nav, glossary tooltips) resolve.
+      - name: Build landing site
+        run: npm run build
+        env:
+          VITE_REPO: ${{ github.repository }}
+          VITE_BASE: /
+          VITE_SITE_URL: https://${{ env.SITE_DOMAIN }}/
+          VITE_DOCS_URL: https://${{ env.DOCS_DOMAIN }}/
+      - name: Build docs
+        run: npm run docs:build
+        env:
+          VITE_REPO: ${{ github.repository }}
+          VITE_BASE: /
+          VITE_SITE_URL: https://${{ env.SITE_DOMAIN }}/
+          VITE_DOCS_URL: https://${{ env.DOCS_DOMAIN }}/
+      # Pages has no rewrites: serve index.html for unknown paths so deep links resolve in the
+      # SPA (and old /docs/* links forward to the docs domain from there). CNAME binds the domain.
+      - run: |
+          cp dist/index.html dist/404.html
+          echo "$SITE_DOMAIN" > dist/CNAME
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+      - name: Deploy docs to ${{ env.DOCS_DOMAIN }}
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          deploy_key: ${{ secrets.GOATHERD_DEPLOY_KEY }}
+          external_repository: goatsoft/goatherd.dev
+          publish_branch: gh-pages
+          publish_dir: web/docs/.vitepress/dist
+          cname: ${{ env.DOCS_DOMAIN }}
+          force_orphan: true
+          commit_message: "docs: deploy ${{ github.sha }}"
+
+  deploy:
+    needs: build
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && !github.event.repository.private && vars.PAGES_PUBLISH_ENABLED == 'true' && inputs.publish }}
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/configure-pages@v5
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

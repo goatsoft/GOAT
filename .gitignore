@@ -1,0 +1,45 @@
+# Generated project: source of truth is project.yml (ADR-0004)
+*.xcodeproj
+# Maintainer-only signing selection. Certificates and private keys stay in Keychain.
+apps/goat-macos/signing.local.mk
+
+# Xcode / Swift: match at any depth (the app lives under apps/goat-macos)
+**/DerivedData/
+**/build/
+**/.build/
+**/.swiftpm/
+**/xcuserdata/
+*.xcresult
+apps/goat-macos/dist/
+
+# Node (the web/ site tooling, if any)
+node_modules/
+web/dist/
+web/.cache/
+web/docs/.vitepress/dist/
+web/docs/.vitepress/cache/
+web/src/auto-imports.d.ts
+web/src/components.d.ts
+web/src/typed-router.d.ts
+
+# macOS
+.DS_Store
+
+# Never commit model weights or local state
+*.safetensors
+*.gguf
+.env
+.env.local
+.env.*.local
+# web/.env is public build config (VITE_REPO, VITE_BASE), not secrets: keep it tracked
+!web/.env
+
+# Python tooling scratch (make-goaties.py / make-icons.py)
+**/__pycache__/
+*.pyc
+
+# Editor / IDE
+.vscode/
+
+# Private maintainer notes, reports and acceptance evidence
+.maintainer/
