@@ -1,21 +1,10 @@
 import { WGSL, GLSL_VS, GLSL_FS } from './aurora-shaders.ts'
 import { usesTouchInput } from './browser-input.ts'
-
-export interface AuroraOptions {
-  colors: [number[], number[], number[]]
-  fixed: boolean
-  parallax: number
-  intensity: number
-  scale: number
-  speed: number
-  fade: boolean
-  seed: number
-  stretch: number
-  sweep: number
-}
+import { auroraWorkers } from './aurora-worker-client.ts'
+import type { AuroraFrame, AuroraMode, AuroraOptions } from './aurora-types.ts'
 
 /** Owns graphics resources from asynchronous setup through disposal. */
-export function createAuroraRenderer(options: () => AuroraOptions, reduced: boolean) {
+export function createAuroraRenderer(options: () => AuroraOptions, reduced: boolean, onMode: (mode: AuroraMode) => void = () => {}) {
   // Uniform block, 80 bytes: res.xy time scroll | c0.xyz intensity | c1.xyz scale | c2.xyz speed | fade seed pad pad
   const uni = new Float32Array(20)
   let raf = 0
@@ -23,6 +12,57 @@ export function createAuroraRenderer(options: () => AuroraOptions, reduced: bool
   let stop: (() => void) | null = null
   let disposed = false
   const t0 = performance.now()
+  let workerLease: ReturnType<typeof auroraWorkers.acquire> | undefined
+  let refresh = () => {}
+
+  async function initWorker(el: HTMLCanvasElement) {
+    if (typeof Worker === 'undefined' || typeof el.transferControlToOffscreen !== 'function' || !navigator.gpu) return false
+    try { workerLease = auroraWorkers.acquire(mode => { if (!disposed) onMode(mode) }) }
+    catch { return false }
+    if (!await workerLease.ready || disposed) {
+      workerLease.release()
+      workerLease = undefined
+      return false
+    }
+    let canvas: OffscreenCanvas
+    try { canvas = el.transferControlToOffscreen() }
+    catch { workerLease.release(); workerLease = undefined; return false }
+
+    // A transferred canvas cannot acquire a main-thread context. Later failures use CSS.
+    const frame: AuroraFrame = {
+      width: 2, height: 2, scroll: 0, visible: false, reduced, options: options(),
+    }
+    const measure = () => {
+      const rect = el.getBoundingClientRect()
+      const ratio = Math.min((window.devicePixelRatio || 1) * 0.5, 1, 1280 / Math.max(1, rect.width), 1280 / Math.max(1, rect.height))
+      frame.width = Math.max(2, Math.round(rect.width * ratio))
+      frame.height = Math.max(2, Math.round(rect.height * ratio))
+    }
+    const update = () => {
+      frame.options = options()
+      frame.visible = visible && !document.hidden
+      frame.scroll = frame.options.fixed ? window.scrollY / Math.max(1, window.innerHeight) * frame.options.parallax : 0
+      workerLease?.update(frame)
+    }
+    measure()
+    frame.visible = visible && !document.hidden
+    workerLease.attach(canvas, frame)
+    const resize = new ResizeObserver(() => { measure(); update() })
+    resize.observe(el)
+    const scroll = () => { if (options().fixed) update() }
+    window.addEventListener('scroll', scroll, { passive: true })
+    document.addEventListener('visibilitychange', update)
+    refresh = update
+    stop = () => {
+      resize.disconnect()
+      window.removeEventListener('scroll', scroll)
+      document.removeEventListener('visibilitychange', update)
+      workerLease?.release()
+      workerLease = undefined
+      refresh = () => {}
+    }
+    return true
+  }
 
   function fill(w: number, h: number) {
     const props = options()
@@ -129,7 +169,13 @@ export function createAuroraRenderer(options: () => AuroraOptions, reduced: bool
   }
   return {
     async start(el: HTMLCanvasElement): Promise<'webgpu' | 'webgl' | 'css'> {
-      // Touch devices use the static gradient so decoration cannot compete with navigation.
+      if (disposed) return 'css'
+      // The worker reports WebGPU only after a surface has rendered its first frame.
+      if (typeof Worker !== 'undefined' && typeof el.transferControlToOffscreen === 'function' && navigator.gpu) {
+        if (await initWorker(el)) return 'css'
+      }
+      if (disposed) return 'css'
+      // Keep touch fallback static when worker WebGPU is unavailable.
       if (usesTouchInput()) return 'css'
       try {
         if (await initWebGPU(el)) return 'webgpu'
@@ -146,11 +192,13 @@ export function createAuroraRenderer(options: () => AuroraOptions, reduced: bool
       }
       return 'css'
     },
-    setVisible(value: boolean) { visible = value },
+    refresh() { refresh() },
+    setVisible(value: boolean) { visible = value; refresh() },
     dispose() {
       if (disposed) return
       disposed = true
       cancelAnimationFrame(raf)
+      workerLease?.release()
       stop?.()
       stop = null
     },

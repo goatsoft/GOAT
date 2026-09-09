@@ -8,6 +8,7 @@
   },
   "scripts": {
     "dev": "vite",
+    "dev:https": "node scripts/dev-https.mjs",
     "build": "vite build && vue-tsc --noEmit",
     "preview": "vite preview",
     "typecheck": "vue-tsc --noEmit",

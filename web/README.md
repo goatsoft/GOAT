@@ -16,6 +16,26 @@ npm run preview    # inspect the combined output on port 4173
 
 Use `npm run dev` or `npm run docs:dev` to work on one site. `npm run build` includes Vue type checking; `npm run docs:build` fails on broken document links. A local environment with restricted file watchers can use `CHOKIDAR_USEPOLLING=1` for builds.
 
+### HTTPS and phone testing
+
+Use HTTPS when testing WebGPU on another device. Create a certificate with an existing local development CA, such as `mkcert`, including the Mac's current LAN address. Store certificate files outside the repository and `public/`.
+
+Run from `web/`, replacing the address and certificate paths:
+
+```sh
+npm run dev:https -- --host <mac-lan-address> --cert <certificate.pem> --key <private-key.pem>
+```
+
+The website listens on HTTPS port 5176, with docs under `/docs/`. The docs backend listens only on loopback port 5179. Both sites use the same public origin for navigation and live reload. Override the ports with `--port` and `--docs-port`. The command fails if either port is occupied; it never stops an existing server.
+
+Install only the CA's public certificate on test devices. On iOS, install the certificate profile, then enable it in Settings → General → About → Certificate Trust Settings. Keep private keys on the development Mac. A certificate warning bypass is not a substitute for a trusted certificate. See [Apple's certificate trust instructions](https://support.apple.com/en-ie/102390).
+
+### Aurora rendering
+
+`AuroraCanvas` adapts Vue props and browser visibility to a framework-independent rendering protocol. A page shares one worker, WebGPU device and pipeline across its canvas surfaces. The worker draws at up to 30 frames per second, caps each surface's dimensions and waits for its GPU batch before submitting another. Hidden surfaces stop drawing; reduced motion draws a still frame and refreshes it when inputs change.
+
+Worker setup is checked before transferring a canvas. Unsupported desktop browsers can use the existing main-thread WebGPU or WebGL2 renderer. Touch devices without worker WebGPU use CSS. A worker failure after transfer restores CSS because canvas ownership cannot be transferred back into a normal main-thread context. The last component to unmount terminates the worker. See [ADR-0079](../docs/adrs/0079-shared-aurora-worker.md).
+
 ## Edit the content
 
 | Source | Responsibility |
