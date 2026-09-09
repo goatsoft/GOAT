@@ -36,7 +36,7 @@ const themes = [
     <motion.div v-bind="reveal()" class="mx-auto max-w-2xl text-center">
       <p class="font-mono text-xs uppercase tracking-[0.2em] text-primary">Themes and appearance</p>
       <motion.h2 v-bind="heading(0.1)" class="mt-3 text-balance text-4xl font-semibold tracking-[-0.03em] sm:text-5xl">Make the workspace yours.</motion.h2>
-      <p class="mt-4 text-pretty text-lg text-muted-foreground">
+      <p class="mt-2 text-pretty text-lg text-muted-foreground sm:mt-4">
         Follow your Mac’s appearance or choose a built-in theme. Adjust reading fonts and sizes, and import a custom theme when you want a different view of your workspace.
       </p>
     </motion.div>
