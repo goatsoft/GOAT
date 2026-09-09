@@ -109,5 +109,7 @@ const ease = [0.22, 1, 0.36, 1] as const
     mask-image:linear-gradient(to bottom,transparent,#000 20%,#000 80%,transparent);
   }
   .hero-section .animate-aurora { animation:none }
+  /* Radial gradients already have soft edges; extra blur stalls iOS compositing. */
+  .hero-section .blur-3xl, .hero-section .blur-2xl { filter:none }
 }
 </style>
