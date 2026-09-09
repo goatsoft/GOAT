@@ -1,8 +1,8 @@
 # Roadmap
 
-GOAT’s first release is **0.1 (Kid)**. The capabilities below are available to explore in the public source preview; binary release acceptance is still in progress. Future work has no promised delivery date.
+GOAT’s first release is **0.1 (Kid)**. The capabilities below are included in the downloadable Mac app. Future work has no promised delivery date.
 
-## Kid: public source preview
+## Available in Kid
 
 - First-launch engine guidance, an empty connection list and automatic activation of the first saved engine.
 - Native streaming chat with compatible engines, model selection, effort presets and generation statistics.
@@ -15,9 +15,11 @@ GOAT’s first release is **0.1 (Kid)**. The capabilities below are available to
 - JUDAS connection policy, session Activity Log, themes and local reading preferences.
 - Optional Hitch local API/CLI and the Pronk contributor example.
 
-The remaining work is release qualification, content/distribution review and a verified installation experience. See [Release readiness](RELEASE-CHECKLIST.md).
+Downloads and release notes are on [GitHub Releases](https://github.com/goatsoft/GOAT/releases/tag/v0.1.0). See [Known issues](KNOWN-ISSUES.md) for current limitations.
 
 ## Next priorities
+
+Fix the maximum-width sidebar rendering issue and evaluate an initial sidebar width of about 300 points. Design a reset and uninstall flow that clearly separates app removal from local data deletion.
 
 Continue improving accessibility, discoverability and compatibility based on observed user needs. Profile realistic long-running workloads and refine documentation as engine/runtime combinations are qualified.
 

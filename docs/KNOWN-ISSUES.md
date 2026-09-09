@@ -1,6 +1,10 @@
 # Known issues
 
-Current limitations to consider when evaluating the Kid source preview. This page separates reproducible behavior from compatibility that still needs qualification.
+Current limitations in 0.1 (Kid). This page separates reproducible behavior from compatibility that still needs qualification.
+
+## Sidebar width
+
+At maximum sidebar width, items can disappear while the plus buttons remain visible. This was reported during build 1343 acceptance and is tracked in [issue #6](https://github.com/goatsoft/GOAT/issues/6). Avoid expanding the sidebar to its maximum width until it is fixed. The default width is 260 points; a wider initial layout is planned.
 
 ## Fullscreen sidebar on macOS 26
 
@@ -28,4 +32,6 @@ macOS can ask again for local-network permission when an ad-hoc build changes. C
 
 ## Release qualification
 
-Clean-machine installation, signing/notarization, full scale profiling and live-service combinations remain release gates. Consult [Release readiness](RELEASE-CHECKLIST.md) for the current acceptance scope. There is no approved public Kid download yet.
+The official 0.1.0 build 1343 passed Developer ID signature, notarization, mounted-package and Gatekeeper checks. The maintainer tested the candidate on a separate Mac and accepted the build and first-engine guidance. The sidebar findings above are deferred fixes.
+
+Broader engine/service combinations, full accessibility coverage and long-workload profiling remain ongoing. A successful installation does not establish compatibility with every model or integration. Consult [Release readiness](RELEASE-CHECKLIST.md) for the acceptance scope.

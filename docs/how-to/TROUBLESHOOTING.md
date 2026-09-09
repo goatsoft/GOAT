@@ -23,6 +23,25 @@ GOAT preserves saved transcript content and completed tool results. If a result 
 
 An extension timeout can quarantine that extension for the current app session. First reconcile outstanding work. Restart only after all active chats and command jobs have finished or been deliberately stopped. A restart is not an appropriate recovery step during active work.
 
+## Reset GOAT for a clean installation
+
+A full reset removes saved chats, attachments, engine connections, credentials, local memory and preferences from the active installation. Back up anything you want to keep first. Keep backups private because they can contain credentials and conversation content.
+
+1. Finish or deliberately stop active chats and command jobs, then quit GOAT.
+2. Note the configured GOAT home before clearing preferences. The default is `~/.goat`; a `GOAT_HOME` environment variable or the `goat.home` preference can select another location. You can inspect the saved preference with `defaults read dev.leet.goat goat.home`. A missing preference means no saved override.
+3. In Finder, choose **Go → Go to Folder** (`Shift-Command-G`). Move `~/.goat` and `~/Library/Application Support/GOAT` to a private backup folder outside those locations. The latter contains the chat database and attachments. If you configured a different GOAT home, inspect it first: it may contain your own files or share a folder with other work. Do not remove an entire shared folder.
+4. If present, move `~/Library/Saved Application State/dev.leet.goat.savedState` to the backup folder too.
+5. With GOAT still closed, run `defaults delete dev.leet.goat` in Terminal to clear its preferences and saved layout. If the domain does not exist, there are no preferences to clear.
+6. Open GOAT again. With the default home, no environment override and the old data moved aside, Engine settings should open with no saved connections. For an installation test, first replace the app with the build being tested.
+
+These steps reset GOAT's local state. They do not reset macOS privacy permissions or delete remote Hindsight banks, model-engine data or external Pen folders. Do not delete those folders or services as part of a GOAT reset.
+
+## Remove GOAT
+
+Quit GOAT and move the installed `GOAT.app` to Trash. If you installed the optional `goat` command-line tool separately, remove that specific copy or symlink from its installation location too. Removing the app alone keeps local data available for a later reinstall.
+
+To remove local data as well, follow the reset steps above and delete the backups only after reviewing their contents. GOAT currently has no built-in uninstall or reset action. Apple Developer certificates and notarization credentials are build tools, not GOAT app data; leave them in Keychain.
+
 ## Report a problem
 
 Use [known issues](../KNOWN-ISSUES.md) first. A useful bug report includes the GOAT version, macOS version, relevant engine/model versions, a minimal reproduction and the visible error. Remove credentials, private prompts, project content and sensitive endpoints. Do not attach unrestricted environment dumps. Use the [security policy](../../SECURITY.md) for sensitive vulnerabilities.

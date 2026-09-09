@@ -1,12 +1,10 @@
-# GOAT 0.1 (Kid): public source preview
+# Try GOAT 0.1 (Kid)
 
-GOAT is a native Mac workspace for local AI models, project files, tools and memory. This preview opens the source and documentation ahead of the first packaged release. You can build it locally, try it with your own engine and contribute improvements.
+Download the signed, notarized Mac app from [GitHub Releases](https://github.com/goatsoft/GOAT/releases/tag/v0.1.0). This guide covers getting started, exploring the features and reporting useful feedback.
 
-**There is no packaged Mac download yet.** Signing, notarization, clean-Mac installation and broader compatibility testing must be complete before the official 0.1 release. The source preview is intended for people comfortable building a Mac app and reporting issues.
+## Install and connect
 
-## Build and try it
-
-You need Apple Silicon, macOS 26 or later, Xcode with the macOS 26 SDK, XcodeGen and a compatible model engine. Apple Developer membership is not required. Follow [Contributing](../CONTRIBUTING.md#build-locally) to build and launch, then [Getting started](wiki/Getting-Started.md) to connect your engine.
+You need an Apple Silicon Mac running macOS 26 or later and a compatible model engine. Follow [Getting started](wiki/Getting-Started.md) to install GOAT and connect your engine. To build from source, use [Contributing](../CONTRIBUTING.md#build-locally).
 
 Start with a small project and review each permission request. Model quality, tool calling and memory requirements depend on the model and engine you choose. Read [known issues](KNOWN-ISSUES.md), [engine compatibility](ENGINES.md) and [Privacy](PRIVACY.md) before using confidential work.
 
@@ -21,10 +19,10 @@ Try the features you need; you do not have to set up every integration. The [ove
 
 ## Give useful feedback
 
-Use the [issue templates](https://github.com/goatsoft/GOAT/issues/new/choose) for bugs, engine compatibility and feature requests. Include the source commit, GOAT build, macOS version, engine/model versions, reproduction steps and expected result. Remove credentials, private messages and project data from screenshots and logs.
+Use the [issue templates](https://github.com/goatsoft/GOAT/issues/new/choose) for bugs, engine compatibility and feature requests. Include the GOAT version/build and, for source builds, the source commit, macOS version, engine/model versions, reproduction steps and expected result. Remove credentials, private messages and project data from screenshots and logs.
 
 Report security problems privately through [SECURITY.md](../SECURITY.md). Documentation corrections, small examples and accessibility improvements are welcome through [Contributing](../CONTRIBUTING.md). For general enquiries or sponsorship, contact [baa@goatapp.dev](mailto:baa@goatapp.dev).
 
-## What happens next
+## Follow development
 
-Preview fixes land as normal commits on `main`. The official release will identify an accepted commit with `v0.1.0`, provide a signed and notarized Mac download, and include installation instructions and known issues. Repository visibility and website availability alone do not mean that release has shipped.
+Fixes land through pull requests, and published releases identify their source commit and download checksums. See the [roadmap](ROADMAP.md) for current priorities. Builds from `main` can include changes that are not yet in a published app.

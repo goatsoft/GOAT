@@ -1,11 +1,11 @@
 # Release a GOAT build
 
-This guide is for maintainers. Kid’s canonical version is `0.1.0`, public label **0.1 (Kid)** and eventual tag `v0.1.0`. Identity comes from `apps/goat-macos/release.json`.
+This guide is for maintainers. Kid’s canonical version is `0.1.0`, public label **0.1 (Kid)** and release tag `v0.1.0`. Identity comes from `apps/goat-macos/release.json`.
 
 1. Review [Release readiness](../RELEASE-CHECKLIST.md). Complete content, distribution, live-service, clean-machine and performance checks appropriate to the release.
 2. Follow [Versioning](../VERSIONING.md) to generate metadata, build a separate candidate and verify source/bundle/artifact agreement. Do not restart an app doing active work.
 3. Record the candidate’s exact source revision and evidence. A later commit or squash requires a newly qualified artifact; old manifests cannot be relabelled.
-4. After approval, tag the final accepted commit. The release workflow checks the tag and builds a **draft** release.
+4. After approval, tag the final accepted commit. When enabled, the release workflow checks the tag and builds a **draft** release. For a locally signed release, upload the exact qualified artifacts to a draft targeting that commit; keep automated signing disabled.
 5. Review signing/notarization, the mounted DMG, checksums, notices, instructions and release notes before publishing the draft.
 
 Repository visibility, website deployment and release publication are separate operations. The Pages workflow is manual-only and requires both its publication variable and explicit input. See [Website maintenance](../../web/README.md).
@@ -14,7 +14,7 @@ Use private Actions secrets for Developer ID and notarization credentials. An ad
 
 ## Public preview before the first release
 
-The source repository and both websites can open before an app release is tagged. Keep `web/publication.json` at `releaseTag: null`; the website then links to source-build instructions. Use the [public preview guide](../PUBLIC-PREVIEW.md) to explain the scope and collect feedback.
+The source repository and both websites can open before an app release is tagged. Keep `web/publication.json` at `releaseTag: null`; the website then links to source-build instructions. Use the [feedback guide](../PUBLIC-PREVIEW.md) to explain the scope and collect feedback.
 
 Before the first public push, archive the development history privately, review the exact distributable tree and prepare one initial commit. Verify that commit from a fresh clone, including source builds, documentation, dependency notices and example packages. Do not publish archive branches or old tags. Once contributors can clone the public repository, preserve normal history instead of squashing it again.
 

@@ -34,7 +34,7 @@ Kid targets Apple Silicon and macOS 26 or later. Model memory requirements depen
 
 ## Where is the download?
 
-Kid is a public source preview. See [Getting started](Getting-Started.md) to build it locally and the [preview guide](../PUBLIC-PREVIEW.md) for scope and feedback. A packaged Mac download will follow after signing, notarization and release acceptance.
+[Download 0.1 (Kid)](https://github.com/goatsoft/GOAT/releases/tag/v0.1.0) from GitHub Releases. The Mac app is signed and notarized; it requires Apple Silicon and macOS 26 or later. Follow [Getting started](Getting-Started.md) for installation and engine setup. Source build instructions remain available in [Contributing](Contributing.md).
 
 ## Do rendering caches contain my only copy of a chat?
 

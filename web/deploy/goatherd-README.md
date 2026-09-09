@@ -4,7 +4,7 @@ Guides and reference for GOAT, a native AI workspace for Mac built around local 
 
 [Read the docs](https://goatherd.dev/) · [Get started](https://goatherd.dev/Getting-Started) · [Website](https://goatapp.dev/) · [Source code](https://github.com/goatsoft/GOAT)
 
-This repository hosts the published documentation at **[goatherd.dev](https://goatherd.dev/)**. GOAT 0.1 (Kid) is available as a public source preview. See the [preview guide](https://goatherd.dev/PUBLIC-PREVIEW) for its current scope and limitations.
+This repository hosts the published documentation at **[goatherd.dev](https://goatherd.dev/)**. GOAT 0.1 (Kid) is available as a signed, notarized download for Apple Silicon Macs. Start with [installation and engine setup](https://goatherd.dev/Getting-Started), or read the [release notes](https://github.com/goatsoft/GOAT/releases/tag/v0.1.0).
 
 ## Contribute
 

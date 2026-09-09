@@ -12,11 +12,18 @@ GOAT does not include model weights. Start with [models and engines](../overview
 
 ## Install GOAT
 
-**0.1 (Kid) is a public source preview.** There is no packaged Mac download yet. Build from source using [Contributing](../../CONTRIBUTING.md). The [preview guide](../PUBLIC-PREVIEW.md) explains what to try, current limitations and how to give useful feedback.
+1. [Download GOAT-0.1.0.dmg](https://github.com/goatsoft/GOAT/releases/download/v0.1.0/GOAT-0.1.0.dmg) from the official [Kid release](https://github.com/goatsoft/GOAT/releases/tag/v0.1.0).
+2. Open the disk image and drag **GOAT** into **Applications**.
+3. Open GOAT from Applications. The official app is signed by **Joseph Blythe** and notarized by Apple. macOS may ask you to confirm opening an app downloaded from the internet.
+4. Allow local-network access if your engine is on your network, then connect your engine below.
 
-Source builds require Xcode with the macOS 26 SDK and XcodeGen. From the repository root, `make gen` generates the Xcode project and `make build` builds the app. Launch instructions are in the contributor guide. Do not restart a running GOAT instance while a chat or command is active.
+The disk image also includes the optional `goat` CLI and licence notices. You do not need the CLI, Xcode or an Apple Developer account to use the app. See [CLI and API](CLI-and-API.md) if you want local command-line access.
 
-Source builds use ad-hoc signing by default and do not require Apple Developer membership. macOS may ask for local-network access when connecting to an engine on your network. Certificate-signed local builds are optional; see [Releasing](Releasing.md#signing-setup). Official downloads will have separate installation instructions after signing, notarization and clean-Mac testing are complete.
+The release includes `SHA256SUMS.txt` and `release-metadata.json`. To check the download, save both beside the DMG, open Terminal in that folder and run `shasum -a 256 -c SHA256SUMS.txt`. Both entries should report `OK`.
+
+### Build from source
+
+Source builds require Xcode with the macOS 26 SDK and XcodeGen. Follow [Contributing](../../CONTRIBUTING.md) for build and launch instructions. They use ad-hoc signing by default and do not require Apple Developer membership. Certificate-signed local builds are optional; see [Releasing](Releasing.md#signing-setup). Do not restart GOAT while a chat or command is active.
 
 ## Connect your engine
 
