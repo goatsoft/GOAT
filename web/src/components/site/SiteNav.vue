@@ -34,8 +34,8 @@ const links = [
         :class="scrolled ? 'glass shadow-[0_10px_40px_-20px_rgba(0,0,0,.8)]' : 'border border-transparent'"
       >
         <RouterLink to="/" class="flex items-center gap-2.5 font-semibold tracking-tight">
-          <img :src="asset('img/goat-dark.webp')" alt="" class="size-9 drop-shadow-[0_4px_14px_rgba(122,92,255,.55)]" />
-          <span class="text-brand text-lg font-bold tracking-tight">GOAT</span>
+          <img :src="asset('img/goat-dark.webp')" alt="" class="size-12 md:size-9 drop-shadow-[0_4px_14px_rgba(122,92,255,.55)]" />
+          <span class="text-brand text-2xl md:text-lg font-bold tracking-tight">GOAT</span>
         </RouterLink>
 
         <div class="hidden items-center gap-7 text-sm text-muted-foreground md:flex">

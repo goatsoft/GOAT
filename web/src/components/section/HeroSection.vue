@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { motion } from 'motion-v'
+import { usesTouchInput } from '@/lib/browser-input'
 const site = useSite()
-const { scrollY } = useScroll()
+const touch = usesTouchInput()
+const scrollY = touch ? useMotionValue(0) : useScroll().scrollY
 const bgY = useTransform(scrollY, [0, 900], [0, 180])
 const goatY = useTransform(scrollY, [0, 900], [0, -60])
 const fade = useTransform(scrollY, [0, 500], [1, 0])
@@ -11,20 +13,17 @@ const ease = [0.22, 1, 0.36, 1] as const
 </script>
 
 <template>
-  <section class="relative isolate overflow-hidden pt-24 pb-16 sm:pt-28">
-    <!-- Backdrop: the Midnight theme art, parallaxed and masked into the page bg. The art's
-         aurora horns converge at 56% of its width (measured); with cover ≈ 1:1 at this aspect,
-         translate = (56 − 50) × scale puts them at 50%, behind the masthead. Scale keeps the
-         right edge covered. -->
-    <motion.div class="pointer-events-none absolute inset-x-0 -top-24 -z-20 h-[120vh]" :style="{ y: bgY }">
+  <section class="hero-section relative isolate overflow-hidden pt-24 pb-16 sm:pt-28">
+    <!-- Keep the mountain artwork behind the mark; mobile framing is set below. -->
+    <motion.div class="hero-backdrop pointer-events-none absolute inset-x-0 -top-24 -z-20 h-[120vh]" :style="touch ? undefined : { y: bgY }">
       <img
         :src="asset('img/midnight.webp')" alt="" fetchpriority="high"
         class="size-full origin-center -translate-x-[7.6%] scale-[1.16] object-cover object-[50%_40%] opacity-75 [mask-image:linear-gradient(180deg,#000_30%,transparent_95%)]"
       />
     </motion.div>
     <div class="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(70%_50%_at_50%_0%,rgba(10,11,20,0)_0%,rgba(10,11,20,.55)_60%,var(--goat-bg)_100%)]" />
-    <!-- Purple mist: the GPU aurora, starting where the mountains end (the art is 120vh tall,
-         its ranges bottom out near 60vh) and rolling down under the copy and the window. -->
+    <!-- Static purple mist stays visible on touch devices without a graphics context. -->
+    <div class="hero-mobile-haze pointer-events-none" aria-hidden="true" />
     <div class="pointer-events-none absolute inset-x-0 top-[52vh] -z-10 h-[85vh] [mask-image:linear-gradient(to_bottom,transparent,#000_25%,#000_65%,transparent)]" aria-hidden="true">
       <AuroraCanvas hue="aurora" fade :intensity="0.38" :scale="1.1" :speed="0.09" :seed="3" :stretch="0.45" />
     </div>
@@ -34,10 +33,10 @@ const ease = [0.22, 1, 0.36, 1] as const
 
     <div class="mx-auto max-w-6xl px-6 text-center">
       <!-- the art has ~25% transparent padding; pull the headline up so the visual gap reads right -->
-      <motion.div :style="{ y: goatY, opacity: fade }" class="mx-auto -mb-8 w-fit sm:-mb-12 md:-mb-16">
+      <motion.div :style="touch ? undefined : { y: goatY, opacity: fade }" class="mx-auto -mb-8 w-fit sm:-mb-12 md:-mb-16">
         <motion.div
           class="size-64 sm:size-80 md:size-[26rem]"
-          :initial="{ opacity: 0, scale: 0.6, filter: 'blur(12px)' }"
+          :initial="touch ? false : { opacity: 0, scale: 0.6, filter: 'blur(12px)' }"
           :animate="{ opacity: 1, scale: 1, filter: 'blur(0px)' }"
           :transition="{ duration: 1.1, ease }"
         >
@@ -47,7 +46,7 @@ const ease = [0.22, 1, 0.36, 1] as const
 
       <motion.h1
         class="mx-auto max-w-4xl text-balance text-5xl font-semibold leading-[1.02] tracking-[-0.03em] sm:text-7xl md:text-8xl [text-shadow:0_2px_30px_rgba(0,0,0,.5)]"
-        :initial="{ opacity: 0, y: 24, filter: 'blur(8px)' }" :animate="{ opacity: 1, y: 0, filter: 'blur(0px)' }"
+        :initial="touch ? false : { opacity: 0, y: 24, filter: 'blur(8px)' }" :animate="{ opacity: 1, y: 0, filter: 'blur(0px)' }"
         :transition="{ duration: 0.9, delay: 0.3, ease }"
       >
         Your private AI<br /><span class="text-aurora">workspace for Mac.</span>
@@ -55,7 +54,7 @@ const ease = [0.22, 1, 0.36, 1] as const
 
       <motion.p
         class="mx-auto mt-7 max-w-2xl text-pretty text-lg text-muted-foreground sm:text-xl"
-        :initial="{ opacity: 0, y: 16 }" :animate="{ opacity: 1, y: 0 }" :transition="{ duration: 0.8, delay: 0.5, ease }"
+        :initial="touch ? false : { opacity: 0, y: 16 }" :animate="{ opacity: 1, y: 0 }" :transition="{ duration: 0.8, delay: 0.5, ease }"
       >
         Put local models to work with project files, tools and memory in one native Mac app. Keep your work organised, guide the next step and choose what GOAT can access.
       </motion.p>
@@ -63,13 +62,13 @@ const ease = [0.22, 1, 0.36, 1] as const
       <p class="mt-5 text-sm text-muted-foreground">No GOAT account. No built-in telemetry. Connections you configure and control.</p>
       <p v-if="!site.releaseAvailable" class="mt-3 text-sm text-muted-foreground"><a :href="site.doc('PUBLIC-PREVIEW')" class="text-primary hover:underline">{{ site.releaseLabel }} · Public source preview</a>. Build locally; Mac downloads are coming after release testing.</p>
 
-      <motion.div :initial="{ opacity: 0, y: 12 }" :animate="{ opacity: 1, y: 0 }" :transition="{ duration: 0.7, delay: 0.6, ease }" class="mt-9 flex justify-center">
+      <motion.div :initial="touch ? false : { opacity: 0, y: 12 }" :animate="{ opacity: 1, y: 0 }" :transition="{ duration: 0.7, delay: 0.6, ease }" class="mt-9 flex justify-center">
         <HeroBadge />
       </motion.div>
 
       <motion.div
         class="mt-6 flex flex-col items-center justify-center gap-3 sm:flex-row"
-        :initial="{ opacity: 0, y: 16 }" :animate="{ opacity: 1, y: 0 }" :transition="{ duration: 0.8, delay: 0.7, ease }"
+        :initial="touch ? false : { opacity: 0, y: 16 }" :animate="{ opacity: 1, y: 0 }" :transition="{ duration: 0.8, delay: 0.7, ease }"
       >
         <DownloadButton :href="site.primaryHref" :label="site.primaryLabel" />
         <!-- Same metrics as StarLink size="lg" so the two secondary CTAs match. -->
@@ -78,7 +77,7 @@ const ease = [0.22, 1, 0.36, 1] as const
         </a>
         <StarLink :href="site.repo" label="View source" size="lg" class="glass border-0 hover:bg-white/10" />
       </motion.div>
-      <motion.p class="mt-4 font-mono text-xs text-muted-foreground/70" :initial="{ opacity: 0 }" :animate="{ opacity: 1 }" :transition="{ delay: 1 }">
+      <motion.p class="mt-4 font-mono text-xs text-muted-foreground/70" :initial="touch ? false : { opacity: 0 }" :animate="{ opacity: 1 }" :transition="{ delay: 1 }">
         Bring a compatible local engine. <a :href="site.omlx" class="text-primary hover:underline">oMLX</a> · <a :href="site.doc('Engines')" class="text-primary hover:underline">Engine setup</a>.
       </motion.p>
     </div>
@@ -86,8 +85,8 @@ const ease = [0.22, 1, 0.36, 1] as const
     <!-- Hero window -->
     <motion.div
       class="mx-auto mt-20 max-w-5xl px-4 [perspective:1600px]"
-      :style="{ y: windowY }"
-      :initial="{ opacity: 0, y: 80, rotateX: 14, scale: 0.94 }"
+      :style="touch ? undefined : { y: windowY }"
+      :initial="touch ? false : { opacity: 0, y: 80, rotateX: 14, scale: 0.94 }"
       :animate="{ opacity: 1, y: 0, rotateX: 0, scale: 1 }"
       :transition="{ duration: 1.2, delay: 0.7, ease }"
     >
@@ -98,3 +97,17 @@ const ease = [0.22, 1, 0.36, 1] as const
     </motion.div>
   </section>
 </template>
+
+<style scoped>
+.hero-mobile-haze { display:none }
+@media (hover: none), (pointer: coarse) {
+  .hero-backdrop { top:0; height:760px }
+  .hero-backdrop img { transform:none; object-position:56% top; opacity:.85 }
+  .hero-mobile-haze {
+    display:block; position:absolute; z-index:-10; inset:300px -25% auto; height:850px;
+    background:radial-gradient(ellipse at 50% 38%,#7a3edb59,transparent 62%),radial-gradient(ellipse at 75% 65%,#ad48dc33,transparent 60%);
+    mask-image:linear-gradient(to bottom,transparent,#000 20%,#000 80%,transparent);
+  }
+  .hero-section .animate-aurora { animation:none }
+}
+</style>

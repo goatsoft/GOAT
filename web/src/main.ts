@@ -24,4 +24,6 @@ if (docsUrl) {
   if (m) location.replace(`${docsUrl}${m[1] ?? ''}${location.search}${location.hash}`)
 }
 
-createApp(App).use(router).mount('#app')
+const app = createApp(App).use(router)
+// Wait for the initial page so the footer cannot appear before the hero.
+router.isReady().then(() => app.mount('#app'))
