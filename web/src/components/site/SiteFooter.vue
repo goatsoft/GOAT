@@ -32,8 +32,8 @@ const site = useSite()
         <ul class="mt-3 space-y-2 text-sm text-muted-foreground">
           <li><a :href="site.repo" class="hover:text-foreground">GitHub</a></li>
           <li><a :href="site.docs" class="hover:text-foreground">Documentation</a></li>
-          <li><a :href="`${site.repo}/blob/main/docs/ENGINES.md`" class="hover:text-foreground">Engine contract</a></li>
-          <li><a :href="`${site.repo}/blob/main/docs/THEMES.md`" class="hover:text-foreground">Theme format</a></li>
+          <li><a :href="site.doc('ENGINES')" class="hover:text-foreground">Engine contract</a></li>
+          <li><a :href="site.doc('THEMES')" class="hover:text-foreground">Theme format</a></li>
         </ul>
       </div>
 
@@ -43,7 +43,7 @@ const site = useSite()
           <li><a :href="site.sponsor" class="hover:text-foreground">Sponsor GOAT</a></li>
           <li><a href="mailto:baa@goatapp.dev" class="hover:text-foreground">Contact GOAT</a></li>
           <li><a :href="`${site.repo}/issues`" class="hover:text-foreground">Issues</a></li>
-          <li><a :href="`${site.repo}/blob/main/CONTRIBUTING.md`" class="hover:text-foreground">Contributing</a></li>
+          <li><a :href="site.doc('Contributing')" class="hover:text-foreground">Contributing</a></li>
           <li><a :href="`${site.repo}/blob/main/SECURITY.md`" class="hover:text-foreground">Security</a></li>
           <li><a :href="`${site.repo}/blob/main/CODE_OF_CONDUCT.md`" class="hover:text-foreground">Code of conduct</a></li>
         </ul>
