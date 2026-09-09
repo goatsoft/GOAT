@@ -4,6 +4,7 @@ import SwiftUI
 struct ContentView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.openSettings) private var openSettings
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     var body: some View {
@@ -62,6 +63,9 @@ struct ContentView: View {
         }
         .task {
             await model.start()
+        }
+        .onChange(of: model.shouldPresentEngineSetup, initial: true) {
+            if model.consumeEngineSetupRequest() { openSettings() }
         }
         .task(id: model.engineRecoveryTrigger) {
             model.updateEngineRecovery(isActive: scenePhase == .active)

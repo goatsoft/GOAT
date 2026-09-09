@@ -4,6 +4,7 @@ GOAT’s first release is **0.1 (Kid)**. The capabilities below are available to
 
 ## Kid: public source preview
 
+- First-launch engine guidance, an empty connection list and automatic activation of the first saved engine.
 - Native streaming chat with compatible engines, model selection, effort presets and generation statistics.
 - Pens with project instructions, linked workspaces and local Git status.
 - Herder file tools and confined non-interactive command jobs, with scoped permissions.
@@ -18,7 +19,7 @@ The remaining work is release qualification, content/distribution review and a v
 
 ## Next priorities
 
-Improve onboarding, accessibility, discoverability and compatibility based on observed user needs. Continue profiling realistic long-running workloads and refine documentation as supported engine/runtime combinations are qualified.
+Continue improving accessibility, discoverability and compatibility based on observed user needs. Profile realistic long-running workloads and refine documentation as engine/runtime combinations are qualified.
 
 Yearling and Ibex are reserved release codenames; a codename or version in planning is not a shipping commitment. [Versioning](VERSIONING.md) defines release identity.
 

@@ -28,7 +28,9 @@ Engines are a **managed list**, like MCP Servers (ADR-0021): add several, switch
 | llama.cpp server | `http://127.0.0.1:8080` | `llama-server -m <model.gguf> --port 8080` |
 | Custom… | you type it | - |
 
-Choosing a preset fills the URL and re-probes; you can still edit the port by hand. Ports are conventional defaults. Change the URL if your server listens elsewhere.
+Fresh installations start with no configured engines and open Engine settings with connection guidance. The first saved engine becomes active automatically. Existing profiles and legacy connections are preserved.
+
+Choosing a preset in the editor fills the URL; use Test to check the connection. You can still edit the port by hand. Ports are conventional defaults. Change the URL if your server listens elsewhere.
 
 ## Feature matrix
 

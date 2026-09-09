@@ -1,4 +1,5 @@
 import AppKit
+import Bleet
 import Caprine
 import Foundation
 import MarkdownUI
@@ -358,6 +359,61 @@ final class ChatArtifactSyntaxTests: XCTestCase {
 }
 
 @MainActor final class ChatArtifactPreviewTests: XCTestCase {
+    func testStreamingArtifactsStaySourceOnlyUntilTheResponseFinishes() async throws {
+        for language in ["html", "svg"] {
+            for fenced in [false, true] {
+                let message = ChatMessage(role: .assistant)
+                let host = NSHostingView(
+                    rootView: MessageView(message: message, isLast: true, projectID: nil)
+                        .environment(AppModel.shared))
+                let window = NSWindow(
+                    contentRect: NSRect(x: 0, y: 0, width: 640, height: 480),
+                    styleMask: [.titled], backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                window.contentView = host
+                defer {
+                    window.contentView = nil
+                    window.close()
+                }
+                let prefix = fenced ? "```\(language)\n" : ""
+                let opening =
+                    language == "html"
+                    ? "<html><body><h1 id='stream-goat'>"
+                    : "<svg xmlns='http://www.w3.org/2000/svg'><text id='stream-goat'>"
+                let closing = language == "html" ? "</h1></body></html>" : "</text></svg>"
+                let parseCount = await MarkdownRenderCache.shared.snapshot().parseCount
+                for chunk in [prefix + opening + "Goat", " trails", closing + (fenced ? "\n```" : "")] {
+                    message.appendStream(text: chunk, thinking: "")
+                    for _ in 0..<40 {
+                        host.layoutSubtreeIfNeeded()
+                        if webView(in: host) != nil {
+                            XCTFail("Streaming \(language), fenced=\(fenced), created a live preview")
+                            return
+                        }
+                        try await Task.sleep(for: .milliseconds(10))
+                    }
+                }
+                let prepared = await MarkdownRenderCache.shared.snapshot().parseCount
+                XCTAssertGreaterThanOrEqual(prepared - parseCount, 3, "Exercise successive rendered snapshots")
+
+                message.complete = true
+                var rendered = false
+                for _ in 0..<150 {
+                    host.layoutSubtreeIfNeeded()
+                    if let web = webView(in: host),
+                        (try? await web.evaluateJavaScript("document.getElementById('stream-goat')?.textContent")
+                            as? String) == "Goat trails"
+                    {
+                        rendered = true
+                        break
+                    }
+                    try await Task.sleep(for: .milliseconds(20))
+                }
+                XCTAssertTrue(rendered, "Completed \(language), fenced=\(fenced), must render its preview")
+            }
+        }
+    }
+
     func testHTMLFenceRendersAsAnInlinePaddockDocument() async throws {
         let source = "```html\n<main><h1 id='goats'>Goat Trails</h1></main>\n```"
         let host = NSHostingView(

@@ -41,6 +41,7 @@ extension AppModel {
         }
         if selectedChatID == nil { selectedChatID = chats.first?.id }
         startupPhase = .connectingServices
+        shouldPresentEngineSetup = needsEngineSetup
         dlog(String(format: "startup: local state %.3fs", Self.elapsedSeconds(since: startedAt)))
 
         // Publish restored state before optional network/process services begin settling.
@@ -120,7 +121,7 @@ extension AppModel {
             snapshot.engineFile.active.flatMap { active in
                 engineProfiles.contains(where: { $0.id == active }) ? active : nil
             } ?? engineProfiles.first?.id ?? ""
-        endpoint = activeEngineProfile?.url ?? Self.fallbackEndpoint.absoluteString
+        endpoint = activeEngineProfile?.url ?? ""
         pens = snapshot.pens.compactMap { item in
             guard let id = Self.canonicalUUID(item.spec.id) else { return nil }
             return Pen(

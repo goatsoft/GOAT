@@ -137,3 +137,4 @@ schemes:
         - GOATTests
       environmentVariables:
         GOAT_TEST_MODE: "1"
+        GOAT_HOME: "$(PROJECT_TEMP_DIR)/GOATTestsHome"

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
- * Aurora decoration. Touch devices use a static CSS gradient. Other browsers use
- * WebGPU, WebGL2, or the gradient when neither is available. Reduced motion renders a single still frame.
+ * Aurora decoration uses a shared WebGPU worker when available. Desktop browsers
+ * can also use a main-thread renderer; CSS covers unsupported devices. Reduced motion renders a still frame.
  *
  * Renders at a capped internal resolution, pauses when off-screen or in a hidden tab, and never intercepts input.
  */
@@ -39,7 +39,8 @@ const cssFallback = computed(() => {
   return `radial-gradient(60% 40% at 20% 30%, ${a}, transparent 70%), radial-gradient(50% 45% at 75% 60%, ${b}, transparent 70%), radial-gradient(70% 35% at 50% 90%, ${c}, transparent 70%)`
 })
 
-const renderer = createAuroraRenderer(() => ({ ...props, colors: pal.value }), reduced)
+const renderer = createAuroraRenderer(() => ({ ...props, colors: pal.value }), reduced, value => { mode.value = value })
+watch(() => ({ ...props, colors: pal.value }), () => renderer.refresh(), { deep: true })
 let observer: IntersectionObserver | null = null
 let disposed = false
 onMounted(async () => {
@@ -66,6 +67,6 @@ onUnmounted(() => {
     :data-aurora="mode"
   >
     <div v-if="mode === 'css'" class="absolute inset-0" :style="{ backgroundImage: cssFallback }" />
-    <canvas ref="canvas" class="block size-full" :class="mode === 'css' ? 'hidden' : ''" />
+    <canvas ref="canvas" class="block size-full" :class="mode === 'css' ? 'invisible' : ''" />
   </div>
 </template>

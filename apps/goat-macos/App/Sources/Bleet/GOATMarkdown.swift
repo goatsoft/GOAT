@@ -33,13 +33,14 @@ enum GOATMarkdownSyntax {
 extension View {
     /// Shared reader treatment for chat, Paddock, and memory documents: GFM plus a clear
     /// callout treatment for GitHub Alert syntax and ordinary quotes.
-    func goatMarkdownStyle(fontSize: CGFloat) -> some View {
-        modifier(GoatMarkdownStyle(fontSize: fontSize))
+    func goatMarkdownStyle(fontSize: CGFloat, isStreaming: Bool = false) -> some View {
+        modifier(GoatMarkdownStyle(fontSize: fontSize, isStreaming: isStreaming))
     }
 }
 
 private struct GoatMarkdownStyle: ViewModifier {
     let fontSize: CGFloat
+    let isStreaming: Bool
     @Environment(AppModel.self) private var model
 
     func body(content: Content) -> some View {
@@ -53,7 +54,7 @@ private struct GoatMarkdownStyle: ViewModifier {
             FontSize(model.codeFontSize)
         }
         .markdownBlockStyle(\.codeBlock) { configuration in
-            CodeBlockView(configuration: configuration)
+            CodeBlockView(configuration: configuration, isStreaming: isStreaming)
         }
         .markdownBlockStyle(\.listItem) { configuration in
             configuration.label.labelStyle(MarkdownListLabelStyle())

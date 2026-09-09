@@ -24,8 +24,8 @@ const ease = [0.22, 1, 0.36, 1] as const
     <div class="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(70%_50%_at_50%_0%,rgba(10,11,20,0)_0%,rgba(10,11,20,.55)_60%,var(--goat-bg)_100%)]" />
     <!-- Static purple mist stays visible on touch devices without a graphics context. -->
     <div class="hero-mobile-haze pointer-events-none" aria-hidden="true" />
-    <div class="pointer-events-none absolute inset-x-0 top-[52vh] -z-10 h-[85vh] [mask-image:linear-gradient(to_bottom,transparent,#000_25%,#000_65%,transparent)]" aria-hidden="true">
-      <AuroraCanvas hue="aurora" fade :intensity="0.38" :scale="1.1" :speed="0.09" :seed="3" :stretch="0.45" />
+    <div class="hero-aurora pointer-events-none absolute inset-x-0 top-[52vh] -z-10 h-[85vh] [mask-image:linear-gradient(to_bottom,transparent,#000_25%,#000_65%,transparent)]" aria-hidden="true">
+      <AuroraCanvas hue="aurora" fade :intensity="touch ? 0.56 : 0.38" :scale="touch ? 1.6 : 1.1" :speed="0.09" :seed="3" :stretch="touch ? 0.95 : 0.45" />
     </div>
     <!-- Aurora ribbons -->
     <div class="pointer-events-none absolute left-1/2 top-24 -z-10 h-[520px] w-[900px] -translate-x-1/2 animate-aurora rounded-full bg-[radial-gradient(closest-side,rgba(58,160,255,.22),transparent)] blur-3xl" />
@@ -91,7 +91,7 @@ const ease = [0.22, 1, 0.36, 1] as const
       :transition="{ duration: 1.2, delay: 0.7, ease }"
     >
       <div class="relative">
-        <div class="pointer-events-none absolute -inset-x-10 -top-10 -z-10 h-64 bg-[radial-gradient(60%_100%_at_50%_0%,rgba(122,92,255,.35),transparent_70%)] blur-2xl" />
+        <div class="hero-window-glow pointer-events-none absolute -inset-x-10 -top-10 -z-10 h-64 bg-[radial-gradient(60%_100%_at_50%_0%,rgba(122,92,255,.35),transparent_70%)] blur-2xl" />
         <ProductMock scene="hero" />
       </div>
     </motion.div>
@@ -103,13 +103,17 @@ const ease = [0.22, 1, 0.36, 1] as const
 @media (hover: none), (pointer: coarse) {
   .hero-backdrop { top:0; height:760px }
   .hero-backdrop img { transform:none; object-position:56% top; opacity:.85 }
+  /* A wider field keeps the ribbons distinct on a narrow screen. */
+  .hero-aurora { top:180px; left:-35%; right:-35%; height:1000px }
   .hero-mobile-haze {
     display:block; position:absolute; z-index:-10; inset:300px -25% auto; height:850px;
-    background:radial-gradient(ellipse at 50% 38%,#7a3edb59,transparent 62%),radial-gradient(ellipse at 75% 65%,#ad48dc33,transparent 60%);
+    background:radial-gradient(ellipse at 35% 38%,#5c24bd40,transparent 62%),radial-gradient(ellipse at 85% 65%,#942bcc24,transparent 60%);
     mask-image:linear-gradient(to bottom,transparent,#000 20%,#000 80%,transparent);
   }
   .hero-section .animate-aurora { animation:none }
   /* Radial gradients already have soft edges; extra blur stalls iOS compositing. */
   .hero-section .blur-3xl, .hero-section .blur-2xl { filter:none }
+  /* This top-aligned glow has a hard edge without blur. The page aurora supplies the mobile glow. */
+  .hero-window-glow { display:none }
 }
 </style>
