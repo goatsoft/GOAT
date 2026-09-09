@@ -17,4 +17,4 @@ Restricted HTML and SVG disable page scripts. Bundled Mermaid rendering remains 
 
 See the [connection-policy reference](../reference/CONNECTIONS.md#preview-behavior). Image/video generation and a separate media-job workspace are not available in Kid.
 
-HTML, SVG and Mermaid code blocks have Preview and Source controls in chat once a response finishes. During generation, formatted source is shown at a bounded update cadence. Open the artifact in Paddock for a larger view.
+HTML, SVG and Mermaid code blocks have Preview and Source controls in chat once a response finishes. During generation, code stays plain and monospaced at a bounded update cadence. Syntax highlighting and inline previews start when the response finishes, so partial documents do not repeatedly reload. Open the artifact in Paddock for a larger view.

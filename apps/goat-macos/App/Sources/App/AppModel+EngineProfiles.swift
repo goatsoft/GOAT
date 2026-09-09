@@ -4,6 +4,13 @@ import Herd
 import Inference
 
 extension AppModel {
+    func consumeEngineSetupRequest() -> Bool {
+        guard shouldPresentEngineSetup, needsEngineSetup else { return false }
+        shouldPresentEngineSetup = false
+        settingsTab = .engine
+        return true
+    }
+
     // MARK: Engine profiles (managed list, one active; engines.json, ADR-0021)
 
     /// CredentialStore key for a profile's API key (per-engine, never shared across engines).
@@ -73,24 +80,31 @@ extension AppModel {
     }
 
     /// Add a new engine or update an existing one (matched by id); re-probes if it's the active one.
-    func addOrUpdateEngine(_ profile: EngineProfile) async {
+    @discardableResult
+    func addOrUpdateEngine(_ profile: EngineProfile, connect: Bool = true) async -> Bool {
         guard startupPhase.hasLocalState,
             profile.id != activeEngineID || !shepherd.hasActiveTurn
-        else { return }
+        else { return false }
         let revision = nextEngineStoreRevision()
         let previous = engineProfiles
+        let previousActiveID = activeEngineID
         if let i = engineProfiles.firstIndex(where: { $0.id == profile.id }) {
             engineProfiles[i] = profile
         } else {
             engineProfiles.append(profile)
         }
+        if !engineProfiles.contains(where: { $0.id == activeEngineID }) { activeEngineID = profile.id }
         guard await saveEngines(revision: revision) else {
-            if engineStoreRevision == revision { engineProfiles = previous }
-            return
+            if engineStoreRevision == revision {
+                engineProfiles = previous
+                activeEngineID = previousActiveID
+            }
+            return false
         }
         await refreshEngineApplicationAvailability()
-        guard engineStoreRevision == revision else { return }
-        if profile.id == activeEngineID { scheduleEngineApply() }
+        guard engineStoreRevision == revision else { return false }
+        if connect && profile.id == activeEngineID { scheduleEngineApply() }
+        return true
     }
 
     /// Remove an engine (and its stored key); if it was active, promote the first remaining one.
@@ -167,6 +181,7 @@ extension AppModel {
         }
         guard let operation = await beginEngineOperation(for: intentRevision) else { return }
         guard let target else {
+            endpoint = ""
             health = .offline("No engine selected")
             await finishEngineTransition(intentRevision: intentRevision, operation: operation)
             return
@@ -184,9 +199,7 @@ extension AppModel {
     /// one so you can test a key you've typed but not yet saved.
     func testEngine(_ profile: EngineProfile, key: String? = nil) async -> EngineHealth {
         guard let url = URL(string: profile.url) else { return .offline("Bad URL") }
-        let apiKey =
-            (key?.isEmpty == false)
-            ? key : engineCredentials[Self.keyStore(profile.id)]
+        let apiKey = key ?? engineCredentials[Self.keyStore(profile.id)]
         let probe = OpenAICompatEngine(
             config: EngineConfig(
                 baseURL: url, apiKey: apiKey,
@@ -197,22 +210,25 @@ extension AppModel {
 
     /// Per-engine API key (in credentials.json, ADR-0012): read/write for a specific profile.
     func engineHasKey(_ id: String) -> Bool { engineCredentials[Self.keyStore(id)] != nil }
-    func setEngineKey(_ key: String, for id: String) async {
-        guard id != activeEngineID || !shepherd.hasActiveTurn else { return }
+    @discardableResult
+    func setEngineKey(_ key: String, for id: String, connect: Bool = true) async -> Bool {
+        guard id != activeEngineID || !shepherd.hasActiveTurn else { return false }
         let storeKey = Self.keyStore(id)
         let revision = nextCredentialRevision(for: storeKey)
         do {
             let saved = try await fileWorker.setCredential(
                 key, for: storeKey, revision: revision)
-            guard saved, credentialRevisions[storeKey] == revision else { return }
+            guard saved, credentialRevisions[storeKey] == revision else { return false }
             if key.isEmpty {
                 engineCredentials.removeValue(forKey: storeKey)
             } else {
                 engineCredentials[storeKey] = key
             }
-            if id == activeEngineID { scheduleEngineApply() }
+            if connect && id == activeEngineID { scheduleEngineApply() }
+            return true
         } catch {
             dbWarning = "Credential was not saved: \(error.localizedDescription)"
+            return false
         }
     }
 

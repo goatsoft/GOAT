@@ -4,6 +4,7 @@ GOAT’s first release is **0.1 (Kid)**. The capabilities below are included in 
 
 ## Available in Kid
 
+- First-launch engine guidance, an empty connection list and automatic activation of the first saved engine.
 - Native streaming chat with compatible engines, model selection, effort presets and generation statistics.
 - Pens with project instructions, linked workspaces and local Git status.
 - Herder file tools and confined non-interactive command jobs, with scoped permissions.
@@ -18,7 +19,7 @@ Downloads and release notes are on [GitHub Releases](https://github.com/goatsoft
 
 ## Next priorities
 
-The next release will focus on first-launch setup: improve the initial window and sidebar proportions, start fresh installations with no configured engines, and open Settings with clear connection guidance. Existing users’ saved engine configurations must be preserved.
+Fix the maximum-width sidebar rendering issue and evaluate an initial sidebar width of about 300 points. Design a reset and uninstall flow that clearly separates app removal from local data deletion.
 
 Continue improving accessibility, discoverability and compatibility based on observed user needs. Profile realistic long-running workloads and refine documentation as engine/runtime combinations are qualified.
 

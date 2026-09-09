@@ -3,8 +3,8 @@ const site = useSite()
 </script>
 
 <template>
-  <footer class="relative mt-32 border-t border-border/60">
-    <div class="mx-auto grid max-w-6xl gap-10 px-6 py-14 md:grid-cols-[1.4fr_1fr_1fr_1fr]">
+  <footer class="relative border-t sm:mt-32 border-border/60">
+    <div class="mx-auto grid max-w-6xl gap-8 px-6 py-10 sm:gap-10 sm:py-14 md:grid-cols-[1.4fr_1fr_1fr_1fr]">
       <div>
         <div class="flex items-center gap-2.5 font-semibold">
           <img :src="asset('img/goat-dark.webp')" alt="" class="size-8 drop-shadow-[0_4px_14px_rgba(122,92,255,.5)]" />

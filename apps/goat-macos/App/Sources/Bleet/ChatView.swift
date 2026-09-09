@@ -382,31 +382,45 @@ struct EngineConnectingBanner: View {
 
 struct EngineBanner: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         HStack(spacing: 10) {
-            GoatieView(pose: model.health == .authRequired ? .shrug : .sleeping, size: 34)
-            Text(bannerText)
-                .font(.callout)
-            Spacer()
-            if model.health == .authRequired {
-                SettingsLink { Text("Add Key…") }
-            } else if model.engineAppURL != nil {
-                Button("Wake \(model.enginePreset.name)") { model.openEngineApp() }
+            if model.activeEngineProfile == nil {
+                Image(systemName: "cpu").foregroundStyle(model.theme.tokens.tint)
             } else {
-                SettingsLink { Text("Engine Settings…") }
+                GoatieView(pose: model.health == .authRequired ? .shrug : .sleeping, size: 34)
             }
-            Button("Retry") { Task { await model.discover() } }
+            Text(bannerText).font(.callout)
+            Spacer()
+            if model.activeEngineProfile == nil {
+                Button("Set Up Engine", action: showEngineSettings)
+            } else {
+                if model.health == .authRequired {
+                    Button("Add Key…", action: showEngineSettings)
+                } else if model.engineAppURL != nil {
+                    Button("Wake \(model.enginePreset.name)") { model.openEngineApp() }
+                } else {
+                    Button("Engine Settings…", action: showEngineSettings)
+                }
+                Button("Retry") { Task { await model.discover() } }
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(.bar)
     }
 
+    private func showEngineSettings() {
+        model.settingsTab = .engine
+        openSettings()
+    }
+
     private var bannerText: String {
-        switch model.health {
-        case .authRequired: "The engine wants an API key."
-        case .offline(let reason): "Brain not found - \(reason)"
+        if model.activeEngineProfile == nil { return "Connect an engine to start chatting." }
+        return switch model.health {
+        case .authRequired: "The engine requires an API key."
+        case .offline(let reason): "Engine unavailable: \(reason)"
         case .ok: ""
         }
     }
@@ -877,6 +891,7 @@ struct ModelEffortControl: View {
     @Bindable var session: ChatSession
     @Binding var showMenu: Bool
     @Environment(AppModel.self) private var model
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         Button {
@@ -914,9 +929,14 @@ struct ModelEffortControl: View {
         VStack(alignment: .leading, spacing: 0) {
             sectionLabel("Model")
             if model.models.isEmpty {
-                plainRow("No models - wake the engine") {
+                plainRow(model.activeEngineProfile == nil ? "Set Up Engine…" : "No models - refresh connection") {
                     showMenu = false
-                    Task { await model.discover() }
+                    if model.activeEngineProfile == nil {
+                        model.settingsTab = .engine
+                        openSettings()
+                    } else {
+                        Task { await model.discover() }
+                    }
                 }
             }
             ForEach(model.models) { ref in
@@ -948,9 +968,11 @@ struct ModelEffortControl: View {
                     model.openEngineApp()
                 }
             }
-            plainRow("Refresh Models") {
-                showMenu = false
-                Task { await model.refreshHealth() }
+            if model.activeEngineProfile != nil {
+                plainRow("Refresh Models") {
+                    showMenu = false
+                    Task { await model.refreshHealth() }
+                }
             }
         }
         .padding(.vertical, 6)

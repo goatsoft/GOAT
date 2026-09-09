@@ -10,8 +10,8 @@ const rows = [
 </script>
 
 <template>
-  <section id="privacy" class="relative scroll-mt-24 overflow-hidden py-24 sm:py-32">
-    <div class="mx-auto grid max-w-6xl items-start gap-14 px-6 lg:grid-cols-2">
+  <section id="privacy" class="relative scroll-mt-24 overflow-hidden py-12 sm:py-32">
+    <div class="mx-auto grid max-w-6xl items-start gap-8 px-6 sm:gap-14 lg:grid-cols-2">
       <motion.div v-bind="reveal()">
         <p class="font-mono text-xs uppercase tracking-[0.2em] text-emerald-300">Privacy by design</p>
         <motion.h2 v-bind="heading(0.1)" class="mt-3 text-balance text-4xl font-semibold tracking-[-0.03em] sm:text-5xl">A clear boundary around your work.</motion.h2>

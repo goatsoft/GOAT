@@ -1907,7 +1907,7 @@
     },
     {
       "path": "apps/goat-macos/project.yml",
-      "sha256": "f9444cb1f3f9d195584ed3836f2bfe5d390545f6fb80081cd08780b881666fa5"
+      "sha256": "68e9ecb58150b423166b071743ec77b70742125be69a3e38441d5abb5bd1a8bc"
     },
     {
       "path": "scripts/distribution-notices.py",

@@ -12,6 +12,7 @@ struct GOATApp: App {
                 .frame(minWidth: 880, minHeight: 560)
         }
         .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 1180, height: 780)
         .commands {
             CommandGroup(replacing: .appInfo) {
                 Button("About GOAT") { showAbout() }

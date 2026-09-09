@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
-import { docRoute } from '../docs/routes.ts'
+import { docRoute } from '../src/lib/doc-routes.ts'
 
 test('guide and reference links remain distinct with anchors intact', () => {
   assert.equal(docRoute('wiki/Architecture.md'), 'Architecture')

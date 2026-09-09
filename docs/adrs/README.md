@@ -84,5 +84,7 @@ Older records retain the package and type names used when accepted. [ADR-0054](0
 | [0076](0076-hindsight-health-and-session-ownership.md) | Hindsight health and session ownership | Accepted · refines 0035 |
 | [0077](0077-host-coordination-and-resource-lifetimes.md) | Host coordination and resource lifetimes | Accepted · refines 0025, 0056 and 0076 |
 | [0078](0078-owner-approved-release-signing.md) | Owner-approved release signing | Accepted · refines 0007 |
+| [0079](0079-shared-aurora-worker.md) | Shared Aurora rendering worker | Accepted · refines 0041 and 0077 |
+| [0080](0080-explicit-first-engine-setup.md) | Explicit first-engine setup | Accepted · refines 0021 |
 
 New session? Start with **[../../AGENT.md](../../AGENT.md)**, then [the roadmap](../ROADMAP.md).

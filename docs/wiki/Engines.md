@@ -8,11 +8,11 @@ Start the server using its own controls. Note its root URL, authentication requi
 
 ## Add the connection
 
-1. Open **Settings → Engine** and add an engine.
+1. Open **Settings → Engine** and choose **Add Engine**. GOAT opens this page automatically when no engines are configured.
 2. Choose the matching preset, or **Custom…**. Presets fill conventional URLs and choose capability metadata behavior; they do not install a server.
 3. Enter the actual root URL. GOAT appends the API paths. Avoid a URL that redirects to another address.
 4. Supply the API key if required. Choose **Test**, review the result and save.
-5. Select the engine and a model, then send a short text request. Verify that the response completes before trying images or tools.
+5. The first engine becomes active automatically. For additional connections, select the one to use. Choose a model, then send a short text request. Verify that the response completes before trying images or tools.
 
 The engine list is stored in `~/.goat/config/engines.json` under the default GOAT Home. Credentials use an owner-only file, not the chat database. See [storage](../reference/STORAGE.md).
 

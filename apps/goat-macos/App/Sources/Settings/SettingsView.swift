@@ -5,7 +5,7 @@ import Herd
 import SwiftUI
 import UniformTypeIdentifiers
 
-private enum SettingsTab: String, CaseIterable, Identifiable {
+enum SettingsTab: String, CaseIterable, Identifiable {
     case general, herd, judas, engine, memory, goated, mcp, appearance
     var id: String { rawValue }
     var title: String {
@@ -48,7 +48,6 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
 
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
-    @State private var tab: SettingsTab = .general
     @State private var goatedSection: GOATedSettingsSection = .skills
     @State private var search = ""
 
@@ -77,14 +76,14 @@ struct SettingsView: View {
                         }
                         .padding(24)
                     } else {
-                        switch tab {
+                        switch model.settingsTab {
                         case .general: GeneralSettings()
                         case .herd: HerdSettings()
                         case .judas:
                             JudasSettings(
-                                openEngine: { tab = .engine },
-                                openMemory: { tab = .memory },
-                                openMCP: { tab = .mcp })
+                                openEngine: { model.settingsTab = .engine },
+                                openMemory: { model.settingsTab = .memory },
+                                openMCP: { model.settingsTab = .mcp })
                         case .engine: EngineSettings()
                         case .memory: MemorySettingsView()
                         case .goated: GOATedSettingsView(section: $goatedSection)
@@ -113,7 +112,7 @@ struct SettingsView: View {
     private var sectionHeader: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .center, spacing: 14) {
-                Image(systemName: tab.symbol)
+                Image(systemName: model.settingsTab.symbol)
                     .font(.system(size: 26, weight: .semibold))
                     .foregroundStyle(model.theme.tokens.tint)
                     .frame(width: 54, height: 54)
@@ -121,11 +120,11 @@ struct SettingsView: View {
                         model.theme.tokens.tint.opacity(0.16),
                         in: RoundedRectangle(cornerRadius: 15))
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(tab.title).font(.title2.weight(.bold))
-                    Text(tab.description).font(.subheadline).foregroundStyle(.secondary)
+                    Text(model.settingsTab.title).font(.title2.weight(.bold))
+                    Text(model.settingsTab.description).font(.subheadline).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 16)
-                if tab == .memory {
+                if model.settingsTab == .memory {
                     Label(
                         model.memory.isEnabled ? "Active" : "Paused",
                         systemImage: model.memory.isEnabled ? "checkmark.circle.fill" : "pause.circle"
@@ -135,7 +134,7 @@ struct SettingsView: View {
                 }
             }
 
-            if tab == .goated {
+            if model.settingsTab == .goated {
                 GOATedSettingsTabBar(
                     selection: $goatedSection,
                     tint: model.theme.tokens.tint
@@ -172,9 +171,9 @@ struct SettingsView: View {
     }
 
     private func tabButton(_ item: SettingsTab) -> some View {
-        let selected = tab == item
+        let selected = model.settingsTab == item
         return Button {
-            tab = item
+            model.settingsTab = item
         } label: {
             HStack(spacing: 13) {
                 Image(systemName: item.symbol)

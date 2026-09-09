@@ -1,6 +1,6 @@
 # Try GOAT 0.1 (Kid)
 
-Kid began as a public source preview. The first signed, notarized Mac download is now available on [GitHub Releases](https://github.com/goatsoft/GOAT/releases/tag/v0.1.0). This page remains a guide to trying GOAT and giving useful feedback.
+Download the signed, notarized Mac app from [GitHub Releases](https://github.com/goatsoft/GOAT/releases/tag/v0.1.0). This guide covers getting started, exploring the features and reporting useful feedback.
 
 ## Install and connect
 

@@ -28,7 +28,7 @@ const title = computed(() => props.title ?? d.value.title)
     >
       <!-- Ring: the DownloadButton's conic sweep, slowed down for a big surface. -->
       <div class="doc-ring pointer-events-none absolute -inset-px rounded-[26px]" aria-hidden="true" />
-      <div class="doc-glow pointer-events-none absolute -inset-6 rounded-[40px]" aria-hidden="true" />
+      <div class="doc-glow pointer-events-none absolute inset-0 rounded-[26px]" aria-hidden="true" />
 
       <div class="relative isolate flex max-h-[88vh] flex-col overflow-hidden rounded-3xl bg-goat-bg/85 ring-hair backdrop-blur-2xl">
         <!-- Clouds live behind the header only, dissolving into the panel so the body stays readable. -->
@@ -76,9 +76,12 @@ const title = computed(() => props.title ?? d.value.title)
   padding: 1.5px;
 }
 .doc-glow {
-  background: conic-gradient(from var(--doc-a, 0deg), transparent 0%, rgba(58,160,255,.55) 25%, rgba(180,75,255,.55) 55%, transparent 100%);
-  filter: blur(28px); opacity: .5;
-  animation: doc-spin 9s linear infinite;
+  box-shadow: -12px -8px 48px -20px rgba(58,160,255,.3), 12px 16px 56px -20px rgba(180,75,255,.3);
+  animation: doc-glow 9s linear infinite;
+}
+@keyframes doc-glow {
+  0%, 100% { box-shadow: -12px -8px 48px -20px rgba(58,160,255,.3), 12px 16px 56px -20px rgba(180,75,255,.3); }
+  50% { box-shadow: -12px -8px 48px -20px rgba(180,75,255,.3), 12px 16px 56px -20px rgba(58,160,255,.3); }
 }
 @keyframes doc-spin { to { --doc-a: 360deg; } }
 @media (prefers-reduced-motion: reduce) { .doc-ring, .doc-glow { animation: none; } }

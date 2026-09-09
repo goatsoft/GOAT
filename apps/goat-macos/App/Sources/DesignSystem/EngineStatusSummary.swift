@@ -4,6 +4,7 @@ import SwiftUI
 struct EngineStatusSummary: View {
     var showSettings = false
     @Environment(AppModel.self) private var model
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         HStack(spacing: 10) {
@@ -14,12 +15,12 @@ struct EngineStatusSummary: View {
                         .frame(width: 7, height: 7)
                         .help(connectionLabel)
                         .accessibilityLabel(connectionLabel)
-                    Text(model.activeEngineProfile?.name ?? "Engine")
+                    Text(model.activeEngineProfile?.name ?? "No engine configured")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(model.theme.tokens.ink)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                        .help(model.activeEngineProfile?.name ?? "Engine")
+                        .help(model.activeEngineProfile?.name ?? "No engine configured")
                     if !model.engineTransitioning, case .ok(let models) = model.health {
                         Text("\(models.count) model\(models.count == 1 ? "" : "s")")
                             .font(.system(size: 11, weight: .medium))
@@ -33,7 +34,7 @@ struct EngineStatusSummary: View {
                     Spacer(minLength: 0)
 
                 }
-                Text(model.endpoint)
+                Text(model.activeEngineProfile == nil ? "Add your first connection" : model.endpoint)
                     .font(.system(size: 10))
                     .foregroundStyle(model.theme.tokens.muted.opacity(0.85))
                     .lineLimit(1)
@@ -43,7 +44,7 @@ struct EngineStatusSummary: View {
                     .help(model.endpoint)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            if case .offline = model.health {
+            if model.activeEngineProfile != nil, case .offline = model.health {
                 Button {
                     Task { await model.refreshHealth() }
                 } label: {
@@ -55,7 +56,10 @@ struct EngineStatusSummary: View {
                 .accessibilityLabel("Reconnect engine")
             }
             if showSettings {
-                SettingsLink {
+                Button {
+                    model.settingsTab = .engine
+                    openSettings()
+                } label: {
                     Image(systemName: "gearshape")
                         .font(.system(size: 20))
                         .foregroundStyle(.secondary)
@@ -71,6 +75,7 @@ struct EngineStatusSummary: View {
     }
 
     private var connectionLabel: String {
+        if model.activeEngineProfile == nil { return "Not configured" }
         if model.engineTransitioning { return "Connecting…" }
         return switch model.health {
         case .ok: "Connected"

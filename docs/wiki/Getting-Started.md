@@ -28,12 +28,12 @@ Source builds require Xcode with the macOS 26 SDK and XcodeGen. Follow [Contribu
 ## Connect your engine
 
 1. Start your engine and make a model available using that engine’s controls.
-2. Open **Settings → Engine** in GOAT. Add or edit the engine, select its preset and enter its actual root URL. Conventional ports are defaults, not a requirement.
-3. Enter the API key if the engine requires one. Use **Test** to check the connection, then save and select the engine.
+2. GOAT opens **Settings → Engine** on a fresh installation. Choose **Add Engine**, select its preset and enter its actual root URL. Conventional ports are defaults, not a requirement.
+3. Enter the API key if the engine requires one. Use **Test** to check the connection, then add the connection. Your first engine becomes active automatically.
 4. Choose a model from the composer. Begin with a short text request such as “Explain what a project brief should contain.”
 5. Send the message. A successful connection shows a response in the transcript; tool setup is not required for this first conversation.
 
-Kid starts with a Custom engine profile. It is a connection preset, not a bundled or running engine. Edit it to match your engine, or add your own configuration.
+Fresh installations have no configured engines. Presets help you enter connection details; they do not install or start a server. Custom remains available for other compatible servers. Existing saved connections are preserved.
 
 If the model list is empty or the request fails, use [Connect an engine](Engines.md) and [Troubleshooting](../how-to/TROUBLESHOOTING.md). Check the endpoint, authentication and JUDAS policy before changing unrelated settings.
 

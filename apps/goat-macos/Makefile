@@ -24,9 +24,10 @@ gen:
 	mkdir -p GOAT.xcodeproj/project.xcworkspace/xcshareddata/swiftpm
 	cp Package.resolved GOAT.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 
+# Command-line ARCHS also applies to Swift package dependencies.
 build: gen
 	xcodebuild -project GOAT.xcodeproj -scheme GOAT -configuration $(CONFIG) \
-	  -derivedDataPath $(DERIVED) -destination 'platform=macOS' -onlyUsePackageVersionsFromResolvedFile $(SIGNING_FLAGS) build
+	  -derivedDataPath $(DERIVED) -destination 'platform=macOS,arch=arm64' ARCHS=arm64 -onlyUsePackageVersionsFromResolvedFile $(SIGNING_FLAGS) build
 
 run: build
 	@osascript -e 'tell application id "dev.leet.goat" to quit' >/dev/null 2>&1 || true
@@ -38,11 +39,11 @@ run: build
 	open -n $(APP)
 
 test:
-	swift test $(SWIFT_FLAGS) --package-path $(MODULES) --no-parallel
+	swift test $(SWIFT_FLAGS) --arch arm64 --package-path $(MODULES) --no-parallel
 
 test-app: gen
 	xcodebuild -project GOAT.xcodeproj -scheme GOAT -configuration $(CONFIG) \
-	  -derivedDataPath $(DERIVED) -destination 'platform=macOS' -onlyUsePackageVersionsFromResolvedFile ENABLE_TESTABILITY=YES $(SIGNING_FLAGS) $(XCODE_FLAGS) test
+	  -derivedDataPath $(DERIVED) -destination 'platform=macOS,arch=arm64' ARCHS=arm64 -onlyUsePackageVersionsFromResolvedFile ENABLE_TESTABILITY=YES $(SIGNING_FLAGS) $(XCODE_FLAGS) test
 
 format:
 	swift format --in-place --recursive App/Sources App/Tests Modules/Sources Modules/Tests
@@ -66,7 +67,7 @@ clean:
 release: RELEASE_CHANNEL = Candidate
 release: gen
 	xcodebuild -project GOAT.xcodeproj -scheme GOAT -configuration Release \
-	  -derivedDataPath $(DERIVED) -destination 'platform=macOS' \
+	  -derivedDataPath $(DERIVED) -destination 'platform=macOS,arch=arm64' ARCHS=arm64 \
 	  -onlyUsePackageVersionsFromResolvedFile \
 	  ENABLE_HARDENED_RUNTIME=YES \
 	  CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
@@ -86,7 +87,7 @@ dmg: release
 # Build the local-only CLI. The DMG ships it beside GOAT.app.
 .PHONY: cli
 cli:
-	swift build --package-path Modules --product goat -c $(shell echo $(CONFIG) | tr A-Z a-z)
+	swift build --arch arm64 --package-path Modules --product goat -c $(shell echo $(CONFIG) | tr A-Z a-z)
 
 .PHONY: module-docs
 module-docs:

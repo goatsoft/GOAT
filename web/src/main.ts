@@ -3,6 +3,7 @@ import { createRouter, createWebHashHistory, createWebHistory } from 'vue-router
 import { routes } from 'vue-router/auto-routes'
 import App from './App.vue'
 import './assets/main.css'
+import { usesTouchInput } from './lib/browser-input'
 
 const router = createRouter({
   // Hash history only for single-file previews (VITE_HASH_ROUTER=1); Pages gets clean URLs.
@@ -10,7 +11,10 @@ const router = createRouter({
   routes,
   scrollBehavior(to, _from, saved) {
     if (saved) return saved
-    if (to.hash) return { el: to.hash, behavior: 'smooth', top: 72 }
+    if (to.hash) {
+      const touch = usesTouchInput()
+      return { el: to.hash, behavior: touch ? 'instant' : 'smooth', top: touch ? 96 : 72 }
+    }
     return { top: 0 }
   },
 })
@@ -24,4 +28,6 @@ if (docsUrl) {
   if (m) location.replace(`${docsUrl}${m[1] ?? ''}${location.search}${location.hash}`)
 }
 
-createApp(App).use(router).mount('#app')
+const app = createApp(App).use(router)
+// Wait for the initial page so the footer cannot appear before the hero.
+router.isReady().then(() => app.mount('#app'))
