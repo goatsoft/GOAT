@@ -60,6 +60,8 @@ jobs:
           VITE_BASE: /
           VITE_SITE_URL: https://${{ env.SITE_DOMAIN }}/
           VITE_DOCS_URL: https://${{ env.DOCS_DOMAIN }}/
+      - name: Include docs repository README
+        run: cp deploy/goatherd-README.md docs/.vitepress/dist/README.md
       # Pages has no rewrites: serve index.html for unknown paths so deep links resolve in the
       # SPA (and old /docs/* links forward to the docs domain from there). CNAME binds the domain.
       - run: |

@@ -46,6 +46,8 @@ The [Pages workflow](../.github/workflows/pages.yml) is manual. Pushes and visib
 
 The landing site publishes through the GOAT repository’s Pages environment at goatapp.dev. Documentation publishes built files to the `gh-pages` branch of goatsoft/goatherd.dev, using the `GOATHERD_DEPLOY_KEY` secret. Configure a dedicated write-enabled deploy key for that target repository; keep its private key in Actions secrets only. Set the docs repository’s Pages source to that branch. Confirm domain verification, DNS and HTTPS for both sites before enabling publication.
 
+The workflow includes `deploy/goatherd-README.md` as the published repository's README. Edit that source file so the next deployment preserves your changes.
+
 Review both builds locally, publication state, reporting contacts, licence notices, navigation and the exact release artifact before dispatching. Deployment is a separate decision from a successful build. See [Release readiness](../docs/RELEASE-CHECKLIST.md).
 
 ## Dependencies and attribution
