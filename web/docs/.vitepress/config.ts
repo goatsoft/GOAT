@@ -8,7 +8,7 @@ import { mermaid } from './plugins/mermaid.ts'
 import { goatGlossary, glossaryLinks } from './plugins/goat-glossary.ts'
 import { existsSync } from 'node:fs'
 import { goatData, readAdrs } from './plugins/goat-data.ts'
-import { referenceRoutes } from '../routes.ts'
+import { referenceRoutes } from '../../src/lib/doc-routes.ts'
 
 /**
  * GOAT docs: VitePress over the markdown that already lives in docs/ (ADR-0044).
