@@ -61,7 +61,8 @@ const ease = [0.22, 1, 0.36, 1] as const
       </motion.p>
 
       <p class="mt-5 text-sm text-muted-foreground">No GOAT account. No built-in telemetry. Connections you configure and control.</p>
-      <p v-if="!site.releaseAvailable" class="mt-3 text-sm text-muted-foreground"><a :href="site.doc('PUBLIC-PREVIEW')" class="text-primary hover:underline">{{ site.releaseLabel }} · Public source preview</a>. Build locally; Mac downloads are coming after release testing.</p>
+      <p v-if="site.releaseAvailable" class="mt-3 text-sm text-muted-foreground"><a :href="`${site.releases}/tag/${site.releaseTag}`" class="text-primary hover:underline">{{ site.releaseLabel }} · Release notes</a>. Signed and notarized for Mac.</p>
+      <p v-else class="mt-3 text-sm text-muted-foreground"><a :href="site.doc('PUBLIC-PREVIEW')" class="text-primary hover:underline">{{ site.releaseLabel }} · Public source preview</a>. Build locally; Mac downloads are coming after release testing.</p>
 
       <motion.div :initial="{ opacity: 0, y: 12 }" :animate="{ opacity: 1, y: 0 }" :transition="{ duration: 0.7, delay: 0.6, ease }" class="mt-9 flex justify-center">
         <HeroBadge />
