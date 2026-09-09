@@ -13,7 +13,7 @@ const ease = [0.22, 1, 0.36, 1] as const
 </script>
 
 <template>
-  <section class="hero-section relative isolate overflow-hidden pt-24 pb-12 sm:pb-16 sm:pt-28">
+  <section class="hero-section relative isolate overflow-hidden pt-12 pb-12 sm:pb-16 sm:pt-28">
     <!-- Keep the mountain artwork behind the mark; mobile framing is set below. -->
     <motion.div class="hero-backdrop pointer-events-none absolute inset-x-0 -top-24 -z-20 h-[120vh]" :style="touch ? undefined : { y: bgY }">
       <img

@@ -37,6 +37,7 @@ withDefaults(defineProps<{ href: string; label?: string; class?: string }>(), { 
 .shimmer {
   background: linear-gradient(110deg, transparent 30%, rgba(255,255,255,.18) 50%, transparent 70%);
   background-size: 250% 100%;
+  background-repeat: no-repeat;
   animation: shimmer 3.2s ease-in-out infinite;
 }
 @keyframes shimmer { from { background-position: 120% 0; } to { background-position: -120% 0; } }
