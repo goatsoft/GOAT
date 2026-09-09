@@ -462,26 +462,42 @@ private func configPermissions(_ url: URL) throws -> Int {
     #expect(result.utf8.count <= 64 + markerBytes + 2)
 }
 
-private actor CleanupProbe {
-    private var didRun = false
+private actor CompletionSignal {
+    private var signalled = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
 
-    func mark() { didRun = true }
-    func value() -> Bool { didRun }
+    func signal() {
+        signalled = true
+        let pending = waiters
+        waiters.removeAll()
+        for waiter in pending { waiter.resume() }
+    }
+
+    func value() -> Bool { signalled }
+
+    // Checked continuations deliberately ignore cancellation, like an unresponsive transport.
+    func wait() async {
+        guard !signalled else { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
 }
 
-@Test func timeoutReturnsAtTheDeadlineForNonCooperativeWork() async throws {
-    let probe = CleanupProbe()
-    let start = Date()
+@Test func timeoutReturnsWithoutWaitingForNonCooperativeWork() async throws {
+    let cleanup = CompletionSignal()
+    let releaseWork = CompletionSignal()
+    // Release the fixture if timeout handling regresses so the test can report a failure.
+    let watchdog = Task {
+        try await Task.sleep(for: .seconds(5))
+        await releaseWork.signal()
+    }
+    defer { watchdog.cancel() }
+
     do {
-        _ = try await withTimeout(
+        try await withTimeout(
             seconds: 0.03,
-            onTimeout: { await probe.mark() }
+            onTimeout: { await cleanup.signal() }
         ) {
-            await withCheckedContinuation { continuation in
-                DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) {
-                    continuation.resume(returning: ())
-                }
-            }
+            await releaseWork.wait()
         }
         Issue.record("operation did not time out")
     } catch MCPError.timeout {
@@ -490,27 +506,31 @@ private actor CleanupProbe {
         Issue.record("unexpected error: \(error)")
     }
 
-    #expect(Date().timeIntervalSince(start) < 0.15)
-    try await Task.sleep(for: .milliseconds(20))
-    #expect(await probe.value())
+    #expect(await !releaseWork.value())
+    await releaseWork.signal()
+    try await withTimeout(seconds: 5) { await cleanup.wait() }
 }
 
 @Test func cancellationReturnsWithoutWaitingForNonCooperativeWork() async throws {
-    let probe = CleanupProbe()
+    let cleanup = CompletionSignal()
+    let started = CompletionSignal()
+    let releaseWork = CompletionSignal()
+    let watchdog = Task {
+        try await Task.sleep(for: .seconds(5))
+        await releaseWork.signal()
+    }
+    defer { watchdog.cancel() }
+
     let task = Task {
-        _ = try await withTimeout(
+        try await withTimeout(
             seconds: 10,
-            onCancel: { await probe.mark() }
+            onCancel: { await cleanup.signal() }
         ) {
-            await withCheckedContinuation { continuation in
-                DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) {
-                    continuation.resume(returning: ())
-                }
-            }
+            await started.signal()
+            await releaseWork.wait()
         }
     }
-    try await Task.sleep(for: .milliseconds(20))
-    let cancellationTime = Date()
+    await started.wait()
     task.cancel()
     do {
         try await task.value
@@ -519,9 +539,9 @@ private actor CleanupProbe {
         // Expected.
     }
 
-    #expect(Date().timeIntervalSince(cancellationTime) < 0.15)
-    try await Task.sleep(for: .milliseconds(20))
-    #expect(await probe.value())
+    #expect(await !releaseWork.value())
+    await releaseWork.signal()
+    try await withTimeout(seconds: 5) { await cleanup.wait() }
 }
 
 @Test func processTerminationEscalatesWhenTermIsIgnored() async throws {
