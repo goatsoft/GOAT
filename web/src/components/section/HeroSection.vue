@@ -13,7 +13,7 @@ const ease = [0.22, 1, 0.36, 1] as const
 </script>
 
 <template>
-  <section class="hero-section relative isolate overflow-hidden pt-24 pb-16 sm:pt-28">
+  <section class="hero-section relative isolate overflow-hidden pt-24 pb-12 sm:pb-16 sm:pt-28">
     <!-- Keep the mountain artwork behind the mark; mobile framing is set below. -->
     <motion.div class="hero-backdrop pointer-events-none absolute inset-x-0 -top-24 -z-20 h-[120vh]" :style="touch ? undefined : { y: bgY }">
       <img
@@ -84,7 +84,7 @@ const ease = [0.22, 1, 0.36, 1] as const
 
     <!-- Hero window -->
     <motion.div
-      class="mx-auto mt-20 max-w-5xl px-4 [perspective:1600px]"
+      class="mx-auto mt-10 max-w-5xl sm:mt-20 px-4 [perspective:1600px]"
       :style="touch ? undefined : { y: windowY }"
       :initial="touch ? false : { opacity: 0, y: 80, rotateX: 14, scale: 0.94 }"
       :animate="{ opacity: 1, y: 0, rotateX: 0, scale: 1 }"

@@ -32,7 +32,7 @@ const themes = [
 </script>
 
 <template>
-  <section id="themes" class="mx-auto max-w-6xl scroll-mt-24 px-6 py-24 sm:py-32">
+  <section id="themes" class="mx-auto max-w-6xl scroll-mt-24 px-6 py-12 sm:py-32">
     <motion.div v-bind="reveal()" class="mx-auto max-w-2xl text-center">
       <p class="font-mono text-xs uppercase tracking-[0.2em] text-primary">Themes and appearance</p>
       <motion.h2 v-bind="heading(0.1)" class="mt-3 text-balance text-4xl font-semibold tracking-[-0.03em] sm:text-5xl">Make the workspace yours.</motion.h2>
@@ -41,7 +41,7 @@ const themes = [
       </p>
     </motion.div>
 
-    <div class="mt-14 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+    <div class="mt-8 grid sm:mt-14 gap-4 sm:grid-cols-2 lg:grid-cols-4">
       <motion.div v-for="(t, i) in themes" :key="t.id" v-bind="stagger(i)">
         <a
           :href="site.doc('Appearance')"

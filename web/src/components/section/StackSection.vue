@@ -46,7 +46,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="mx-auto max-w-6xl px-6 py-16 sm:py-24">
+  <section class="mx-auto max-w-6xl px-6 py-12 sm:py-24">
     <motion.div v-bind="reveal()" class="flex flex-col items-start justify-between gap-6 md:flex-row md:items-end">
       <div>
         <p class="font-mono text-xs uppercase tracking-[0.2em] text-primary">Under the hood</p>
@@ -57,7 +57,7 @@ onMounted(() => {
       </p>
     </motion.div>
 
-    <div ref="grid" class="relative isolate mt-10">
+    <div ref="grid" class="relative isolate mt-8 sm:mt-10">
       <!-- the one cloud, clipped to the tiles -->
       <div class="pointer-events-none absolute inset-0 -z-10 bg-card" :style="{ maskImage: mask, WebkitMaskImage: mask }">
         <div class="absolute inset-0 bg-[linear-gradient(100deg,rgba(58,160,255,.16),rgba(122,92,255,.12)_50%,rgba(180,75,255,.18))]" />
@@ -85,7 +85,7 @@ onMounted(() => {
         </template>
       </div>
     </div>
-    <div class="mt-12 border-t border-white/10 pt-8">
+    <div class="mt-8 border-t sm:mt-12 border-white/10 pt-8">
       <h3 class="text-xl font-semibold">More for your everyday work</h3>
       <ul class="mt-6 grid gap-x-10 gap-y-4 text-sm text-muted-foreground sm:grid-cols-2">
         <li v-for="item in capabilities" :key="item" class="flex gap-3"><span aria-hidden="true" class="text-primary">•</span>{{ item }}</li>

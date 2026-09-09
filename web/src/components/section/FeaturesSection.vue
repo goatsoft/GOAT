@@ -89,8 +89,8 @@ const steps = [
 </script>
 
 <template>
-  <section id="features" class="relative mx-auto max-w-6xl scroll-mt-24 px-6 py-16 sm:py-24">
-    <motion.div v-bind="reveal()" class="mx-auto mb-16 max-w-2xl text-center sm:mb-24">
+  <section id="features" class="relative mx-auto max-w-6xl scroll-mt-24 px-6 py-12 sm:py-24">
+    <motion.div v-bind="reveal()" class="mx-auto mb-8 max-w-2xl text-center sm:mb-24">
       <p class="font-mono text-xs uppercase tracking-[0.2em] text-primary">Features</p>
       <motion.h2 v-bind="heading(0.1)" class="mt-3 text-balance text-4xl font-semibold tracking-[-0.03em] sm:text-5xl">
         From conversation to project work.
@@ -99,10 +99,10 @@ const steps = [
 
     <div ref="root" class="grid gap-10 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] lg:gap-16">
       <!-- Copy column -->
-      <div class="order-2 lg:order-1">
+      <div class="order-2 space-y-12 sm:space-y-0 lg:order-1">
         <div
           v-for="(s, i) in steps" :key="s.key" :data-step="i" :id="`feature-${s.key}`"
-          class="scroll-mt-24 flex min-h-[70vh] flex-col justify-center py-10 transition-opacity duration-500 lg:min-h-[80vh] lg:justify-start lg:pt-0"
+          class="scroll-mt-24 flex flex-col justify-center transition-opacity duration-500 sm:min-h-[70vh] sm:py-10 lg:min-h-[80vh] lg:justify-start lg:pt-0"
           :class="active === i ? 'opacity-100' : 'lg:opacity-30'"
         >
           <p class="font-mono text-xs uppercase tracking-[0.2em] text-primary">{{ s.eyebrow }}</p>
