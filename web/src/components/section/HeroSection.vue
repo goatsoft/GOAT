@@ -91,7 +91,7 @@ const ease = [0.22, 1, 0.36, 1] as const
       :transition="{ duration: 1.2, delay: 0.7, ease }"
     >
       <div class="relative">
-        <div class="pointer-events-none absolute -inset-x-10 -top-10 -z-10 h-64 bg-[radial-gradient(60%_100%_at_50%_0%,rgba(122,92,255,.35),transparent_70%)] blur-2xl" />
+        <div class="hero-window-glow pointer-events-none absolute -inset-x-10 -top-10 -z-10 h-64 bg-[radial-gradient(60%_100%_at_50%_0%,rgba(122,92,255,.35),transparent_70%)] blur-2xl" />
         <ProductMock scene="hero" />
       </div>
     </motion.div>
@@ -111,5 +111,7 @@ const ease = [0.22, 1, 0.36, 1] as const
   .hero-section .animate-aurora { animation:none }
   /* Radial gradients already have soft edges; extra blur stalls iOS compositing. */
   .hero-section .blur-3xl, .hero-section .blur-2xl { filter:none }
+  /* This top-aligned glow has a hard edge without blur. The page aurora supplies the mobile glow. */
+  .hero-window-glow { display:none }
 }
 </style>
