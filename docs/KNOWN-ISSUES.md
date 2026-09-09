@@ -16,6 +16,10 @@ Jobs are non-interactive and confined to a Pen, with isolated home/cache directo
 
 A saved engine preset is not proof that every model or server version supports structured tools, vision or reasoning controls. Basic chat and tool calling must be qualified separately. See [Engine compatibility](ENGINES.md#compatibility-evidence).
 
+Some Devstral Small 2 conversions include a chat template that rejects a user message immediately after a tool result. Lead can trigger this with an HTTP 400 about alternating conversation roles. The installed 24B 4-bit conversion reproduced this during Kid acceptance, including with a minimal request outside GOAT. See the [upstream template report](https://huggingface.co/mistralai/Devstral-Small-2-24B-Instruct-2512/discussions/30). Use an updated template or another compatible model; switching the affected chat to Qwen3 Coder 30B resumed the completed file result in the tested configuration.
+
+A model can request another write after you deny one. Each unapproved write remains blocked, but a new request may open another approval prompt. Use Stop to end the turn. Kid acceptance verified that Deny left the file absent and Stop cancelled a subsequent request.
+
 Hindsight’s Open in Hindsight action currently targets port 9999 on the configured hostname. Custom web UI ports/reverse proxies must be opened manually. Browser/graph views are bounded previews, not complete service exports.
 
 ## Local-network access in source builds

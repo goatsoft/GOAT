@@ -2,6 +2,7 @@ import base64
 import importlib.util
 import os
 from pathlib import Path
+import plistlib
 import subprocess
 import tempfile
 import unittest
@@ -62,6 +63,15 @@ class ReleaseSigningTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn("skipped", result.stdout)
 
+    def test_release_entitlements_reject_debugger_access(self):
+        for entitlements in ({}, {"com.apple.security.get-task-allow": False}):
+            signing.validate_entitlements(plistlib.dumps(entitlements))
+        signing.validate_entitlements(b"")
+        for entitlements in (plistlib.dumps({"com.apple.security.get-task-allow": True}),
+                             b"invalid plist", plistlib.dumps(["unexpected"])):
+            with self.subTest(entitlements=entitlements), self.assertRaises(ValueError):
+                signing.validate_entitlements(entitlements)
+
     def test_make_keeps_local_and_release_signing_separate(self):
         makefile = Path(__file__).parents[2] / "Makefile"
         with tempfile.TemporaryDirectory() as directory:
@@ -81,6 +91,8 @@ class ReleaseSigningTests(unittest.TestCase):
             release = dry_run("release")
             self.assertIn(f'CODE_SIGN_IDENTITY="{self.identity}"', release)
             self.assertIn('OTHER_CODE_SIGN_FLAGS="--timestamp"', release)
+            self.assertIn('CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO', release)
+            self.assertNotIn('CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO', dry_run("test-app"))
             self.assertIn('CODE_SIGN_STYLE=Manual', release)
             self.assertIn('CODE_SIGN_IDENTITY="-"', dry_run("build", "CODE_SIGN_IDENTITY=-"))
             self.assertIn('OTHER_CODE_SIGN_FLAGS=""',

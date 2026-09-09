@@ -4,6 +4,7 @@ import base64
 import binascii
 import os
 from pathlib import Path
+import plistlib
 import re
 import subprocess
 import sys
@@ -48,6 +49,19 @@ def validate_signature(details, identity, team):
         raise ValueError("official artifacts require a secure timestamp")
 
 
+def validate_entitlements(data):
+    if not data.strip():
+        return
+    try:
+        entitlements = plistlib.loads(data)
+    except plistlib.InvalidFileException:
+        raise ValueError("artifact entitlements could not be decoded") from None
+    if not isinstance(entitlements, dict):
+        raise ValueError("artifact entitlements must be a dictionary")
+    if entitlements.get("com.apple.security.get-task-allow"):
+        raise ValueError("official artifacts must not allow debugger attachment")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--verify", type=Path, help="check a signed app or executable")
@@ -63,6 +77,10 @@ def main():
             validate_signature(
                 details.stderr, os.environ.get("CODE_SIGN_IDENTITY", ""),
                 os.environ.get("APPLE_TEAM_ID") or os.environ.get("DEVELOPMENT_TEAM", ""))
+            entitlements = subprocess.run(
+                ["codesign", "-d", "--entitlements", "-", "--xml", str(args.verify)],
+                check=True, capture_output=True)
+            validate_entitlements(entitlements.stdout)
         else:
             validate_configuration(os.environ)
     except (ValueError, subprocess.CalledProcessError) as error:
