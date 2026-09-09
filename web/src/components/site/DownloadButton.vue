@@ -24,15 +24,20 @@ withDefaults(defineProps<{ href: string; label?: string; class?: string }>(), { 
   animation: ring-spin 4s linear infinite;
 }
 .ring-cta::after {
-  content: ""; position: absolute; inset: -8px; border-radius: 9999px; filter: blur(14px); opacity: .6;
-  background: conic-gradient(from var(--a, 0deg), transparent 0%, #3aa0ff 25%, #b44bff 50%, transparent 100%);
-  animation: ring-spin 4s linear infinite;
+  content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  box-shadow: -6px -3px 22px rgba(58,160,255,.4), 6px 3px 24px rgba(180,75,255,.4);
+  animation: ring-glow 4s linear infinite;
+}
+@keyframes ring-glow {
+  0%, 100% { box-shadow: -6px -3px 22px rgba(58,160,255,.4), 6px 3px 24px rgba(180,75,255,.4); }
+  50% { box-shadow: -6px -3px 22px rgba(180,75,255,.4), 6px 3px 24px rgba(58,160,255,.4); }
 }
 @property --a { syntax: "<angle>"; inherits: false; initial-value: 0deg; }
 @keyframes ring-spin { to { --a: 360deg; } }
 .shimmer {
   background: linear-gradient(110deg, transparent 30%, rgba(255,255,255,.18) 50%, transparent 70%);
   background-size: 250% 100%;
+  background-repeat: no-repeat;
   animation: shimmer 3.2s ease-in-out infinite;
 }
 @keyframes shimmer { from { background-position: 120% 0; } to { background-position: -120% 0; } }

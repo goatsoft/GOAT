@@ -1,4 +1,5 @@
 import { WGSL, GLSL_VS, GLSL_FS } from './aurora-shaders.ts'
+import { usesTouchInput } from './browser-input.ts'
 
 export interface AuroraOptions {
   colors: [number[], number[], number[]]
@@ -128,6 +129,8 @@ export function createAuroraRenderer(options: () => AuroraOptions, reduced: bool
   }
   return {
     async start(el: HTMLCanvasElement): Promise<'webgpu' | 'webgl' | 'css'> {
+      // Touch devices use the static gradient so decoration cannot compete with navigation.
+      if (usesTouchInput()) return 'css'
       try {
         if (await initWebGPU(el)) return 'webgpu'
       } catch {

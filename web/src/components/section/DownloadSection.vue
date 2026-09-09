@@ -19,7 +19,7 @@ const palette = (i: number) => {
 </script>
 
 <template>
-  <section id="download" class="relative scroll-mt-24 overflow-hidden py-24 sm:py-32">
+  <section id="download" class="relative scroll-mt-24 overflow-hidden py-12 sm:py-32">
     <div class="pointer-events-none absolute left-1/2 top-1/2 -z-10 h-[700px] w-[1100px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[radial-gradient(closest-side,rgba(122,92,255,.22),transparent)] blur-3xl" />
     <div class="mx-auto max-w-6xl px-6">
       <motion.div v-bind="reveal()" class="mx-auto max-w-2xl text-center">
@@ -28,7 +28,7 @@ const palette = (i: number) => {
         <p class="mt-4 text-pretty text-lg text-muted-foreground">{{ site.releaseAvailable ? 'Install GOAT, connect an engine and create your first Pen.' : 'Explore the source preview, try it with your local models and tell us what works. A packaged Mac download will follow once release testing is complete.' }}</p>
         <div class="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
           <DownloadButton :href="site.primaryHref" :label="site.primaryLabel" />
-          <StarLink :href="site.repo" label="View source" size="lg" />
+          <StarLink :href="site.repo" label="Star on GitHub" size="lg" />
         </div>
       </motion.div>
 
@@ -36,7 +36,7 @@ const palette = (i: number) => {
 
       <!-- Same cloud language as the rest of the page, but softer and top-lit: the cloud
            sits behind the step number and fades out before the copy. -->
-      <div class="mt-16 grid gap-4 md:grid-cols-3">
+      <div class="mt-10 grid sm:mt-16 gap-4 md:grid-cols-3">
         <motion.div v-for="(s, i) in steps" :key="s.n" v-bind="stagger(i)">
           <Card variant="glass" padding="lg" class="group relative isolate h-full overflow-hidden">
             <AuroraCanvas

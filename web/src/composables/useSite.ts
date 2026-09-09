@@ -1,6 +1,6 @@
 import release from '../../../apps/goat-macos/release.json'
 import publication from '../../publication.json'
-import { docRoute } from '../../docs/routes.ts'
+import { docRoute } from '../lib/doc-routes.ts'
 
 /** Build-time identity and deliberate publication state; no background release lookup. */
 export function useSite() {

@@ -70,6 +70,9 @@ onMounted(() => {
 .glow-l { left: -6%; top: 4%; width: 68%; height: 72%; background: radial-gradient(closest-side, var(--gl), transparent 72%); animation: breathe-l 7s ease-in-out infinite; }
 .glow-r { right: -6%; top: 4%; width: 68%; height: 72%; background: radial-gradient(closest-side, var(--gr), transparent 72%); animation: breathe-r 7s ease-in-out infinite; animation-delay: -3.5s; }
 .glow-m { left: 18%; top: 28%; width: 64%; height: 66%; background: radial-gradient(closest-side, var(--gm), transparent 70%); animation: breathe-m 9s ease-in-out infinite; animation-delay: -2s; }
+@media (hover: none), (pointer: coarse) {
+  .mark, .glow { filter:none }
+}
 @keyframes breathe-l {
   0%, 100% { opacity: .7; transform: translate(0, 0) scale(1); }
   50% { opacity: 1; transform: translate(-6%, 4%) scale(1.25); }

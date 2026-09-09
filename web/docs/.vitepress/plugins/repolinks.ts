@@ -1,6 +1,6 @@
 import { dirname, posix, relative, resolve } from 'node:path'
 import type MarkdownIt from 'markdown-it'
-import { docRoute } from '../../routes.ts'
+import { docRoute } from '../../../src/lib/doc-routes.ts'
 
 /**
  * markdown-it plugin: make links that leave docs/ land somewhere real.
