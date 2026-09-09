@@ -51,18 +51,18 @@ const themes = [
         >
           <img
             :src="t.img" :alt="`${t.name} theme`" loading="lazy"
-            class="pan-img aspect-[4/5] w-full object-cover"
+            class="pan-img aspect-[12/5] w-full object-cover sm:aspect-[4/5]"
             :style="{ objectPosition: t.pos }"
           />
-          <div class="absolute inset-0 bg-[linear-gradient(180deg,transparent_45%,rgba(10,11,20,.92))]" />
-          <div class="absolute inset-x-0 bottom-0 p-5">
+          <div class="absolute inset-0 bg-black/55 sm:bg-transparent sm:bg-[linear-gradient(180deg,transparent_45%,rgba(10,11,20,.92))]" />
+          <div class="absolute inset-x-0 top-1/2 -translate-y-1/2 p-5 sm:bottom-0 sm:top-auto sm:translate-y-0">
             <div class="flex items-center justify-between">
               <span class="text-lg font-semibold">{{ t.name }}</span>
               <span class="flex gap-1">
                 <span v-for="c in t.tokens" :key="c" class="size-3.5 rounded-full ring-1 ring-white/20" :style="{ background: c }" />
               </span>
             </div>
-            <p class="mt-1 text-sm text-goat-muted">{{ t.desc }}</p>
+            <p class="mt-1 text-sm text-white sm:text-goat-muted">{{ t.desc }}</p>
           </div>
         </a>
       </motion.div>
