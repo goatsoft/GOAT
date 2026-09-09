@@ -183,10 +183,7 @@ struct StreamingMarkdownView: View {
             Markdown(content)
                 .markdownImageProvider(BlockedMarkdownImageProvider())
                 .markdownInlineImageProvider(BlockedMarkdownInlineImageProvider())
-                .goatMarkdownStyle(fontSize: model.chatFontSize)
-                .markdownBlockStyle(\.codeBlock) { configuration in
-                    CodeBlockView(configuration: configuration, isStreaming: true)
-                }
+                .goatMarkdownStyle(fontSize: model.chatFontSize, isStreaming: true)
                 .textSelection(.enabled)
         }
         .task(id: message.id) {

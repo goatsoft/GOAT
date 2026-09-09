@@ -64,7 +64,8 @@ struct CodeBlockView: View {
                 }
                 .clipShape(RoundedRectangle(cornerRadius: Caprine.Activity.radius))
             } else {
-                HighlightedCodeView(code: code, fontSize: model.codeFontSize, language: language)
+                HighlightedCodeView(
+                    code: code, fontSize: model.codeFontSize, language: language, isStreaming: isStreaming)
             }
             HStack(spacing: 16) {
                 Spacer()

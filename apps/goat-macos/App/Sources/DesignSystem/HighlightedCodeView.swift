@@ -13,6 +13,7 @@ struct HighlightedCodeView: View {
     var fontSize: CGFloat = 12
     var showLineNumbers: Bool = false
     var language: String? = nil
+    var isStreaming = false
 
     private var lineCount: Int {
         max(1, code.reduce(1) { $0 + ($1 == "\n" ? 1 : 0) } - (code.hasSuffix("\n") ? 1 : 0))
@@ -39,7 +40,9 @@ struct HighlightedCodeView: View {
                         .textSelection(.disabled)
                         .accessibilityHidden(true)
                 }
-                if permitsRichRendering {
+                // Highlighting is asynchronous. Growing fences stay plain until completion so
+                // each Markdown snapshot cannot alternate between plain and coloured source.
+                if permitsRichRendering && !isStreaming {
                     highlightedText
                         .font(Font(ReadingFonts.nsFont(model.effectiveCodeFontID, size: fontSize, role: .code)))
                         .multilineTextAlignment(.leading)
