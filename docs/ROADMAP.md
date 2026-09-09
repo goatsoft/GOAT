@@ -1,8 +1,8 @@
 # Roadmap
 
-GOAT’s first release is **0.1 (Kid)**. The capabilities below are available to explore in the public source preview; binary release acceptance is still in progress. Future work has no promised delivery date.
+GOAT’s first release is **0.1 (Kid)**. The capabilities below are included in the downloadable Mac app. Future work has no promised delivery date.
 
-## Kid: public source preview
+## Available in Kid
 
 - Native streaming chat with compatible engines, model selection, effort presets and generation statistics.
 - Pens with project instructions, linked workspaces and local Git status.
@@ -14,11 +14,13 @@ GOAT’s first release is **0.1 (Kid)**. The capabilities below are available to
 - JUDAS connection policy, session Activity Log, themes and local reading preferences.
 - Optional Hitch local API/CLI and the Pronk contributor example.
 
-The remaining work is release qualification, content/distribution review and a verified installation experience. See [Release readiness](RELEASE-CHECKLIST.md).
+Downloads and release notes are on [GitHub Releases](https://github.com/goatsoft/GOAT/releases/tag/v0.1.0). See [Known issues](KNOWN-ISSUES.md) for current limitations.
 
 ## Next priorities
 
-Improve onboarding, accessibility, discoverability and compatibility based on observed user needs. Continue profiling realistic long-running workloads and refine documentation as supported engine/runtime combinations are qualified.
+The next release will focus on first-launch setup: improve the initial window and sidebar proportions, start fresh installations with no configured engines, and open Settings with clear connection guidance. Existing users’ saved engine configurations must be preserved.
+
+Continue improving accessibility, discoverability and compatibility based on observed user needs. Profile realistic long-running workloads and refine documentation as engine/runtime combinations are qualified.
 
 Yearling and Ibex are reserved release codenames; a codename or version in planning is not a shipping commitment. [Versioning](VERSIONING.md) defines release identity.
 

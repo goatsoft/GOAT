@@ -1,6 +1,6 @@
 # Release readiness
 
-**0.1 (Kid) is a public source preview.** This is the public acceptance checklist, not a claim that every item has passed. Detailed machine logs and historical reports remain in the private maintainer archive.
+**0.1 (Kid) is available as a signed, notarized Mac download.** This is the acceptance checklist for ongoing releases, not a claim that every configuration or workflow has been tested. See [Known issues](KNOWN-ISSUES.md#release-qualification) for the scope of Kid’s installation check. Detailed machine logs and historical reports remain in the private maintainer archive.
 
 ## Product and content
 

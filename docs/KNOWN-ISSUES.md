@@ -1,12 +1,18 @@
 # Known issues
 
-Current limitations to consider when evaluating the Kid source preview. This page separates reproducible behavior from compatibility that still needs qualification.
+Current limitations in 0.1 (Kid). This page separates reproducible behavior from compatibility that still needs qualification.
 
 ## Fullscreen sidebar on macOS 26
 
 A dark area can appear over the top corners of the sidebar in native fullscreen. Windowed mode is unaffected. GOAT uses an opaque fullscreen backdrop to reduce related compositing artifacts, but this does not establish that the sidebar issue is resolved.
 
 Workaround: use a normal window if the artifact interferes with reading. The original investigation covered macOS 26; a fix on a later macOS version has not been verified for this release. Include your exact OS/build and a non-sensitive screenshot when reporting a change.
+
+## First-launch setup
+
+The initial window and sidebar proportions may need adjustment. Resize them to suit your display.
+
+Kid includes a Custom engine profile on first launch. It does not mean an engine is installed or connected. Open **Settings → Engine** and configure the actual endpoint for your engine. A guided setup with no preconfigured engines is planned for the next release.
 
 ## Native command compatibility
 
@@ -28,4 +34,6 @@ macOS can ask again for local-network permission when an ad-hoc build changes. C
 
 ## Release qualification
 
-Clean-machine installation, signing/notarization, full scale profiling and live-service combinations remain release gates. Consult [Release readiness](RELEASE-CHECKLIST.md) for the current acceptance scope. There is no approved public Kid download yet.
+The official 0.1.0 build 1342 passed signing, notarization and installation checks on a separate Mac Studio with an M1 Max, 64 GB RAM and macOS 26.6.2. The owner confirmed launch without security warnings and chat/engine settings persisting across quit and reopen.
+
+Broader engine/service combinations, full accessibility coverage and long-workload profiling remain ongoing. A successful installation does not establish compatibility with every model or integration. Consult [Release readiness](RELEASE-CHECKLIST.md) for the acceptance scope.

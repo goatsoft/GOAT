@@ -24,7 +24,7 @@ A vulnerability in an independently operated engine or MCP server may need to be
 
 ## Supported releases
 
-0.1 (Kid) is a public source preview. Reports against current `main` are welcome. Development and candidate builds have not completed binary release acceptance; supported release versions and security fixes will be listed with published releases.
+0.1 (Kid) is the current supported release. Reports against the latest published release and current `main` are welcome. Security fixes will be identified in release notes and, where appropriate, a security advisory.
 
 Unsigned or ad hoc candidate builds can trigger macOS warnings. That expected distribution state does not establish that a build is safe, and a signing or update-integrity defect is still reportable.
 
