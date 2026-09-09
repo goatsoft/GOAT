@@ -57,4 +57,7 @@ withDefaults(defineProps<{ title?: string; class?: string; sidebar?: boolean }>(
 .sidebar-engine { margin-top:auto; padding-top:25px; font-size:9px }.sidebar-engine>div { display:flex; align-items:center; gap:5px; padding-top:12px; border-top:1px solid #d2d5ff12 }.sidebar-engine svg { margin-left:auto; width:15px; height:15px }.sidebar-engine small { display:block; margin:5px 0 0 11px; color:#949bb1; font-size:9px }.engine-dot { width:5px; height:5px; border-radius:50%; background:#37dd92 }.model-count { color:#65b7ff; background:#339dff13; padding:3px 5px; border-radius:20px }
 @container(min-width:700px) { .mock-sidebar { display:flex }.narrow-only-controls { display:none } }
 @container(max-width:380px) { .window-toolbar { gap:7px; padding-inline:8px }.toolbar-icon { width:22px; height:22px }.window-toolbar>.toolbar-icon:nth-last-child(2) { display:none }.app-glass { border-radius:20px } }
+@media (hover: none), (pointer: coarse) {
+  .app-glass { backdrop-filter:none; -webkit-backdrop-filter:none }
+}
 </style>

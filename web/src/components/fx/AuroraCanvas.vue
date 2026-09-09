@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
- * GPU aurora. WebGPU when the browser has it, WebGL2 otherwise, and a static CSS
- * gradient when neither is available. Reduced motion renders a single still frame.
+ * Aurora decoration. Touch devices use a static CSS gradient. Other browsers use
+ * WebGPU, WebGL2, or the gradient when neither is available. Reduced motion renders a single still frame.
  *
  * Renders at a capped internal resolution, pauses when off-screen or in a hidden tab, and never intercepts input.
  */

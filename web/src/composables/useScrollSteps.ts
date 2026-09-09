@@ -11,7 +11,7 @@ export function useScrollSteps(root: Ref<HTMLElement | null>, focal = 0.45) {
   const measure = () => {
     raf = 0
     const el = root.value
-    if (!el) return
+    if (!el || window.innerWidth < 1024) return
     const steps = Array.from(el.querySelectorAll<HTMLElement>('[data-step]'))
     const line = window.innerHeight * focal
     let best = 0
@@ -25,7 +25,7 @@ export function useScrollSteps(root: Ref<HTMLElement | null>, focal = 0.45) {
     active.value = best
   }
 
-  const onScroll = () => { if (!raf) raf = requestAnimationFrame(measure) }
+  const onScroll = () => { if (window.innerWidth >= 1024 && !raf) raf = requestAnimationFrame(measure) }
 
   onMounted(() => {
     measure()

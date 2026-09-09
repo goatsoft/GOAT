@@ -114,3 +114,19 @@ test('failed WebGL allocation releases the acquired context', async t => {
   assert.equal(lost, 1)
   assert.equal(f.frames(), 0)
 })
+
+for (const query of ['(hover: none)', '(pointer: coarse)']) {
+  test(`touch graphics fallback skips devices, contexts and animation frames: ${query}`, async t => {
+    let adapters = 0
+    const f = fixture(t, async () => { adapters++; return null })
+    const previous = Object.getOwnPropertyDescriptor(globalThis, 'matchMedia')
+    Object.defineProperty(globalThis, 'matchMedia', { configurable: true, value: value => ({ matches: value.split(', ').includes(query) }) })
+    t.after(() => { if (previous) Object.defineProperty(globalThis, 'matchMedia', previous); else delete globalThis.matchMedia })
+    const renderer = createAuroraRenderer(options, false)
+    assert.equal(await renderer.start(f.canvas), 'css')
+    assert.equal(adapters, 0)
+    assert.equal(f.contextRequests(), 0)
+    assert.equal(f.frames(), 0)
+    renderer.dispose()
+  })
+}

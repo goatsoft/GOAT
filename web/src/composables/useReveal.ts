@@ -1,4 +1,5 @@
 import type { MotionProps } from 'motion-v'
+import { usesTouchInput } from '../lib/browser-input.ts'
 
 type RevealProps = Pick<MotionProps, 'initial' | 'whileInView' | 'inViewOptions' | 'transition'>
 
@@ -8,6 +9,10 @@ type RevealProps = Pick<MotionProps, 'initial' | 'whileInView' | 'inViewOptions'
  * motion-v honours prefers-reduced-motion via <MotionConfig reduced-motion="user"> in App.vue.
  */
 export function useReveal() {
+  if (usesTouchInput()) {
+    const visible = (_delay?: number, _distance?: number): RevealProps => ({ initial: false })
+    return { reveal: visible, stagger: visible, heading: visible }
+  }
   const reveal = (delay = 0, y = 28): RevealProps => ({
     initial: { opacity: 0, y, filter: 'blur(6px)' },
     whileInView: { opacity: 1, y: 0, filter: 'blur(0px)' },
