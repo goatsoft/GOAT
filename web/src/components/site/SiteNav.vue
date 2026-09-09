@@ -38,7 +38,7 @@ const links = [
           <span class="text-brand text-2xl md:text-lg font-bold tracking-tight">GOAT</span>
         </RouterLink>
 
-        <div class="hidden items-center gap-7 text-sm text-muted-foreground md:flex">
+        <div class="hidden items-center gap-7 text-sm md:flex" :class="scrolled ? 'text-muted-foreground' : 'text-foreground'">
           <component
             :is="l.external ? 'a' : RouterLink" v-for="l in links" :key="l.to"
             v-bind="l.external ? { href: l.to } : { to: l.to }"
@@ -47,7 +47,7 @@ const links = [
         </div>
 
         <div class="flex items-center gap-2">
-          <Button variant="ghost" size="icon" :as="'a'" :href="site.repo" target="_blank" rel="noopener" aria-label="GitHub" class="hidden md:inline-flex">
+          <Button variant="ghost" size="icon" :as="'a'" :href="site.repo" target="_blank" rel="noopener" aria-label="GitHub" class="hidden md:inline-flex" :class="scrolled ? 'text-muted-foreground' : 'text-foreground'">
             <i-simple-icons-github />
           </Button>
           <Button size="sm" :as="'a'" :href="site.primaryHref" class="hidden sm:inline-flex">
