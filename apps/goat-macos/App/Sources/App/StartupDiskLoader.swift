@@ -128,11 +128,11 @@ enum StartupDiskLoader {
             chats: chatRecords)
     }
 
-    /// First run of the managed list: fold the old single endpoint (+ preset + key) into one profile.
-    private static func loadOrMigrateEngines(
-        _ settings: LegacyEngineSettings
+    /// Preserve an existing list or migrate an explicitly configured legacy connection.
+    static func loadOrMigrateEngines(
+        _ settings: LegacyEngineSettings, at url: URL = Home.enginesFile
     ) throws -> (file: EngineStore.File, warning: String?) {
-        if let file = try EngineStore.load(from: Home.enginesFile) {
+        if let file = try EngineStore.load(from: url) {
             var warning: String?
             do {
                 if let legacy = try CredentialStore.get("engine.apiKey"),
@@ -154,7 +154,7 @@ enum StartupDiskLoader {
             try CredentialStore.set(legacy, for: AppModel.keyStore(profile.id))
             migratedLegacyCredential = true
         }
-        try EngineStore.save(file, to: Home.enginesFile)
+        try EngineStore.save(file, to: url)
         var warning: String?
         if migratedLegacyCredential {
             do {
@@ -169,9 +169,12 @@ enum StartupDiskLoader {
     static func fallbackEngineFile(
         _ settings: LegacyEngineSettings
     ) -> EngineStore.File {
-        let candidate = settings.endpoint ?? EnginePreset.recommended.url
-        let oldURL = safeEngineEndpoint(candidate)
         let preset = EnginePreset.management(forPresetID: settings.presetID)
+        let endpoint = settings.endpoint?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let candidate = endpoint.flatMap({ $0.isEmpty ? nil : $0 }) ?? preset.url else {
+            return EngineStore.File(active: nil, engines: [])
+        }
+        let oldURL = safeEngineEndpoint(candidate)
         let profile = EngineProfile(
             id: preset.id == "custom" ? "engine" : preset.id,
             name: preset.id == "custom" ? "Custom" : preset.name,

@@ -5,7 +5,7 @@ import SwiftUI
 
 /// The Engine tab: a managed list of engines (one active at a time), mirroring the MCP Servers
 /// screen (ADR-0021). Everything per-engine (URL, key, model management) lives in the Add/Edit
-/// popup; the tab itself is just the list.
+/// popup; the empty list explains how to connect the first engine.
 struct EngineSettings: View {
     @Environment(AppModel.self) private var model
     @State private var editing: EngineProfile?
@@ -21,6 +21,7 @@ struct EngineSettings: View {
                 Label("Add Engine", systemImage: "plus")
             }
             .buttonStyle(.borderedProminent)
+            .disabled(!model.engineStoreWritable)
             Spacer()
             Button {
                 Task { await model.discover() }
@@ -28,6 +29,7 @@ struct EngineSettings: View {
                 Label("Auto-Discover", systemImage: "sparkle.magnifyingglass")
             }
             .buttonStyle(SecondaryChipButtonStyle())
+            .disabled(model.activeEngineProfile == nil || model.shepherd.hasActiveTurn || model.engineTransitioning)
             Button {
                 showConfigEditor = true
             } label: {
@@ -37,13 +39,8 @@ struct EngineSettings: View {
             .help(Home.enginesFile.path)
         } rows: {
             if model.engineProfiles.isEmpty {
-                VStack(spacing: 8) {
-                    GoatieView(pose: .shrug, size: 60)
-                    Text("No engines yet").foregroundStyle(.secondary)
-                    Text("Add one, or run Auto-Discover.").font(.caption).foregroundStyle(.tertiary)
-                }
-                .frame(maxWidth: .infinity).padding(.vertical, 24)
-                .listRowBackground(Color.clear)
+                firstEngineGuide
+                    .listRowBackground(Color.clear)
             }
             ForEach(model.engineProfiles) { profile in
                 EngineRow(
@@ -80,13 +77,55 @@ struct EngineSettings: View {
         }
     }
 
+    private var firstEngineGuide: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Connect your first engine", systemImage: "cpu")
+                    .font(.title3.weight(.semibold))
+                Text("Your engine runs the model. GOAT connects to it for chat, project tools and memory.")
+                    .foregroundStyle(.secondary)
+            }
+            setupStep(
+                "1", title: "Start your engine",
+                detail: "Open oMLX or another compatible engine, load a model and start its server.")
+            setupStep(
+                "2", title: "Add the connection",
+                detail:
+                    "Choose Add Engine and select its preset. Check the server address and enter an API key if required. Use Custom for other compatible servers."
+            )
+            setupStep(
+                "3", title: "Test, save and chat",
+                detail:
+                    "Test the connection, then add it. GOAT activates your first engine automatically. Choose a model in chat to get started."
+            )
+            if let url = URL(string: "https://goatherd.dev/Getting-Started") {
+                Link("Read the setup guide", destination: url)
+            }
+            if !model.engineStoreWritable {
+                Text("The saved engine configuration needs repair. Open Edit Config before adding a connection.")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func setupStep(_ number: String, title: String, detail: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Text(number).font(.headline).foregroundStyle(model.theme.tokens.tint)
+                .frame(width: 22)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.headline)
+                Text(detail).font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
     /// Seed shown if engines.json is somehow missing when the editor opens (it's written on first run).
     private static let seedConfig = """
         {
-          "active" : "omlx",
-          "engines" : [
-            { "id" : "omlx", "name" : "oMLX", "presetID" : "omlx", "url" : "http://127.0.0.1:8000" }
-          ]
+          "engines" : []
         }
         """
 }
@@ -134,7 +173,7 @@ private struct EngineRow: View {
                     Image(systemName: "trash")
                 }
                 .help("Remove")
-                .disabled(model.engineProfiles.count <= 1)
+                .disabled(profile.id == model.activeEngineID && model.shepherd.hasActiveTurn)
             }
             .buttonStyle(.borderless)
             .foregroundStyle(.secondary)
@@ -164,7 +203,7 @@ private struct EngineRow: View {
             Button("Edit…") { onEdit() }
             Divider()
             Button("Remove…", role: .destructive) { onDelete() }
-                .disabled(model.engineProfiles.count <= 1)
+                .disabled(profile.id == model.activeEngineID && model.shepherd.hasActiveTurn)
         }
     }
 
@@ -196,15 +235,29 @@ private struct EngineEditorSheet: View {
     @State private var copiedCommand = false
     @State private var managerAppAvailable: Bool?
     @State private var isSaving = false
+    @State private var saveError: String?
+    @State private var draftID = UUID().uuidString
+
+    private struct ConnectionInput: Equatable {
+        let preset: String
+        let url: String
+        let key: String
+        let removeKey: Bool
+        let requestStyle: EngineRequestStyle
+    }
+    private var connectionInput: ConnectionInput {
+        ConnectionInput(preset: presetID, url: urlText, key: keyDraft, removeKey: removeKey, requestStyle: requestStyle)
+    }
 
     private var isEditing: Bool { existing != nil }
     private var preset: EnginePreset { EnginePreset.with(id: presetID) }
 
     init(existing: EngineProfile?) {
         self.existing = existing
-        _presetID = State(initialValue: existing?.presetID ?? "custom")
-        _name = State(initialValue: existing?.name ?? "")
-        _urlText = State(initialValue: existing?.url ?? "")
+        let initialPreset = existing?.preset ?? EnginePreset.recommended
+        _presetID = State(initialValue: initialPreset.id)
+        _name = State(initialValue: existing?.name ?? initialPreset.name)
+        _urlText = State(initialValue: existing?.url ?? initialPreset.url ?? "")
         _requestStyle = State(initialValue: existing?.requestStyle ?? .automatic)
     }
 
@@ -213,6 +266,10 @@ private struct EngineEditorSheet: View {
             VStack(alignment: .leading, spacing: 12) {
                 Text(isEditing ? "Edit Engine" : "Add Engine")
                     .font(.title3.weight(.semibold))
+                if !isEditing {
+                    Text("Start the server in your engine first, then match its address below.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
 
                 Picker("Preset", selection: $presetID) {
                     ForEach(EnginePreset.all) { p in
@@ -259,6 +316,9 @@ private struct EngineEditorSheet: View {
                 if let testResult {
                     testSummary(testResult)
                 }
+                if let saveError {
+                    Text(saveError).font(.callout).foregroundStyle(.secondary)
+                }
 
                 HStack {
                     Button("Cancel") { dismiss() }
@@ -271,14 +331,19 @@ private struct EngineEditorSheet: View {
                     } label: {
                         if testing { GoatLoadingIndicator().controlSize(.small) } else { Text("Test") }
                     }
-                    .disabled(!formValid || testing)
+                    .disabled(!formValid || testing || isSaving)
                     Button(isEditing ? "Save" : "Add") { Task { await save() } }
                         .keyboardShortcut(.defaultAction)
-                        .disabled(!formValid || isSaving)
+                        .disabled(!formValid || isSaving || testing)
                 }
             }
+            .disabled(isSaving)
             .padding(20)
             .frame(width: 460)
+        }
+        .onChange(of: connectionInput) {
+            testResult = nil
+            saveError = nil
         }
         .task(id: managerAppPath) {
             guard let path = managerAppPath else {
@@ -394,6 +459,9 @@ private struct EngineEditorSheet: View {
                 if !models.isEmpty {
                     Text(models.prefix(6).map(\.displayName).joined(separator: ", ") + (models.count > 6 ? "…" : ""))
                         .font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+                } else {
+                    Text("The server is reachable. Load a model in your engine, then test again.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
         case .authRequired:
@@ -414,7 +482,7 @@ private struct EngineEditorSheet: View {
 
     private func buildProfile() -> EngineProfile {
         EngineProfile(
-            id: existing?.id ?? UUID().uuidString,
+            id: existing?.id ?? draftID,
             name: name.trimmingCharacters(in: .whitespaces),
             url: urlText.trimmingCharacters(in: .whitespaces),
             presetID: presetID == "custom" ? nil : presetID,
@@ -424,20 +492,34 @@ private struct EngineEditorSheet: View {
     private func runTest() async {
         testing = true
         testResult = nil
-        testResult = await model.testEngine(buildProfile(), key: removeKey ? "" : keyDraft)
+        let input = connectionInput
+        let result = await model.testEngine(buildProfile(), key: removeKey ? "" : (keyDraft.isEmpty ? nil : keyDraft))
+        if connectionInput == input { testResult = result }
         testing = false
     }
 
     private func save() async {
         guard !isSaving else { return }
         isSaving = true
+        saveError = nil
         defer { isSaving = false }
         let profile = buildProfile()
-        await model.addOrUpdateEngine(profile)
+        guard await model.addOrUpdateEngine(profile, connect: false) else {
+            saveError = model.dbWarning ?? "The engine could not be saved. Try again."
+            return
+        }
+        let keySaved: Bool
         if removeKey {
-            await model.setEngineKey("", for: profile.id)
+            keySaved = await model.setEngineKey("", for: profile.id, connect: false)
         } else if !keyDraft.isEmpty {
-            await model.setEngineKey(keyDraft, for: profile.id)
+            keySaved = await model.setEngineKey(keyDraft, for: profile.id, connect: false)
+        } else {
+            keySaved = true
+        }
+        if profile.id == model.activeEngineID { model.scheduleEngineApply() }
+        guard keySaved else {
+            saveError = model.dbWarning ?? "The API key could not be saved. Try again."
+            return
         }
         dismiss()
     }

@@ -205,7 +205,13 @@ final class AppModel {
     /// Dedicated coder variants lead the UI and first-run default, without changing their wire format.
     var models: [ModelRef] { health.models }
     var endpoint: String {
-        didSet { UserDefaults.standard.set(endpoint, forKey: "engine.endpoint") }
+        didSet {
+            if endpoint.isEmpty {
+                UserDefaults.standard.removeObject(forKey: "engine.endpoint")
+            } else {
+                UserDefaults.standard.set(endpoint, forKey: "engine.endpoint")
+            }
+        }
     }
     var defaultModelID: String? {
         didSet { UserDefaults.standard.set(defaultModelID, forKey: "engine.defaultModel") }
@@ -213,6 +219,11 @@ final class AppModel {
     /// The managed list of engines (one active at a time) persisted in engines.json (ADR-0021).
     var engineProfiles: [EngineProfile] = []
     var activeEngineID = ""
+    var settingsTab: SettingsTab = .general
+    var shouldPresentEngineSetup = false
+    var needsEngineSetup: Bool {
+        startupPhase.hasLocalState && engineStoreWritable && engineProfiles.isEmpty
+    }
     var activeEngineProfile: EngineProfile? { engineProfiles.first { $0.id == activeEngineID } }
     /// The preset backing the active engine: drives its blurb + model-management affordance.
     var enginePreset: EnginePreset { activeEngineProfile?.preset ?? .custom }
@@ -349,7 +360,7 @@ final class AppModel {
     var messageRatingRevisions: [UUID: UInt64] = [:]
     var deletingChatIDs: Set<UUID> = []
 
-    /// Discovery probes both common local-engine ports, so this is only a seed value.
+    /// Inert initial configuration for the engine actor. No probe runs without a saved profile.
     static let fallbackEndpoint: URL = {
         guard let url = URL(string: "http://127.0.0.1:8000") else {
             preconditionFailure("The built-in engine endpoint must be a valid URL.")
@@ -389,11 +400,11 @@ final class AppModel {
         settingsAlwaysOnTop = d.object(forKey: "settings.alwaysOnTop") as? Bool ?? true
         herdRootPath = d.string(forKey: "herd.defaultRoot") ?? HerdWorkspace.suggestedRoot.path
         // File stores, credentials, and SQLite open during progressive startup, never here.
-        let seedURL = d.string(forKey: "engine.endpoint") ?? Self.fallbackEndpoint.absoluteString
+        let seedURL = d.string(forKey: "engine.endpoint") ?? ""
         endpoint = seedURL
         engine = OpenAICompatEngine(
             config: EngineConfig(
-                baseURL: URL(string: seedURL) ?? Self.fallbackEndpoint,
+                baseURL: (seedURL.isEmpty ? nil : URL(string: seedURL)) ?? Self.fallbackEndpoint,
                 apiKey: nil,
                 metadataDialect: .generic
             ))

@@ -111,3 +111,5 @@ The [release checklist](RELEASE-CHECKLIST.md) records qualification requirements
 Chat text/code attachments use validated `.goatdoc` envelopes in the existing attachment store. Shepherd expands their text during prompt preparation. Inline HTML/SVG/Mermaid artifacts and throttled streaming Markdown use the existing bounded rendering paths. See [ADR-0075](adrs/0075-chat-attachments-and-inline-artifacts.md).
 
 Hindsight session health is independent of individual memory request success. Connection checks share an owned attempt and reuse healthy transports; scope recovery preserves extension and JUDAS authority. See [ADR-0076](adrs/0076-hindsight-health-and-session-ownership.md).
+
+Fresh installations keep an empty engine list and open Engine settings after local startup. Existing lists and explicit legacy connections retain their settings. The first saved engine becomes active after its profile and optional credential have been written. See [ADR-0080](adrs/0080-explicit-first-engine-setup.md).
