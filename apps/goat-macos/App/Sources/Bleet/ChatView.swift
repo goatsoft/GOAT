@@ -581,8 +581,8 @@ struct Composer: View {
                 if attachmentsLoading {
                     GoatLoadingIndicator().controlSize(.small).help("Preparing attachments")
                 }
-                if !pending.isEmpty && !activeModelLooksVision {
-                    Label("this model may not do images", systemImage: "eye.trianglebadge.exclamationmark")
+                if pending.contains(where: { $0.imageData != nil }) && !activeModelLooksVision {
+                    Label("This model may not support images", systemImage: "eye.trianglebadge.exclamationmark")
                         .font(.caption)
                         .foregroundStyle(.orange)
                 }
