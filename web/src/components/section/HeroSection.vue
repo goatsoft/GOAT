@@ -75,7 +75,7 @@ const ease = [0.22, 1, 0.36, 1] as const
         <a :href="site.docs" class="glass inline-flex h-14 items-center gap-2 rounded-full border-0 px-8 text-lg font-semibold text-foreground transition-colors hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60">
           <i-hugeicons-book-open-01 class="size-5" /> Documentation
         </a>
-        <StarLink :href="site.repo" label="View source" size="lg" class="glass border-0 hover:bg-white/10" />
+        <StarLink :href="site.repo" label="Star on GitHub" size="lg" class="glass border-0 hover:bg-white/10" />
       </motion.div>
       <motion.p class="mt-4 font-mono text-xs text-muted-foreground/70" :initial="touch ? false : { opacity: 0 }" :animate="{ opacity: 1 }" :transition="{ delay: 1 }">
         Bring a compatible local engine. <a :href="site.omlx" class="text-primary hover:underline">oMLX</a> · <a :href="site.doc('Engines')" class="text-primary hover:underline">Engine setup</a>.

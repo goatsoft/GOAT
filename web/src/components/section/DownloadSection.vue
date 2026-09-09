@@ -28,7 +28,7 @@ const palette = (i: number) => {
         <p class="mt-4 text-pretty text-lg text-muted-foreground">{{ site.releaseAvailable ? 'Install GOAT, connect an engine and create your first Pen.' : 'Explore the source preview, try it with your local models and tell us what works. A packaged Mac download will follow once release testing is complete.' }}</p>
         <div class="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
           <DownloadButton :href="site.primaryHref" :label="site.primaryLabel" />
-          <StarLink :href="site.repo" label="View source" size="lg" />
+          <StarLink :href="site.repo" label="Star on GitHub" size="lg" />
         </div>
       </motion.div>
 
