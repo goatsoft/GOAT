@@ -69,6 +69,7 @@ release: gen
 	  -derivedDataPath $(DERIVED) -destination 'platform=macOS' \
 	  -onlyUsePackageVersionsFromResolvedFile \
 	  ENABLE_HARDENED_RUNTIME=YES \
+	  CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
 	  $(RELEASE_SIGNING_FLAGS) \
 	  OTHER_CODE_SIGN_FLAGS="$(if $(filter -,$(RELEASE_SIGNING_IDENTITY)),,--timestamp)" \
 	  build
