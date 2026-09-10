@@ -92,6 +92,31 @@ import Testing
     }
 }
 
+/// A dispatch timer distinguishes main-queue service from a sleeping Swift task's resumption.
+@MainActor private final class MainQueueResponsivenessProbe {
+    private let timer = DispatchSource.makeTimerSource(queue: .global(qos: .userInteractive))
+    private(set) var worstDelay: Duration = .zero
+    private var measuring = true
+
+    init() {
+        let clock = ContinuousClock()
+        timer.schedule(deadline: .now(), repeating: .milliseconds(20))
+        timer.setEventHandler { @Sendable [weak self] in
+            let queued = clock.now
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.measuring else { return }
+                self.worstDelay = max(self.worstDelay, queued.duration(to: clock.now))
+            }
+        }
+        timer.resume()
+    }
+
+    func stop() {
+        measuring = false
+        timer.cancel()
+    }
+}
+
 @Test @MainActor func readySendButtonDoesNotContinuouslyRelayoutTheWindow() async throws {
     let window = NSWindow(
         contentRect: NSRect(x: 80, y: 80, width: 200, height: 100),
@@ -117,6 +142,8 @@ import Testing
 }
 
 @Test @MainActor func codeHeavyListsLeaveTheVisibleChatEventLoopResponsive() async throws {
+    let clock = ContinuousClock()
+    let setupStart = clock.now
     let session = ChatSession(effort: .trot, modelID: nil)
     session.messagesLoaded = true
     let response = (1...12).map { step in
@@ -156,14 +183,31 @@ import Testing
     try await Task.sleep(for: .seconds(1))
     let editor = try #require(findComposerEditor(host))
     window.makeFirstResponder(editor)
-    let clock = ContinuousClock()
+    let setupDuration = setupStart.duration(to: clock.now)
     var worstPause: Duration = .zero
-    for character in "A responsive draft alongside rich code lists" {
+    var worstInsertion: Duration = .zero
+    var worstResume: Duration = .zero
+    var slowestCharacter = 0
+    let mainQueueProbe = MainQueueResponsivenessProbe()
+    defer { mainQueueProbe.stop() }
+    for (index, character) in "A responsive draft alongside rich code lists".enumerated() {
         let start = clock.now
         editor.insertText(String(character), replacementRange: NSRange(location: NSNotFound, length: 0))
+        let inserted = clock.now
         try await Task.sleep(for: .milliseconds(20))
-        worstPause = max(worstPause, start.duration(to: clock.now))
+        let resumed = clock.now
+        let pause = start.duration(to: resumed)
+        if pause > worstPause {
+            worstPause = pause
+            slowestCharacter = index
+        }
+        worstInsertion = max(worstInsertion, start.duration(to: inserted))
+        worstResume = max(worstResume, inserted.duration(to: resumed))
     }
+    print(
+        "Chat responsiveness: setup=\(setupDuration), insertion=\(worstInsertion), "
+            + "resume=\(worstResume), total=\(worstPause), character=\(slowestCharacter), "
+            + "mainQueue=\(mainQueueProbe.worstDelay)")
     #expect(editor.string == "A responsive draft alongside rich code lists")
     #expect(worstPause < .milliseconds(250), "Visible chat event-loop delay: \(worstPause)")
     window.setContentSize(NSSize(width: 720, height: 700))

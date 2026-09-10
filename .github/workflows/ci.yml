@@ -43,6 +43,15 @@ jobs:
         run: brew install xcodegen
       - name: Release verification
         run: make verify CONFIG=Release SWIFT_FLAGS='-c release'
+      - name: Preserve failed app test results
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: app-test-results
+          path: apps/goat-macos/.build/DerivedData/Logs/Test/*.xcresult
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
 
   website:
     runs-on: ubuntu-latest

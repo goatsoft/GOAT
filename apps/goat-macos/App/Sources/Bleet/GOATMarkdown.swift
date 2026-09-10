@@ -90,17 +90,33 @@ private struct MarkdownListLabelStyle: LabelStyle {
 private struct MarkdownListLayout: Layout {
     private let spacing: CGFloat = 8
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        guard subviews.count == 2 else { return .zero }
-        let marker = subviews[0].sizeThatFits(.unspecified)
-        let bodyWidth = proposal.width.map { max(0, $0 - marker.width - spacing) }
-        let body = subviews[1].sizeThatFits(ProposedViewSize(width: bodyWidth, height: nil))
-        return CGSize(width: marker.width + spacing + body.width, height: max(marker.height, body.height))
+    struct Cache {
+        var marker: CGSize?
+        var sizes: [CGFloat?: CGSize] = [:]
     }
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+    // SwiftUI recreates this cache when the layout or its children change, including
+    // highlighted text and font changes. Width proposals can repeat within one update.
+    func makeCache(subviews: Subviews) -> Cache { Cache() }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
+        guard subviews.count == 2 else { return .zero }
+        if let size = cache.sizes[proposal.width] { return size }
+        let marker = cache.marker ?? subviews[0].sizeThatFits(.unspecified)
+        cache.marker = marker
+        let bodyWidth = proposal.width.map { max(0, $0 - marker.width - spacing) }
+        let body = subviews[1].sizeThatFits(ProposedViewSize(width: bodyWidth, height: nil))
+        let size = CGSize(width: marker.width + spacing + body.width, height: max(marker.height, body.height))
+        // Bound transient proposals during continuous window resizing.
+        if cache.sizes.count >= 8 { cache.sizes.removeAll(keepingCapacity: true) }
+        cache.sizes[proposal.width] = size
+        return size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
         guard subviews.count == 2 else { return }
-        let marker = subviews[0].sizeThatFits(.unspecified)
+        let marker = cache.marker ?? subviews[0].sizeThatFits(.unspecified)
+        cache.marker = marker
         subviews[0].place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(marker))
         subviews[1].place(
             at: CGPoint(x: bounds.minX + marker.width + spacing, y: bounds.minY), anchor: .topLeading,
