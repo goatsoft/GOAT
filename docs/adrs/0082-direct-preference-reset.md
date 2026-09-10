@@ -14,7 +14,7 @@ Reset preferences updates a fixed set of presentation and general settings throu
 
 The reset preserves GOAT Home and workspace paths, connections and credentials, conversations, local files, current selection, window positions, presentation unlock, privacy policy, preview networking rules, tool permissions and extension configuration. It does not clear the preferences domain, touch file stores or invoke service lifecycle methods. Uninstall may separately remove the complete preferences domain after shutdown under ADR-0081.
 
-Data management has two tabs: Reset preferences and Uninstall GOAT. Local-data choices are covered by the uninstall keep controls. Partial uninstall is the default and preserves GOAT Home data and chats/attachments while removing app preferences. Uninstall all clears every keep box. The uninstall review and final confirmation remain because they prepare app and data removal after shutdown.
+Data management has two tabs: Reset preferences and Uninstall GOAT. Local-data choices are covered by the uninstall keep controls. Partial uninstall is the default and preserves GOAT Home data and chats/attachments while removing app preferences. Uninstall all clears every keep box. The uninstall review serves as the final **Are you sure?** confirmation, with a single **Uninstall** button, because it schedules app and data removal after shutdown.
 
 ## Verification
 
