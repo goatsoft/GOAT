@@ -30,6 +30,10 @@ Rendering caches contain disposable prepared content and are bounded in memory. 
 
 Restore to a compatible GOAT version while the app is closed. Preserve ownership and private permissions. Verify the restored workspace paths, memory provider and engine configuration before submitting a new task. Do not copy a live database file alone and assume it represents a consistent backup.
 
+## Inspect locations and choose removal
+
+Candidate and development builds include **Settings → General → Manage**. The storage tree shows the configured GOAT Home and the separate Application Support location. Reset preferences keeps data in place; uninstall offers checked-to-remove choices, a final review and a recovery folder. See the [reset and uninstall guide](../how-to/MANAGE-GOAT-DATA.md) for defaults, cancellation and recovery. These controls are not in the published Kid build 1343.
+
 ## Remove data deliberately
 
 Use the relevant app controls for individual chats, memory entries and configuration. Removing the application bundle alone does not remove its data directories or user workspaces. For a complete local removal, first back up what you need, reconcile active work, close the app, then remove only the GOAT directories you have confirmed.

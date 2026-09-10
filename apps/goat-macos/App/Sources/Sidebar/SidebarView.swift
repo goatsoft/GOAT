@@ -101,7 +101,6 @@ struct SidebarView: View {
         .onChange(of: model.penComposerFocusID) { _, id in
             if id != nil { filter = "" }
         }
-        .navigationSplitViewColumnWidth(min: 200, ideal: 300, max: 320)
         .opacity(model.startupPhase.hasLocalState ? 1 : 0)
         .allowsHitTesting(model.startupPhase.hasLocalState)
         .overlay {

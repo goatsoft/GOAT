@@ -344,6 +344,23 @@ final class AppModel {
         didSet { UserDefaults.standard.set(settingsAlwaysOnTop, forKey: "settings.alwaysOnTop") }
     }
 
+    /// Reset only the presentation and general preferences listed in Settings (ADR-0082).
+    /// Keep connections, privacy policy and tool authority intact during active work.
+    func resetPreferences() {
+        themeID = "system"
+        chatFontID = "theme"
+        codeFontID = "theme"
+        chatFontSize = 14
+        codeFontSize = ReadingFontRole.code.normalizedSize(14 * 0.92)
+        windowTransparency = CaprineBackground.defaultTransparency
+        animationsEnabled = true
+        automaticChatTitles = true
+        defaultEffort = .trot
+        settingsAlwaysOnTop = true
+        UserDefaults.standard.set("grid", forKey: "pens.overview.layout")
+        AppIconManager.apply(.system, unlocked: presentation.isUnlocked, playful: false, dark: theme.isDark)
+    }
+
     // Easter-egg triggers - bump to fire.
     var goatWalkToken = 0
     var goatCheerToken = 0

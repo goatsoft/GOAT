@@ -1,7 +1,6 @@
 import AppKit
 import SwiftUI
 
-@main
 struct GOATApp: App {
     @State private var model = AppModel.shared
 

@@ -22,6 +22,7 @@
 - Build from the final intended source revision with consistent version, build and codename metadata.
 - Validate app and CLI architecture, Developer ID signing and notarization for official downloads, staged/mounted DMG contents, licence notices and checksums.
 - Test installation and launch on a clean supported Mac. Verify the actual Gatekeeper path and local-network permission behavior.
+- Qualify automatic uninstall with the final signed/notarized app: copied-helper execution, removal options, cancellation, other-instance exclusion, recovery records and app/CLI Trash handling. Use disposable installations and data; never interrupt active work.
 - Preserve evidence for supported upgrades and any previously distributed builds. Do not reuse an existing artifact name with different contents.
 
 ## Publication

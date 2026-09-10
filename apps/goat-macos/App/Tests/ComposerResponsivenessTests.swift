@@ -117,6 +117,41 @@ import Testing
     }
 }
 
+private struct MainQueueInputMeasurement: Sendable {
+    let insertion: Duration
+    let eventLoop: Duration
+    let completed: ContinuousClock.Instant
+}
+
+/// Timestamp input inside its main-queue callback, before resuming the test task.
+/// A sleeping task's wake-up is not an AppKit input event and has no upper-bound timing contract.
+@MainActor private func measureMainQueueInput(
+    _ insert: @escaping @MainActor () -> Void
+) async -> MainQueueInputMeasurement {
+    let clock = ContinuousClock()
+    let queued = clock.now
+    return await withCheckedContinuation { continuation in
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(20)) {
+            let started = clock.now
+            insert()
+            let completed = clock.now
+            continuation.resume(
+                returning: MainQueueInputMeasurement(
+                    insertion: started.duration(to: completed),
+                    eventLoop: queued.duration(to: completed), completed: completed))
+        }
+    }
+}
+
+@Test @MainActor func inputResponsivenessMeasurementDetectsABlockedMainQueue() async {
+    // Queue the stall before the input callback while this actor still owns the thread.
+    DispatchQueue.main.async { Thread.sleep(forTimeInterval: 0.3) }
+    var insertions = 0
+    let measurement = await measureMainQueueInput { insertions += 1 }
+    #expect(insertions == 1)
+    #expect(measurement.eventLoop >= .milliseconds(250))
+}
+
 @Test @MainActor func readySendButtonDoesNotContinuouslyRelayoutTheWindow() async throws {
     let window = NSWindow(
         contentRect: NSRect(x: 80, y: 80, width: 200, height: 100),
@@ -191,25 +226,24 @@ import Testing
     let mainQueueProbe = MainQueueResponsivenessProbe()
     defer { mainQueueProbe.stop() }
     for (index, character) in "A responsive draft alongside rich code lists".enumerated() {
-        let start = clock.now
-        editor.insertText(String(character), replacementRange: NSRange(location: NSNotFound, length: 0))
-        let inserted = clock.now
-        try await Task.sleep(for: .milliseconds(20))
-        let resumed = clock.now
-        let pause = start.duration(to: resumed)
+        let measurement = await measureMainQueueInput {
+            editor.insertText(String(character), replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
+        let pause = measurement.eventLoop
         if pause > worstPause {
             worstPause = pause
             slowestCharacter = index
         }
-        worstInsertion = max(worstInsertion, start.duration(to: inserted))
-        worstResume = max(worstResume, inserted.duration(to: resumed))
+        worstInsertion = max(worstInsertion, measurement.insertion)
+        worstResume = max(worstResume, measurement.completed.duration(to: clock.now))
     }
     print(
         "Chat responsiveness: setup=\(setupDuration), insertion=\(worstInsertion), "
-            + "resume=\(worstResume), total=\(worstPause), character=\(slowestCharacter), "
+            + "taskResume=\(worstResume), inputEvent=\(worstPause), character=\(slowestCharacter), "
             + "mainQueue=\(mainQueueProbe.worstDelay)")
     #expect(editor.string == "A responsive draft alongside rich code lists")
     #expect(worstPause < .milliseconds(250), "Visible chat event-loop delay: \(worstPause)")
+    #expect(mainQueueProbe.worstDelay < .milliseconds(250), "Main-queue delay between inputs")
     window.setContentSize(NSSize(width: 720, height: 700))
     try await Task.sleep(for: .milliseconds(300))
     #expect(editor.string == "A responsive draft alongside rich code lists")
