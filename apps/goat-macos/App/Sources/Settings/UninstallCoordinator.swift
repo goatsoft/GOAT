@@ -32,8 +32,7 @@ import Observation
             }
             guard let home = inventory.locations.first(where: { $0.id == "home" })?.url,
                 let database = inventory.locations.first(where: { $0.id == "database" })?.url,
-                let app = inventory.locations.first(where: { $0.id == "app" })?.url,
-                let executable = Bundle.main.executableURL
+                let app = inventory.locations.first(where: { $0.id == "app" })?.url
             else {
                 throw UninstallError.unsafe("Could not identify the running installation.")
             }
@@ -62,7 +61,7 @@ import Observation
                     _ = try UninstallOperation.inventory(request)
                     try fm.createDirectory(
                         at: staging, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
-                    try fm.copyItem(at: executable, to: staging.appendingPathComponent("goat-cleanup"))
+                    try UninstallHelperBundle.copy(from: app, to: staging)
                     let planURL = staging.appendingPathComponent("request.json")
                     try JSONEncoder().encode(request).write(to: planURL)
                     try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: planURL.path)
@@ -74,9 +73,9 @@ import Observation
                 }
             }.value
             let process = Process()
-            process.executableURL = staging.appendingPathComponent("goat-cleanup")
+            process.executableURL = UninstallHelperBundle.executable(in: staging)
             process.arguments = ["--goat-uninstall-helper", staging.path]
-            // ADR-0081: a copy of this executable in one fixed local maintenance mode.
+            // ADR-0081: preserve the signed app bundle, then use one fixed local maintenance mode.
             // No shell, user command, service registration or network operation is involved.
             process.environment = ["TMPDIR": fm.temporaryDirectory.path, "PATH": "/usr/bin:/bin"]
             process.standardOutput = FileHandle.nullDevice
@@ -117,6 +116,22 @@ import Observation
     }
 }
 
+enum UninstallHelperBundle {
+    static func executable(in job: URL) -> URL {
+        job.appendingPathComponent("GOAT.app/Contents/MacOS/GOAT")
+    }
+
+    static func copy(from app: URL, to job: URL) throws {
+        let destination = job.appendingPathComponent("GOAT.app", isDirectory: true)
+        try FileManager.default.copyItem(at: app, to: destination)
+        guard Bundle(url: destination)?.executableURL?.standardizedFileURL == executable(in: job).standardizedFileURL
+        else { throw UninstallError.unsafe("The copied cleanup app could not be identified.") }
+        // The main executable's signature binds Info.plist and sealed bundle resources.
+        // Copying just the executable passes ad-hoc tests but fails Developer ID validation.
+        _ = try UninstallRequest.signature(destination)
+    }
+}
+
 enum MaintenanceGate {
     static func acquire(exclusive: Bool, path: String = "/private/tmp/dev.leet.goat-maintenance-\(getuid()).lock")
         throws -> Int32
@@ -149,8 +164,10 @@ enum MaintenanceGate {
                 try UninstallRequest.physicalPath(job.deletingLastPathComponent())
                     == UninstallRequest.physicalPath(fm.temporaryDirectory),
                 let executable = Bundle.main.executableURL,
-                try UninstallRequest.physicalPath(executable.deletingLastPathComponent())
-                    == UninstallRequest.physicalPath(job)
+                try UninstallRequest.physicalPath(executable)
+                    == UninstallRequest.physicalPath(UninstallHelperBundle.executable(in: job)),
+                try UninstallRequest.physicalPath(Bundle.main.bundleURL)
+                    == UninstallRequest.physicalPath(job.appendingPathComponent("GOAT.app"))
             else {
                 throw UninstallError.unsafe("The private cleanup job could not be validated.")
             }

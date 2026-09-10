@@ -114,7 +114,7 @@ struct UninstallRequest: Codable, Sendable {
         return String(cString: result)
     }
 
-    private static func signature(_ url: URL) throws -> (identifier: String, team: String?) {
+    static func signature(_ url: URL) throws -> (identifier: String, team: String?) {
         var code: SecStaticCode?
         guard SecStaticCodeCreateWithPath(url as CFURL, [], &code) == errSecSuccess, let code,
             SecStaticCodeCheckValidity(code, [], nil) == errSecSuccess

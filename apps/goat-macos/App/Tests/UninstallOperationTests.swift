@@ -195,3 +195,20 @@ private struct UninstallFixture {
     }
     #expect(FileManager.default.fileExists(atPath: credentials.path))
 }
+
+@Test func copiedUninstallHelperPreservesItsSignedAppBundle() throws {
+    let fm = FileManager.default
+    let job = fm.temporaryDirectory.appendingPathComponent("goat-helper-bundle-test-\(UUID().uuidString)")
+    try fm.createDirectory(at: job, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+    defer { try? fm.removeItem(at: job) }
+    try UninstallHelperBundle.copy(from: Bundle.main.bundleURL, to: job)
+    let copied = job.appendingPathComponent("GOAT.app")
+    #expect(fm.isExecutableFile(atPath: UninstallHelperBundle.executable(in: job).path))
+    #expect(
+        try Data(contentsOf: copied.appendingPathComponent("Contents/Info.plist"))
+            == Data(contentsOf: Bundle.main.bundleURL.appendingPathComponent("Contents/Info.plist")))
+    #expect(
+        try Data(contentsOf: copied.appendingPathComponent("Contents/_CodeSignature/CodeResources"))
+            == Data(contentsOf: Bundle.main.bundleURL.appendingPathComponent("Contents/_CodeSignature/CodeResources")))
+    #expect(try UninstallRequest.signature(copied).identifier == Bundle.main.bundleIdentifier)
+}
