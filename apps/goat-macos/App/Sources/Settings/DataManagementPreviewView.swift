@@ -104,6 +104,7 @@ struct DataManagementPreviewView: View {
                     }
                 }
                 .pickerStyle(.radioGroup)
+                .horizontalRadioGroupLayout()
                 .labelsHidden()
                 summaryBlock(
                     "Choose what to keep", symbol: "app.dashed",
