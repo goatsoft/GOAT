@@ -224,15 +224,18 @@ struct GeneralSettings: View {
                 }
             }
             Section("Data and installation") {
-                LabeledContent {
-                    Button("Manage GOAT data…") { showingDataManagement = true }
-                } label: {
+                HStack(alignment: .center, spacing: 20) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Reset or uninstall")
-                        Text("Preview your choices and make a backup plan.")
+                        Text("Storage, reset and uninstall options.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
+                    Spacer(minLength: 20)
+                    Button("Manage") { showingDataManagement = true }
+                        .fixedSize()
+                        .layoutPriority(1)
                 }
+                .padding(.vertical, 6)
             }
         }
         .formStyle(.grouped)

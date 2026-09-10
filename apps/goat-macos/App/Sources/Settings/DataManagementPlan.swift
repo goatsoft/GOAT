@@ -31,6 +31,7 @@ struct DataManagementPlan {
 
     var action: Action = .preferences
     private(set) var groups: Set<Group> = []
+    var keepPreferences = true
     var backupURL: URL?
     var cliURL: URL?
 
@@ -68,6 +69,8 @@ struct DataManagementPlan {
             Group.allCases.filter { groups.contains($0) }.map(\.rawValue)
         case .uninstall:
             ["The selected GOAT app copy"] + (cliURL == nil ? [] : ["The separately selected CLI copy"])
+                + Group.allCases.filter { groups.contains($0) }.map(\.rawValue)
+                + (keepPreferences ? [] : ["macOS app preferences and saved window state"])
         }
     }
 
@@ -82,10 +85,21 @@ struct DataManagementPlan {
             result += Group.allCases.filter { !groups.contains($0) }.map(\.rawValue)
             result += ["App, CLI and preferences", "Unrecognised files, shared folders and linked targets"]
         case .uninstall:
-            result += ["All preferences and local data"]
+            result += Group.allCases.filter { !groups.contains($0) }.map(\.rawValue)
+            if keepPreferences { result += ["macOS app preferences and saved window state"] }
+            result += ["Unrecognised files, shared folders and linked targets"]
             if cliURL == nil { result += ["Any separately installed CLI"] }
         }
         return result
+    }
+
+    var keepsHomeData: Bool {
+        get { groups.isDisjoint(with: [.connections, .memory, .customizations, .pens]) }
+        set {
+            for group in [Group.connections, .memory, .customizations, .pens] {
+                select(group, included: !newValue)
+            }
+        }
     }
 
     func checklist(inventory: DataManagementInventory) -> String {

@@ -25,7 +25,7 @@ An extension timeout can quarantine that extension for the current app session. 
 
 ## Reset GOAT for a clean installation
 
-Development builds include **Settings → General → Manage GOAT data**, a review-only prototype for preferences, selected local data and app/CLI removal. It shows storage locations and copies a backup and recovery checklist, but does not perform a reset, make a backup, delete files or quit GOAT. The published Kid download does not include this preview.
+Development builds include **Settings → General → Manage**, with a storage tree, review-only reset plans and automatic uninstall. Standalone reset plans do not change data. The published Kid download does not include these controls.
 
 A full reset removes saved chats, attachments, engine connections, credentials, local memory and preferences from the active installation. Back up anything you want to keep first. Keep backups private because they can contain credentials and conversation content.
 
@@ -40,9 +40,19 @@ These steps reset GOAT's local state. They do not reset macOS privacy permission
 
 ## Remove GOAT
 
+In development builds, choose **Manage → Uninstall GOAT**. Keep options start enabled for macOS preferences/window state, connections, Pens, local memory, customisations and chats. Removing Pen metadata also selects its chats and attachments. The GOAT Home group controls its data categories together; chats have their own Application Support location. External project files, model engines and remote memory are always kept.
+
+Review the selection, choose a recovery parent folder on the same volume as the data (Downloads is the default), then confirm **Uninstall after I quit GOAT**. Finish chats, imports, command jobs and other work before quitting normally. You can cancel from Manage while GOAT remains open; the request expires after one hour. Preparation does not close GOAT for you.
+
+After GOAT closes, a temporary helper moves selected data into a private recovery folder and moves the app and any explicitly selected, validated CLI copy to Trash. Other running GOAT copies block cleanup. Do not launch an older GOAT version until cleanup finishes. Linked locations, hard-linked files, unknown entries and shared roots are kept or require manual review; empty directories may remain. Retained Pen memory stays in its original folder when Pen metadata is removed.
+
+Keep the recovery folder private. It records the installation paths, planned moves, completed moves and any backed-up preferences. On failure, review its report and existing source paths before retrying; earlier moves may already be complete. To recover, reinstall a compatible version, keep GOAT closed and restore only reviewed files to their recorded locations. Review newer files before replacing them. App removal is not secure erasure, and the recovery folder is never deleted automatically.
+
+For the published Kid download, remove the app manually:
+
 Quit GOAT and move the installed `GOAT.app` to Trash. If you installed the optional `goat` command-line tool separately, remove that specific copy or symlink from its installation location too. Removing the app alone keeps local data available for a later reinstall.
 
-To remove local data as well, follow the reset steps above and delete the backups only after reviewing their contents. GOAT currently has no built-in uninstall or reset action. Apple Developer certificates and notarization credentials are build tools, not GOAT app data; leave them in Keychain.
+To remove local data as well, follow the reset steps above and delete the backups only after reviewing their contents. The published Kid download has no built-in uninstall or reset action. Apple Developer certificates and notarization credentials are build tools, not GOAT app data; leave them in Keychain.
 
 ## Report a problem
 

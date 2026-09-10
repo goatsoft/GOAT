@@ -10,13 +10,32 @@ struct DataManagementPreviewView: View {
     @State private var inventory: DataManagementInventory?
     @State private var inventoryError: String?
     @State private var copied = false
+    @State private var uninstall = UninstallCoordinator.shared
+    @State private var confirmingUninstall = false
 
     var body: some View {
         VStack(spacing: 0) {
             header
             Divider()
+            if uninstall.pending {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Uninstall is prepared").font(.headline)
+                    Text(
+                        "Finish all work, then quit GOAT normally. Cleanup starts only after GOAT has closed. You can cancel before quitting. The request expires after one hour."
+                    )
+                    .font(.callout)
+                    if let recovery = uninstall.recovery {
+                        Text(recovery.path).font(.caption.monospaced()).textSelection(.enabled)
+                    }
+                    Button("Cancel uninstall") { uninstall.cancel() }
+                }
+                .padding(24)
+            }
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
+                    if let error = uninstall.error {
+                        Label(error, systemImage: "exclamationmark.triangle").font(.callout)
+                    }
                     if reviewing {
                         review
                     } else {
@@ -25,6 +44,7 @@ struct DataManagementPreviewView: View {
                 }
                 .padding(24)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .disabled(uninstall.pending || uninstall.preparing)
             }
             Divider()
             footer
@@ -33,6 +53,16 @@ struct DataManagementPreviewView: View {
         .background(model.theme.tokens.bg)
         .tint(model.theme.tokens.tint)
         .task { await inspectLocations() }
+        .confirmationDialog("Prepare automatic uninstall?", isPresented: $confirmingUninstall) {
+            Button("Uninstall after I quit GOAT", role: .destructive) {
+                guard let inventory else { return }
+                Task { await uninstall.prepare(plan: plan, inventory: inventory, model: model) }
+            }
+        } message: {
+            Text(
+                "Selected data will move to a private recovery folder and this app copy will move to Trash after GOAT closes. Finish active work before quitting. Keep options are shown in the review."
+            )
+        }
     }
 
     private var header: some View {
@@ -43,12 +73,14 @@ struct DataManagementPreviewView: View {
                 Text(reviewing ? "Review your plan" : "Manage GOAT data")
                     .font(.title2.bold())
                 Spacer()
-                Text("Preview").font(.caption.weight(.semibold))
+                Text(plan.action == .uninstall ? "Uninstall" : "Preview").font(.caption.weight(.semibold))
                     .padding(.horizontal, 10).padding(.vertical, 4)
                     .background(model.theme.tokens.tint.opacity(0.15), in: Capsule())
             }
             Text(
-                "Explore a reset or removal. This preview does not change files or preferences, create a backup, or quit GOAT."
+                plan.action == .uninstall
+                    ? "Review what to keep. Automatic removal waits until you have finished your work and closed GOAT."
+                    : "Explore a reset. These reset previews do not change files or preferences or create a backup."
             )
             .font(.callout).foregroundStyle(.secondary)
         }
@@ -90,10 +122,35 @@ struct DataManagementPreviewView: View {
                 }
             case .uninstall:
                 summaryBlock(
-                    "Remove the app, keep your data", symbol: "app.dashed",
+                    "Choose what to keep", symbol: "app.dashed",
                     text:
-                        "Finish active work and quit GOAT before moving the reviewed app copy to Trash in Finder. Your local data stays unless you separately choose to remove it."
+                        "GOAT can uninstall automatically after you close it. Keep the data you want for a later reinstall. Removed data goes to a private recovery folder; the app goes to Trash."
                 )
+                Toggle("Keep macOS app preferences and window state", isOn: $plan.keepPreferences)
+                    .toggleStyle(.checkbox)
+                Toggle("Keep all GOAT Home data", isOn: $plan.keepsHomeData)
+                    .toggleStyle(.checkbox)
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(DataManagementPlan.Group.allCases.filter { $0 != .chats }) { group in
+                        Toggle(
+                            "Keep \(group.rawValue.lowercased())",
+                            isOn: Binding(
+                                get: { !plan.groups.contains(group) },
+                                set: { plan.select(group, included: !$0) })
+                        )
+                        .toggleStyle(.checkbox)
+                    }
+                }
+                .padding(.leading, 18)
+                Toggle(
+                    "Keep chats and attachments (Application Support)",
+                    isOn: Binding(
+                        get: { !plan.groups.contains(.chats) },
+                        set: { plan.select(.chats, included: !$0) })
+                )
+                .toggleStyle(.checkbox)
+                Text("Removing Pen metadata also includes its chats. Keeping chats keeps their Pen metadata.")
+                    .font(.caption).foregroundStyle(.secondary)
                 if let app = inventory?.locations.first(where: { $0.id == "app" }) {
                     locationRow(app)
                     Button("Show app in Finder") {
@@ -114,9 +171,7 @@ struct DataManagementPreviewView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            if plan.action != .uninstall {
-                DisclosureGroup("Storage locations on this Mac") { locations }
-            }
+            DisclosureGroup("Storage locations on this Mac") { locations }
         }
     }
 
@@ -127,15 +182,24 @@ struct DataManagementPreviewView: View {
             bulletSection("Kept", items: plan.kept, symbol: "checkmark.shield")
             VStack(alignment: .leading, spacing: 8) {
                 Text("Backup destination").font(.headline)
-                Text(plan.backupURL?.path ?? "Choose a private folder outside GOAT’s data locations.")
-                    .font(.callout).textSelection(.enabled)
+                Text(
+                    plan.backupURL?.path
+                        ?? (plan.action == .uninstall
+                            ? "A private GOAT Recovery folder in Downloads."
+                            : "Choose a private folder outside GOAT’s data locations.")
+                )
+                .font(.callout).textSelection(.enabled)
                 Button("Choose backup folder…") { chooseLocation(directory: true) { plan.backupURL = $0 } }
                 if let inventory, let warning = plan.backupWarning(inventory: inventory) {
                     Label(warning, systemImage: "exclamationmark.triangle")
                         .font(.caption).foregroundStyle(model.theme.tokens.tint)
                 }
-                Text("No backup has been created or verified. Backups can contain credentials and conversations.")
-                    .font(.caption).foregroundStyle(.secondary)
+                Text(
+                    plan.action == .uninstall
+                        ? "Selected data is moved here after GOAT closes. Choose a folder on the same volume. Recovery data can contain credentials and conversations."
+                        : "No backup has been created or verified. Backups can contain credentials and conversations."
+                )
+                .font(.caption).foregroundStyle(.secondary)
             }
             summaryBlock(
                 "Before making changes", symbol: "pause.circle",
@@ -158,7 +222,7 @@ struct DataManagementPreviewView: View {
                     "GOAT Home: \(inventory.homeSource). The chat database and attachments have their own Application Support location."
                 )
                 .font(.caption).foregroundStyle(.secondary)
-                ForEach(inventory.locations) { locationRow($0) }
+                StorageLocationTree(inventory: inventory)
                 Text("Preferences are managed by macOS for \(inventory.preferencesDomain).")
                     .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                 Text("Folder presence is not proof of ownership. Only reviewed GOAT entries belong in a removal plan.")
@@ -218,7 +282,14 @@ struct DataManagementPreviewView: View {
             }
             Button(reviewing ? "Done" : "Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
             Spacer()
-            if reviewing {
+            if reviewing && plan.action == .uninstall {
+                Button(uninstall.preparing ? "Preparing…" : "Prepare uninstall…") { confirmingUninstall = true }
+                    .disabled(
+                        uninstall.pending || uninstall.preparing || inventory == nil
+                            || inventory.map { plan.backupWarning(inventory: $0) != nil } == true
+                    )
+                    .buttonStyle(.borderedProminent)
+            } else if reviewing {
                 Button(copied ? "Checklist copied" : "Copy checklist") {
                     guard let inventory else { return }
                     NSPasteboard.general.clearContents()

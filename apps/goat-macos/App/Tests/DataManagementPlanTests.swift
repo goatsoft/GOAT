@@ -24,8 +24,8 @@ import Testing
     #expect(plan.kept.contains("GOAT Home location"))
     plan.select(.chats, included: true)
     plan.action = .uninstall
-    #expect(plan.affected == ["The selected GOAT app copy"])
-    #expect(plan.kept.contains("All preferences and local data"))
+    #expect(plan.affected.contains("Chats and attachments"))
+    #expect(plan.kept.contains("macOS app preferences and saved window state"))
     #expect(plan.kept.contains("Any separately installed CLI"))
     plan.cliURL = URL(fileURLWithPath: "/custom/bin/goat")
     #expect(plan.affected.contains("The separately selected CLI copy"))
