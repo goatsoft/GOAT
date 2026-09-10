@@ -40,19 +40,11 @@ These steps reset GOAT's local state. They do not reset macOS privacy permission
 
 ## Reset appearance and general preferences
 
-In development builds, choose **Manage → Reset preferences**. The tab lists the defaults: System theme and Dock icon, theme reading fonts (chat 14, code 13), 40% transparency, animations on, Trot effort for new chats, automatic titles on, Grid Pens overview and Settings always on top. **Reset preferences** applies these immediately and shows a completion message, without a separate review or app restart.
-
-GOAT Home, connections, credentials, chats, files, window positions, privacy rules, tool permissions, extension settings and presentation unlock are kept. This is separate from the full local-state reset above.
+In candidate and development builds, use **Settings → General → Manage → Reset preferences**. It applies the listed appearance and general defaults immediately, preserving data, connections, permissions and window positions. Follow the [reset guide](MANAGE-GOAT-DATA.md#reset-appearance-and-general-preferences) for the exact values and scope.
 
 ## Remove GOAT
 
-In development builds, choose **Manage → Uninstall GOAT**. **Partial uninstall** is the default: it keeps GOAT Home data (connections, Pens, local memory and customisations) and chats/attachments, while macOS preferences/window state is selected for removal. **Uninstall all** checks every removal box. Switching back to Partial uninstall restores the default removal options, and you can adjust individual boxes. Checked items are removed; unchecked items are kept. A separate CLI still needs to be explicitly selected. Removing Pen metadata also selects its chats and attachments. The GOAT Home group controls its data categories together; chats have their own Application Support location. External project files, model engines and remote memory are always kept.
-
-On the **Are you sure?** review, check the removal/keep lists and recovery parent folder (Downloads by default, on the same volume as the data), then click **Uninstall**. This is the final confirmation; no additional dialog appears. Finish chats, imports, command jobs and other work before quitting normally. You can cancel from Manage while GOAT remains open; the request expires after one hour. Preparation does not close GOAT for you.
-
-After GOAT closes, a temporary helper moves selected data into a private recovery folder and moves the app and any explicitly selected, validated CLI copy to Trash. Other running GOAT copies block cleanup. Do not launch an older GOAT version until cleanup finishes. Linked locations, hard-linked files, unknown entries and shared roots are kept or require manual review; empty directories may remain. Retained Pen memory stays in its original folder when Pen metadata is removed.
-
-Keep the recovery folder private. It records the installation paths, planned moves, completed moves and any backed-up preferences. On failure, review its report and existing source paths before retrying; earlier moves may already be complete. To recover, reinstall a compatible version, keep GOAT closed and restore only reviewed files to their recorded locations. Review newer files before replacing them. App removal is not secure erasure, and the recovery folder is never deleted automatically.
+Candidate and development builds include **Settings → General → Manage → Uninstall GOAT**. Checked options select removal; unchecked items are kept. Partial uninstall preserves user data by default. Follow the [uninstall guide](MANAGE-GOAT-DATA.md#choose-what-uninstall-removes) for the presets, final review, cancellation and recovery process. For an incomplete uninstall, inspect the [recovery report and original locations](MANAGE-GOAT-DATA.md#recover-data-or-check-an-incomplete-uninstall) before retrying.
 
 For the published Kid download, remove the app manually:
 

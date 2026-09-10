@@ -137,6 +137,7 @@ export default defineConfig({
           { text: 'Install packages', link: '/GOATed-Packages' },
           { text: 'Connection controls', link: '/JUDAS' },
           { text: 'Appearance', link: '/Appearance' },
+          { text: 'Reset and uninstall', link: '/how-to/MANAGE-GOAT-DATA' },
           { text: 'Read statistics', link: '/Nerd-Stats' },
           { text: 'Use the CLI', link: '/CLI-and-API' },
         ] },

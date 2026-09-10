@@ -14,6 +14,8 @@ GOAT brings models, project files, tools and memory into a native Mac workspace.
 
 [Work on code](../how-to/WORK-ON-CODE.md), [guide active work with Lead](../how-to/LEAD.md), [use memory](Memory-and-Pens.md), [inspect previews](../how-to/PREVIEWS.md) or [add tools and skills](Extensions.md).
 
+For storage locations, preference defaults and removal choices in candidate builds, see [Manage storage, reset preferences and uninstall](../how-to/MANAGE-GOAT-DATA.md).
+
 ## Find an exact answer
 
 Use the [reference index](../reference/README.md) for engine compatibility, file and command permissions, connection policies, storage, packages and the local API. [Troubleshooting](../how-to/TROUBLESHOOTING.md) starts from common symptoms; [known issues](../KNOWN-ISSUES.md) records current limitations.
