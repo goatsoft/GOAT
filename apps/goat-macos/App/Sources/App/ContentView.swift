@@ -35,7 +35,7 @@ struct ContentView: View {
                     }
                     // Apply sizing to the complete column, including its toolbar. A preference
                     // inside SidebarView is lost through the toolbar wrapper on macOS (issue #6).
-                    .navigationSplitViewColumnWidth(min: 200, ideal: 300, max: 320)
+                    .navigationSplitViewColumnWidth(min: 200, ideal: 300, max: 600)
             } detail: {
                 if !model.startupPhase.hasLocalState {
                     StartupPastureView()

@@ -25,16 +25,16 @@ import Testing
     let nativeController = try #require(split.delegate as? NSSplitViewController)
     let item = try #require(nativeController.splitViewItems.first)
     #expect(item.minimumThickness == 200)
-    #expect(item.maximumThickness == 320)
+    #expect(item.maximumThickness == 600)
     for windowWidth in [1180.0, 880, 1500, 1180] {
         window.setContentSize(NSSize(width: windowWidth, height: 780))
-        for width in [200.0, 300, 320, 1400, 200, 320, 300] {
+        for width in [200.0, 300, 400, 500, 600, 1400, 200, 600, 300] {
             split.setPosition(width, ofDividerAt: 0)
             try await Task.sleep(for: .milliseconds(30))
             controller.view.layoutSubtreeIfNeeded()
             #expect(sidebar.frame.width >= 200)
             // The native column includes an eight-point Liquid Glass inset at its drag limit.
-            #expect(sidebar.frame.width <= 328)
+            #expect(sidebar.frame.width <= 608)
             // An oversized split view used to center itself outside the window, hiding labels.
             #expect(sidebar.convert(sidebar.bounds, to: nil).minX >= 0)
         }
@@ -47,7 +47,7 @@ import Testing
     split.setPosition(1400, ofDividerAt: 0)
     try await Task.sleep(for: .milliseconds(30))
     #expect(!item.isCollapsed)
-    #expect(sidebar.frame.width <= 328)
+    #expect(sidebar.frame.width <= 608)
     #expect(sidebar.convert(sidebar.bounds, to: nil).minX >= 0)
 }
 
