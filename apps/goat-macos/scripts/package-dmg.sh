@@ -55,7 +55,7 @@ tiffutil -cathidpicheck "$THEME/goat-dmg-background.png" "$WORK/retina.png" \
   -out "$WORK/stage/.background/background.tiff"
 hdiutil create -volname "GOAT $VERSION $CHANNEL $BUILD" -srcfolder "$WORK/stage" \
   -format UDRW "$WORK/layout.dmg" >/dev/null
-hdiutil attach -nobrowse -mountpoint "$MOUNT" "$WORK/layout.dmg" >/dev/null
+hdiutil attach -noautoopen -nobrowse -mountpoint "$MOUNT" "$WORK/layout.dmg" >/dev/null
 ATTACHED=1
 swift "$SCRIPT_DIR/dmg-footer-icons.swift" "$MOUNT/CLI Tools" "$MOUNT/Licence"
 osascript "$SCRIPT_DIR/layout-dmg.applescript" "$MOUNT"
@@ -68,7 +68,7 @@ done
 hdiutil detach "$MOUNT" >/dev/null
 ATTACHED=0
 # Patch the saved window only while Finder has no mounted volume to overwrite.
-hdiutil attach -nobrowse -mountpoint "$MOUNT" "$WORK/layout.dmg" >/dev/null
+hdiutil attach -noautoopen -nobrowse -mountpoint "$MOUNT" "$WORK/layout.dmg" >/dev/null
 ATTACHED=1
 python3 "$SCRIPT_DIR/dmg-window.py" "$MOUNT/.DS_Store" --hide-tab-bar
 cp "$MOUNT/.DS_Store" "$WORK/expected.DS_Store"
@@ -77,7 +77,7 @@ hdiutil detach "$MOUNT" >/dev/null
 ATTACHED=0
 hdiutil convert "$WORK/layout.dmg" -format UDZO -o "$WORK/candidate.dmg" >/dev/null
 hdiutil verify "$WORK/candidate.dmg" >/dev/null
-hdiutil attach -readonly -nobrowse -mountpoint "$MOUNT" "$WORK/candidate.dmg" >/dev/null
+hdiutil attach -readonly -noautoopen -nobrowse -mountpoint "$MOUNT" "$WORK/candidate.dmg" >/dev/null
 ATTACHED=1
 cmp "$WORK/expected.DS_Store" "$MOUNT/.DS_Store"
 cmp "$WORK/expected-background.tiff" "$MOUNT/.background/background.tiff"
