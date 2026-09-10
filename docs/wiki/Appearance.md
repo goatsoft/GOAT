@@ -12,6 +12,14 @@ Choose the chat/composer and code fonts separately. The picker lists locally ava
 
 Chat text supports 11–28 pt and code supports 10–24 pt. A missing saved font falls back to a system font while preserving the preference. Web preview documents own their own typography and may look different from the surrounding native interface.
 
+## Resize the sidebar
+
+In current candidate and development builds, drag the divider beside the chat sidebar to choose a width between 200 and 600 points. Its preferred starting width is 300 points. This wider range is not in the published Kid build 1343.
+
+## Reset appearance and general preferences
+
+In candidate and development builds, **Settings → General → Manage → Reset preferences** lists the defaults and applies them immediately. It keeps your data, connections and permissions. See [Reset appearance and general preferences](../how-to/MANAGE-GOAT-DATA.md#reset-appearance-and-general-preferences) for the exact scope.
+
 ## Create a custom theme
 
 Use the [theme-format reference](../THEMES.md) for folder layout, fields and font declarations. GOAT’s own theme artwork has separate [artwork terms](../../LICENSE-ART.md); the format, code and documentation are MIT-licensed.

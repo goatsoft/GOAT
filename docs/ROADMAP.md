@@ -19,7 +19,9 @@ Downloads and release notes are on [GitHub Releases](https://github.com/goatsoft
 
 ## Next priorities
 
-Fix the maximum-width sidebar rendering issue and evaluate an initial sidebar width of about 300 points. Design a reset and uninstall flow that clearly separates app removal from local data deletion.
+The development branch includes the sidebar rendering fix, with a 300-point preferred width and a 600-point maximum. Settings → General → Manage groups storage paths into a tree and offers automatic uninstall after GOAT closes, with independent removal options and a private recovery folder. Partial uninstall defaults to preserving GOAT Home and chats, with app preferences selected for removal; Uninstall all checks every removal option. Local-data choices live within uninstall. Preference reset applies the listed appearance and general defaults immediately without restarting GOAT. GOAT never quits as a side effect of preparing uninstall. These changes are not in the published Kid download.
+
+Qualify automatic uninstall under the final signed distribution identity and evaluate standalone reset operations.
 
 Continue improving accessibility, discoverability and compatibility based on observed user needs. Profile realistic long-running workloads and refine documentation as engine/runtime combinations are qualified.
 

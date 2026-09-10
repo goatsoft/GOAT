@@ -19,6 +19,10 @@ Settings, the permission sheet, memory graph presentation, Stats, onboarding and
 
 `AppModel` keeps composition and observable state; its responsibility-specific extensions implement startup, engine management, chat/Pen persistence, presentation and generation. `StartupDiskLoader` owns startup disk reads and migrations. `MemoryModel` keeps configuration and provider authority; `MemoryToolHandler` owns tool decoding and bounded results, with separate browsing, configuration, Hindsight, retention and feedback implementations. `ExtensionRegistrationController` serializes optional Hindsight registration and teardown. See [ADR-0077](adrs/0077-host-coordination-and-resource-lifetimes.md).
 
+## Automatic uninstall
+
+The app entry point acquires a shared maintenance lock before initializing AppModel. Settings can apply the listed appearance/general preference defaults directly through observed model setters while preserving connection and authority state ([ADR-0082](adrs/0082-direct-preference-reset.md)). It can also prepare a private, cancellable uninstall request with explicit keep choices. A complete temporary copy of the signed application bundle preserves Info.plist and sealed resources; its executable enters a dedicated helper mode before any app state is created, waits for the launching process to exit, acquires the lock exclusively, then moves selected data to recovery and app/CLI copies to Trash. It does not force shutdown. No network or shell operation is involved. See [ADR-0081](adrs/0081-owner-prepared-automatic-uninstall.md) for ownership checks, lifecycle limits and recovery.
+
 ## Dependency direction
 
 Arrows mean imports. The app composes all libraries; no library imports the app. See the catalogue for the exact dependency list, checked against `Modules/Package.swift`.

@@ -203,6 +203,7 @@ struct SettingsView: View {
 
 struct GeneralSettings: View {
     @Environment(AppModel.self) private var model
+    @State private var showingDataManagement = false
 
     var body: some View {
         @Bindable var model = model
@@ -222,10 +223,26 @@ struct GeneralSettings: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
-
+            Section("Data and installation") {
+                HStack(alignment: .center, spacing: 20) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Reset or uninstall")
+                        Text("Storage, reset and uninstall options.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 20)
+                    Button("Manage") { showingDataManagement = true }
+                        .fixedSize()
+                        .layoutPriority(1)
+                }
+                .padding(.vertical, 6)
+            }
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
+        .sheet(isPresented: $showingDataManagement) {
+            DataManagementPreviewView()
+        }
     }
 }
 
