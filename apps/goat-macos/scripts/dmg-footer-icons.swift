@@ -10,6 +10,7 @@ for path in CommandLine.arguments.dropFirst() {
     original.draw(in: NSRect(x: 24, y: 0, width: 48, height: 48))
     image.unlockFocus()
     guard NSWorkspace.shared.setIcon(image, forFile: path, options: []) else {
-        fatalError("Could not set staging footer icon: \(path)")
+        FileHandle.standardError.write(Data("Could not set staging footer icon: \(path)\n".utf8))
+        exit(1)
     }
 }

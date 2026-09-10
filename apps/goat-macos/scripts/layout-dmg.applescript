@@ -15,6 +15,7 @@ on run argv
         set arrangement of viewOptions to not arranged
         set icon size of viewOptions to 96
         set text size of viewOptions to 12
+        set label position of viewOptions to bottom
         set shows item info of viewOptions to false
         set shows icon preview of viewOptions to false
         set background color of viewOptions to {0, 0, 0}
