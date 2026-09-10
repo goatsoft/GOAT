@@ -20,11 +20,7 @@ on run argv
         set shows icon preview of viewOptions to false
         set background color of viewOptions to {0, 0, 0}
         set background picture of viewOptions to file ".background:background.tiff" of diskFolder
-        set position of item "GOAT.app" of diskFolder to {215, 235}
-        set position of item "Applications" of diskFolder to {505, 235}
-        -- The smaller footer artwork sits 24 points below its item centre.
-        set position of item "CLI Tools" of diskFolder to {520, 401}
-        set position of item "Licence" of diskFolder to {630, 401}
+        my placeItems(diskFolder)
         update diskFolder without registering applications
         delay 2
         close installWindow
@@ -33,13 +29,39 @@ on run argv
         delay 2
         -- A fresh Finder window can recalculate item geometry on its first
         -- reopen. Reapply the anchors once its background and icons are loaded.
-        set position of item "GOAT.app" of diskFolder to {215, 235}
-        set position of item "Applications" of diskFolder to {505, 235}
-        set position of item "CLI Tools" of diskFolder to {520, 401}
-        set position of item "Licence" of diskFolder to {630, 401}
+        my placeItems(diskFolder)
         update diskFolder without registering applications
         delay 2
         if (count argv) is 1 then close container window of diskFolder
         delay 2
     end tell
 end run
+
+-- Anchors match the measured ImageGen landing zones. Smaller icons use 24-point padding.
+on placeItems(diskFolder)
+    -- Finder's filtered folder collection omits some invisible system folders.
+    set rootNames to list folder diskFolder with invisibles
+    tell application "Finder"
+        set position of item "GOAT.app" of diskFolder to {222, 180}
+        set position of item "Applications" of diskFolder to {499, 180}
+        set position of item "CLI Tools" of diskFolder to {277, 207}
+        set position of item "Licence" of diskFolder to {638, 401}
+        set position of item ".background" of diskFolder to {532, 401}
+        set extraX to 316
+        repeat with rootName in rootNames
+            set supportName to contents of rootName
+            if supportName starts with "." and supportName is not ".background" then
+                set supportFolder to item supportName of diskFolder
+                if class of supportFolder is folder then
+                    if supportName is ".fseventsd" then
+                        set position of supportFolder to {426, 401}
+                    else
+                        if extraX < 60 then error "Too many hidden support folders for the installer footer"
+                        set position of supportFolder to {extraX, 401}
+                        set extraX to extraX - 110
+                    end if
+                end if
+            end if
+        end repeat
+    end tell
+end placeItems

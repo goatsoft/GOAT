@@ -77,12 +77,24 @@ def check_layout(data):
             raise ValueError(f"unexpected Finder icon option: {key}")
     if not options.get("backgroundImageAlias"):
         raise ValueError("missing Finder background reference")
-    for name, position in {"GOAT.app": (215, 235), "Applications": (505, 235),
-                           "CLI Tools": (520, 401), "Licence": (630, 401)}.items():
+    for name, position in {"GOAT.app": (222, 180), "Applications": (499, 180),
+                           "CLI Tools": (277, 207), "Licence": (638, 401), ".background": (532, 401)}.items():
         _, blob = blob_record(data, name, b"Iloc")
         if len(blob) != 16 or struct.unpack_from(">II", blob) != position:
             actual = struct.unpack_from(">II", blob) if len(blob) >= 8 else None
             raise ValueError(f"unexpected Finder position: {name}: {actual}, expected {position}")
+
+
+def check_hidden_folders(data, names):
+    occupied = set()
+    for name in names:
+        _, blob = blob_record(data, name, b"Iloc")
+        position = struct.unpack_from(">II", blob) if len(blob) == 16 else None
+        allowed = {".background": {(532, 401)}, ".fseventsd": {(426, 401)}}.get(
+            name, {(316, 401), (206, 401), (96, 401)})
+        if position not in allowed or position in occupied:
+            raise ValueError(f"hidden folder must have its own footer slot: {name}: {position}")
+        occupied.add(position)
 
 
 def main():
@@ -94,6 +106,8 @@ def main():
     if args.hide_tab_bar:
         data = hide_tab_bar(data)
     check_layout(data)
+    check_hidden_folders(data, [item.name for item in args.store.parent.iterdir()
+                               if item.name.startswith(".") and item.is_dir()])
     if args.hide_tab_bar:
         args.store.write_bytes(data)
     print("Finder installer window verified")

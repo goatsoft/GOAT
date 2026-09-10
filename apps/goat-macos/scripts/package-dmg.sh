@@ -45,19 +45,24 @@ for NOTICE in LICENSE.txt LICENSE-ART.txt THIRD-PARTY-NOTICES.txt; do
 done
 cp -R "$LICENSE_SOURCE" "$WORK/stage/Licence"
 python3 "$SCRIPT_DIR/release-metadata.py" bundle "${ARGS[@]}" --app "$WORK/stage/GOAT.app"
-# Keep the supplied pixels unchanged. A two-representation TIFF gives Finder
-# a 720 x 480-point canvas on both standard and Retina displays.
-mkdir "$WORK/stage/.background"
+# Add verified metadata to the ImageGen master's empty blue capsule at both scales.
 THEME="$SCRIPT_DIR/../art/dmg"
-cp "$THEME/goat-dmg-background@2x.png" "$WORK/retina.png"
-sips -s dpiWidth 144 -s dpiHeight 144 "$WORK/retina.png" >/dev/null
-tiffutil -cathidpicheck "$THEME/goat-dmg-background.png" "$WORK/retina.png" \
+swift "$SCRIPT_DIR/dmg-background.swift" "$THEME/goat-dmg-background-source.png" \
+  "$APP" "$WORK/background"
+mkdir "$WORK/stage/.background"
+tiffutil -cathidpicheck "$WORK/background/background.png" "$WORK/background/background@2x.png" \
   -out "$WORK/stage/.background/background.tiff"
+cp "$WORK/background/build.json" "$WORK/stage/.background/build.json"
 hdiutil create -volname "GOAT $VERSION $CHANNEL $BUILD" -srcfolder "$WORK/stage" \
   -format UDRW "$WORK/layout.dmg" >/dev/null
 hdiutil attach -noautoopen -nobrowse -mountpoint "$MOUNT" "$WORK/layout.dmg" >/dev/null
 ATTACHED=1
-swift "$SCRIPT_DIR/dmg-footer-icons.swift" "$MOUNT/CLI Tools" "$MOUNT/Licence"
+SUPPORT_FOLDERS=("$MOUNT/Licence" "$MOUNT/.background")
+for FOLDER in "$MOUNT"/.[!.]*; do
+  if [ -d "$FOLDER" ] && [ "$FOLDER" != "$MOUNT/.background" ]; then SUPPORT_FOLDERS+=("$FOLDER"); fi
+done
+swift "$SCRIPT_DIR/dmg-footer-icons.swift" "$THEME/goat-cli-icon.png" \
+  "$MOUNT/CLI Tools" "${SUPPORT_FOLDERS[@]}"
 osascript "$SCRIPT_DIR/layout-dmg.applescript" "$MOUNT"
 # Finder writes its preferences asynchronously after the window closes.
 for ATTEMPT in {1..20}; do
@@ -81,6 +86,7 @@ hdiutil attach -readonly -noautoopen -nobrowse -mountpoint "$MOUNT" "$WORK/candi
 ATTACHED=1
 cmp "$WORK/expected.DS_Store" "$MOUNT/.DS_Store"
 cmp "$WORK/expected-background.tiff" "$MOUNT/.background/background.tiff"
+cmp "$WORK/background/build.json" "$MOUNT/.background/build.json"
 python3 "$SCRIPT_DIR/dmg-window.py" "$MOUNT/.DS_Store"
 python3 "$SCRIPT_DIR/release-metadata.py" bundle "${ARGS[@]}" --app "$MOUNT/GOAT.app"
 codesign --verify --deep --strict "$MOUNT/GOAT.app"

@@ -1,22 +1,25 @@
 # Finder installer theme
 
-These are the owner's final GOAT DMG exports, used without repainting or regenerating the artwork. They are Brand Assets under [LICENSE-ART.md](../../../../LICENSE-ART.md).
+The current background and CLI icon were created with the built-in ImageGen tool from the owner's Midnight base and GOAT icon reference. They replace the first circular-layout exports. Source masters retain the generated artwork and transparency; packaging renders the final background locally. These pictures are Brand Assets under [LICENSE-ART.md](../../../../LICENSE-ART.md). The authoring [prompts](PROMPTS.md) are retained for reference; measured export geometry governs Finder placement.
 
-| Asset | Pixels | Use |
-| --- | --- | --- |
-| `goat-dmg-background.png` | 720 x 480 | Standard-resolution representation |
-| `goat-dmg-background@2x.png` | 1440 x 960 | Retina representation |
+- `goat-dmg-background-source.png`: 3:2 ImageGen landscape with two main squircles, an attached smaller CLI squircle, raised arrow, installation copy and an empty blue build capsule. No optional footer copy or divider.
+- `goat-cli-icon.png`: transparent terminal tile in the GOAT icon family. Applied to the CLI Tools folder only, preserving the signed executable inside it.
 
-Packaging combines the original pixels into a two-representation TIFF using macOS `sips` and `tiffutil`. The Retina representation is assigned 144 DPI so Finder uses a 720 x 480-point canvas. No image-generation service, font download or Python imaging dependency is required.
+## Rendering and identity
 
-## Layout
+`dmg-background.swift` reads the actual validated app's Info.plist and fills the blue capsule beside GOAT with `BUILD <number>` in native SF Mono. Missing, invalid or oversized build labels fail instead of producing a placeholder. It exports 720 x 480 at 72 DPI and 1440 x 960 at 144 DPI, then macOS `tiffutil` combines both representations for the 720 x 480-point Finder canvas. The image's `build.json`, the volume title, app and release manifest agree on identity. No image service runs during packaging.
 
-GOAT.app and the Applications shortcut have 96-point icons centred at (215, 235) and (505, 235). The native artwork for the optional CLI Tools and Licence folders is 48 points, centred at (520, 425) and (630, 425). Finder only supports one icon size per window: the footer icons use transparent padding inside a 96-point footprint, with item anchors at Y = 401. This keeps the artwork at the supplied coordinates and the filenames inside the canvas. CLI Tools contains the unchanged, signed `goat` executable. Licence contains the existing distribution notices.
+## Finder layout
 
-The saved window hides its toolbar, sidebar, status bar and tab bar. Finder's 32-point title bar adds to the 480-point canvas. Packaging requires Finder in a logged-in macOS session and permission for the packaging terminal to automate Finder. It fails if Finder cannot save a valid layout. The helper changes only the staging volume; it does not change global Finder preferences. Users who enable Show Hidden Files will also see the volume's support files.
+| Item | Finder anchor | Visible icon centre | Icon size |
+| --- | --- | --- | --- |
+| GOAT.app | (222, 180) | (222, 180) | 96 |
+| Applications | (499, 180) | (499, 180) | 96 |
+| CLI Tools | (277, 207) | (277, 231) | 48 |
+| Licence | (638, 401) | (638, 425) | 48 |
+| .background | (532, 401) | (532, 425) | 48 |
+| .fseventsd, when present | (426, 401) | (426, 425) | 48 |
 
-## Build identity and source provenance
+Finder only supports one icon size per window. Smaller icons use transparent padding in the 96-point footprint, positioning the artwork 24 points below the anchor and leaving room for filenames. Other hidden support folders, when present, occupy the remaining footer slots to the left. They never cover the header, even with Show Hidden Files enabled. Packaging does not change that global preference.
 
-Both supplied PNGs contain a neutral build capsule. It is decorative and does not identify a build. The volume title includes the actual version, channel and build from validated release metadata; the app and release manifest retain the source fingerprint and complete identity. Never substitute an invented or stale build label into the artwork.
-
-The supplied bundle README referred to `tools/build_dmg_background.py`. That generator was present in the owner's artwork workspace, outside the bundle and this application repository. Its source uses the supplied Midnight base image, local SF Pro/SF Mono fonts and Pillow to render the exports, with a neutral build label by default. The base image and generator are not runtime packaging inputs and are not copied here. Regeneration is an artwork-authoring operation; these final exports are the packaging authority.
+The saved window hides its toolbar, sidebar, status bar and tab bar. Finder's 32-point title bar adds to the 480-point canvas. Packaging requires Finder in a logged-in macOS session and permission for the packaging terminal to automate Finder. It refuses an invalid saved layout. Opening the volume in a fresh window uses that geometry; navigation inside an existing Finder window retains that window's chrome.

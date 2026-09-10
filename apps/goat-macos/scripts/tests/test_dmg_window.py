@@ -39,3 +39,18 @@ class FinderWindowTests(unittest.TestCase):
         for data in (b"", self.fixture() + self.fixture()):
             with self.assertRaises(ValueError):
                 window.hide_tab_bar(data)
+
+    def test_hidden_system_folders_cannot_cover_header_or_share_footer_slots(self):
+        def position_record(name, x, y):
+            blob = struct.pack(">IIII", x, y, 0, 0)
+            return (struct.pack(">I", len(name)) + name.encode("utf-16be") + b"Ilocblob"
+                    + struct.pack(">I", len(blob)) + blob)
+
+        correct = position_record(".background", 532, 401) + position_record(".fseventsd", 426, 401)
+        window.check_hidden_folders(correct, [".background", ".fseventsd"])
+        with self.assertRaisesRegex(ValueError, "footer slot"):
+            window.check_hidden_folders(position_record(".fseventsd", 264, 64), [".fseventsd"])
+        with self.assertRaisesRegex(ValueError, "footer slot"):
+            window.check_hidden_folders(position_record(".a", 316, 401) + position_record(".b", 316, 401), [".a", ".b"])
+        with self.assertRaises(ValueError):
+            window.check_hidden_folders(correct, [".missing"])
