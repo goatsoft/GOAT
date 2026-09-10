@@ -84,7 +84,7 @@ dmg: release
 	CLI="Modules/.build/release/goat" CONFIG=Release APP="$(DERIVED)/Build/Products/Release/GOAT.app" DIST="$(DIST)" \
 	  ./scripts/package-dmg.sh
 
-# Build the local-only CLI. The DMG ships it beside GOAT.app.
+# Build the local-only CLI. The DMG ships it inside CLI Tools.
 .PHONY: cli
 cli:
 	swift build --arch arm64 --package-path Modules --product goat -c $(shell echo $(CONFIG) | tr A-Z a-z)

@@ -12,6 +12,7 @@ ARGS=(--channel "$CHANNEL")
 if [ -n "${RELEASE_TAG:-}" ]; then ARGS+=(--tag "$RELEASE_TAG"); fi
 python3 "$SCRIPT_DIR/release-metadata.py" bundle "${ARGS[@]}" --app "$APP"
 VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$SCRIPT_DIR/../release.json")"
+BUILD="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["build"])' "$SCRIPT_DIR/../release.json")"
 [ -x "$CLI" ] || { echo 'error: CLI executable not found' >&2; exit 1; }
 codesign --verify --deep --strict "$APP"
 codesign --verify --strict "$CLI"
@@ -35,24 +36,58 @@ cleanup() {
 trap cleanup EXIT
 mkdir "$WORK/stage" "$MOUNT"
 ditto "$APP" "$WORK/stage/GOAT.app"
-cp "$CLI" "$WORK/stage/goat"
+mkdir "$WORK/stage/CLI Tools"
+cp "$CLI" "$WORK/stage/CLI Tools/goat"
 ln -s /Applications "$WORK/stage/Applications"
 LICENSE_SOURCE="$SCRIPT_DIR/../App/Resources/Licenses"
 for NOTICE in LICENSE.txt LICENSE-ART.txt THIRD-PARTY-NOTICES.txt; do
   cmp "$LICENSE_SOURCE/$NOTICE" "$APP/Contents/Resources/Licenses/$NOTICE"
 done
-cp -R "$LICENSE_SOURCE" "$WORK/stage/Licenses"
+cp -R "$LICENSE_SOURCE" "$WORK/stage/Licence"
 python3 "$SCRIPT_DIR/release-metadata.py" bundle "${ARGS[@]}" --app "$WORK/stage/GOAT.app"
-hdiutil create -volname "GOAT $VERSION" -srcfolder "$WORK/stage" -format UDZO "$WORK/candidate.dmg" >/dev/null
+# Keep the supplied pixels unchanged. A two-representation TIFF gives Finder
+# a 720 x 480-point canvas on both standard and Retina displays.
+mkdir "$WORK/stage/.background"
+THEME="$SCRIPT_DIR/../art/dmg"
+cp "$THEME/goat-dmg-background@2x.png" "$WORK/retina.png"
+sips -s dpiWidth 144 -s dpiHeight 144 "$WORK/retina.png" >/dev/null
+tiffutil -cathidpicheck "$THEME/goat-dmg-background.png" "$WORK/retina.png" \
+  -out "$WORK/stage/.background/background.tiff"
+hdiutil create -volname "GOAT $VERSION $CHANNEL $BUILD" -srcfolder "$WORK/stage" \
+  -format UDRW "$WORK/layout.dmg" >/dev/null
+hdiutil attach -nobrowse -mountpoint "$MOUNT" "$WORK/layout.dmg" >/dev/null
+ATTACHED=1
+swift "$SCRIPT_DIR/dmg-footer-icons.swift" "$MOUNT/CLI Tools" "$MOUNT/Licence"
+osascript "$SCRIPT_DIR/layout-dmg.applescript" "$MOUNT"
+# Finder writes its preferences asynchronously after the window closes.
+for ATTEMPT in {1..20}; do
+  [ ! -f "$MOUNT/.DS_Store" ] || break
+  sleep 1
+done
+[ -s "$MOUNT/.DS_Store" ] || { echo 'error: Finder did not save the DMG layout' >&2; exit 1; }
+hdiutil detach "$MOUNT" >/dev/null
+ATTACHED=0
+# Patch the saved window only while Finder has no mounted volume to overwrite.
+hdiutil attach -nobrowse -mountpoint "$MOUNT" "$WORK/layout.dmg" >/dev/null
+ATTACHED=1
+python3 "$SCRIPT_DIR/dmg-window.py" "$MOUNT/.DS_Store" --hide-tab-bar
+cp "$MOUNT/.DS_Store" "$WORK/expected.DS_Store"
+cp "$MOUNT/.background/background.tiff" "$WORK/expected-background.tiff"
+hdiutil detach "$MOUNT" >/dev/null
+ATTACHED=0
+hdiutil convert "$WORK/layout.dmg" -format UDZO -o "$WORK/candidate.dmg" >/dev/null
 hdiutil verify "$WORK/candidate.dmg" >/dev/null
 hdiutil attach -readonly -nobrowse -mountpoint "$MOUNT" "$WORK/candidate.dmg" >/dev/null
 ATTACHED=1
+cmp "$WORK/expected.DS_Store" "$MOUNT/.DS_Store"
+cmp "$WORK/expected-background.tiff" "$MOUNT/.background/background.tiff"
+python3 "$SCRIPT_DIR/dmg-window.py" "$MOUNT/.DS_Store"
 python3 "$SCRIPT_DIR/release-metadata.py" bundle "${ARGS[@]}" --app "$MOUNT/GOAT.app"
 codesign --verify --deep --strict "$MOUNT/GOAT.app"
-codesign --verify --strict "$MOUNT/goat"
-cmp "$CLI" "$MOUNT/goat"
+codesign --verify --strict "$MOUNT/CLI Tools/goat"
+cmp "$CLI" "$MOUNT/CLI Tools/goat"
 for NOTICE in LICENSE.txt LICENSE-ART.txt THIRD-PARTY-NOTICES.txt; do
-  cmp "$LICENSE_SOURCE/$NOTICE" "$MOUNT/Licenses/$NOTICE"
+  cmp "$LICENSE_SOURCE/$NOTICE" "$MOUNT/Licence/$NOTICE"
   cmp "$LICENSE_SOURCE/$NOTICE" "$MOUNT/GOAT.app/Contents/Resources/Licenses/$NOTICE"
 done
 [ "$(readlink "$MOUNT/Applications")" = /Applications ]
