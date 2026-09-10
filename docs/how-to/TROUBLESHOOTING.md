@@ -25,7 +25,7 @@ An extension timeout can quarantine that extension for the current app session. 
 
 ## Reset GOAT for a clean installation
 
-Development builds include **Settings → General → Manage**, with a storage tree, review-only reset plans and automatic uninstall. Standalone reset plans do not change data. The published Kid download does not include these controls.
+Development builds include **Settings → General → Manage**, with a storage tree, direct reset of the listed appearance/general preferences and automatic uninstall. The preference reset keeps user data and connection/security settings. The published Kid download does not include these controls.
 
 A full reset removes saved chats, attachments, engine connections, credentials, local memory and preferences from the active installation. Back up anything you want to keep first. Keep backups private because they can contain credentials and conversation content.
 
@@ -38,9 +38,15 @@ A full reset removes saved chats, attachments, engine connections, credentials, 
 
 These steps reset GOAT's local state. They do not reset macOS privacy permissions or delete remote Hindsight banks, model-engine data or external Pen folders. Do not delete those folders or services as part of a GOAT reset.
 
+## Reset appearance and general preferences
+
+In development builds, choose **Manage → Reset preferences**. The tab lists the defaults: System theme and Dock icon, theme reading fonts (chat 14, code 13), 40% transparency, animations on, Trot effort for new chats, automatic titles on, Grid Pens overview and Settings always on top. **Reset preferences** applies these immediately and shows a completion message, without a separate review or app restart.
+
+GOAT Home, connections, credentials, chats, files, window positions, privacy rules, tool permissions, extension settings and presentation unlock are kept. This is separate from the full local-state reset above.
+
 ## Remove GOAT
 
-In development builds, choose **Manage → Uninstall GOAT**. Keep options start enabled for macOS preferences/window state, connections, Pens, local memory, customisations and chats. Removing Pen metadata also selects its chats and attachments. The GOAT Home group controls its data categories together; chats have their own Application Support location. External project files, model engines and remote memory are always kept.
+In development builds, choose **Manage → Uninstall GOAT**. **Partial uninstall** is the default: it keeps GOAT Home data (connections, Pens, local memory and customisations) and chats/attachments, while macOS preferences/window state starts unchecked. **Uninstall all** unticks every keep box. Switching back to Partial uninstall restores the default keep options, and you can adjust individual boxes. A separate CLI still needs to be explicitly selected. Removing Pen metadata also selects its chats and attachments. The GOAT Home group controls its data categories together; chats have their own Application Support location. External project files, model engines and remote memory are always kept.
 
 Review the selection, choose a recovery parent folder on the same volume as the data (Downloads is the default), then confirm **Uninstall after I quit GOAT**. Finish chats, imports, command jobs and other work before quitting normally. You can cancel from Manage while GOAT remains open; the request expires after one hour. Preparation does not close GOAT for you.
 

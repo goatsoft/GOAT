@@ -19,7 +19,7 @@ Downloads and release notes are on [GitHub Releases](https://github.com/goatsoft
 
 ## Next priorities
 
-The development branch includes the sidebar rendering fix, with a 300-point preferred width and a 600-point maximum. Settings → General → Manage groups storage paths into a tree and offers automatic uninstall after GOAT closes, with independent keep options and a private recovery folder. Preference-reset and local-data-only flows remain review-only. GOAT never quits as a side effect of preparing uninstall. These changes are not in the published Kid download.
+The development branch includes the sidebar rendering fix, with a 300-point preferred width and a 600-point maximum. Settings → General → Manage groups storage paths into a tree and offers automatic uninstall after GOAT closes, with independent keep options and a private recovery folder. Partial uninstall defaults to preserving GOAT Home and chats, with app preferences unchecked; Uninstall all clears every keep option. Local-data choices live within uninstall. Preference reset applies the listed appearance and general defaults immediately without restarting GOAT. GOAT never quits as a side effect of preparing uninstall. These changes are not in the published Kid download.
 
 Qualify automatic uninstall under the final signed distribution identity and evaluate standalone reset operations.
 

@@ -87,5 +87,6 @@ Older records retain the package and type names used when accepted. [ADR-0054](0
 | [0079](0079-shared-aurora-worker.md) | Shared Aurora rendering worker | Accepted · refines 0041 and 0077 |
 | [0080](0080-explicit-first-engine-setup.md) | Explicit first-engine setup | Accepted · refines 0021 |
 | [0081](0081-owner-prepared-automatic-uninstall.md) | Owner-prepared automatic uninstall | Accepted |
+| [0082](0082-direct-preference-reset.md) | Direct preference reset | Accepted · refines 0081 |
 
 New session? Start with **[../../AGENT.md](../../AGENT.md)**, then [the roadmap](../ROADMAP.md).

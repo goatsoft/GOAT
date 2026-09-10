@@ -1,10 +1,9 @@
 import Foundation
 
-/// Review-only choices. This model has no reset, backup, removal or process-control operations.
+/// Settings choices. This model has no reset, backup, removal or process-control operations.
 struct DataManagementPlan {
     enum Action: String, CaseIterable, Identifiable {
         case preferences = "Reset preferences"
-        case localData = "Choose which data to remove"
         case uninstall = "Uninstall GOAT"
         var id: Self { self }
     }
@@ -29,13 +28,29 @@ struct DataManagementPlan {
         }
     }
 
-    var action: Action = .preferences
+    enum UninstallMode: String, CaseIterable, Identifiable {
+        case partial = "Partial uninstall"
+        case all = "Uninstall all"
+        var id: Self { self }
+    }
+
+    var action: Action = .preferences {
+        didSet {
+            if action == .uninstall && oldValue != .uninstall { uninstallMode = .partial }
+        }
+    }
     private(set) var groups: Set<Group> = []
-    var keepPreferences = true
+    var keepPreferences = false
     var backupURL: URL?
     var cliURL: URL?
 
-    var canReview: Bool { action != .localData || !groups.isEmpty }
+    var uninstallMode: UninstallMode {
+        get { !keepPreferences && groups == Set(Group.allCases) ? .all : .partial }
+        set {
+            keepPreferences = false
+            groups = newValue == .all ? Set(Group.allCases) : []
+        }
+    }
 
     func backupWarning(inventory: DataManagementInventory) -> String? {
         guard let backupURL else { return nil }
@@ -62,11 +77,11 @@ struct DataManagementPlan {
         switch action {
         case .preferences:
             [
-                "Appearance and app behaviour", "Saved window layout",
-                "Local permission decisions, requiring approval again",
+                "Theme and Dock icon: System; transparency: 40%; animations: on",
+                "Reading fonts: Theme; chat size: 14; code size: 13",
+                "New-chat effort: Trot; automatic chat titles: on",
+                "Pens overview: Grid; Settings always on top: on",
             ]
-        case .localData:
-            Group.allCases.filter { groups.contains($0) }.map(\.rawValue)
         case .uninstall:
             ["The selected GOAT app copy"] + (cliURL == nil ? [] : ["The separately selected CLI copy"])
                 + Group.allCases.filter { groups.contains($0) }.map(\.rawValue)
@@ -80,10 +95,10 @@ struct DataManagementPlan {
         ]
         switch action {
         case .preferences:
-            result += ["GOAT Home location", "Connections and credentials", "Chats, attachments, Pens and local files"]
-        case .localData:
-            result += Group.allCases.filter { !groups.contains($0) }.map(\.rawValue)
-            result += ["App, CLI and preferences", "Unrecognised files, shared folders and linked targets"]
+            result += [
+                "GOAT Home location", "Connections and credentials", "Chats, attachments, Pens and local files",
+                "Privacy rules, tool permissions and extension settings", "Window positions and presentation unlock",
+            ]
         case .uninstall:
             result += Group.allCases.filter { !groups.contains($0) }.map(\.rawValue)
             if keepPreferences { result += ["macOS app preferences and saved window state"] }
@@ -102,36 +117,6 @@ struct DataManagementPlan {
         }
     }
 
-    func checklist(inventory: DataManagementInventory) -> String {
-        let locations = inventory.locations.map { "- \($0.title): \($0.url.path) (\($0.status.rawValue))" }
-        let changes = affected.map { "- \($0)" }
-        let preserves = kept.map { "- \($0)" }
-        return
-            ([
-                "GOAT: \(action.rawValue)",
-                "Preview only. No backup, reset or removal has been performed.",
-                "", "Would remove:",
-            ] + changes + ["", "Kept:"] + preserves + [
-                "", "Locations (review before making changes):",
-            ] + locations + [
-                "- Preferences domain: \(inventory.preferencesDomain)",
-                "- GOAT Home source: \(inventory.homeSource)",
-                "- Optional CLI: \(cliURL?.path ?? "Not selected")",
-                "", "Backup destination: \(backupURL?.path ?? "Choose a private folder outside GOAT data")",
-                "No backup has been created or verified.",
-                "", "Before any manual changes:",
-                "1. Finish chats, queued work, imports and command jobs, then quit GOAT.",
-                "2. Back up the owned GOAT files to a private folder. For a shared home, inspect entries individually.",
-                "3. Keep the closed chat database, WAL/SHM companions and attachments together. Protect credentials and conversations.",
-                "4. Verify the backup before removing anything. Keep unrecognised files, shared folders and linked targets.",
-                action == .uninstall
-                    ? "5. In Finder, move only the reviewed app and optional CLI copies to Trash after GOAT is closed. App removal keeps local data."
-                    : "5. Selective reset and removal are not implemented. Do not apply the full-reset instructions to a partial selection or a preferences-only plan.",
-                "", "Recovery:",
-                "Restore to the recorded locations while GOAT is closed, using a compatible version. Preserve ownership and private permissions; review existing files before replacing them.",
-                "", "Full-reset and app-removal reference: https://goatherd.dev/how-to/TROUBLESHOOTING",
-            ]).joined(separator: "\n")
-    }
 }
 
 struct DataManagementInventory: Sendable {

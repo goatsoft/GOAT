@@ -9,7 +9,7 @@ struct DataManagementPreviewView: View {
     @State private var reviewing = false
     @State private var inventory: DataManagementInventory?
     @State private var inventoryError: String?
-    @State private var copied = false
+    @State private var preferencesReset = false
     @State private var uninstall = UninstallCoordinator.shared
     @State private var confirmingUninstall = false
     @State private var showingStorageLocations = false
@@ -74,14 +74,14 @@ struct DataManagementPreviewView: View {
                 Text(reviewing ? "Review your plan" : "Manage GOAT data")
                     .font(.title2.bold())
                 Spacer()
-                Text(plan.action == .uninstall ? "Uninstall" : "Preview").font(.caption.weight(.semibold))
+                Text(plan.action == .uninstall ? "Uninstall" : "Preferences").font(.caption.weight(.semibold))
                     .padding(.horizontal, 10).padding(.vertical, 4)
                     .background(model.theme.tokens.tint.opacity(0.15), in: Capsule())
             }
             Text(
                 plan.action == .uninstall
                     ? "Review what to keep. Automatic removal waits until you have finished your work and closed GOAT."
-                    : "Explore a reset. These reset previews do not change files or preferences or create a backup."
+                    : "Reset the preferences listed below. Your data stays in place and GOAT stays open."
             )
             .font(.callout).foregroundStyle(.secondary)
         }
@@ -100,33 +100,24 @@ struct DataManagementPreviewView: View {
 
             switch plan.action {
             case .preferences:
-                summaryBlock(
-                    "Return preferences to defaults", symbol: "slider.horizontal.3",
-                    text:
-                        "Review appearance, app behaviour, window layout and local permission decisions. Your GOAT Home location, connections, conversations and local files stay in place."
-                )
-            case .localData:
-                Text("Choose which data to remove").font(.headline)
-                VStack(alignment: .leading, spacing: 16) {
-                    ForEach(DataManagementPlan.Group.allCases) { group in
-                        Toggle(
-                            isOn: Binding(
-                                get: { plan.groups.contains(group) },
-                                set: { plan.select(group, included: $0) })
-                        ) {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(group.rawValue).font(.body.weight(.medium))
-                                Text(group.explanation).font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                        .toggleStyle(.checkbox)
-                    }
+                bulletSection("Resets to defaults", items: plan.affected, symbol: "slider.horizontal.3")
+                bulletSection("Kept", items: plan.kept, symbol: "checkmark.shield")
+                if preferencesReset {
+                    Label("Preferences reset.", systemImage: "checkmark.circle")
+                        .font(.callout).foregroundStyle(model.theme.tokens.tint)
                 }
             case .uninstall:
+                Picker("Uninstall mode", selection: $plan.uninstallMode) {
+                    ForEach(DataManagementPlan.UninstallMode.allCases) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
                 summaryBlock(
                     "Choose what to keep", symbol: "app.dashed",
                     text:
-                        "GOAT can uninstall automatically after you close it. Keep the data you want for a later reinstall. Removed data goes to a private recovery folder; the app goes to Trash."
+                        "Partial uninstall keeps GOAT Home data and chats, with app preferences unchecked. Uninstall all clears every keep option. You can adjust the boxes below. Removed data goes to recovery after GOAT closes; the app goes to Trash."
                 )
                 Toggle("Keep macOS app preferences and window state", isOn: $plan.keepPreferences)
                     .toggleStyle(.checkbox)
@@ -301,30 +292,27 @@ struct DataManagementPreviewView: View {
             if reviewing {
                 Button("Back") {
                     reviewing = false
-                    copied = false
                 }
             }
             Button(reviewing ? "Done" : "Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
             Spacer()
-            if reviewing && plan.action == .uninstall {
+            if plan.action == .preferences {
+                Button("Reset preferences") {
+                    model.resetPreferences()
+                    preferencesReset = true
+                }
+                .disabled(uninstall.pending || uninstall.preparing)
+                .buttonStyle(.borderedProminent)
+            } else if reviewing {
                 Button(uninstall.preparing ? "Preparing…" : "Prepare uninstall…") { confirmingUninstall = true }
                     .disabled(
                         uninstall.pending || uninstall.preparing || inventory == nil
                             || inventory.map { plan.backupWarning(inventory: $0) != nil } == true
                     )
                     .buttonStyle(.borderedProminent)
-            } else if reviewing {
-                Button(copied ? "Checklist copied" : "Copy checklist") {
-                    guard let inventory else { return }
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(plan.checklist(inventory: inventory), forType: .string)
-                    copied = true
-                }
-                .disabled(inventory == nil || inventory.map { plan.backupWarning(inventory: $0) != nil } == true)
-                .buttonStyle(.borderedProminent)
             } else {
                 Button("Review choices") { reviewing = true }
-                    .disabled(!plan.canReview || inventory == nil)
+                    .disabled(inventory == nil)
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
             }
@@ -342,7 +330,6 @@ struct DataManagementPreviewView: View {
         GOATFileSelector.present(panel) { response in
             if response == .OK, let url = panel.url {
                 selected(url)
-                copied = false
             }
         }
     }

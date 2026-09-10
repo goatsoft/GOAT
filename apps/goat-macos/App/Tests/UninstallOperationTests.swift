@@ -40,13 +40,14 @@ private struct UninstallFixture {
     func clean() { try? FileManager.default.removeItem(at: root) }
 }
 
-@Test func uninstallDefaultsKeepEveryDataCategory() {
+@Test func partialUninstallDefaultsKeepHomeAndChatsButRemoveAppPreferences() {
     var plan = DataManagementPlan()
     plan.action = .uninstall
-    #expect(plan.keepPreferences)
+    #expect(!plan.keepPreferences)
+    #expect(plan.uninstallMode == .partial)
     #expect(plan.keepsHomeData)
     #expect(plan.groups.isEmpty)
-    #expect(plan.affected == ["The selected GOAT app copy"])
+    #expect(plan.affected == ["The selected GOAT app copy", "macOS app preferences and saved window state"])
     plan.keepsHomeData = false
     #expect(plan.groups.contains(.pens))
     #expect(plan.groups.contains(.chats))
