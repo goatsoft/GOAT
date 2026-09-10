@@ -25,6 +25,8 @@ An extension timeout can quarantine that extension for the current app session. 
 
 ## Reset GOAT for a clean installation
 
+Development builds include **Settings → General → Manage GOAT data**, a review-only prototype for preferences, selected local data and app/CLI removal. It shows storage locations and copies a backup and recovery checklist, but does not perform a reset, make a backup, delete files or quit GOAT. The published Kid download does not include this preview.
+
 A full reset removes saved chats, attachments, engine connections, credentials, local memory and preferences from the active installation. Back up anything you want to keep first. Keep backups private because they can contain credentials and conversation content.
 
 1. Finish or deliberately stop active chats and command jobs, then quit GOAT.

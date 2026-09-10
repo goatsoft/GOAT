@@ -203,6 +203,7 @@ struct SettingsView: View {
 
 struct GeneralSettings: View {
     @Environment(AppModel.self) private var model
+    @State private var showingDataManagement = false
 
     var body: some View {
         @Bindable var model = model
@@ -222,10 +223,23 @@ struct GeneralSettings: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
-
+            Section("Data and installation") {
+                LabeledContent {
+                    Button("Manage GOAT data…") { showingDataManagement = true }
+                } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Reset or uninstall")
+                        Text("Preview your choices and make a backup plan.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
+        .sheet(isPresented: $showingDataManagement) {
+            DataManagementPreviewView()
+        }
     }
 }
 
