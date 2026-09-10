@@ -98,14 +98,13 @@ struct DataManagementPreviewView: View {
                         .font(.callout).foregroundStyle(model.theme.tokens.tint)
                 }
             case .uninstall:
-                HStack(spacing: 8) {
-                    choiceTab(
-                        "Partial uninstall", symbol: "externaldrive.badge.checkmark", value: .partial,
-                        selection: $plan.uninstallMode)
-                    choiceTab("Uninstall all", symbol: "trash.fill", value: .all, selection: $plan.uninstallMode)
+                Picker("Uninstall options", selection: $plan.uninstallMode) {
+                    ForEach(DataManagementPlan.UninstallMode.allCases) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
                 }
-                .accessibilityElement(children: .contain)
-                .accessibilityLabel("Uninstall mode")
+                .pickerStyle(.radioGroup)
+                .labelsHidden()
                 summaryBlock(
                     "Choose what to keep", symbol: "app.dashed",
                     text:
