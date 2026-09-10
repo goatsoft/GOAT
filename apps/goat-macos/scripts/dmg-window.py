@@ -81,7 +81,8 @@ def check_layout(data):
                            "CLI Tools": (520, 401), "Licence": (630, 401)}.items():
         _, blob = blob_record(data, name, b"Iloc")
         if len(blob) != 16 or struct.unpack_from(">II", blob) != position:
-            raise ValueError(f"unexpected Finder position: {name}")
+            actual = struct.unpack_from(">II", blob) if len(blob) >= 8 else None
+            raise ValueError(f"unexpected Finder position: {name}: {actual}, expected {position}")
 
 
 def main():

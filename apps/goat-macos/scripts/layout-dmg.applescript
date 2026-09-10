@@ -31,6 +31,15 @@ on run argv
         delay 2
         open diskFolder
         delay 2
+        -- A fresh Finder window can recalculate item geometry on its first
+        -- reopen. Reapply the anchors once its background and icons are loaded.
+        set position of item "GOAT.app" of diskFolder to {215, 235}
+        set position of item "Applications" of diskFolder to {505, 235}
+        set position of item "CLI Tools" of diskFolder to {520, 401}
+        set position of item "Licence" of diskFolder to {630, 401}
+        update diskFolder without registering applications
+        delay 2
         if (count argv) is 1 then close container window of diskFolder
+        delay 2
     end tell
 end run
