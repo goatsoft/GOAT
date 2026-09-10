@@ -2,8 +2,8 @@ import SwiftUI
 
 struct StorageLocationTree: View {
     let inventory: DataManagementInventory
-    @State private var homeExpanded = true
-    @State private var supportExpanded = true
+    @State private var homeExpanded = false
+    @State private var supportExpanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -28,7 +28,7 @@ struct StorageLocationTree: View {
             }
             if let app = inventory.locations.first(where: { $0.id == "app" }) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Label("Application", systemImage: "app").font(.callout.weight(.semibold))
+                    Label("Application", systemImage: "macwindow").font(.callout.weight(.semibold))
                     Text(app.url.path).font(.caption.monospaced()).foregroundStyle(.secondary)
                         .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                 }

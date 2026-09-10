@@ -4,7 +4,7 @@ import Foundation
 struct DataManagementPlan {
     enum Action: String, CaseIterable, Identifiable {
         case preferences = "Reset preferences"
-        case localData = "Remove local data"
+        case localData = "Choose which data to remove"
         case uninstall = "Uninstall GOAT"
         var id: Self { self }
     }
@@ -110,7 +110,7 @@ struct DataManagementPlan {
             ([
                 "GOAT: \(action.rawValue)",
                 "Preview only. No backup, reset or removal has been performed.",
-                "", "Would change:",
+                "", "Would remove:",
             ] + changes + ["", "Kept:"] + preserves + [
                 "", "Locations (review before making changes):",
             ] + locations + [

@@ -12,6 +12,7 @@ struct DataManagementPreviewView: View {
     @State private var copied = false
     @State private var uninstall = UninstallCoordinator.shared
     @State private var confirmingUninstall = false
+    @State private var showingStorageLocations = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -95,6 +96,7 @@ struct DataManagementPreviewView: View {
                 }
             }
             .pickerStyle(.segmented)
+            .labelsHidden()
 
             switch plan.action {
             case .preferences:
@@ -104,7 +106,7 @@ struct DataManagementPreviewView: View {
                         "Review appearance, app behaviour, window layout and local permission decisions. Your GOAT Home location, connections, conversations and local files stay in place."
                 )
             case .localData:
-                Text("Choose the data to include").font(.headline)
+                Text("Choose which data to remove").font(.headline)
                 VStack(alignment: .leading, spacing: 16) {
                     ForEach(DataManagementPlan.Group.allCases) { group in
                         Toggle(
@@ -171,14 +173,14 @@ struct DataManagementPreviewView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            DisclosureGroup("Storage locations on this Mac") { locations }
+            storageDisclosure("Storage locations on this Mac")
         }
     }
 
     private var review: some View {
         VStack(alignment: .leading, spacing: 20) {
             Text(plan.action.rawValue).font(.headline)
-            bulletSection("Would change", items: plan.affected, symbol: "minus.circle")
+            bulletSection("Would remove", items: plan.affected, symbol: "minus.circle")
             bulletSection("Kept", items: plan.kept, symbol: "checkmark.shield")
             VStack(alignment: .leading, spacing: 8) {
                 Text("Backup destination").font(.headline)
@@ -211,7 +213,29 @@ struct DataManagementPreviewView: View {
                 text:
                     "Restore to the recorded locations while GOAT is closed, using a compatible version. Preserve ownership and private permissions. Review existing files before replacing them."
             )
-            DisclosureGroup("Review storage locations") { locations }
+            storageDisclosure("Review storage locations")
+        }
+    }
+
+    private func storageDisclosure(_ title: String) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                showingStorageLocations.toggle()
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: showingStorageLocations ? "chevron.down" : "chevron.right")
+                        .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    Text(title)
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(title)
+            .accessibilityValue(showingStorageLocations ? "Expanded" : "Collapsed")
+            .accessibilityHint("Show or hide storage locations on this Mac")
+            if showingStorageLocations { locations }
         }
     }
 
