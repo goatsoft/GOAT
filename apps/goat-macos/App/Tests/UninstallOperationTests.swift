@@ -45,10 +45,10 @@ private struct UninstallFixture {
     plan.action = .uninstall
     #expect(!plan.keepPreferences)
     #expect(plan.uninstallMode == .partial)
-    #expect(plan.keepsHomeData)
+    #expect(!plan.removesHomeData)
     #expect(plan.groups.isEmpty)
     #expect(plan.affected == ["The selected GOAT app copy", "macOS app preferences and saved window state"])
-    plan.keepsHomeData = false
+    plan.removesHomeData = true
     #expect(plan.groups.contains(.pens))
     #expect(plan.groups.contains(.chats))
     plan.select(.chats, included: false)

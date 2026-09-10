@@ -108,11 +108,11 @@ struct DataManagementPlan {
         return result
     }
 
-    var keepsHomeData: Bool {
-        get { groups.isDisjoint(with: [.connections, .memory, .customizations, .pens]) }
+    var removesHomeData: Bool {
+        get { groups.isSuperset(of: [.connections, .memory, .customizations, .pens]) }
         set {
             for group in [Group.connections, .memory, .customizations, .pens] {
-                select(group, included: !newValue)
+                select(group, included: newValue)
             }
         }
     }

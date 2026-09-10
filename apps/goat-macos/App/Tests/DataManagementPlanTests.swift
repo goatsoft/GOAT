@@ -29,13 +29,13 @@ import Testing
     #expect(!plan.kept.contains("Any separately installed CLI"))
 }
 
-@Test func uninstallPresetsResetKeepOptionsAndAllowPartialAdjustments() {
+@Test func uninstallPresetsResetRemovalOptionsAndAllowPartialAdjustments() {
     var plan = DataManagementPlan()
     plan.action = .uninstall
     plan.keepPreferences = true
     plan.uninstallMode = .all
     #expect(!plan.keepPreferences)
-    #expect(!plan.keepsHomeData)
+    #expect(plan.removesHomeData)
     #expect(plan.groups == Set(DataManagementPlan.Group.allCases))
     #expect(plan.uninstallMode == .all)
     #expect(plan.kept.contains("External Pen workspaces and project files"))
@@ -52,8 +52,31 @@ import Testing
     plan.uninstallMode = .all
     plan.uninstallMode = .partial
     #expect(plan.groups.isEmpty)
-    #expect(plan.keepsHomeData)
+    #expect(!plan.removesHomeData)
     #expect(!plan.keepPreferences)
+}
+
+@Test func removingAllHomeDataRequiresEveryCategoryAndPreservesSeparateChatChoices() {
+    var plan = DataManagementPlan()
+    plan.action = .uninstall
+    plan.select(.memory, included: true)
+    #expect(!plan.removesHomeData)
+    #expect(plan.affected.contains("Local memory"))
+    #expect(plan.kept.contains("Connections and credentials"))
+
+    plan.removesHomeData = true
+    #expect(plan.removesHomeData)
+    #expect(plan.groups == Set(DataManagementPlan.Group.allCases))
+    plan.select(.connections, included: false)
+    #expect(!plan.removesHomeData)
+    #expect(plan.kept.contains("Connections and credentials"))
+
+    plan.removesHomeData = false
+    #expect(plan.groups == [.chats])
+    #expect(plan.affected.contains("Chats and attachments"))
+    #expect(plan.kept.contains("Pen metadata and instructions"))
+    plan.select(.chats, included: false)
+    #expect(plan.groups.isEmpty)
 }
 
 @Test func inventoryOnlyInspectsMetadataAndPreservesLinkedTargets() throws {

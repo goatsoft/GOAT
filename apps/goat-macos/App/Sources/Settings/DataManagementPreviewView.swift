@@ -71,7 +71,7 @@ struct DataManagementPreviewView: View {
                 reviewing
                     ? "Removal starts after you finish work and quit GOAT. You can cancel before quitting."
                     : plan.action == .uninstall
-                        ? "Review what to keep. Automatic removal waits until you have finished your work and closed GOAT."
+                        ? "Review what to remove. Automatic removal waits until you have finished your work and closed GOAT."
                         : "Reset the preferences listed below. Your data stays in place and GOAT stays open."
             )
             .font(.callout).foregroundStyle(.secondary)
@@ -107,31 +107,34 @@ struct DataManagementPreviewView: View {
                 .horizontalRadioGroupLayout()
                 .labelsHidden()
                 summaryBlock(
-                    "Choose what to keep", symbol: "app.dashed",
+                    "Choose what to remove", symbol: "app.dashed",
                     text:
-                        "Partial uninstall keeps GOAT Home data and chats, with app preferences unchecked. Uninstall all clears every keep option. You can adjust the boxes below. Removed data goes to recovery after GOAT closes; the app goes to Trash."
+                        "Checked items will be removed; unchecked items will be kept. Partial uninstall keeps GOAT Home data and chats. Uninstall all selects every item below. Removed data goes to recovery after GOAT closes; the app goes to Trash."
                 )
-                Toggle("Keep macOS app preferences and window state", isOn: $plan.keepPreferences)
-                    .toggleStyle(.checkbox)
-                Toggle("Keep all GOAT Home data", isOn: $plan.keepsHomeData)
+                Toggle(
+                    "Remove macOS app preferences and window state",
+                    isOn: Binding(get: { !plan.keepPreferences }, set: { plan.keepPreferences = !$0 })
+                )
+                .toggleStyle(.checkbox)
+                Toggle("Remove all GOAT Home data", isOn: $plan.removesHomeData)
                     .toggleStyle(.checkbox)
                 VStack(alignment: .leading, spacing: 12) {
                     ForEach(DataManagementPlan.Group.allCases.filter { $0 != .chats }) { group in
                         Toggle(
-                            "Keep \(group.rawValue.lowercased())",
+                            "Remove \(group.rawValue.lowercased())",
                             isOn: Binding(
-                                get: { !plan.groups.contains(group) },
-                                set: { plan.select(group, included: !$0) })
+                                get: { plan.groups.contains(group) },
+                                set: { plan.select(group, included: $0) })
                         )
                         .toggleStyle(.checkbox)
                     }
                 }
                 .padding(.leading, 18)
                 Toggle(
-                    "Keep chats and attachments (Application Support)",
+                    "Remove chats and attachments (Application Support)",
                     isOn: Binding(
-                        get: { !plan.groups.contains(.chats) },
-                        set: { plan.select(.chats, included: !$0) })
+                        get: { plan.groups.contains(.chats) },
+                        set: { plan.select(.chats, included: $0) })
                 )
                 .toggleStyle(.checkbox)
                 Text("Removing Pen metadata also includes its chats. Keeping chats keeps their Pen metadata.")
