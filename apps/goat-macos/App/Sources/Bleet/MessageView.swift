@@ -17,12 +17,16 @@ struct MessageView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovering = false
+    @State private var showingResponseDetails = false
 
     var body: some View {
         content
             .contentShape(Rectangle())  // whole row (incl. the area below the text) is hoverable
             .onHover { h in
                 withAnimation(.easeOut(duration: 0.12)) { hovering = h }
+            }
+            .sheet(isPresented: $showingResponseDetails) {
+                ResponseDetailsView(message: message)
             }
     }
 
@@ -221,6 +225,13 @@ struct MessageView: View {
             CopyButton(text: message.text.isEmpty ? (message.error ?? "") : message.text)
                 .labelStyle(.iconOnly)
                 .font(.caption)
+            Button("Response Details…", systemImage: "info.circle") {
+                showingResponseDetails = true
+            }
+            .buttonStyle(.plain)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .help("Response Details")
             rememberButton
             FeedbackButtons(message: message)
         }

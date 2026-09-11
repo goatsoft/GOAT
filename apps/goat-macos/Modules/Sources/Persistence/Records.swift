@@ -70,13 +70,16 @@ public struct MessageRecord: Codable, FetchableRecord, PersistableRecord, Sendab
     public var attachmentsJson: String?
     public var toolsJson: String?
     public var rating: Int?
+    public var generationProvenanceJson: String?
+    public var statsFinishReason: String?
 
     public init(
         id: String, chatId: String, role: String, text: String, thinking: String,
         error: String?, statsTtft: Double?, statsTokens: Int?, statsDuration: Double?,
         statsGenerationTokensPerSecond: Double? = nil, statsTokensAreExact: Bool? = nil,
         complete: Bool, position: Int, createdAt: Date, attachmentsJson: String? = nil,
-        toolsJson: String? = nil, rating: Int? = nil
+        toolsJson: String? = nil, rating: Int? = nil,
+        generationProvenanceJson: String? = nil, statsFinishReason: String? = nil
     ) {
         self.id = id
         self.chatId = chatId
@@ -95,6 +98,8 @@ public struct MessageRecord: Codable, FetchableRecord, PersistableRecord, Sendab
         self.attachmentsJson = attachmentsJson
         self.toolsJson = toolsJson
         self.rating = rating
+        self.generationProvenanceJson = generationProvenanceJson
+        self.statsFinishReason = statsFinishReason
     }
 }
 

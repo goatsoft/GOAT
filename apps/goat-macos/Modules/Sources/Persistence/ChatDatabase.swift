@@ -209,6 +209,12 @@ public final class ChatDatabase: Sendable {
                 table.primaryKey(["penID", "chatID", "workspaceIdentity"])
             }
         }
+        migrator.registerMigration("v11-message-generation-provenance") { db in
+            try db.alter(table: "message") { table in
+                table.add(column: "generationProvenanceJson", .text)
+                table.add(column: "statsFinishReason", .text)
+            }
+        }
         return migrator
     }
 

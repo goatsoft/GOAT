@@ -482,6 +482,10 @@ public final class ShepherdModel {
                 )
             }
             let assistant = ChatMessage(role: .assistant)
+            assistant.generationContext = context
+            assistant.generationParameters = EffectiveGenerationParameters(request: plan.request)
+            assistant.generationSelectedEffort = session.effort.rawValue
+            assistant.generationLifecycle = GenerationProvenanceRecord.Lifecycle.prepared.rawValue
             session.messages.append(assistant)
             // The first incomplete row is a durability barrier. A checkpoint can only run
             // after this insert succeeds, so a fast stream never checkpoints a missing row.
@@ -501,6 +505,14 @@ public final class ShepherdModel {
                 continue shepherd
             }
             let request = plan.request
+            assistant.generationLifecycle = GenerationProvenanceRecord.Lifecycle.started.rawValue
+            guard await env.persist(assistant, in: session) else {
+                assistant.generationLifecycle = GenerationProvenanceRecord.Lifecycle.failed.rawValue
+                assistant.error = "The response could not start because persistence is unavailable."
+                assistant.complete = true
+                assistant.markRenderChanged()
+                break shepherd
+            }
 
             @MainActor func finishPendingToolsAsStopped(unknownIndex: Int? = nil) async {
                 for index in assistant.toolEvents.indices
@@ -537,12 +549,14 @@ public final class ShepherdModel {
                 }
             } catch {
                 if Task.isCancelled || !owns(turnID: turnID, sessionID: session.id) {
+                    assistant.generationLifecycle = GenerationProvenanceRecord.Lifecycle.cancelled.rawValue
                     assistant.error = "Stopped by you before the response finished."
                     assistant.complete = true
                     assistant.markRenderChanged()
                     await env.persist(assistant, in: session)
                     break shepherd
                 }
+                assistant.generationLifecycle = GenerationProvenanceRecord.Lifecycle.failed.rawValue
                 assistant.error = error.localizedDescription
                 assistant.complete = true
                 assistant.markRenderChanged()
@@ -553,6 +567,7 @@ public final class ShepherdModel {
 
             let toolCalls = streamResult.toolCalls
             assistant.stats = streamResult.stats
+            assistant.generationLifecycle = GenerationProvenanceRecord.Lifecycle.completed.rawValue
             assistant.text = assistant.text.trimmingCharacters(in: .whitespacesAndNewlines)
             if handoffCommand != nil {
                 assistant.text = HandoffCommand.fencedMarkdown(assistant.text, date: .now)
@@ -613,6 +628,7 @@ public final class ShepherdModel {
                 }
                 acceptsLead = false
                 if Task.isCancelled {
+                    assistant.generationLifecycle = GenerationProvenanceRecord.Lifecycle.cancelled.rawValue
                     assistant.error = "Stopped by you before the turn finished."
                 } else if assistant.text.isEmpty {
                     assistant.error =

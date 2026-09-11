@@ -23,6 +23,12 @@ public final class ChatMessage: Identifiable {
     public var toolEvents: [ToolEventSnapshot] = []
     /// User feedback is persisted separately from the streamed message body.
     public var rating: Int?
+    public var generationContext: GenerationContext?
+    public var generationParameters: EffectiveGenerationParameters?
+    public var generationLifecycle: String?
+    public var generationSelectedEffort: String?
+    public var generationProvenance: GenerationProvenanceRecord?
+    public var generationProvenanceUnavailable = false
     /// Session-local prompt-budget notice. It is UI metadata, never model-visible content.
     public var contextNotice: String?
     public let createdAt: Date

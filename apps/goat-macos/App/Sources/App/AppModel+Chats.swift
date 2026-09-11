@@ -239,8 +239,50 @@ extension AppModel {
             toolsJson: msg.toolEvents.isEmpty
                 ? nil
                 : (try? JSONEncoder().encode(msg.toolEvents)).flatMap { String(data: $0, encoding: .utf8) },
-            rating: msg.rating
+            rating: msg.rating,
+            generationProvenanceJson: provenanceJSON(for: msg),
+            statsFinishReason: msg.stats?.finishReason
         )
+    }
+
+    private func provenanceJSON(for message: ChatMessage) -> String? {
+        if let existing = message.generationProvenance {
+            return try? String(data: JSONEncoder().encode(existing), encoding: .utf8)
+        }
+        guard let context = message.generationContext,
+            let parameters = message.generationParameters,
+            let lifecycle = message.generationLifecycle,
+            let state = GenerationProvenanceRecord.Lifecycle(rawValue: lifecycle)
+        else { return nil }
+        let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown"
+        let appBuild = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "Unknown"
+        let record = GenerationProvenanceRecord(
+            engineProfileID: context.engineProfileID,
+            engineDisplayName: context.engineName,
+            requestedModelID: context.identity.modelID,
+            requestStartedAt: message.createdAt,
+            appVersion: appVersion,
+            appBuild: appBuild,
+            resolvedRequestStyle: context.compatibility.effectiveStyle.rawValue,
+            resolutionSource: context.compatibility.source.rawValue,
+            adapterIdentifier: context.compatibility.adapterIdentifier,
+            selectedEffort: message.generationSelectedEffort ?? "Unknown",
+            actualTemperature: parameters.temperature,
+            effectiveOutputTokenCap: parameters.outputTokenCap,
+            nativeReasoningValue: parameters.nativeReasoningEffort,
+            reasoningHistoryReplayed: parameters.replayReasoningHistory,
+            templateControls: parameters.qwenEnableThinking.map {
+                GenerationProvenanceRecord.TemplateControls(
+                    enableThinking: $0,
+                    preserveThinking: parameters.qwenPreserveThinking ?? false,
+                    reasoningEffort: parameters.qwenReasoningEffort)
+            },
+            effectiveContextLimit: nil,
+            contextLimitSource: .unknown,
+            capabilities: [:],
+            lifecycle: state,
+            finishReason: message.stats?.finishReason)
+        return try? String(data: JSONEncoder().encode(record), encoding: .utf8)
     }
 
     func loadMessages(for session: ChatSession) async {
@@ -272,6 +314,21 @@ extension AppModel {
                 msg.error = record.error
                 msg.rating = record.rating
                 msg.complete = record.complete
+                if let rawText = record.generationProvenanceJson,
+                    rawText.utf8.count <= 256 * 1_024,
+                    let raw = rawText.data(using: .utf8)
+                {
+                    do {
+                        msg.generationProvenance =
+                            try JSONDecoder().decode(GenerationProvenanceRecord.self, from: raw)
+                    } catch {
+                        msg.generationProvenanceUnavailable = true
+                        dbWarning = "Some response provenance is unavailable because it could not be decoded."
+                    }
+                } else if record.generationProvenanceJson != nil {
+                    msg.generationProvenanceUnavailable = true
+                    dbWarning = "Some response provenance is unavailable because it exceeded the local limit."
+                }
                 if let raw = record.attachmentsJson?.data(using: .utf8),
                     let paths = try? JSONDecoder().decode([String].self, from: raw)
                 {
@@ -288,7 +345,8 @@ extension AppModel {
                         tokens: tokens,
                         duration: duration,
                         tokensAreExact: record.statsTokensAreExact ?? false,
-                        generationTokensPerSecond: record.statsGenerationTokensPerSecond)
+                        generationTokensPerSecond: record.statsGenerationTokensPerSecond,
+                        finishReason: record.statsFinishReason)
                 }
                 return msg
             }
