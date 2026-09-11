@@ -41,3 +41,7 @@ Kid targets Apple Silicon and macOS 26 or later. Model memory requirements depen
 No. Chats use durable SQLite storage and attachments use files. Rendering caches are bounded, disposable work; evicting them is not deletion of the saved transcript. See [Storage](../reference/STORAGE.md).
 
 For a specific failure, start with [Troubleshooting](../how-to/TROUBLESHOOTING.md).
+
+## Is 0.1.1 the M7 release?
+
+No. 0.1.1 is a Kid maintenance candidate covering sidebar fixes, preference reset, recoverable uninstall and the Finder installer. M7 remains the broader polish plan for a possible Yearling release. See the [roadmap](../ROADMAP.md).

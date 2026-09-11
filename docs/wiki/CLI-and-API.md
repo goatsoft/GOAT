@@ -4,7 +4,7 @@ Hitch lets programs running as your macOS user work with the running GOAT app. I
 
 ## Enable and locate the client
 
-Enable **Settings → GOATed → Extensions → Hitch**. A packaged distribution includes `goat` beside the app; copy it to a directory already on your PATH if desired. GOAT does not edit shell configuration. To build from source:
+Enable **Settings → GOATed → Extensions → Hitch**. The 0.1.1 installer includes `goat` inside **CLI Tools**; the 0.1.0 installer places it beside the app. Copy the executable to a directory already on your PATH if desired. GOAT does not edit shell configuration. To build from source:
 
 ```sh
 make cli

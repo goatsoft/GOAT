@@ -232,7 +232,7 @@ Apple's macOS 26 material: translucent, refractive surfaces that show what sits 
 
 ## Kid
 
-Release 0.1, the first of the herd. Then Yearling, Billy, Nanny, Wether, Ram, Capra and Ibex at 1.0.
+The 0.1 release line, including its 0.1.1 maintenance update. Patch releases retain Kid; Yearling is reserved for the planned 0.2 polish release. Later codenames include Billy, Nanny, Wether, Ram, Capra and Ibex at 1.0.
 
 Aliases: 0.1 (Kid)
 

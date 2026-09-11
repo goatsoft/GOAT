@@ -14,7 +14,7 @@ Chat text supports 11–28 pt and code supports 10–24 pt. A missing saved font
 
 ## Resize the sidebar
 
-In current candidate and development builds, drag the divider beside the chat sidebar to choose a width between 200 and 600 points. Its preferred starting width is 300 points. This wider range is not in the published Kid build 1343.
+In the 0.1.1 (Kid) maintenance candidate, drag the divider beside the chat sidebar to choose a width between 200 and 600 points. Its preferred starting width is 300 points. This wider range is not in the published Kid build 1343.
 
 ## Reset appearance and general preferences
 
