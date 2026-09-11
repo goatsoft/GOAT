@@ -967,7 +967,8 @@ struct ModelEffortControl: View {
             if model.engineAppURL != nil {
                 plainRow(model.enginePreset.appLabel ?? "Manage Models…") {
                     showMenu = false
-                    model.openEngineApp()
+                    model.settingsTab = .models
+                    openSettings()
                 }
             }
             if model.activeEngineProfile != nil {

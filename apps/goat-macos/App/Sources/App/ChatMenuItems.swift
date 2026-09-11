@@ -13,7 +13,11 @@ struct ModelMenuItems: View {
 
     var body: some View {
         if model.models.isEmpty {
-            Button("No Models - Wake the Engine") { Task { await model.discover() } }
+            if model.activeEngineProfile == nil {
+                Button("Set Up an Engine to Inspect Models") { model.settingsTab = .engine }
+            } else {
+                Button("No Models - Refresh Engine") { Task { await model.refreshModelCatalog() } }
+            }
         } else {
             ForEach(model.models) { ref in
                 Toggle(isOn: binding(for: ref.id)) {

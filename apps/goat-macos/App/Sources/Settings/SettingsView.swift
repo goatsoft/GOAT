@@ -6,7 +6,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 enum SettingsTab: String, CaseIterable, Identifiable {
-    case general, herd, judas, engine, memory, goated, mcp, appearance
+    case general, herd, judas, engine, models, memory, goated, mcp, appearance
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -14,6 +14,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .herd: "Herd"
         case .judas: "JUDAS"
         case .engine: "Engine"
+        case .models: "Models"
         case .memory: "Memory"
         case .goated: "Extensions"
         case .mcp: "MCP"
@@ -26,6 +27,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .herd: "folder.badge.gearshape"
         case .judas: "shield.lefthalf.filled"
         case .engine: "cpu"
+        case .models: "square.stack.3d.up"
         case .memory: "brain"
         case .goated: "shippingbox.fill"
         case .mcp: "wrench.and.screwdriver"
@@ -37,7 +39,8 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .general: "Defaults and safeguards for every GOAT session."
         case .herd: "Project folders and the local Git status GOAT can safely read."
         case .judas: "Choose what connects. Keep local services, previews and privacy under your control."
-        case .engine: "Connect and manage the local models that power GOAT."
+        case .engine: "Connect and configure the inference engines that power GOAT."
+        case .models: "Inspect your engine’s models and choose favourites."
         case .memory: "Global persistent context for chats that are not in a Pen."
         case .goated: "Manage GOAT skills and the extension surface."
         case .mcp: "Connect tools and control what GOAT may call."
@@ -85,6 +88,7 @@ struct SettingsView: View {
                                 openMemory: { model.settingsTab = .memory },
                                 openMCP: { model.settingsTab = .mcp })
                         case .engine: EngineSettings()
+                        case .models: ModelsSettingsView()
                         case .memory: MemorySettingsView()
                         case .goated: GOATedSettingsView(section: $goatedSection)
                         case .mcp: MCPSettingsView()
@@ -164,6 +168,8 @@ struct SettingsView: View {
         guard !query.isEmpty else { return SettingsTab.allCases }
         return SettingsTab.allCases.filter {
             $0.title.lowercased().contains(query) || $0.description.lowercased().contains(query)
+                || ($0 == .models
+                    && "favourites capabilities compatibility template reasoning vision tools model models".contains(query))
                 || ($0 == .judas
                     && "network lan thunderbolt local internet off-grid previews security privacy permissions activity hoofprint connections"
                         .contains(query))
