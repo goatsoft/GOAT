@@ -38,7 +38,9 @@ mkdir "$WORK/stage" "$MOUNT"
 ditto "$APP" "$WORK/stage/GOAT.app"
 mkdir "$WORK/stage/CLI Tools"
 cp "$CLI" "$WORK/stage/CLI Tools/goat"
-ln -s /Applications "$WORK/stage/Applications"
+THEME="$SCRIPT_DIR/../art/dmg"
+swift "$SCRIPT_DIR/dmg-applications-shortcut.swift" create /Applications \
+  "$WORK/stage/Applications" "$THEME/goat-applications-icon.png"
 LICENSE_SOURCE="$SCRIPT_DIR/../App/Resources/Licenses"
 for NOTICE in LICENSE.txt LICENSE-ART.txt THIRD-PARTY-NOTICES.txt; do
   cmp "$LICENSE_SOURCE/$NOTICE" "$APP/Contents/Resources/Licenses/$NOTICE"
@@ -46,7 +48,6 @@ done
 cp -R "$LICENSE_SOURCE" "$WORK/stage/Licence"
 python3 "$SCRIPT_DIR/release-metadata.py" bundle "${ARGS[@]}" --app "$WORK/stage/GOAT.app"
 # Add verified metadata to the ImageGen master's empty blue capsule at both scales.
-THEME="$SCRIPT_DIR/../art/dmg"
 swift "$SCRIPT_DIR/dmg-background.swift" "$THEME/goat-dmg-background-source.png" \
   "$APP" "$WORK/background"
 mkdir "$WORK/stage/.background"
@@ -96,7 +97,8 @@ for NOTICE in LICENSE.txt LICENSE-ART.txt THIRD-PARTY-NOTICES.txt; do
   cmp "$LICENSE_SOURCE/$NOTICE" "$MOUNT/Licence/$NOTICE"
   cmp "$LICENSE_SOURCE/$NOTICE" "$MOUNT/GOAT.app/Contents/Resources/Licenses/$NOTICE"
 done
-[ "$(readlink "$MOUNT/Applications")" = /Applications ]
+swift "$SCRIPT_DIR/dmg-applications-shortcut.swift" verify /Applications "$MOUNT/Applications"
+cmp "$WORK/stage/Applications/..namedfork/rsrc" "$MOUNT/Applications/..namedfork/rsrc"
 hdiutil detach "$MOUNT" >/dev/null
 ATTACHED=0
 # Prepare the manifest before publishing any local output.

@@ -49,9 +49,9 @@ on placeItems(diskFolder)
     -- Finder's filtered folder collection omits some invisible system folders.
     set rootNames to list folder diskFolder with invisibles
     tell application "Finder"
-        set position of item "GOAT.app" of diskFolder to {222, 180}
-        set position of item "Applications" of diskFolder to {499, 180}
-        set position of item "CLI Tools" of diskFolder to {303, 246}
+        set position of item "GOAT.app" of diskFolder to {220, 183}
+        set position of item "Applications" of diskFolder to {499, 183}
+        set position of item "CLI Tools" of diskFolder to {303, 247}
         set position of item "Licence" of diskFolder to {638, 375}
         set position of item ".background" of diskFolder to {532, 375}
         set extraX to 316

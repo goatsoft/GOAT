@@ -9,8 +9,15 @@ guard CommandLine.arguments.count >= 3,
     exit(1)
 }
 for path in CommandLine.arguments.dropFirst(2) {
-    let original = URL(fileURLWithPath: path).lastPathComponent == "CLI Tools"
-        ? cliIcon : NSWorkspace.shared.icon(for: .folder)
+    let name = URL(fileURLWithPath: path).lastPathComponent
+    let original: NSImage
+    if name == "CLI Tools" {
+        original = cliIcon
+    } else if name == "Licence" {
+        original = NSWorkspace.shared.icon(for: .plainText)
+    } else {
+        original = NSWorkspace.shared.icon(for: .folder)
+    }
     let image = NSImage(size: NSSize(width: 96, height: 96))
     image.lockFocus()
     original.draw(in: NSRect(x: 24, y: 0, width: 48, height: 48))
