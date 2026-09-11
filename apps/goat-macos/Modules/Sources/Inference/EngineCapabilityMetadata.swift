@@ -26,13 +26,27 @@ struct EngineHTTPOrigin: Equatable, Sendable {
 struct ProbedModelMetadata: Equatable, Sendable {
     var contextLength: Int?
     var capabilities: ModelCapabilities
+    var observedAt: Date?
+    var sourceDescriptors: Set<String>
+
+    init(
+        contextLength: Int?, capabilities: ModelCapabilities,
+        observedAt: Date? = nil, sourceDescriptors: Set<String> = []
+    ) {
+        self.contextLength = contextLength
+        self.capabilities = capabilities
+        self.observedAt = observedAt
+        self.sourceDescriptors = sourceDescriptors
+    }
 
     static let unknown = ProbedModelMetadata(contextLength: nil, capabilities: .unknown)
 
     func merged(with other: ProbedModelMetadata) -> ProbedModelMetadata {
         ProbedModelMetadata(
             contextLength: other.contextLength ?? contextLength,
-            capabilities: capabilities.merged(with: other.capabilities))
+            capabilities: capabilities.merged(with: other.capabilities),
+            observedAt: other.observedAt ?? observedAt,
+            sourceDescriptors: sourceDescriptors.union(other.sourceDescriptors))
     }
 
     func applying(to model: ModelRef) -> ModelRef {
@@ -40,6 +54,13 @@ struct ProbedModelMetadata: Equatable, Sendable {
             id: model.id,
             contextLength: contextLength ?? model.contextLength,
             capabilities: model.capabilities.merged(with: capabilities))
+    }
+
+    func observed(at date: Date, source: String? = nil) -> ProbedModelMetadata {
+        var result = self
+        result.observedAt = date
+        if let source, !source.isEmpty { result.sourceDescriptors.insert(source) }
+        return result
     }
 }
 

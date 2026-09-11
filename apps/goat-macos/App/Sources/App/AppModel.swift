@@ -198,6 +198,10 @@ final class AppModel {
     var modelPreferencesLoading = false
     var modelPreferencesRevision: UInt64 = 0
     var durableModelPreferences = ModelPreferencesFile()
+    var modelInspectionStates: [ModelIdentity: ModelMetadataState] = [:]
+    var modelInspectionTask: Task<Void, Never>?
+    var modelInspectionRevision: UInt64 = 0
+    var modelCatalogRefreshing = false
     var credentialRevisions: [String: UInt64] = [:]
     var themeStoreRevision: UInt64 = 0
     var penStoreRevisions: [UUID: UInt64] = [:]

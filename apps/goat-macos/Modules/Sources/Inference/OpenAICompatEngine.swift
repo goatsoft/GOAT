@@ -75,7 +75,7 @@ public actor OpenAICompatEngine: InferenceEngine {
         guard revision == configRevision, config == self.config, !Task.isCancelled else {
             return model
         }
-        let enriched = (metadata ?? .unknown).applying(to: model)
+        let enriched = (metadata?.observed(at: .now) ?? .unknown).applying(to: model)
         return enriched
     }
 
