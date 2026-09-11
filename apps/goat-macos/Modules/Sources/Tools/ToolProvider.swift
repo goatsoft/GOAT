@@ -25,9 +25,11 @@ public struct ToolCallRequest: Sendable {
 public struct ToolResult: Sendable {
     public var content: String
     public var isError: Bool
-    public init(content: String, isError: Bool = false) {
+    public var diagnostic: ToolExecutionDiagnostic?
+    public init(content: String, isError: Bool = false, diagnostic: ToolExecutionDiagnostic? = nil) {
         self.content = content
         self.isError = isError
+        self.diagnostic = diagnostic
     }
 }
 

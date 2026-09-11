@@ -110,6 +110,9 @@ public protocol ShepherdToolSource: AnyObject {
     func authorizeAndInvoke(
         route: ShepherdToolRoute, argumentsJSON: String
     ) async throws -> ToolResult?
+    func previewToolEffect(
+        route: ShepherdToolRoute, argumentsJSON: String
+    ) async -> ToolExecutionDiagnostic?
     func logCall(server: String, tool: String, status: String, duration: TimeInterval)
     func cancelPendingPermission()
 }
@@ -118,6 +121,9 @@ extension ShepherdToolSource {
     public func turnWillPrepare(chatID: UUID, projectID: UUID?, turnID: UUID) async throws {}
     public func turnDidEnd(turnID: UUID, cancelled: Bool) async {}
     public func finishPendingWork() async -> String? { nil }
+    public func previewToolEffect(
+        route: ShepherdToolRoute, argumentsJSON: String
+    ) async -> ToolExecutionDiagnostic? { nil }
 }
 
 /// The selected Pen's prompt context. A workspace path describes the intended project;
@@ -432,6 +438,7 @@ public final class ShepherdModel {
             + (handoffCommand == nil ? [] : [HandoffCommand.promptSection])
         var repairedToolFormat = false
         var repairNextRound = false
+        var repairProgress = FileRepairProgressTracker()
         shepherd: while true {
             guard owns(turnID: turnID, sessionID: session.id), !Task.isCancelled else { break }
             await drainLeadSave()
@@ -717,7 +724,19 @@ public final class ShepherdModel {
                     }
                     continue
                 }
+                if let preview = await tools.previewToolEffect(
+                    route: target, argumentsJSON: call.argumentsJSON),
+                    let blocked = repairProgress.preflight(preview)
+                {
+                    assistant.toolEvents[index].result = blocked
+                    assistant.toolEvents[index].isError = true
+                    assistant.error = blocked
+                    assistant.markRenderChanged()
+                    guard await env.persist(assistant, in: session) else { break shepherd }
+                    break shepherd
+                }
                 let started = Date()
+                var repairStop: String?
                 do {
                     let result = try await tools.authorizeAndInvoke(
                         route: target, argumentsJSON: call.argumentsJSON)
@@ -726,6 +745,9 @@ public final class ShepherdModel {
                     if let result {
                         assistant.toolEvents[index].result = result.content
                         assistant.toolEvents[index].isError = result.isError
+                        if let diagnostic = result.diagnostic {
+                            repairStop = repairProgress.observe(diagnostic)
+                        }
                         assistant.markRenderChanged()
                         tools.logCall(
                             server: target.server, tool: target.tool,
@@ -758,6 +780,12 @@ public final class ShepherdModel {
                     assistant.error = "Tool processing stopped because its result could not be saved."
                     assistant.markRenderChanged()
                     activity.log(.warn, "persistence: tool result was not saved")
+                    break shepherd
+                }
+                if let repairStop {
+                    assistant.error = repairStop
+                    assistant.markRenderChanged()
+                    _ = await env.persist(assistant, in: session)
                     break shepherd
                 }
                 if Task.isCancelled || !owns(turnID: turnID, sessionID: session.id) {

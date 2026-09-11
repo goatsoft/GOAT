@@ -301,8 +301,12 @@ final class AppToolRouter: ShepherdToolSource {
                         server: handle.registration.extensionID.rawValue, tool: handle.name, isExtension: true)
                     return allowed
                 }
-                return ToolResult(content: result.content, isError: result.isError)
+                return ToolResult(
+                    content: result.content, isError: result.isError, diagnostic: result.diagnostic)
             } catch is OwnerDeniedTool { return nil }
+            catch let error as PenFileTools.Failure {
+                return ToolResult(content: error.localizedDescription, isError: true, diagnostic: error.diagnostic)
+            }
         case .mcp:
             return try await mcp.authorizeAndInvoke(route: route, argumentsJSON: argumentsJSON)
         case .memory(let context):
@@ -313,8 +317,22 @@ final class AppToolRouter: ShepherdToolSource {
             }
             let result = try await provider.invoke(
                 ToolCallRequest(tool: route.tool, argumentsJSON: argumentsJSON))
-            return ToolResult(content: result.content, isError: result.isError)
+            return ToolResult(
+                content: result.content, isError: result.isError, diagnostic: result.diagnostic)
         }
+    }
+
+    func previewToolEffect(
+        route: ShepherdToolRoute, argumentsJSON: String
+    ) async -> ToolExecutionDiagnostic? {
+        guard case .extensionTool(let handle) = route.origin,
+            handle.registration.extensionID.rawValue == "goat.herder",
+            handle.name == "pen_run_command",
+            let session = penFileSession,
+            session.turnID == handle.turnID
+        else { return nil }
+        return await session.provider.previewToolEffect(
+            ToolCallRequest(tool: route.tool, argumentsJSON: argumentsJSON))
     }
 
     private func authorizeExtension(_ handle: ToolHandle, arguments: String) async throws -> Bool {

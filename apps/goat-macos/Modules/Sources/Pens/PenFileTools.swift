@@ -1,4 +1,5 @@
 import CoreFoundation
+import CryptoKit
 import Darwin
 import Foundation
 import Tools
@@ -133,7 +134,13 @@ public actor PenFileTools {
                 "end_line": end, "total_lines": lines.count, "truncated": end < lines.count,
             ]
             if end < lines.count { result["next_start_line"] = end + 1 }
-            return ToolResult(content: try json(result))
+            return ToolResult(
+                content: try json(result),
+                diagnostic: ToolExecutionDiagnostic(fileObservations: [
+                    FileOperationObservation(
+                        workspaceIdentity: workspaceIdentity, relativePath: path, kind: .read,
+                        outcome: .succeeded, afterDigest: Self.digest(data))
+                ]))
         case "pen_search":
             try validateKeys(args, allowed: ["path", "query", "file_glob", "case_sensitive", "max_results"])
             guard let query = args["query"] as? String, !query.isEmpty, query.unicodeScalars.count <= 512 else {
@@ -325,17 +332,28 @@ public actor PenFileTools {
             let new = try required("new_text", args)
             guard !old.utf8.elementsEqual(new.utf8) else {
                 throw Failure(
-                    "No change: old_text and new_text are identical. Nothing was written. Skip this edit if the file is already correct, or supply a replacement that changes the requested content."
+                    "No change: old_text and new_text are identical. Nothing was written. Skip this edit if the file is already correct, or supply a replacement that changes the requested content.",
+                    diagnostic: ToolExecutionDiagnostic(
+                        fileObservations: [FileOperationObservation(
+                            workspaceIdentity: workspaceIdentity, relativePath: path,
+                            kind: .edit, outcome: .unchanged, beforeDigest: Self.digest(data))],
+                        failureCategory: .fileUnchanged)
                 )
             }
             guard !old.isEmpty, let match = content.range(of: old) else {
                 throw Failure(
-                    "old_text was not found. Nothing was written. Call pen_read_file for this path and copy an exact, unique fragment from its content; do not guess the existing text."
+                    "old_text was not found. Nothing was written. Call pen_read_file for this path and copy an exact, unique fragment from its content; do not guess the existing text.",
+                    diagnostic: ToolExecutionDiagnostic(fileObservations: [FileOperationObservation(
+                        workspaceIdentity: workspaceIdentity, relativePath: path,
+                        kind: .edit, outcome: .failed, beforeDigest: Self.digest(data))])
                 )
             }
             guard content.range(of: old, range: content.index(after: match.lowerBound)..<content.endIndex) == nil else {
                 throw Failure(
-                    "old_text matches more than once. Nothing was written. Read the file and include more surrounding text to select one location."
+                    "old_text matches more than once. Nothing was written. Read the file and include more surrounding text to select one location.",
+                    diagnostic: ToolExecutionDiagnostic(fileObservations: [FileOperationObservation(
+                        workspaceIdentity: workspaceIdentity, relativePath: path,
+                        kind: .edit, outcome: .failed, beforeDigest: Self.digest(data))])
                 )
             }
             original = data
@@ -398,12 +416,24 @@ public actor PenFileTools {
         guard renameatx_np(parent.raw, temporary, parent.raw, name, flags) == 0 else {
             if write.original == nil, errno == EEXIST {
                 throw Failure(
-                    "File already exists. Nothing was overwritten. Call pen_read_file for this path, then pen_edit_file with an exact fragment from that read. If the content is already correct, skip it; do not recreate completed files. Empty content does not delete a file. When pen_run_command is available, remove a confirmed obsolete file with command rm and args [--, the relative file path], subject to separate command approval."
+                    "File already exists. Nothing was overwritten. Call pen_read_file for this path, then pen_edit_file with an exact fragment from that read. If the content is already correct, skip it; do not recreate completed files. Empty content does not delete a file.",
+                    diagnostic: ToolExecutionDiagnostic(
+                        fileObservations: [FileOperationObservation(
+                            workspaceIdentity: workspaceIdentity, relativePath: write.path,
+                            kind: .create, outcome: .alreadyExists)],
+                        failureCategory: .fileAlreadyExists)
                 )
             }
             throw failure("Save file")
         }
-        return ToolResult(content: try json(["path": write.path, "bytes": write.replacement.count, "status": "saved"]))
+        return ToolResult(
+            content: try json(["path": write.path, "bytes": write.replacement.count, "status": "saved"]),
+            diagnostic: ToolExecutionDiagnostic(fileObservations: [
+                FileOperationObservation(
+                    workspaceIdentity: workspaceIdentity, relativePath: write.path,
+                    kind: write.original == nil ? .create : .edit, outcome: .succeeded,
+                    beforeDigest: Self.digest(write.original), afterDigest: Self.digest(write.replacement))
+            ]))
     }
 
     private func validateRoot() throws {
@@ -413,6 +443,11 @@ public actor PenFileTools {
         guard fstat(root.raw, &expected) == 0, fstat(current.raw, &actual) == 0,
             expected.st_dev == actual.st_dev, expected.st_ino == actual.st_ino
         else { throw Failure("Pen folder changed. Start a new turn to refresh its file tools.") }
+    }
+
+    private static func digest(_ data: Data?) -> String? {
+        guard let data else { return nil }
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
     private static func openDirectory(_ path: String) throws -> Descriptor {
@@ -501,10 +536,14 @@ public actor PenFileTools {
         Failure("\(operation): \(String(cString: strerror(errno))).")
     }
 
-    private struct Failure: LocalizedError {
-        let message: String
-        init(_ message: String) { self.message = message }
-        var errorDescription: String? { message }
+    public struct Failure: LocalizedError, Sendable {
+        public let message: String
+        public let diagnostic: ToolExecutionDiagnostic?
+        public init(_ message: String, diagnostic: ToolExecutionDiagnostic? = nil) {
+            self.message = message
+            self.diagnostic = diagnostic
+        }
+        public var errorDescription: String? { message }
     }
 
     private final class Descriptor {

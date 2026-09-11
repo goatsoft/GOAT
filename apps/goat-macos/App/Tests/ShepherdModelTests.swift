@@ -1649,6 +1649,34 @@ func automaticTitlesNameToolWorkflowsWithAnEmptyFinalMessage(narrated: Bool) asy
     #expect(!ShepherdModel.hasUnexecutedToolMarkup("vec4<f32>(1.0) < T", toolNames: names))
 }
 
+@Test func fileRepairTrackerBlocksDeleteAfterCreateConflictAndStopsCycles() {
+    var tracker = FileRepairProgressTracker()
+    let key = FileRepairProgressTracker.Key(workspaceIdentity: "workspace", relativePath: "src/main.swift")
+    let conflict = ToolExecutionDiagnostic(fileObservations: [
+        FileOperationObservation(
+            workspaceIdentity: key.workspaceIdentity, relativePath: key.relativePath,
+            kind: .create, outcome: .alreadyExists)
+    ])
+    #expect(tracker.observe(conflict) == nil)
+    let removal = ToolExecutionDiagnostic(fileObservations: [
+        FileOperationObservation(
+            workspaceIdentity: key.workspaceIdentity, relativePath: key.relativePath,
+            kind: .remove, outcome: .succeeded)
+    ])
+    #expect(tracker.preflight(removal) == FileRepairProgressTracker.blockedRemovalMessage)
+
+    var cycleTracker = FileRepairProgressTracker()
+    var stop: String?
+    for digest in ["B", "A", "B", "A", "B"] {
+        stop = cycleTracker.observe(ToolExecutionDiagnostic(fileObservations: [
+            FileOperationObservation(
+                workspaceIdentity: key.workspaceIdentity, relativePath: key.relativePath,
+                kind: .edit, outcome: .succeeded, beforeDigest: "previous", afterDigest: digest)
+        ]))
+    }
+    #expect(stop?.contains("content cycle") == true)
+}
+
 @Test @MainActor func toolFormatRecoveryStopsIfItsFailedResponseCannotBeSaved() async {
     let tools = FakeToolSource()
     tools.specs = [ToolSpec(name: "srv__tool", description: "Tool", parametersJSON: "{}")]

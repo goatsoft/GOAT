@@ -41,6 +41,7 @@ public actor PenCommandTools {
         public let commandIdentity: String
         public let displayName: String
         public let network: Bool
+        public let directRemovalObservation: FileOperationObservation?
         public let previewJSON: String
         public var isDefaultAllowed: Bool {
             !network
@@ -92,6 +93,8 @@ public actor PenCommandTools {
         var exitCode: Int32?
         var stopped: String?
         var finished = false
+        let directRemovalObservation: FileOperationObservation?
+        var observationReported = false
         var monitor: Task<Void, Never>?
         var cancellation: UUID?
     }
@@ -151,6 +154,8 @@ public actor PenCommandTools {
             owner: identity, executable: executable, arguments: input.args, directory: directory,
             timeout: input.timeout_seconds ?? defaultTimeout, runtimeRoots: roots, commandIdentity: commandIdentity,
             displayName: URL(fileURLWithPath: executable).lastPathComponent, network: network,
+            directRemovalObservation: Self.directRemovalObservation(
+                executable: executable, arguments: input.args, workspaceIdentity: files.workspaceIdentity),
             previewJSON: try Self.json(preview))
     }
 
@@ -203,7 +208,8 @@ public actor PenCommandTools {
         jobOrder.append(id)
         jobs[id] = Job(
             pid: spawned.pid, outputFD: spawned.output, lifetimeFD: spawned.lifetime, scratch: scratch,
-            deadline: Date().addingTimeInterval(TimeInterval(command.timeout)), network: command.network)
+            deadline: Date().addingTimeInterval(TimeInterval(command.timeout)), network: command.network,
+            directRemovalObservation: command.directRemovalObservation)
         if command.network {
             jobs[id]?.cancellation = judas.registerCancellation { [weak self] in
                 Task { await self?.stop(id, reason: "Stopped because JUDAS policy changed.") }
@@ -228,7 +234,7 @@ public actor PenCommandTools {
         let input = try JSONDecoder().decode(StatusInput.self, from: Data(argumentsJSON.utf8))
         guard jobs[input.job_id] != nil else {
             throw Failure(
-                "Unknown command job for this turn. Copy job_id exactly from a successful pen_run_command result; never invent job1. pen_stop_command cancels a running process, not a file. To remove a confirmed obsolete file, call pen_run_command with command rm and args [--, the relative file path], then poll its returned job_id."
+                "Unknown command job for this turn. Check the exact job_id returned by pen_run_command; do not invent or alter a job ID."
             )
         }
         if tool == "pen_stop_command" {
@@ -303,15 +309,37 @@ public actor PenCommandTools {
     }
 
     private func snapshot(_ id: String) throws -> ToolResult {
-        guard let job = jobs[id] else { throw Failure("Unknown command job.") }
+        guard var job = jobs[id] else { throw Failure("Unknown command job.") }
         var object: [String: Any] = [
             "job_id": id, "running": !job.finished,
             "output": String(decoding: job.output, as: UTF8.self), "output_truncated": job.truncated,
         ]
         object["exit_code"] = job.exitCode
         object["notice"] = job.stopped
+        let succeeded = job.finished && job.exitCode == 0 && job.stopped == nil
+        var diagnostic: ToolExecutionDiagnostic?
+        if succeeded, let observation = job.directRemovalObservation, !job.observationReported {
+            diagnostic = ToolExecutionDiagnostic(fileObservations: [observation])
+            job.observationReported = true
+            jobs[id] = job
+        }
         return ToolResult(
-            content: try Self.json(object), isError: job.finished && (job.exitCode != 0 || job.stopped != nil))
+            content: try Self.json(object), isError: job.finished && !succeeded, diagnostic: diagnostic)
+    }
+
+    private static func directRemovalObservation(
+        executable: String, arguments: [String], workspaceIdentity: String
+    ) -> FileOperationObservation? {
+        guard ["/bin/rm", "/usr/bin/rm"].contains(executable), arguments.count == 2,
+            arguments[0] == "--"
+        else { return nil }
+        let path = arguments[1]
+        guard !path.isEmpty, !path.hasPrefix("/"), !path.contains("\0"), !path.contains("*") else { return nil }
+        let components = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        guard !components.isEmpty, !components.contains(".."), !components.contains(where: { $0.hasPrefix("-") }) else { return nil }
+        return FileOperationObservation(
+            workspaceIdentity: workspaceIdentity, relativePath: components.joined(separator: "/"),
+            kind: .remove, outcome: .succeeded)
     }
 
     private static func drain(_ job: inout Job) {
