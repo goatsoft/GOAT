@@ -40,6 +40,10 @@ The model-management implementation is present on the current development branch
 
 Fake-engine qualification covers fragmented structured calls, mixed printed markup, exactly-once execution, continuation, and output-cap behavior. Live model qualification remains a separate activity and no candidate is treated as qualified from discovery alone. The [proposed model-management design](adrs/0084-model-inspection-favourites-and-recovery.md) records the scope and acceptance boundaries.
 
+## Inference efficiency (proposed)
+
+A harness audit on 11 September 2026 compared GOAT's inference loop with ten open-source coding agents. The architecture held; the gaps are prefix-cache stability, budget accuracy, round-trip count and loop resilience. Five proposed ADRs record the fixes: [prefix-stable prompts and calibrated budgeting](adrs/0085-prefix-stable-prompts-and-usage-calibrated-budgeting.md), [sampling parameters as model facts](adrs/0086-sampling-parameters-are-model-facts.md), [conversation compaction with `/compact` and an auto-compact threshold](adrs/0087-conversation-compaction.md), [single-round tool results](adrs/0088-single-round-tool-results.md) and [turn continuity and engine resilience](adrs/0089-turn-continuity-and-engine-resilience.md). They are ordered so each phase is independently shippable; none is implemented or qualified yet.
+
 ## M7: The polish pass
 
 Yearling (0.2.0) is the planned release line for broader polish. The remaining checklist below separates implemented foundations from acceptance work; unchecked items are not promised features or completed qualification.
