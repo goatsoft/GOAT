@@ -11,6 +11,8 @@ GOAT connects a compatible model engine to project files, tools and memory. Orga
 
 **0.1 (Kid) is available for Mac.** [Download GOAT](https://github.com/goatsoft/GOAT/releases/download/v0.1.0/GOAT-0.1.0.dmg) or read the [release notes](https://github.com/goatsoft/GOAT/releases/tag/v0.1.0). The official download is signed and notarized. Start with the [installation guide](https://goatherd.dev/Getting-Started), and check [known issues](https://goatherd.dev/KNOWN-ISSUES) for current limitations.
 
+**0.1.1 (Kid) is in preparation:** sidebar fixes, preference reset, recoverable uninstall and a revised Finder installer. See the [maintenance scope and M7 plan](docs/ROADMAP.md). The published download above remains 0.1.0.
+
 ## From conversation to project work
 
 - **Work on code.** Inspect files, make approved edits and run permitted non-interactive commands. Expand grouped tool activity and use Lead to guide the next step after the current action completes.

@@ -58,7 +58,7 @@ Documentation wiki pages retain their established root routes. ADR and reference
 
 The tracked `.env` contains public build values only. `VITE_REPO` selects the source repository, `VITE_SITE_URL` the landing URL, `VITE_DOCS_URL` the separate docs URL and `VITE_BASE` the deployment path. `.env.example` documents these values. Never put secrets in `VITE_*` variables: they can be included in the browser bundle.
 
-Release identity comes from `../apps/goat-macos/release.json`. `publication.json` controls download availability independently. Leave `releaseTag` null until an approved artifact exists. Set it to the exact `v<version>` tag only as part of an authorised launch. The sites do not query GitHub for releases at runtime.
+Release identity comes from `../apps/goat-macos/release.json`. `publication.json` controls download availability independently. Leave `releaseTag` null until an approved artifact exists. Set it to the exact `v<version>` tag and record its `codename` only as part of an authorised launch. When the source version advances, keep this record on the existing published release until the new artifact is available; its download filename and label continue to use the published identity. The sites do not query GitHub for releases at runtime.
 
 ## Publication
 

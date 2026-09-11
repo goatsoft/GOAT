@@ -1,6 +1,7 @@
 import release from '../../../apps/goat-macos/release.json'
 import publication from '../../publication.json'
 import { docRoute } from '../lib/doc-routes.ts'
+import { siteRelease } from '../lib/site-release.ts'
 
 /** Build-time identity and deliberate publication state; no background release lookup. */
 export function useSite() {
@@ -8,12 +9,10 @@ export function useSite() {
   const repo = `https://github.com/${slug}`
   const docs = import.meta.env.VITE_DOCS_URL || `${import.meta.env.BASE_URL}docs/`
   const doc = (path: string) => `${docs.replace(/\/?$/, '/')}${docRoute(path)}`
-  const releaseTag = `v${release.version}`
-  const releaseAvailable = publication.releaseTag === releaseTag
-  const downloadFilename = `GOAT-${release.version}.dmg`
+  const { releaseTag, releaseAvailable, releaseLabel, downloadFilename } = siteRelease(release, publication)
   return {
     name: 'GOAT',
-    releaseLabel: `${release.version.replace(/\.0$/, '')} (${release.codename})`,
+    releaseLabel,
     releaseTag,
     releaseAvailable,
     downloadFilename,

@@ -21,6 +21,12 @@ The disk image also includes the optional `goat` CLI and licence notices. You do
 
 The release includes `SHA256SUMS.txt` and `release-metadata.json`. To check the download, save both beside the DMG, open Terminal in that folder and run `shasum -a 256 -c SHA256SUMS.txt`. Both entries should report `OK`.
 
+### Updating within Kid
+
+0.1.1 is being prepared as a maintenance update. Until it is published, the download above remains 0.1.0. Finish active chats and command jobs before quitting to replace an installed app. Keep a backup of GOAT Home and Application Support as described in [Storage and backups](../reference/STORAGE.md). An ordinary app replacement does not require resetting preferences or uninstalling user data.
+
+The revised 0.1.1 disk image places the optional executable in **CLI Tools** and the notices in **Licence**, shown with a document-style icon. Drag GOAT to the blue Applications folder bearing the standard Applications symbol.
+
 ### Build from source
 
 Source builds require Xcode with the macOS 26 SDK and XcodeGen. Follow [Contributing](../../CONTRIBUTING.md) for build and launch instructions. They use ad-hoc signing by default and do not require Apple Developer membership. Certificate-signed local builds are optional; see [Releasing](Releasing.md#signing-setup). Do not restart GOAT while a chat or command is active.

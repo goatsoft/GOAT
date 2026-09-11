@@ -17,15 +17,30 @@ GOAT’s first release is **0.1 (Kid)**. The capabilities below are included in 
 
 Downloads and release notes are on [GitHub Releases](https://github.com/goatsoft/GOAT/releases/tag/v0.1.0). See [Known issues](KNOWN-ISSUES.md) for current limitations.
 
-## Next priorities
+## Kid 0.1.1 maintenance release
 
-The development branch includes the sidebar rendering fix, with a 300-point preferred width and a 600-point maximum. Settings → General → Manage groups storage paths into a tree and offers automatic uninstall after GOAT closes, with independent removal options and a private recovery folder. Partial uninstall defaults to preserving GOAT Home and chats, with app preferences selected for removal; Uninstall all checks every removal option. Local-data choices live within uninstall. Preference reset applies the listed appearance and general defaults immediately without restarting GOAT. GOAT never quits as a side effect of preparing uninstall. These changes are not in the published Kid download.
+0.1.1 remains on the Kid release line. It is being qualified and is not yet the published download. See the [release notes](RELEASE-NOTES.md) for the upgrade guidance. The maintenance scope is:
 
-Qualify automatic uninstall under the final signed distribution identity and evaluate standalone reset operations.
+- Sidebar labels remain visible at maximum width, with a 300-point preferred width and a 600-point maximum. Repeated chat layout work is reduced.
+- Settings → General → Manage shows storage locations in a tree, resets the listed appearance/general preferences immediately, and schedules recoverable uninstall after GOAT closes. Partial uninstall preserves GOAT Home and chats by default. Review the [reset and uninstall guide](how-to/MANAGE-GOAT-DATA.md) for exact removal choices.
+- The Finder installer has a Retina background, a build badge drawn from the app identity, clearer Applications and CLI icons, readable labels and a support-folder row.
 
-Continue improving accessibility, discoverability and compatibility based on observed user needs. Profile realistic long-running workloads and refine documentation as engine/runtime combinations are qualified.
+Release gates include the final signed/notarized package, installation and upgrade checks, and disposable-installation qualification of uninstall. See [Release readiness](RELEASE-CHECKLIST.md). These maintenance changes do not complete M7 or require a 0.2 release.
 
-Yearling and Ibex are reserved release codenames; a codename or version in planning is not a shipping commitment. [Versioning](VERSIONING.md) defines release identity.
+## M7: The polish pass
+
+Yearling (0.2.0) is the planned release line for broader polish. The remaining checklist below separates implemented foundations from acceptance work; unchecked items are not promised features or completed qualification.
+
+- [ ] **Command palette:** implement the broader ⌘K palette for chats, Pens, models and actions, with search, keyboard selection, dismissal and reliable focus restoration. The existing composer slash-command menu is a separate control.
+- [ ] **Onboarding and empty states:** build on Kid's explicit first-engine setup. Review first chat, first Pen, unavailable engines, empty memory, loading, errors and recovery with a fresh profile and an existing installation. Users should have a clear next action without mistaking loading for missing data.
+- [ ] **Accessibility:** audit core workflows with keyboard and VoiceOver, contrast, text sizing, Reduce Motion and Reduce Transparency. Existing labels and motion controls are foundations, not evidence of complete coverage.
+- [ ] **Performance:** measure cold launch to an interactive window, warm-engine first-token latency, streaming scroll, long chats, tool-heavy turns, large workspaces and repeated previews. Retain the original targets of under one second to an interactive window, under 2.5 seconds to first token on the documented warm reference pairing, and 60 fps streaming scroll. Record hardware, model/server versions and measured results before marking this complete.
+- [ ] **Herd Guarantee:** verify supported local chat, Pens, memory and stdio MCP with external networking unavailable. Separately demonstrate blocked remote preview fetches under the off-grid policy. Explicitly configured remote services remain subject to their own availability and connection policy.
+- [ ] **Remaining presentation polish:** decide the bounded scope of optional easter eggs and non-critical copy. The professional default, About-scoped 1337 unlock and experience split already belong to Kid; they are not pending M7 features.
+
+Honest token/context statistics, off-grid previews, formatting checks, the app test target and first-engine guidance were brought forward into Kid. M7 must recheck their behavior where relevant rather than count them as newly delivered features.
+
+Complete the applicable checklist and [release acceptance gates](RELEASE-CHECKLIST.md) before declaring M7 finished. Yearling and Ibex remain reserved codenames with no promised delivery date. Ibex 1.0 is a separate release decision; completing this checklist does not automatically change the version to 1.0. [Versioning](VERSIONING.md) defines release identity.
 
 ## Ideas under consideration
 

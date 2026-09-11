@@ -1,10 +1,10 @@
 # Known issues
 
-Current limitations in 0.1 (Kid). This page separates reproducible behavior from compatibility that still needs qualification.
+Current limitations in the Kid release line. Version-specific notes distinguish the published 0.1.0 download from the 0.1.1 maintenance candidate. This page separates reproducible behavior from compatibility that still needs qualification.
 
 ## Sidebar width
 
-At maximum sidebar width, items can disappear while the plus buttons remain visible. This was reported during build 1343 acceptance and is tracked in [issue #6](https://github.com/goatsoft/GOAT/issues/6). Avoid expanding the sidebar to its maximum width until it is fixed. The default width is 260 points; a wider initial layout is planned.
+At maximum sidebar width, items can disappear while the plus buttons remain visible. This was reported during build 1343 acceptance and is tracked in [issue #6](https://github.com/goatsoft/GOAT/issues/6). In 0.1.0, avoid expanding the sidebar to its maximum width. The 0.1.1 candidate fixes label visibility and changes the preferred width from 260 to 300 points, with a 600-point maximum.
 
 ## Fullscreen sidebar on macOS 26
 
@@ -32,6 +32,8 @@ macOS can ask again for local-network permission when an ad-hoc build changes. C
 
 ## Release qualification
 
-The official 0.1.0 build 1343 passed Developer ID signature, notarization, mounted-package and Gatekeeper checks. The maintainer tested the candidate on a separate Mac and accepted the build and first-engine guidance. The sidebar findings above are deferred fixes.
+The official 0.1.0 build 1343 passed Developer ID signature, notarization, mounted-package and Gatekeeper checks. The maintainer tested the candidate on a separate Mac and accepted the build and first-engine guidance. This evidence applies to that exact 0.1.0 artifact.
+
+The 0.1.1 maintenance candidate requires its own signed/notarized package, installation, upgrade and automatic-uninstall checks before publication. Installer artwork approval and automated tests do not establish those results.
 
 Broader engine/service combinations, full accessibility coverage and long-workload profiling remain ongoing. A successful installation does not establish compatibility with every model or integration. Consult [Release readiness](RELEASE-CHECKLIST.md) for the acceptance scope.

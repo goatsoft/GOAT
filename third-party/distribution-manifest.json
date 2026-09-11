@@ -1891,7 +1891,7 @@
     },
     {
       "path": "web/package-lock.json",
-      "sha256": "ebf46914abffb8345139aa7415c1ad0491ed6e66301e4411ff635c43c1181f1f"
+      "sha256": "1b17d84bb64ae68dec89ed43df432c2cf00f446b844a8612927ce8095e2f1606"
     },
     {
       "path": "apps/goat-macos/App/Resources/mermaid.min.js",

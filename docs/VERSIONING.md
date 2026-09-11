@@ -4,11 +4,13 @@ Implemented by ADR-0040. Public release approval, clean-machine acceptance and p
 
 [release.json](../apps/goat-macos/release.json) is the editable product identity: canonical `version`, `codename` and positive integer `build`. Read that record for the current build number, which must remain above the legacy build 1337. Increment the build when preparing a new candidate with changed content. The record alone does not make a candidate distributable.
 
-| Surface | Kid value |
+The maintenance candidate is **0.1.1 (Kid)**. The published 0.1.0 artifacts retain their original identity.
+
+| Surface | 0.1.1 candidate value |
 |---|---|
-| About and Activity Log, either presentation mode | `0.1 (Kid)` |
-| Website label and GitHub draft title | `GOAT 0.1 (Kid)` |
-| Bundle version / tag / DMG filename | `0.1.0` / `v0.1.0` / `GOAT-0.1.0.dmg` |
+| About and Activity Log, either presentation mode | `0.1.1 (Kid)` |
+| Website label and GitHub draft title | `GOAT 0.1.1 (Kid)` |
+| Bundle version / tag / DMG filename | `0.1.1` / `v0.1.1` / `GOAT-0.1.1.dmg` |
 | Secondary UI diagnostics | `Development · build <number>` or `Candidate · build <number>` |
 
 Only a zero patch is omitted from display; `0.1.1 (Kid)` keeps its patch. Choose codenames from [CODENAMES.md](CODENAMES.md). Patch candidates preserve their release-line codename. Versions change for releases, not milestones or rebuilds.
@@ -54,6 +56,6 @@ After acceptance and explicit release authorization, the tag-triggered workflow:
 3. Builds/signs the app and CLI, packages and remounts the DMG, requires notarization and stapling, and regenerates the manifest/checksums after stapling.
 4. Uses `gh release create --draft --verify-tag`, with the derived title and explicit assets. It never uploads replacement assets to an existing release. Workflow runs are serialized rather than cancelled.
 
-The website reads its displayed label from the release record. `web/publication.json` controls availability separately. With `releaseTag` null, the main action leads to setup documentation. Set the exact approved `v<version>` tag only at launch; downloads then point to that tag’s artifact, with no runtime release lookup. `web/package.json` is checked against the record as a compatibility mirror.
+The website reads its displayed label from the release record. `web/publication.json` controls availability separately. With `releaseTag` null, the main action leads to setup documentation. Set the exact approved `v<version>` tag and its codename only at launch; downloads then point to that tag’s artifact, with no runtime release lookup. Keep the previous publication record while preparing a new candidate so its existing download and label remain available. `web/package.json` is checked against the record as a compatibility mirror.
 
 See [Releasing](wiki/Releasing.md) for signing and runner setup. A CI definition is not evidence that remote CI ran. Draft creation is not publication approval, notarization is not clean-machine acceptance, and ordinary tests do not complete runtime performance qualification.

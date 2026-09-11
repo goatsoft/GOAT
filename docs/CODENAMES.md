@@ -8,8 +8,8 @@ Set the codename in `apps/goat-macos/release.json`; generated build settings and
 
 | Codename | Meaning | Version | Milestone |
 |---|---|---|---|
-| **Kid** | a baby goat, the first of the herd | 0.1.0 (current) | M0–M6, memory, and the professional-default identity pivot |
-| **Yearling** | a goat in its first year, finding its feet | 0.2.0 | Polish (M7) |
+| **Kid** | a baby goat, the first of the herd | 0.1.x (0.1.1 in preparation) | M0–M6, memory, professional-default identity, and maintenance |
+| **Yearling** | a goat in its first year, finding its feet | 0.2.0 | Polish (M7, planned) |
 | **Billy** | an intact male, sure-footed | 0.3.0 | n/a |
 | **Nanny** | a doe, keeper of the herd | 0.4.0 | n/a |
 | **Wether** | steady and even-tempered | 0.5.0 | n/a |
@@ -19,6 +19,6 @@ Set the codename in `apps/goat-macos/release.json`; generated build settings and
 | **Markhor** | the spiral-horned king | reserved | n/a |
 | **Tur** | the Caucasian summit-dweller | reserved | n/a |
 
-`1.0.0` (Ibex) is earned when the Definition of GOAT (PLAN §13) passes: Herd Guarantee tested, notarized builds, onboarding, 60fps. Not before.
+`1.0.0` (Ibex) remains a separate release decision, requiring the acceptance bar in [Release readiness](RELEASE-CHECKLIST.md), including verified Herd Guarantee behavior, notarized distribution, onboarding and measured performance. The [M7 checklist](ROADMAP.md#m7-the-polish-pass) preserves the original polish targets without treating their completion as an automatic 1.0 release.
 
 Unreleased codenames may be reordered as milestones shift. Published release identities remain fixed, and patch releases retain the codename of their release line.

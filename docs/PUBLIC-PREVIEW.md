@@ -2,6 +2,8 @@
 
 Download the signed, notarized Mac app from [GitHub Releases](https://github.com/goatsoft/GOAT/releases/tag/v0.1.0). This guide covers getting started, exploring the features and reporting useful feedback.
 
+0.1.1 (Kid) is being prepared as a maintenance update. The current download remains 0.1.0; see the [roadmap](ROADMAP.md) for its scope and the separate M7 checklist.
+
 ## Install and connect
 
 You need an Apple Silicon Mac running macOS 26 or later and a compatible model engine. Follow [Getting started](wiki/Getting-Started.md) to install GOAT and connect your engine. To build from source, use [Contributing](../CONTRIBUTING.md#build-locally).

@@ -161,6 +161,7 @@ export default defineConfig({
           { text: 'FAQ', link: '/FAQ' },
           { text: 'Public preview', link: '/PUBLIC-PREVIEW' },
           { text: 'Known issues', link: '/KNOWN-ISSUES' },
+          { text: 'Release notes', link: '/RELEASE-NOTES' },
           { text: 'Privacy', link: '/PRIVACY' },
         ] },
         { text: 'Contribute', collapsed: true, items: [
