@@ -2,7 +2,7 @@
 
 Status: Accepted · 2026-09-11
 
-Revises [ADR-0024](0024-deterministic-prompt-budgeting.md) (prompt budget policy version 4) and the title timing in [ADR-0066](0066-lead-and-continuous-tool-work.md). Informed by the 2026-09-11 harness audit (opencode, pi, oh-my-pi, Cline, goose, Plandex, TrueForge, Open SWE, deepagents).
+Revises [ADR-0024](0024-deterministic-prompt-budgeting.md) (prompt budget policy version 4) and the title timing in [ADR-0066](0066-lead-and-continuous-tool-work.md). Informed by a 2026-09-11 review of established local-inference and coding-agent practice.
 
 ## Context
 
@@ -10,7 +10,7 @@ Every compatible local engine keeps a prefix or KV cache keyed on the exact requ
 
 The budget estimator charges tool results, arguments, identifiers and schemas at one token per UTF-8 byte and natural text at a two-bytes-per-token floor. Measured tokenizers land between 3.2 and 4.0 bytes per token on source code and command output. On a 32k window with an 8k output reserve, two 20 KiB file reads exhaust the planned budget while the engine could have accepted them. The 8,192-token fallback window compounds this. Effort output ceilings of 1,024 to 8,192 tokens are also charged against reasoning models whose thinking tokens count toward `max_tokens`; the same transcript recorded four `length` finishes at 2,048.
 
-The reference harnesses converge on three practices: volatile text goes after the cacheable prefix, the previous response's server `usage` is the primary token accounting, and output reserves are a window fraction or a per-model figure rather than a small fixed ceiling.
+Established practice converges on three points: volatile text goes after the cacheable prefix, the previous response's server `usage` is the primary token accounting, and output reserves are a window fraction or a per-model figure rather than a small fixed ceiling.
 
 ## Decision
 

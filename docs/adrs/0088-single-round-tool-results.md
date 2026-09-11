@@ -8,7 +8,7 @@ Refines [ADR-0069](0069-coding-navigation-and-context-retention.md) and [ADR-007
 
 On a local engine each model round trip re-reads the growing context, so the number of rounds, not the size of any one result, dominates the cost of a coding task. Three Herder behaviours multiply rounds. `pen_run_command` returns a job ID and the model polls `pen_command_status` with at most ten seconds of wait per call, so a ninety second install costs nine or more rounds. `pen_read_file` returns at most 200 lines and 32 KiB per call, so a 900 line file costs five rounds. `pen_list_files` lists one directory per call with no recursive or pattern mode, so locating a file in an unfamiliar tree costs several rounds.
 
-Results are also JSON objects with the file content as an escaped string, so every newline and quote is escaped. That costs tokens and, more importantly, makes copying an exact `old_text` fragment unreliable for smaller models, which is the origin of the "missing or ambiguous match" loop that the recovery hints try to correct. All reference harnesses return plain text with a bracketed notice, run commands synchronously to a timeout with head-and-tail truncation, and save any overflow to a file the model can search.
+Results are also JSON objects with the file content as an escaped string, so every newline and quote is escaped. That costs tokens and, more importantly, makes copying an exact `old_text` fragment unreliable for smaller models, which is the origin of the "missing or ambiguous match" loop that the recovery hints try to correct. Established practice is to return plain text with a bracketed notice, run commands synchronously to a timeout with head-and-tail truncation, and save any overflow to a file the model can search.
 
 ## Decision
 

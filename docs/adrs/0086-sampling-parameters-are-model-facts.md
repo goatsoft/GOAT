@@ -8,7 +8,7 @@ Refines [ADR-0024](0024-deterministic-prompt-budgeting.md) and [ADR-0084](0084-m
 
 The wire encoder always sends `temperature` (0.7 for Graze and Trot, 0.6 for Climb and Summit) and never sends `top_p`, `top_k` or `min_p`. Local engines load each checkpoint's `generation_config.json` and apply its sampling defaults only when the request omits the field, so GOAT silently overrides tuned defaults for every model. Published recommendations disagree widely: Qwen3 documents 0.6 for thinking and 0.7 for non-thinking with specific top_p and top_k, DeepSeek-R1 documents 0.6 and warns against greedy decoding, GPT-OSS and Gemma 3 document 1.0, MiniMax M2 documents 1.0 with top_p 0.95 and top_k 40. Some OpenAI-compatible endpoints reject the field entirely with HTTP 400 "Unsupported parameter: temperature"; pinned server-side sampling also exists on vLLM and llama.cpp deployments. Effort has no principled relationship to any of these numbers.
 
-The reference harnesses omit temperature unless a provider rule or the user sets it, drop it while thinking is enabled, and clear it for Ollama. GOAT's own rule that a model name never selects a wire field applies here too.
+Established practice is to omit temperature unless a provider rule or the user sets it, and to drop it while thinking is enabled. GOAT's own rule that a model name never selects a wire field applies here too.
 
 ## Decision
 

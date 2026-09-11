@@ -6,7 +6,7 @@ Supersedes the parked rolling-summary decision in [ADR-0024](0024-deterministic-
 
 ## Context
 
-When a chat outgrows the input budget, GOAT drops whole older exchanges. Nothing carries their content forward, so a long coding session loses the task, the decisions and the list of files it has already changed. Every reference harness compacts instead: a bounded summary replaces older history at a threshold of 80 to 90 percent of the window, the newest user message is kept verbatim, and old tool results are pruned before any summary is written. GOAT already has the ingredients: the `/handoff` command produces a structured handover, tool events record every file read and edited, and the budgeter enforces exchange boundaries.
+When a chat outgrows the input budget, GOAT drops whole older exchanges. Nothing carries their content forward, so a long coding session loses the task, the decisions and the list of files it has already changed. The established alternative is to compact instead: a bounded summary replaces older history at a threshold of 80 to 90 percent of the window, the newest user message is kept verbatim, and old tool results are pruned before any summary is written. GOAT already has the ingredients: the `/handoff` command produces a structured handover, tool events record every file read and edited, and the budgeter enforces exchange boundaries.
 
 The owner asked for a manual compact command and an automatic mode with a threshold.
 
@@ -40,4 +40,4 @@ Long coding sessions keep their task state across the window boundary and the mo
 
 ## Alternatives considered
 
-Keep dropping exchanges (rejected: amnesia is the failure users notice most). Summarise during send without persistence (rejected by ADR-0024 for nondeterminism; persisting the row answers that objection). Summarise mid-stream on overflow like opencode (rejected: violates the single-active-turn ownership and cannot show a stable UI state). Rasterising old history into images (oh-my-pi's snapcompact; rejected: needs a vision model and hides content from inspection). A separate small summariser model (deferred: worthwhile once multi-slot engines are common, and the design leaves room for a model choice on the summary request).
+Keep dropping exchanges (rejected: amnesia is the failure users notice most). Summarise during send without persistence (rejected by ADR-0024 for nondeterminism; persisting the row answers that objection). Summarise mid-stream on overflow (rejected: violates the single-active-turn ownership and cannot show a stable UI state). Rasterising old history into images (rejected: needs a vision model and hides content from inspection). A separate small summariser model (deferred: worthwhile once multi-slot engines are common, and the design leaves room for a model choice on the summary request).
