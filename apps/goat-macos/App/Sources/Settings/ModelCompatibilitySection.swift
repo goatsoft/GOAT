@@ -26,7 +26,7 @@ struct ModelCompatibilitySection: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Label("Review migrated engine compatibility", systemImage: "arrow.triangle.2.circlepath")
                         .font(.callout.weight(.medium))
-                    Text("The old engine-wide setting was (review.legacyStyle == .qwenChatTemplate ? "Qwen chat template" : "automatic"). Assign it to one model or discard it before relying on per-model compatibility.")
+                    Text("The old engine-wide setting was \(review.legacyStyle == .qwenChatTemplate ? "Qwen chat template" : "automatic"). Assign it to one model or discard it before relying on per-model compatibility.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     HStack {

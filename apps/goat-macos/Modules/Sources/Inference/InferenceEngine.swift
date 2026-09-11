@@ -78,7 +78,7 @@ public struct EngineConfig: Sendable, Equatable {
     }
 }
 
-public struct ModelRef: Identifiable, Hashable, Sendable {
+public struct ModelRef: Codable, Identifiable, Hashable, Sendable {
     public let id: String
     /// Context window in tokens, when the server reports one (`/v1/models` extras).
     public let contextLength: Int?
