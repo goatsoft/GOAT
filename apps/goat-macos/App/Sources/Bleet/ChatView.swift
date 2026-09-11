@@ -50,9 +50,10 @@ struct ChatView: View {
     @State private var composerFocused = false
 
     static func permitsSend(
-        localStateReady: Bool, engineIsHealthy: Bool, messagesLoaded: Bool, isBusy: Bool
+        localStateReady: Bool, engineIsHealthy: Bool, messagesLoaded: Bool,
+        modelCanGenerate: Bool = true, isBusy: Bool
     ) -> Bool {
-        localStateReady && engineIsHealthy && messagesLoaded && !isBusy
+        localStateReady && engineIsHealthy && messagesLoaded && modelCanGenerate && !isBusy
     }
 
     var body: some View {
@@ -73,6 +74,7 @@ struct ChatView: View {
                     localStateReady: model.startupPhase.hasLocalState,
                     engineIsHealthy: model.health.isOK,
                     messagesLoaded: session.messagesLoaded,
+                    modelCanGenerate: model.canGenerateWithSelectedModel(for: session),
                     isBusy: model.activeTurnSessionID != nil || model.engineTransitioning
                         || model.modelCapabilitiesLoading),
                 isStreaming: model.activeTurnSessionID != nil,

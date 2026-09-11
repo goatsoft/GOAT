@@ -9,7 +9,8 @@ enum CanonicalRequestPreparation {
             effort: request.effort,
             maxTokens: request.maxTokens,
             tools: preparedTools(request.tools),
-            modelCapabilities: request.modelCapabilities)
+            modelCapabilities: request.modelCapabilities,
+            compatibility: request.compatibility)
     }
 
     static func canonicalParametersJSON(_ rawJSON: String) -> String {
@@ -378,7 +379,8 @@ public struct PromptBudgeter: Sendable {
         let plannedRequest = GenerationRequest(
             model: request.model, turns: plannedTurns, effort: request.effort,
             maxTokens: outputReserve, tools: request.tools,
-            modelCapabilities: request.modelCapabilities)
+            modelCapabilities: request.modelCapabilities,
+            compatibility: request.compatibility)
         return PromptPlan(request: plannedRequest, report: report)
     }
 

@@ -142,6 +142,7 @@ public struct ShepherdProjectContext: Sendable {
 public protocol ShepherdEnvironment: AnyObject {
     var availableModels: [ModelRef] { get }
     var fallbackModelID: String? { get }
+    func generationContext(for modelID: String) -> GenerationContext?
     var automaticChatTitles: Bool { get }
     func projectContext(forProject id: UUID) async -> ShepherdProjectContext?
     @discardableResult
@@ -369,29 +370,18 @@ public final class ShepherdModel {
             releaseReservation(turnID: turnID, sessionID: session.id)
             return
         }
-        // A chat can outlive its model (engine switched or restarted). Never send a
-        // model the engine doesn't currently serve - that's a guaranteed 400.
-        let available = env.availableModels
-        let model: ModelRef
-        if let exact = available.first(where: { $0.id == requestedModelID }) {
-            model = exact
-        } else if !available.isEmpty {
-            model =
-                env.fallbackModelID.flatMap { fallback in
-                    available.first(where: { $0.id == fallback })
-                } ?? available[0]
-        } else {
-            model = ModelRef(id: requestedModelID)
-        }
-        if model.id != requestedModelID {
-            session.modelID = model.id
-            env.sessionMetaChanged(session)
+        guard let model = env.availableModels.first(where: { $0.id == requestedModelID }),
+            let context = env.generationContext(for: requestedModelID)
+        else {
+            activity.log(.warn, "Model \(requestedModelID) is unavailable or needs compatibility review")
+            releaseReservation(turnID: turnID, sessionID: session.id)
+            return
         }
         activity.log(.engine, "→ \(model.displayName) · \(session.effort.label)")
 
         acceptsLead = true
         streamTask = Task {
-            await executeTurn(in: session, turnID: turnID, model: model, env: env)
+            await executeTurn(in: session, turnID: turnID, model: model, context: context, env: env)
             acceptsLead = false
             await drainLeadSave()
             if leadRevision != appliedLeadRevision {
@@ -407,7 +397,10 @@ public final class ShepherdModel {
         }
     }
 
-    private func executeTurn(in session: ChatSession, turnID: UUID, model: ModelRef, env: ShepherdEnvironment) async {
+    private func executeTurn(
+        in session: ChatSession, turnID: UUID, model: ModelRef,
+        context: GenerationContext, env: ShepherdEnvironment
+    ) async {
         do {
             try await tools.turnWillPrepare(chatID: session.id, projectID: session.projectID, turnID: turnID)
         } catch is CancellationError { return } catch {
@@ -465,7 +458,8 @@ public final class ShepherdModel {
                     model: model,
                     effort: session.effort,
                     tools: specs,
-                    memory: memory)
+                    memory: memory,
+                    compatibility: context.compatibility)
             } catch {
                 guard owns(turnID: turnID, sessionID: session.id), !Task.isCancelled else {
                     break shepherd
@@ -672,7 +666,7 @@ public final class ShepherdModel {
                 break shepherd
             }
 
-            if !Task.isCancelled { await autoTitle(session, model: model) }
+            if !Task.isCancelled { await autoTitle(session, model: model, context: context) }
             for (index, call) in toolCalls.enumerated() {
                 await drainLeadSave()
                 // Finish the current response's first tool step, including its approval.
@@ -751,7 +745,7 @@ public final class ShepherdModel {
                     break shepherd
                 }
             }
-            if !Task.isCancelled { await autoTitle(session, model: model) }
+            if !Task.isCancelled { await autoTitle(session, model: model, context: context) }
             // Loop: next round streams a fresh assistant message with the results in context.
         }
         acceptsLead = false
@@ -768,7 +762,7 @@ public final class ShepherdModel {
         {
             // Tool workflows may finish with an empty assistant message. autoTitle selects
             // the first usable reply from the exchange instead of requiring final-round text.
-            await autoTitle(session, model: model)
+            await autoTitle(session, model: model, context: context)
         }
     }
 
@@ -1007,7 +1001,9 @@ public final class ShepherdModel {
         return await worker.turns(for: snapshot)
     }
 
-    private func autoTitle(_ session: ChatSession, model: ModelRef) async {
+    private func autoTitle(
+        _ session: ChatSession, model: ModelRef, context: GenerationContext
+    ) async {
         guard env?.automaticChatTitles == true, session.hasDefaultTitle,
             let firstUser = session.messages.first(where: { $0.role == .user })?.text
         else { return }
@@ -1028,7 +1024,8 @@ public final class ShepherdModel {
             effort: .graze,
             // Some configured models spend their output budget on reasoning before the title.
             maxTokens: 1024,
-            modelCapabilities: model.capabilities
+            modelCapabilities: model.capabilities,
+            compatibility: context.compatibility
         )
         var generated = ""
         do {

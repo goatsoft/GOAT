@@ -189,9 +189,11 @@ public struct GenerationRequest: Sendable {
     public var tools: [ToolSpec]
     /// Immutable snapshot captured with model selection, so a later switch cannot alter this request.
     public var modelCapabilities: ModelCapabilities
+    public var compatibility: ResolvedModelCompatibility
     public init(
         model: String, turns: [ChatTurn], effort: Effort, maxTokens: Int? = nil,
-        tools: [ToolSpec] = [], modelCapabilities: ModelCapabilities = .unknown
+        tools: [ToolSpec] = [], modelCapabilities: ModelCapabilities = .unknown,
+        compatibility: ResolvedModelCompatibility? = nil
     ) {
         self.model = model
         self.turns = turns
@@ -199,6 +201,11 @@ public struct GenerationRequest: Sendable {
         self.maxTokens = maxTokens
         self.tools = tools
         self.modelCapabilities = modelCapabilities
+        self.compatibility = compatibility ?? ResolvedModelCompatibility(
+            identity: ModelIdentity(engineProfileID: "", modelID: model),
+            effectiveStyle: .genericOpenAI,
+            source: .genericFallback,
+            capabilities: modelCapabilities)
     }
 }
 

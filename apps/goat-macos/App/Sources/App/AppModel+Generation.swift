@@ -16,7 +16,8 @@ extension AppModel {
     ) -> UUID? {
         guard startupPhase.hasLocalState,
             let session = targetSession ?? currentSession, session.messagesLoaded, activeTurnSessionID == nil,
-            !engineTransitioning, !modelCapabilitiesLoading, health.isOK
+            !engineTransitioning, !modelCapabilitiesLoading, health.isOK,
+            canGenerateWithSelectedModel(for: session)
         else { return nil }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !attachments.isEmpty || !documents.isEmpty else { return nil }
@@ -86,7 +87,8 @@ extension AppModel {
         guard startupPhase.hasLocalState,
             let session = currentSession, let databaseWriter,
             session.messagesLoaded, activeTurnSessionID == nil,
-            !engineTransitioning, !modelCapabilitiesLoading, health.isOK
+            !engineTransitioning, !modelCapabilitiesLoading, health.isOK,
+            canGenerateWithSelectedModel(for: session)
         else { return }
 
         let assistant = session.messages.last.flatMap { message in
@@ -115,6 +117,31 @@ extension AppModel {
 extension AppModel: ShepherdEnvironment {
     var availableModels: [ModelRef] { models }
     var fallbackModelID: String? { defaultModelID }
+
+    func generationContext(for modelID: String) -> GenerationContext? {
+        guard let profile = activeEngineProfile,
+            let model = models.first(where: { $0.id == modelID }),
+            !legacyCompatibilityReviews.contains(where: {
+                $0.engineProfileID == profile.id && $0.state == .pending
+            })
+        else { return nil }
+        let identity = ModelIdentity(engineProfileID: profile.id, modelID: modelID)
+        let override = modelPreferences.first(where: { $0.identity == identity })?.compatibilityOverride
+            ?? .automatic
+        let compatibility = ModelCompatibilityResolver.resolve(
+            identity: identity, override: override, now: .now)
+        return GenerationContext(
+            engineProfileID: profile.id,
+            engineName: profile.name,
+            engineConfigurationRevision: engineIntentRevision,
+            identity: identity,
+            compatibility: compatibility)
+    }
+
+    func canGenerateWithSelectedModel(for session: ChatSession? = nil) -> Bool {
+        guard let modelID = session?.modelID ?? defaultModelID else { return false }
+        return generationContext(for: modelID) != nil
+    }
 
     func projectContext(forProject id: UUID) async -> ShepherdProjectContext? {
         // The Pen's app-managed brief and agent guide are distinct from workspace files.

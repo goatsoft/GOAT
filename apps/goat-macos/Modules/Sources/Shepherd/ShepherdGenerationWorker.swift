@@ -266,7 +266,8 @@ actor ShepherdGenerationWorker {
         model: ModelRef,
         effort: Effort,
         tools: [ToolSpec],
-        memory: [PromptMemoryEntry] = []
+        memory: [PromptMemoryEntry] = [],
+        compatibility: ResolvedModelCompatibility? = nil
     ) async throws -> PromptPlan {
         try Task.checkCancellation()
         let request = GenerationRequest(
@@ -274,7 +275,8 @@ actor ShepherdGenerationWorker {
             turns: await turns(for: snapshot, toolsAvailable: !tools.isEmpty, toolNames: Set(tools.map(\.name))),
             effort: effort,
             tools: tools,
-            modelCapabilities: model.capabilities)
+            modelCapabilities: model.capabilities,
+            compatibility: compatibility)
         let plan = try promptBudgeter.plan(request, model: model, memory: memory)
         try Task.checkCancellation()
         return plan

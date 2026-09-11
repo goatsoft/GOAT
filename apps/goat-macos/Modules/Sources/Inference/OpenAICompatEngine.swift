@@ -45,7 +45,7 @@ public actor OpenAICompatEngine: InferenceEngine {
                 ModelRef(
                     id: model.id,
                     contextLength: model.contextLength,
-                    capabilities: model.capabilities.applying(requestStyle: config.requestStyle))
+                    capabilities: model.capabilities)
             }
             return .ok(models)
         } catch {
@@ -76,11 +76,7 @@ public actor OpenAICompatEngine: InferenceEngine {
             return model
         }
         let enriched = (metadata ?? .unknown).applying(to: model)
-        let configured = ModelRef(
-            id: enriched.id,
-            contextLength: enriched.contextLength,
-            capabilities: enriched.capabilities.applying(requestStyle: config.requestStyle))
-        return configured
+        return enriched
     }
 
     private static func probeGenericDetail(
@@ -163,13 +159,10 @@ public actor OpenAICompatEngine: InferenceEngine {
         return data
     }
 
-    static func makeBody(
-        for r: GenerationRequest, requestStyle: EngineRequestStyle = .automatic
-    ) -> CompletionBody {
+    static func makeBody(for r: GenerationRequest) -> CompletionBody {
         let prepared = CanonicalRequestPreparation.prepare(r)
-        let qwenControls =
-            requestStyle == .qwenChatTemplate
-            ? QwenChatTemplateControls(for: prepared.effort) : nil
+        let parameters = EffectiveGenerationParameters(request: prepared)
+        let qwenControls = QwenChatTemplateControls(parameters: parameters)
         return CompletionBody(
             model: prepared.model,
             messages: prepared.turns.map { turn in
@@ -180,17 +173,30 @@ public actor OpenAICompatEngine: InferenceEngine {
                     imagesBase64: turn.images.map { $0.base64EncodedString() },
                     toolCalls: turn.toolCalls,
                     toolCallID: turn.toolCallID,
-                    replayReasoning: qwenControls != nil
+                    replayReasoning: parameters.replayReasoningHistory
                 )
             },
             stream: true,
-            temperature: qwenControls?.temperature ?? prepared.effort.temperature,
-            maxTokens: prepared.maxTokens ?? prepared.effort.maxTokens,
+            temperature: parameters.temperature,
+            maxTokens: parameters.outputTokenCap,
             tools: prepared.tools,
-            reasoningEffort: qwenControls?.reasoningEffort
-                ?? prepared.modelCapabilities.nativeReasoningEffort(for: prepared.effort),
+            reasoningEffort: parameters.nativeReasoningEffort,
             qwenChatTemplate: qwenControls
         )
+    }
+
+    /// Compatibility overload for focused request-body fixtures. Production requests carry the
+    /// resolved style on `GenerationRequest` and do not read mutable engine configuration.
+    static func makeBody(
+        for r: GenerationRequest, requestStyle: EngineRequestStyle
+    ) -> CompletionBody {
+        var request = r
+        request.compatibility = ResolvedModelCompatibility(
+            identity: r.compatibility.identity,
+            effectiveStyle: requestStyle == .qwenChatTemplate ? .qwenChatTemplate : .genericOpenAI,
+            source: .explicitOverride,
+            capabilities: r.modelCapabilities)
+        return makeBody(for: request)
     }
 
     // MARK: Generation
@@ -210,7 +216,7 @@ public actor OpenAICompatEngine: InferenceEngine {
                         req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
                     }
                     req.httpBody = try JSONEncoder().encode(
-                        Self.makeBody(for: r, requestStyle: config.requestStyle))
+                        Self.makeBody(for: r))
 
                     let client = JudasHTTPClient(origin: config.baseURL, source: .engine, name: config.name)
                     defer { client.invalidateAndCancel() }
@@ -263,34 +269,25 @@ public actor OpenAICompatEngine: InferenceEngine {
 /// OpenAI-compatible requests never receive these non-standard fields.
 struct QwenChatTemplateControls: Encodable {
     let enableThinking: Bool
-    let preserveThinking = true
+    let preserveThinking: Bool
     let reasoningEffort: String?
     let temperature: Double
 
-    init(for effort: Effort) {
-        switch effort {
-        case .graze:
-            enableThinking = false
-            reasoningEffort = nil
-            temperature = 0.7
-        case .trot:
-            enableThinking = true
-            reasoningEffort = "low"
-            temperature = 1.0
-        case .climb:
-            enableThinking = true
-            reasoningEffort = "medium"
-            temperature = 1.0
-        case .summit:
-            enableThinking = true
-            reasoningEffort = "xhigh"
-            temperature = 1.0
-        }
+    init?(parameters: EffectiveGenerationParameters) {
+        guard let enableThinking = parameters.qwenEnableThinking,
+            let preserveThinking = parameters.qwenPreserveThinking
+        else { return nil }
+        self.enableThinking = enableThinking
+        self.preserveThinking = preserveThinking
+        self.reasoningEffort = parameters.qwenReasoningEffort
+        self.temperature = parameters.temperature
     }
 
     private enum CodingKeys: String, CodingKey {
         case enableThinking = "enable_thinking"
         case preserveThinking = "preserve_thinking"
+        case reasoningEffort = "reasoning_effort"
+        case temperature
     }
 }
 

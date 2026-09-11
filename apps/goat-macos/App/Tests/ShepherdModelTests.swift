@@ -234,6 +234,15 @@ private final class FakeEnv: ShepherdEnvironment {
     private(set) var activeSessionID: UUID?
     private var persistenceContinuation: CheckedContinuation<Bool, Never>?
 
+    func generationContext(for modelID: String) -> GenerationContext? {
+        guard availableModels.contains(where: { $0.id == modelID }) else { return nil }
+        let identity = ModelIdentity(engineProfileID: "test", modelID: modelID)
+        let compatibility = ModelCompatibilityResolver.resolve(identity: identity)
+        return GenerationContext(
+            engineProfileID: "test", engineName: "Test", engineConfigurationRevision: 1,
+            identity: identity, compatibility: compatibility)
+    }
+
     func projectContext(forProject id: UUID) async -> ShepherdProjectContext? { project }
     func persist(_ message: ChatMessage, in session: ChatSession) async -> Bool {
         persistenceAttempts += 1

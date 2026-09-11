@@ -280,9 +280,7 @@ extension AppModel {
     static func resolvedModelID(
         requested: String?, defaultModelID: String?, availableModels: [ModelRef]
     ) -> String? {
-        if let requested, availableModels.contains(where: { $0.id == requested }) {
-            return requested
-        }
+        if let requested { return requested }
         if let defaultModelID, availableModels.contains(where: { $0.id == defaultModelID }) {
             return defaultModelID
         }
