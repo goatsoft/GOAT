@@ -1,5 +1,13 @@
 # ImageGen prompts
 
+## Final rebuild from the original detailed base
+
+Use case: compositing with strict texture preservation. Image1 is the ORIGINAL high-detail Midnight landscape and is the EDIT TARGET. Image2 is ONLY a reference for the approved installer UI overlay layout. Rebuild the final installer from Image1 in ONE PASS. Preserve Image1's fine photographic/painted textures, fine aurora filaments, smooth sky gradients, crisp mountain ridges, lake ripples, trees, moon, goat silhouette and rock details as faithfully as possible. Do not reuse Image2's degraded chunky/faceted landscape. Do not repaint the landscape into polygonal blocks, mosaic fragments or plastic-looking rocks. Add only the approved UI overlay from Image2 over the unchanged-looking Image1 landscape. Canvas exactly1536x1024. UI positions in pixels: gradient GOAT text same top-left box x64 to239 y75 to120, cyan-to-violet letter fills; light sky-blue EMPTY build capsule x257 to397 y77 to118; white 'Welcome to the herd.' below at x66 y143. Main empty dark-navy squircle recesses outer bounds x351 y267 to595 y503 and x943 y267 to1185 y503, restrained cyan-to-violet edge. Simple horizontal cyan-to-violet right-pointing arrow from615,386 to923,386. Smaller empty CLI squircle bounds573,518 to694,640, separated below-right of app. Three EMPTY see-through label pills at bounds391,510 to549,546;958,510 to1173,546;546,649 to718,685. Pills show ORIGINAL image1 mountain/lake details clearly through them, with faint light-ice-blue tint roughly20% opacity and a thin subtle edge, NOT opaque pale-blue fills. Bottom white caption exactly 'Move GOAT to Applications.' centred768,979. No actual icons or folders, no filenames in pills, no build number in capsule, no additional text or divider. Everything about the scene comes from original Image1; Image2 provides only UI layout. Prioritise preserved crisp fine original detail and exact approved overlay geometry. Do not add sharpening halos, noise or invented details.
+
+## Transparent pill correction
+
+undefined
+
 ## Label alignment refinement
 
 undefined

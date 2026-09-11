@@ -78,7 +78,7 @@ def check_layout(data):
     if not options.get("backgroundImageAlias"):
         raise ValueError("missing Finder background reference")
     for name, position in {"GOAT.app": (222, 180), "Applications": (499, 180),
-                           "CLI Tools": (296, 247), "Licence": (638, 375), ".background": (532, 375)}.items():
+                           "CLI Tools": (303, 246), "Licence": (638, 375), ".background": (532, 375)}.items():
         _, blob = blob_record(data, name, b"Iloc")
         if len(blob) != 16 or struct.unpack_from(">II", blob) != position:
             actual = struct.unpack_from(">II", blob) if len(blob) >= 8 else None

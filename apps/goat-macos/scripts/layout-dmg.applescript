@@ -44,7 +44,7 @@ on placeItems(diskFolder)
     tell application "Finder"
         set position of item "GOAT.app" of diskFolder to {222, 180}
         set position of item "Applications" of diskFolder to {499, 180}
-        set position of item "CLI Tools" of diskFolder to {296, 247}
+        set position of item "CLI Tools" of diskFolder to {303, 246}
         set position of item "Licence" of diskFolder to {638, 375}
         set position of item ".background" of diskFolder to {532, 375}
         set extraX to 316
