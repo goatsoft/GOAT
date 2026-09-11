@@ -2,9 +2,9 @@
 
 GOAT brings models, project files, tools and memory into a native Mac workspace. Use these pages to understand the concepts, follow a practical task or check exact behavior.
 
-0.1.1 (Kid) is being prepared as a maintenance update. The current download remains 0.1.0; see the [roadmap](../ROADMAP.md) for its scope and the separate M7 checklist.
+0.1.1 (Kid) is a maintenance update. See the [roadmap](../ROADMAP.md) for its scope and the separate M7 checklist.
 
-**0.1 (Kid) is available.** [Download the signed, notarized Mac app](https://github.com/goatsoft/GOAT/releases/tag/v0.1.0), follow [Getting started](Getting-Started.md) and check [known issues](../KNOWN-ISSUES.md).
+**0.1.1 (Kid) is available.** [Download the signed, notarized Mac app](https://github.com/goatsoft/GOAT/releases/tag/v0.1.1), follow [Getting started](Getting-Started.md) and check [known issues](../KNOWN-ISSUES.md).
 
 ## Start here
 
@@ -16,7 +16,7 @@ GOAT brings models, project files, tools and memory into a native Mac workspace.
 
 [Work on code](../how-to/WORK-ON-CODE.md), [guide active work with Lead](../how-to/LEAD.md), [use memory](Memory-and-Pens.md), [inspect previews](../how-to/PREVIEWS.md) or [add tools and skills](Extensions.md).
 
-For storage locations, preference defaults and removal choices in candidate builds, see [Manage storage, reset preferences and uninstall](../how-to/MANAGE-GOAT-DATA.md).
+For storage locations, preference defaults and removal choices in 0.1.1, see [Manage storage, reset preferences and uninstall](../how-to/MANAGE-GOAT-DATA.md).
 
 ## Find an exact answer
 

@@ -25,7 +25,7 @@ An extension timeout can quarantine that extension for the current app session. 
 
 ## Reset GOAT for a clean installation
 
-The 0.1.1 (Kid) maintenance candidate includes **Settings → General → Manage**, with a storage tree, direct reset of the listed appearance/general preferences and automatic uninstall. The preference reset keeps user data and connection/security settings. The published 0.1.0 download does not include these controls.
+The 0.1.1 (Kid) includes **Settings → General → Manage**, with a storage tree, direct reset of the listed appearance/general preferences and automatic uninstall. The preference reset keeps user data and connection/security settings. The older 0.1.0 download does not include these controls.
 
 A full reset removes saved chats, attachments, engine connections, credentials, local memory and preferences from the active installation. Back up anything you want to keep first. Keep backups private because they can contain credentials and conversation content.
 
@@ -40,17 +40,17 @@ These steps reset GOAT's local state. They do not reset macOS privacy permission
 
 ## Reset appearance and general preferences
 
-In the 0.1.1 (Kid) maintenance candidate, use **Settings → General → Manage → Reset preferences**. It applies the listed appearance and general defaults immediately, preserving data, connections, permissions and window positions. Follow the [reset guide](MANAGE-GOAT-DATA.md#reset-appearance-and-general-preferences) for the exact values and scope.
+In the 0.1.1 (Kid), use **Settings → General → Manage → Reset preferences**. It applies the listed appearance and general defaults immediately, preserving data, connections, permissions and window positions. Follow the [reset guide](MANAGE-GOAT-DATA.md#reset-appearance-and-general-preferences) for the exact values and scope.
 
 ## Remove GOAT
 
-The 0.1.1 (Kid) maintenance candidate includes **Settings → General → Manage → Uninstall GOAT**. Checked options select removal; unchecked items are kept. Partial uninstall preserves user data by default. Follow the [uninstall guide](MANAGE-GOAT-DATA.md#choose-what-uninstall-removes) for the presets, final review, cancellation and recovery process. For an incomplete uninstall, inspect the [recovery report and original locations](MANAGE-GOAT-DATA.md#recover-data-or-check-an-incomplete-uninstall) before retrying.
+The 0.1.1 (Kid) includes **Settings → General → Manage → Uninstall GOAT**. Checked options select removal; unchecked items are kept. Partial uninstall preserves user data by default. Follow the [uninstall guide](MANAGE-GOAT-DATA.md#choose-what-uninstall-removes) for the presets, final review, cancellation and recovery process. For an incomplete uninstall, inspect the [recovery report and original locations](MANAGE-GOAT-DATA.md#recover-data-or-check-an-incomplete-uninstall) before retrying.
 
-For the published 0.1.0 download, remove the app manually:
+For the older 0.1.0 download, remove the app manually:
 
 Quit GOAT and move the installed `GOAT.app` to Trash. If you installed the optional `goat` command-line tool separately, remove that specific copy or symlink from its installation location too. Removing the app alone keeps local data available for a later reinstall.
 
-To remove local data as well, follow the reset steps above and delete the backups only after reviewing their contents. The published 0.1.0 download has no built-in uninstall or reset action. Apple Developer certificates and notarization credentials are build tools, not GOAT app data; leave them in Keychain.
+To remove local data as well, follow the reset steps above and delete the backups only after reviewing their contents. The older 0.1.0 download has no built-in uninstall or reset action. Apple Developer certificates and notarization credentials are build tools, not GOAT app data; leave them in Keychain.
 
 ## Report a problem
 

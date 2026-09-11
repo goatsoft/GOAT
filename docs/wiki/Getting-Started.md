@@ -12,7 +12,7 @@ GOAT does not include model weights. Start with [models and engines](../overview
 
 ## Install GOAT
 
-1. [Download GOAT-0.1.0.dmg](https://github.com/goatsoft/GOAT/releases/download/v0.1.0/GOAT-0.1.0.dmg) from the official [Kid release](https://github.com/goatsoft/GOAT/releases/tag/v0.1.0).
+1. [Download GOAT-0.1.1.dmg](https://github.com/goatsoft/GOAT/releases/download/v0.1.1/GOAT-0.1.1.dmg) from the official [Kid release](https://github.com/goatsoft/GOAT/releases/tag/v0.1.1).
 2. Open the disk image and drag **GOAT** into **Applications**.
 3. Open GOAT from Applications. The official app is signed by **Joseph Blythe** and notarized by Apple. macOS may ask you to confirm opening an app downloaded from the internet.
 4. Allow local-network access if your engine is on your network, then connect your engine below.
@@ -23,7 +23,7 @@ The release includes `SHA256SUMS.txt` and `release-metadata.json`. To check the 
 
 ### Updating within Kid
 
-0.1.1 is being prepared as a maintenance update. Until it is published, the download above remains 0.1.0. Finish active chats and command jobs before quitting to replace an installed app. Keep a backup of GOAT Home and Application Support as described in [Storage and backups](../reference/STORAGE.md). An ordinary app replacement does not require resetting preferences or uninstalling user data.
+0.1.1 is a maintenance update within Kid. Finish active chats and command jobs before quitting to replace an installed app. Keep a backup of GOAT Home and Application Support as described in [Storage and backups](../reference/STORAGE.md). An ordinary app replacement does not require resetting preferences or uninstalling user data.
 
 The revised 0.1.1 disk image places the optional executable in **CLI Tools** and the notices in **Licence**, shown with a document-style icon. Drag GOAT to the blue Applications folder bearing the standard Applications symbol.
 

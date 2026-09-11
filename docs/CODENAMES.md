@@ -8,7 +8,7 @@ Set the codename in `apps/goat-macos/release.json`; generated build settings and
 
 | Codename | Meaning | Version | Milestone |
 |---|---|---|---|
-| **Kid** | a baby goat, the first of the herd | 0.1.x (0.1.1 in preparation) | M0–M6, memory, professional-default identity, and maintenance |
+| **Kid** | a baby goat, the first of the herd | 0.1.1 (current) | M0–M6, memory, professional-default identity, and maintenance |
 | **Yearling** | a goat in its first year, finding its feet | 0.2.0 | Polish (M7, planned) |
 | **Billy** | an intact male, sure-footed | 0.3.0 | n/a |
 | **Nanny** | a doe, keeper of the herd | 0.4.0 | n/a |

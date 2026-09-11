@@ -1,6 +1,6 @@
 # Release notes
 
-## 0.1.1 (Kid), in preparation
+## 0.1.1 (Kid)
 
 A maintenance update to Kid, focused on everyday navigation, managing an installation and a clearer Finder installer. This release does not complete M7 or change the release line to Yearling.
 
@@ -15,13 +15,13 @@ A maintenance update to Kid, focused on everyday navigation, managing an install
 
 ### Installation and upgrade
 
-Requires Apple Silicon and macOS 26 or later. The published download remains [0.1.0 (Kid)](https://github.com/goatsoft/GOAT/releases/tag/v0.1.0) until 0.1.1 completes release qualification.
+Requires Apple Silicon and macOS 26 or later. Download the signed, notarized [0.1.1 (Kid) release](https://github.com/goatsoft/GOAT/releases/tag/v0.1.1), build 1353, with its manifest and checksums.
 
 An ordinary upgrade replaces the app without a data reset. Finish active work before quitting to install an update, and keep a [backup of local data](reference/STORAGE.md#back-up-safely). See [Getting started](wiki/Getting-Started.md) and [Manage storage, reset preferences and uninstall](how-to/MANAGE-GOAT-DATA.md).
 
 ### Qualification and limitations
 
-The final package must pass Developer ID signing, notarization, mounted-DMG checks, installation and upgrade acceptance, and automatic-uninstall checks with disposable data. Results from the published 0.1.0 artifact do not establish acceptance of 0.1.1.
+The maintainer accepted the tested maintenance candidate. The official package was rebuilt from the same source content and passed Developer ID signing, notarization/stapling, mounted-DMG checks, checksums and Gatekeeper assessment. Automated tests and maintainer acceptance do not establish compatibility with every engine, integration or workload.
 
 The macOS fullscreen compositing limitation, model-template compatibility, non-interactive command boundaries and broader service/accessibility/performance qualification remain documented in [Known issues](KNOWN-ISSUES.md). The [roadmap](ROADMAP.md#m7-the-polish-pass) tracks the remaining M7 work.
 

@@ -34,7 +34,7 @@ Kid targets Apple Silicon and macOS 26 or later. Model memory requirements depen
 
 ## Where is the download?
 
-[Download 0.1 (Kid)](https://github.com/goatsoft/GOAT/releases/tag/v0.1.0) from GitHub Releases. The Mac app is signed and notarized; it requires Apple Silicon and macOS 26 or later. Follow [Getting started](Getting-Started.md) for installation and engine setup. Source build instructions remain available in [Contributing](Contributing.md).
+[Download 0.1.1 (Kid)](https://github.com/goatsoft/GOAT/releases/tag/v0.1.1) from GitHub Releases. The Mac app is signed and notarized; it requires Apple Silicon and macOS 26 or later. Follow [Getting started](Getting-Started.md) for installation and engine setup. Source build instructions remain available in [Contributing](Contributing.md).
 
 ## Do rendering caches contain my only copy of a chat?
 
@@ -44,4 +44,4 @@ For a specific failure, start with [Troubleshooting](../how-to/TROUBLESHOOTING.m
 
 ## Is 0.1.1 the M7 release?
 
-No. 0.1.1 is a Kid maintenance candidate covering sidebar fixes, preference reset, recoverable uninstall and the Finder installer. M7 remains the broader polish plan for a possible Yearling release. See the [roadmap](../ROADMAP.md).
+No. 0.1.1 is a Kid maintenance release covering sidebar fixes, preference reset, recoverable uninstall and the Finder installer. M7 remains the broader polish plan for a possible Yearling release. See the [roadmap](../ROADMAP.md).
