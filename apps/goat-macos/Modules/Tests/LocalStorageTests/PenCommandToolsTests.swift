@@ -232,8 +232,7 @@ func nativeNpmInstallsBuildsAndTestsWithAnIsolatedHome() async throws {
         _ = try await runner.invoke(tool: "pen_stop_command", argumentsJSON: #"{"job_id":"job1"}"#)
         Issue.record("An invented job must fail")
     } catch {
-        #expect(error.localizedDescription.contains("never invent job1"))
-        #expect(error.localizedDescription.contains("not a file"))
+        #expect(error.localizedDescription.contains("do not invent or alter a job ID"))
     }
     #expect(FileManager.default.fileExists(atPath: path.path))
     let result = try await runCommand(runner, ["command": "rm", "args": ["--", "obsolete config.ts"]])

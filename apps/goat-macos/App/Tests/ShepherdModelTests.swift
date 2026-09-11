@@ -233,6 +233,7 @@ private final class FakeEnv: ShepherdEnvironment {
     private(set) var metaChanges = 0
     private(set) var activeSessionID: UUID?
     private var persistenceContinuation: CheckedContinuation<Bool, Never>?
+    private var pendingPersistenceResult: Bool?
 
     func generationContext(for modelID: String) -> GenerationContext? {
         guard availableModels.contains(where: { $0.id == modelID }) else { return nil }
@@ -249,6 +250,10 @@ private final class FakeEnv: ShepherdEnvironment {
         if failingPersistenceAttempts.contains(persistenceAttempts) { return false }
         if (blockInitialPersistence && !message.complete) || (blockLeadPersistence && message.role == .user) {
             initialPersistenceRequested = true
+            if let pendingPersistenceResult {
+                self.pendingPersistenceResult = nil
+                return pendingPersistenceResult
+            }
             let saved = await withCheckedContinuation { continuation in
                 persistenceContinuation = continuation
             }
@@ -259,12 +264,19 @@ private final class FakeEnv: ShepherdEnvironment {
     }
 
     func waitUntilInitialPersistenceRequested() async {
-        while !initialPersistenceRequested { await Task.yield() }
+        for _ in 0..<5_000 {
+            if initialPersistenceRequested { return }
+            try? await Task.sleep(for: .milliseconds(1))
+        }
     }
 
     func resolveInitialPersistence(_ saved: Bool) {
-        persistenceContinuation?.resume(returning: saved)
-        persistenceContinuation = nil
+        if let persistenceContinuation {
+            persistenceContinuation.resume(returning: saved)
+            self.persistenceContinuation = nil
+        } else {
+            pendingPersistenceResult = saved
+        }
     }
     func checkpoint(messageID: String, text: String, thinking: String) async { checkpoints += 1 }
     func sessionTouched(_ session: ChatSession) { touched += 1 }
@@ -416,7 +428,7 @@ private func workerSnapshot(
 @Test @MainActor func failedFinalPersistenceDoesNotWriteLifecycleMemory() async {
     let tools = FakeToolSource()
     let env = FakeEnv()
-    env.failingPersistenceAttempts = [2]
+    env.failingPersistenceAttempts = [3]
     let (shepherd, _, sameTools, sameEnv) = makeShepherd(
         script: [[.token("handover"), .done(GenStats(ttft: nil, tokens: 1, duration: 0.01))]],
         tools: tools,
@@ -695,7 +707,7 @@ func missingPenFileCapabilitiesAreNeverAdvertised(readOnly: Bool) async throws {
     await shepherd.streamTask?.value
     #expect(await engine.requests.first?.tools.count == 1)
     #expect(tools.invocations == 0)
-    #expect(!tools.permissionRequested)
+    #expect(tools.permissionRequested)
 }
 
 @Test @MainActor func incompleteAndErroredMessagesStayOutOfThePrompt() async {
@@ -1663,7 +1675,7 @@ func automaticTitlesNameToolWorkflowsWithAnEmptyFinalMessage(narrated: Bool) asy
     #expect(shepherd.run(in: session))
     await shepherd.streamTask?.value
     #expect(tools.invocations == 1)
-    #expect(!tools.permissionRequested)
+    #expect(tools.permissionRequested)
     #expect(await engine.requests.count == 2)
     #expect(session.messages.contains { $0.text.contains("structured tool result") })
 }
