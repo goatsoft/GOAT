@@ -1,6 +1,6 @@
 # Roadmap
 
-GOAT’s first release is **0.1 (Kid)**. The capabilities below are included in the downloadable Mac app. Future work has no promised delivery date.
+The current release is **0.1.1 (Kid)**. The capabilities below are included in the downloadable Mac app. Future work has no promised delivery date.
 
 ## Available in Kid
 
@@ -15,17 +15,17 @@ GOAT’s first release is **0.1 (Kid)**. The capabilities below are included in 
 - JUDAS connection policy, session Activity Log, themes and local reading preferences.
 - Optional Hitch local API/CLI and the Pronk contributor example.
 
-Downloads and release notes are on [GitHub Releases](https://github.com/goatsoft/GOAT/releases/tag/v0.1.0). See [Known issues](KNOWN-ISSUES.md) for current limitations.
+Downloads and release notes are on [GitHub Releases](https://github.com/goatsoft/GOAT/releases/tag/v0.1.1). See [Known issues](KNOWN-ISSUES.md) for current limitations.
 
 ## Kid 0.1.1 maintenance release
 
-0.1.1 remains on the Kid release line. It is being qualified and is not yet the published download. See the [release notes](RELEASE-NOTES.md) for the upgrade guidance. The maintenance scope is:
+0.1.1 remains on the Kid release line and is available as a signed, notarized Mac download. See the [release notes](RELEASE-NOTES.md) for the upgrade guidance. The maintenance scope is:
 
 - Sidebar labels remain visible at maximum width, with a 300-point preferred width and a 600-point maximum. Repeated chat layout work is reduced.
 - Settings → General → Manage shows storage locations in a tree, resets the listed appearance/general preferences immediately, and schedules recoverable uninstall after GOAT closes. Partial uninstall preserves GOAT Home and chats by default. Review the [reset and uninstall guide](how-to/MANAGE-GOAT-DATA.md) for exact removal choices.
 - The Finder installer has a Retina background, a build badge drawn from the app identity, clearer Applications and CLI icons, readable labels and a support-folder row.
 
-Release gates include the final signed/notarized package, installation and upgrade checks, and disposable-installation qualification of uninstall. See [Release readiness](RELEASE-CHECKLIST.md). These maintenance changes do not complete M7 or require a 0.2 release.
+The maintainer accepted the tested maintenance candidate. The official release was rebuilt from the same source content and passed signing, notarization and mounted-package checks. See [Release readiness](RELEASE-CHECKLIST.md) for the acceptance requirements. These maintenance changes do not complete M7 or require a 0.2 release.
 
 ## M7: The polish pass
 

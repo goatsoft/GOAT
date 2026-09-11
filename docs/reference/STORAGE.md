@@ -32,7 +32,7 @@ Restore to a compatible GOAT version while the app is closed. Preserve ownership
 
 ## Inspect locations and choose removal
 
-The 0.1.1 (Kid) maintenance candidate includes **Settings → General → Manage**. The storage tree shows the configured GOAT Home and the separate Application Support location. Reset preferences keeps data in place; uninstall offers checked-to-remove choices, a final review and a recovery folder. See the [reset and uninstall guide](../how-to/MANAGE-GOAT-DATA.md) for defaults, cancellation and recovery. These controls are not in the published Kid build 1343.
+The 0.1.1 (Kid) includes **Settings → General → Manage**. The storage tree shows the configured GOAT Home and the separate Application Support location. Reset preferences keeps data in place; uninstall offers checked-to-remove choices, a final review and a recovery folder. See the [reset and uninstall guide](../how-to/MANAGE-GOAT-DATA.md) for defaults, cancellation and recovery. These controls are not in 0.1.0 build 1343.
 
 ## Remove data deliberately
 

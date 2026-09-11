@@ -14,11 +14,11 @@ Chat text supports 11–28 pt and code supports 10–24 pt. A missing saved font
 
 ## Resize the sidebar
 
-In the 0.1.1 (Kid) maintenance candidate, drag the divider beside the chat sidebar to choose a width between 200 and 600 points. Its preferred starting width is 300 points. This wider range is not in the published Kid build 1343.
+In the 0.1.1 (Kid), drag the divider beside the chat sidebar to choose a width between 200 and 600 points. Its preferred starting width is 300 points. This wider range is not in 0.1.0 build 1343.
 
 ## Reset appearance and general preferences
 
-In candidate and development builds, **Settings → General → Manage → Reset preferences** lists the defaults and applies them immediately. It keeps your data, connections and permissions. See [Reset appearance and general preferences](../how-to/MANAGE-GOAT-DATA.md#reset-appearance-and-general-preferences) for the exact scope.
+In 0.1.1, **Settings → General → Manage → Reset preferences** lists the defaults and applies them immediately. It keeps your data, connections and permissions. See [Reset appearance and general preferences](../how-to/MANAGE-GOAT-DATA.md#reset-appearance-and-general-preferences) for the exact scope.
 
 ## Create a custom theme
 

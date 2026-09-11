@@ -4,9 +4,9 @@ Implemented by ADR-0040. Public release approval, clean-machine acceptance and p
 
 [release.json](../apps/goat-macos/release.json) is the editable product identity: canonical `version`, `codename` and positive integer `build`. Read that record for the current build number, which must remain above the legacy build 1337. Increment the build when preparing a new candidate with changed content. The record alone does not make a candidate distributable.
 
-The maintenance candidate is **0.1.1 (Kid)**. The published 0.1.0 artifacts retain their original identity.
+The current maintenance release is **0.1.1 (Kid)**. The published 0.1.0 artifacts retain their original identity.
 
-| Surface | 0.1.1 candidate value |
+| Surface | 0.1.1 release value |
 |---|---|
 | About and Activity Log, either presentation mode | `0.1.1 (Kid)` |
 | Website label and GitHub draft title | `GOAT 0.1.1 (Kid)` |

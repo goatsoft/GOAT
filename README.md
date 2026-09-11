@@ -9,9 +9,9 @@
 
 GOAT connects a compatible model engine to project files, tools and memory. Organise work in Pens, inspect the actions behind a response and guide an active chat with Lead. The engine you choose runs the model; GOAT provides the workspace around it.
 
-**0.1 (Kid) is available for Mac.** [Download GOAT](https://github.com/goatsoft/GOAT/releases/download/v0.1.0/GOAT-0.1.0.dmg) or read the [release notes](https://github.com/goatsoft/GOAT/releases/tag/v0.1.0). The official download is signed and notarized. Start with the [installation guide](https://goatherd.dev/Getting-Started), and check [known issues](https://goatherd.dev/KNOWN-ISSUES) for current limitations.
+**0.1.1 (Kid) is available for Mac.** [Download GOAT](https://github.com/goatsoft/GOAT/releases/download/v0.1.1/GOAT-0.1.1.dmg) or read the [release notes](https://github.com/goatsoft/GOAT/releases/tag/v0.1.1). The official download is signed and notarized. Start with the [installation guide](https://goatherd.dev/Getting-Started), and check [known issues](https://goatherd.dev/KNOWN-ISSUES) for current limitations.
 
-**0.1.1 (Kid) is in preparation:** sidebar fixes, preference reset, recoverable uninstall and a revised Finder installer. See the [maintenance scope and M7 plan](docs/ROADMAP.md). The published download above remains 0.1.0.
+**New in 0.1.1:** sidebar fixes, preference reset, recoverable uninstall and a revised Finder installer. See the [maintenance scope and M7 plan](docs/ROADMAP.md).
 
 ## From conversation to project work
 
@@ -28,7 +28,7 @@ GOAT also includes streaming chat, capability-aware effort presets, engine-suppl
 
 You need an **Apple Silicon Mac running macOS 26 or later** and a compatible model engine. Model memory requirements depend on the model and engine you choose. GOAT does not include model weights or run inference in-process.
 
-[Download the DMG](https://github.com/goatsoft/GOAT/releases/download/v0.1.0/GOAT-0.1.0.dmg), open it and drag GOAT into Applications. Follow [Getting started](https://goatherd.dev/Getting-Started) and the [engine compatibility reference](https://goatherd.dev/reference/engines). Configure your engine’s actual endpoint and credentials, select a model and send a first message. For project work, [create a Pen](https://goatherd.dev/how-to/CREATE-A-PEN) and review its workspace permissions.
+[Download the DMG](https://github.com/goatsoft/GOAT/releases/download/v0.1.1/GOAT-0.1.1.dmg), open it and drag GOAT into Applications. Follow [Getting started](https://goatherd.dev/Getting-Started) and the [engine compatibility reference](https://goatherd.dev/reference/engines). Configure your engine’s actual endpoint and credentials, select a model and send a first message. For project work, [create a Pen](https://goatherd.dev/how-to/CREATE-A-PEN) and review its workspace permissions.
 
 To build from source, install the required Xcode toolchain and XcodeGen, then:
 

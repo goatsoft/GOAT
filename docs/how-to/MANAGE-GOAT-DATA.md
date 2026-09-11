@@ -1,6 +1,6 @@
 # Manage storage, reset preferences and uninstall
 
-These controls are included in the 0.1.1 (Kid) maintenance candidate under **Settings → General → Manage**. They are not included in the published Kid build 1343. For that download, use the [manual reset and removal instructions](TROUBLESHOOTING.md#reset-goat-for-a-clean-installation).
+These controls are included in the 0.1.1 (Kid) under **Settings → General → Manage**. They are not included in 0.1.0 build 1343. For that download, use the [manual reset and removal instructions](TROUBLESHOOTING.md#reset-goat-for-a-clean-installation).
 
 Manage has two tabs: **Reset preferences** and **Uninstall GOAT**. Inspecting locations or reviewing choices does not remove anything.
 
