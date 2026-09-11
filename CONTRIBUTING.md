@@ -42,6 +42,10 @@ npm run check:content
 
 The web toolchain requires Node 22 or later. Build output is ignored. Run `make module-docs` from the repository root after changing the module catalogue; generated module READMEs are not edited independently.
 
+CI skips the macOS lint, app tests and app build when a change only touches `docs/`, `web/`, shared brand `assets/`, or the root README, contribution, community and agent guides. Website tests, both site builds, content links, distribution notices and generated module documentation are still checked. App code, app dependencies, packaging, shared licence notices, build scripts, workflows and unrecognised paths trigger full app verification. An uncertain comparison also keeps full verification. Release tags retain their full release checks regardless of changed paths.
+
+After editing CI change detection, run `python3 -m unittest discover -s scripts/tests` from the repository root.
+
 Real-inference tests require a deliberately configured service and are separate from normal fixture tests. Record the actual environment when reporting live compatibility. Do not interrupt another task’s app instance to run a test.
 
 ## Preserve the boundaries

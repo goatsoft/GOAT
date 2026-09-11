@@ -19,8 +19,28 @@ defaults:
     working-directory: apps/goat-macos
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    outputs:
+      app: ${{ steps.changes.outputs.app }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Test change detection
+        run: python3 -m unittest discover -s scripts/tests
+      - name: Detect app changes
+        id: changes
+        run: python3 scripts/ci-changes.py
+
   # Style gate: swift-format is syntactic, so it needs no Xcode SDK and runs fast.
   lint:
+    needs: changes
+    # If detection fails or produces no output, retain full verification.
+    if: ${{ !cancelled() && needs.changes.outputs.app != 'false' }}
     runs-on: macos-15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -31,6 +51,8 @@ jobs:
 
   # App tests require the deployment OS as well as a compatible SDK.
   build-test:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.app != 'false' }}
     runs-on: macos-26
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -69,5 +91,7 @@ jobs:
       - run: npm run test:unit
       - name: Check distribution notices
         run: python3 ../scripts/distribution-notices.py --check
+      - name: Check module documentation
+        run: python3 ../apps/goat-macos/scripts/sync-module-docs.py --check
       - run: npm run build:all
       - run: npm run check:content
