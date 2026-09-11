@@ -30,7 +30,7 @@ Tool results, arguments, identifiers and schemas are charged at 3.5 bytes per to
 
 Each completed response with exact server `usage.prompt_tokens` records a calibration ratio for the chat: `usage.prompt_tokens / report.estimatedInputTokensAfter`, clamped to 0.5...2.0 and smoothed by averaging with the previous ratio. The next plan compares raw estimates against the budget divided by the ratio, which is the same test as scaling every estimate, and the report records the ratio, the raw estimate and the calibrated estimate; the meter shows the calibrated figure. A chat without usage keeps ratio 1.0, and the ratio is session-scoped. The plan remains deterministic: the ratio is an explicit input recorded in `PromptBudgetReport`, and fixtures pin its arithmetic.
 
-`prompt_tokens_details.cached_tokens` is decoded when present and recorded in `GenStats` and provenance, so the activity log and Nerd Stats can show prefix-cache hits.
+`prompt_tokens_details.cached_tokens` (or a top-level `cached_tokens` / `prompt_cache_hit_tokens`) is decoded when present and recorded in `GenStats` and generation provenance, so the activity log can report prefix-cache hits. Surfacing it in the Stats inspector is left to later polish.
 
 ### Window and output reserve
 

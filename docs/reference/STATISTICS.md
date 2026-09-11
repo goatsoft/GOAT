@@ -37,7 +37,8 @@ against its available budget. During generation the budget can reserve space for
 The text identifies an input limit when applicable, and a trimming notice appears if GOAT removed
 older prompt material to fit.
 
-**~** means estimated usage or capacity. **?** means the engine or saved chat does not supply enough
+The estimate is calibrated per chat from the server's reported prompt tokens, so it converges on the
+engine's real count after the first response. **~** means estimated usage or capacity. **?** means the engine or saved chat does not supply enough
 information yet. An unknown value is not zero. Run another response to populate missing saved-chat
 usage. This is a request budget indicator, not a promise that all earlier messages remain in context.
 
