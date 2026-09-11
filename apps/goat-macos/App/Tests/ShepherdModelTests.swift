@@ -1628,7 +1628,7 @@ func automaticTitlesNameToolWorkflowsWithAnEmptyFinalMessage(narrated: Bool) asy
     tools.specs = [ToolSpec(name: "srv__tool", description: "Write file", parametersJSON: "{}")]
     tools.mapping = ["srv__tool": fakeToolRoute()]
     tools.allow = false
-    let broken = "<function=srv__tool>\n<parameter=path>. </parameter>\n</function>\n</tool_call>"
+    let broken = "<tool_call>\n<function=srv__tool>\n<parameter=path>. </parameter>\n</function>\n</tool_call>"
     let (shepherd, engine, _, env) = makeShepherd(
         script: [[.token(broken)], toolCallRound(), [.token("The requested action was denied.")]], tools: tools)
     defer { _ = env }
@@ -1646,8 +1646,10 @@ func automaticTitlesNameToolWorkflowsWithAnEmptyFinalMessage(narrated: Bool) asy
     #expect(session.messages[2].toolEvents.first?.denied == true)
     let requests = await engine.requests
     #expect(requests.count == 3)
-    #expect(requests[1].turns.first?.text.contains("No tool from that response was executed") == true)
+    // The failed markup row is excluded from history; the retry round carries the recovery note
+    // on the newest exchange rather than in the system turn (ADR-0085).
     #expect(!requests[1].turns.contains { $0.text == broken })
+    #expect(requests[1].turns.contains { $0.text.contains("structured tool interface") })
     #expect(requests[2].turns.contains { $0.role == .tool && $0.text.contains("denied") })
 }
 
@@ -1739,7 +1741,7 @@ func automaticTitlesNameToolWorkflowsWithAnEmptyFinalMessage(narrated: Bool) asy
     let env = FakeEnv()
     env.failingPersistenceAttempts = [3]  // 1 prepared, 2 started, 3 failed row
     let (shepherd, engine, _, _) = makeShepherd(
-        script: [[.token("<function=srv__tool></function></tool_call>")], toolCallRound()],
+        script: [[.token("<tool_call>\n<function=srv__tool></function>\n</tool_call>")], toolCallRound()],
         tools: tools, env: env)
     defer { _ = env }
     let session = ChatSession(effort: .trot, modelID: "test-model")
@@ -1760,7 +1762,9 @@ func automaticTitlesNameToolWorkflowsWithAnEmptyFinalMessage(narrated: Bool) asy
     tools.specs = [ToolSpec(name: "srv__tool", description: "Tool", parametersJSON: "{}")]
     tools.mapping = ["srv__tool": fakeToolRoute()]
     let (shepherd, engine, _, env) = makeShepherd(
-        script: [toolCallRound(), [.token("<function=srv__tool></function></tool_call>")], [.token("Done.")]],
+        script: [
+            toolCallRound(), [.token("<tool_call>\n<function=srv__tool></function>\n</tool_call>")], [.token("Done.")],
+        ],
         tools: tools)
     defer { _ = env }
     let session = ChatSession(effort: .trot, modelID: "test-model")
@@ -1774,7 +1778,9 @@ func automaticTitlesNameToolWorkflowsWithAnEmptyFinalMessage(narrated: Bool) asy
     #expect(tools.invocations == 1)
     let requests = await engine.requests
     #expect(requests.count == 3)
-    #expect(requests[2].turns.contains { $0.role == .tool && $0.text == "ok" })
+    // The completed tool result is retained on the retry. The recovery note rides that last
+    // turn of the newest exchange (ADR-0085), so match its prefix rather than the whole text.
+    #expect(requests[2].turns.contains { $0.role == .tool && $0.toolCallID == "c1" && $0.text.hasPrefix("ok") })
     #expect(requests[2].turns.filter { !$0.toolCalls.isEmpty }.count == 1)
 }
 
@@ -1790,7 +1796,10 @@ private actor LiveRecoveryProbeEngine: InferenceEngine {
         if injectMalformedResponse {
             injectMalformedResponse = false
             return AsyncThrowingStream {
-                $0.yield(.token("<function=pen_list_files>\n<parameter=path>. </parameter>\n</function>\n</tool_call>"))
+                $0.yield(
+                    .token(
+                        "<tool_call>\n<function=pen_list_files>\n<parameter=path>. </parameter>\n</function>\n</tool_call>"
+                    ))
                 $0.finish()
             }
         }
