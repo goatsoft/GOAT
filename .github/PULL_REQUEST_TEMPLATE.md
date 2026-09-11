@@ -8,6 +8,8 @@
 
 ## Checklist
 
+- [ ] Branch follows the Git-flow-style naming convention: `feat/...`, `fix/...`, `chore/...`, `refactor/...`, `docs/...`, `test/...` or `perf/...`
+- [ ] Appropriate repository labels/tags are applied to this pull request, including change type and relevant area or risk
 - [ ] `make verify` is green (lint + package tests + app tests + build)
 - [ ] No new dependency without an ADR (the approved set is small on purpose)
 - [ ] Colors/fonts/spacing go through Caprine tokens: no hardcoded values in views
