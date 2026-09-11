@@ -169,7 +169,8 @@ struct SettingsView: View {
         return SettingsTab.allCases.filter {
             $0.title.lowercased().contains(query) || $0.description.lowercased().contains(query)
                 || ($0 == .models
-                    && "favourites capabilities compatibility template reasoning vision tools model models".contains(query))
+                    && "favourites capabilities compatibility template reasoning vision tools model models".contains(
+                        query))
                 || ($0 == .judas
                     && "network lan thunderbolt local internet off-grid previews security privacy permissions activity hoofprint connections"
                         .contains(query))

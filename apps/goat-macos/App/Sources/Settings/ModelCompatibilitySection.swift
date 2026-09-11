@@ -26,9 +26,11 @@ struct ModelCompatibilitySection: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Label("Review migrated engine compatibility", systemImage: "arrow.triangle.2.circlepath")
                         .font(.callout.weight(.medium))
-                    Text("The old engine-wide setting was \(review.legacyStyle == .qwenChatTemplate ? "Qwen chat template" : "automatic"). Assign it to one model or discard it before relying on per-model compatibility.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Text(
+                        "The old engine-wide setting was \(review.legacyStyle == .qwenChatTemplate ? "Qwen chat template" : "automatic"). Assign it to one model or discard it before relying on per-model compatibility."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                     HStack {
                         Picker("Model", selection: $selectedLegacyModelID) {
                             Text("Choose a model").tag("")
@@ -38,7 +40,11 @@ struct ModelCompatibilitySection: View {
                         }
                         .pickerStyle(.menu)
                         Button("Apply to Selected Model") {
-                            Task { _ = await model.resolveLegacyCompatibility(for: identity.engineProfileID, assignTo: selectedLegacyModelID.isEmpty ? nil : selectedLegacyModelID) }
+                            Task {
+                                _ = await model.resolveLegacyCompatibility(
+                                    for: identity.engineProfileID,
+                                    assignTo: selectedLegacyModelID.isEmpty ? nil : selectedLegacyModelID)
+                            }
                         }
                         .disabled(selectedLegacyModelID.isEmpty || model.shepherd.hasActiveTurn)
                         Button("Use Automatic") {
