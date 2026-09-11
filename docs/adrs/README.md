@@ -89,5 +89,6 @@ Older records retain the package and type names used when accepted. [ADR-0054](0
 | [0081](0081-owner-prepared-automatic-uninstall.md) | Owner-prepared automatic uninstall | Accepted |
 | [0082](0082-direct-preference-reset.md) | Direct preference reset | Accepted · refines 0081 |
 | [0083](0083-selective-app-ci.md) | Selective app verification for content changes | Accepted · refines 0018 |
+| [0084](0084-model-inspection-favourites-and-recovery.md) | Models settings, favourites, effort submenu and diagnostic recovery | Proposed |
 
 New session? Start with **[../../AGENT.md](../../AGENT.md)**, then [the roadmap](../ROADMAP.md).

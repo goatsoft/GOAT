@@ -19,3 +19,9 @@ Graze, Trot, Climb and Summit set sampling and output presets. Native reasoning 
 Token counts and timing are reported by the engine when available. GOAT labels estimates separately. Speed depends on the model, hardware, context and engine; the website’s interface illustrations are not benchmarks.
 
 Follow [Connect an engine](../wiki/Engines.md). For endpoints, defaults and compatibility evidence, use the [engine reference](../ENGINES.md).
+
+## Planned model management
+
+The [next roadmap tranche](../ROADMAP.md#next-model-selection-capabilities-and-recovery) adds Models settings for catalog and capability inspection, engine-scoped favourites, an Other models submenu and an Effort row that shows the selected preset. Diagnostic work will distinguish checkpoint loadability, request-style compatibility and per-response generation evidence. These controls are planned and are not available in Kid 0.1.1.
+
+Compatibility will default to Automatic for each engine/model pairing, with an advanced override in model details. Switching models will resolve the new model's supported controls instead of inheriting another model family's settings from engine setup. The OpenAI-compatible API describes the connection protocol; the engine applies each model's actual chat template.

@@ -27,6 +27,21 @@ Downloads and release notes are on [GitHub Releases](https://github.com/goatsoft
 
 The maintainer accepted the tested maintenance candidate. The official release was rebuilt from the same source content and passed signing, notarization and mounted-package checks. See [Release readiness](RELEASE-CHECKLIST.md) for the acceptance requirements. These maintenance changes do not complete M7 or require a 0.2 release.
 
+## Next: model selection, capabilities and recovery
+
+The next feature tranche is model management and reliable recovery, ahead of routine M7 polish. These are planned changes, not features in Kid 0.1.1:
+
+- **Models settings:** browse the active engine's catalog, inspect model capabilities and their evidence, review compatibility and load failures, and maintain favourites.
+- **Compact model menu:** show favourites at the top level and the remaining catalog in **Other models**. Keep the selected model visible in the composer and retain the engine's management and refresh actions.
+- **Effort submenu:** show the selected preset on the trailing side of the **Effort** row. Graze, Trot, Climb and Summit retain their existing meanings and shortcuts.
+- **Per-model compatibility:** remove the family-template choice from engine setup. Resolve request behaviour automatically when selecting a model, with an advanced override stored for that engine/model pairing in Models settings.
+- **GLM compatibility:** distinguish full models from speculative draft components, qualify realistic hardware/runtime pairings, and investigate model-specific request styles and repetitive or malformed output.
+- **Recovery and reporting:** recognise malformed tool attempts without executing printed markup, break unproductive file-repair cycles, and record the actual model, engine and effective settings per response.
+
+Start with diagnostic provenance and the GLM compatibility investigations, then build the shared Models inventory/favourite state and menu changes. Tool-format and file-recovery fixes can proceed independently once their fixtures are defined. A model's presence in a catalog is not proof of loadability, reasoning support or tool reliability.
+
+The [proposed model-management design](adrs/0084-model-inspection-favourites-and-recovery.md) records the scope and acceptance boundaries. Completion requires versioned compatibility evidence and keyboard/VoiceOver checks as well as regression tests for confirmed client defects. No release date or full GLM-5.2 support on a 64 GB Mac is promised.
+
 ## M7: The polish pass
 
 Yearling (0.2.0) is the planned release line for broader polish. The remaining checklist below separates implemented foundations from acceptance work; unchecked items are not promised features or completed qualification.

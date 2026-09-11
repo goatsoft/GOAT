@@ -227,7 +227,6 @@ private struct EngineEditorSheet: View {
     @State private var presetID = "custom"
     @State private var name = ""
     @State private var urlText = ""
-    @State private var requestStyle: EngineRequestStyle = .automatic
     @State private var keyDraft = ""
     @State private var removeKey = false
     @State private var testing = false
@@ -243,10 +242,9 @@ private struct EngineEditorSheet: View {
         let url: String
         let key: String
         let removeKey: Bool
-        let requestStyle: EngineRequestStyle
     }
     private var connectionInput: ConnectionInput {
-        ConnectionInput(preset: presetID, url: urlText, key: keyDraft, removeKey: removeKey, requestStyle: requestStyle)
+        ConnectionInput(preset: presetID, url: urlText, key: keyDraft, removeKey: removeKey)
     }
 
     private var isEditing: Bool { existing != nil }
@@ -258,7 +256,6 @@ private struct EngineEditorSheet: View {
         _presetID = State(initialValue: initialPreset.id)
         _name = State(initialValue: existing?.name ?? initialPreset.name)
         _urlText = State(initialValue: existing?.url ?? initialPreset.url ?? "")
-        _requestStyle = State(initialValue: existing?.requestStyle ?? .automatic)
     }
 
     var body: some View {
@@ -283,18 +280,6 @@ private struct EngineEditorSheet: View {
                 TextField("URL", text: $urlText, prompt: Text("http://127.0.0.1:8000"))
                     .themedField(tint: model.theme.tokens.tint)
                     .autocorrectionDisabled()
-
-                Picker("Request protocol", selection: $requestStyle) {
-                    Text("Automatic (OpenAI-compatible)").tag(EngineRequestStyle.automatic)
-                    Text("Qwen local chat template").tag(EngineRequestStyle.qwenChatTemplate)
-                }
-                if requestStyle == .qwenChatTemplate {
-                    Text(
-                        "For a local Qwen server that accepts chat_template_kwargs. GOAT preserves prior reasoning and maps its effort dial to Qwen's low, medium, and xhigh levels."
-                    )
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                }
 
                 // API key: per engine (only if this engine needs one). A saved key intentionally
                 // never comes back from the credential store into this field, even when revealing.
@@ -486,7 +471,7 @@ private struct EngineEditorSheet: View {
             name: name.trimmingCharacters(in: .whitespaces),
             url: urlText.trimmingCharacters(in: .whitespaces),
             presetID: presetID == "custom" ? nil : presetID,
-            requestStyle: requestStyle)
+            requestStyle: existing?.requestStyle ?? .automatic)
     }
 
     private func runTest() async {

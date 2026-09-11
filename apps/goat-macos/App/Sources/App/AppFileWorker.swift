@@ -11,6 +11,12 @@ enum EngineFileLoad: Sendable {
     case loaded(EngineStore.File)
 }
 
+enum ModelPreferencesFileLoad: Sendable {
+    case stale
+    case missing
+    case loaded(ModelPreferencesFile)
+}
+
 struct ThemeMutationResult: Sendable {
     let themes: [ThemeSpec]
     let saved: ThemeSpec?
@@ -23,6 +29,7 @@ struct ThemeMutationResult: Sendable {
 actor AppFileWorker {
     static let shared = AppFileWorker()
     private var engineRevision: UInt64 = 0
+    private var modelPreferencesRevision: UInt64 = 0
     private var credentialRevisions: [String: UInt64] = [:]
     private var themeRevision: UInt64 = 0
     private var penRevisions: [String: UInt64] = [:]
@@ -38,6 +45,22 @@ actor AppFileWorker {
         guard revision > engineRevision else { return false }
         engineRevision = revision
         try EngineStore.save(file, to: url)
+        return true
+    }
+
+    func loadModelPreferences(from url: URL, revision: UInt64) throws -> ModelPreferencesFileLoad {
+        guard revision > modelPreferencesRevision else { return .stale }
+        modelPreferencesRevision = revision
+        guard let file = try ModelPreferencesStore.load(from: url) else { return .missing }
+        return .loaded(file)
+    }
+
+    func saveModelPreferences(
+        _ file: ModelPreferencesFile, to url: URL, revision: UInt64
+    ) throws -> Bool {
+        guard revision > modelPreferencesRevision else { return false }
+        modelPreferencesRevision = revision
+        try ModelPreferencesStore.save(file, to: url)
         return true
     }
 

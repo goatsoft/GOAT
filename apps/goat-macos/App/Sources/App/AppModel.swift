@@ -191,6 +191,13 @@ final class AppModel {
     var installedEngineApplicationPaths: Set<String> = []
     var engineStoreRevision: UInt64 = 0
     var engineStoreWritable = true
+    var modelPreferences: [ModelPreference] = []
+    var legacyCompatibilityReviews: [LegacyCompatibilityReview] = []
+    var modelPreferencesSaveError: String?
+    var modelPreferencesWarning: String?
+    var modelPreferencesLoading = false
+    var modelPreferencesRevision: UInt64 = 0
+    var durableModelPreferences = ModelPreferencesFile()
     var credentialRevisions: [String: UInt64] = [:]
     var themeStoreRevision: UInt64 = 0
     var penStoreRevisions: [UUID: UInt64] = [:]

@@ -145,7 +145,7 @@ struct DataManagementInventory: Sendable {
         locations = [
             Location(id: "home", title: "GOAT Home", url: home),
             Location(
-                id: "config", title: "Connections, credentials and themes", url: home.appendingPathComponent("config")),
+                id: "config", title: "Connections, model preferences, credentials and themes", url: home.appendingPathComponent("config")),
             Location(id: "memory", title: "Global local memory", url: home.appendingPathComponent("memory")),
             Location(
                 id: "pens", title: "Pen folders, instructions and local memory",
