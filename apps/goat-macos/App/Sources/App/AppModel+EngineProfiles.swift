@@ -184,7 +184,7 @@ extension AppModel {
                 config: EngineConfig(
                     baseURL: url, apiKey: key,
                     name: profile.name, metadataDialect: profile.preset.metadataDialect,
-                    requestStyle: profile.requestStyle))
+                    requestStyle: .automatic))
         }
         guard let operation = await beginEngineOperation(for: intentRevision) else { return }
         guard let target else {
@@ -211,7 +211,7 @@ extension AppModel {
             config: EngineConfig(
                 baseURL: url, apiKey: apiKey,
                 name: profile.name, metadataDialect: profile.preset.metadataDialect,
-                requestStyle: profile.requestStyle))
+                requestStyle: .automatic))
         return await probe.health()
     }
 
