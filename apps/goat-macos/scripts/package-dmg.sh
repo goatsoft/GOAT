@@ -12,6 +12,7 @@ ARGS=(--channel "$CHANNEL")
 if [ -n "${RELEASE_TAG:-}" ]; then ARGS+=(--tag "$RELEASE_TAG"); fi
 python3 "$SCRIPT_DIR/release-metadata.py" bundle "${ARGS[@]}" --app "$APP"
 VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$SCRIPT_DIR/../release.json")"
+BUILD="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["build"])' "$SCRIPT_DIR/../release.json")"
 [ -x "$CLI" ] || { echo 'error: CLI executable not found' >&2; exit 1; }
 codesign --verify --deep --strict "$APP"
 codesign --verify --strict "$CLI"
@@ -35,27 +36,69 @@ cleanup() {
 trap cleanup EXIT
 mkdir "$WORK/stage" "$MOUNT"
 ditto "$APP" "$WORK/stage/GOAT.app"
-cp "$CLI" "$WORK/stage/goat"
-ln -s /Applications "$WORK/stage/Applications"
+mkdir "$WORK/stage/CLI Tools"
+cp "$CLI" "$WORK/stage/CLI Tools/goat"
+THEME="$SCRIPT_DIR/../art/dmg"
+swift "$SCRIPT_DIR/dmg-applications-shortcut.swift" create /Applications \
+  "$WORK/stage/Applications" "$THEME/goat-applications-icon.png"
 LICENSE_SOURCE="$SCRIPT_DIR/../App/Resources/Licenses"
 for NOTICE in LICENSE.txt LICENSE-ART.txt THIRD-PARTY-NOTICES.txt; do
   cmp "$LICENSE_SOURCE/$NOTICE" "$APP/Contents/Resources/Licenses/$NOTICE"
 done
-cp -R "$LICENSE_SOURCE" "$WORK/stage/Licenses"
+cp -R "$LICENSE_SOURCE" "$WORK/stage/Licence"
 python3 "$SCRIPT_DIR/release-metadata.py" bundle "${ARGS[@]}" --app "$WORK/stage/GOAT.app"
-hdiutil create -volname "GOAT $VERSION" -srcfolder "$WORK/stage" -format UDZO "$WORK/candidate.dmg" >/dev/null
-hdiutil verify "$WORK/candidate.dmg" >/dev/null
-hdiutil attach -readonly -nobrowse -mountpoint "$MOUNT" "$WORK/candidate.dmg" >/dev/null
+# Add verified metadata to the ImageGen master's empty blue capsule at both scales.
+swift "$SCRIPT_DIR/dmg-background.swift" "$THEME/goat-dmg-background-source.png" \
+  "$APP" "$WORK/background"
+mkdir "$WORK/stage/.background"
+tiffutil -cathidpicheck "$WORK/background/background.png" "$WORK/background/background@2x.png" \
+  -out "$WORK/stage/.background/background.tiff"
+cp "$WORK/background/build.json" "$WORK/stage/.background/build.json"
+hdiutil create -volname "GOAT $VERSION $CHANNEL $BUILD" -srcfolder "$WORK/stage" \
+  -format UDRW "$WORK/layout.dmg" >/dev/null
+hdiutil attach -noautoopen -nobrowse -mountpoint "$MOUNT" "$WORK/layout.dmg" >/dev/null
 ATTACHED=1
+SUPPORT_FOLDERS=("$MOUNT/Licence" "$MOUNT/.background")
+for FOLDER in "$MOUNT"/.[!.]*; do
+  if [ -d "$FOLDER" ] && [ "$FOLDER" != "$MOUNT/.background" ]; then SUPPORT_FOLDERS+=("$FOLDER"); fi
+done
+swift "$SCRIPT_DIR/dmg-footer-icons.swift" "$THEME/goat-cli-icon.png" \
+  "$MOUNT/CLI Tools" "${SUPPORT_FOLDERS[@]}"
+osascript "$SCRIPT_DIR/layout-dmg.applescript" "$MOUNT"
+# Finder writes its preferences asynchronously after the window closes.
+for ATTEMPT in {1..20}; do
+  [ ! -f "$MOUNT/.DS_Store" ] || break
+  sleep 1
+done
+[ -s "$MOUNT/.DS_Store" ] || { echo 'error: Finder did not save the DMG layout' >&2; exit 1; }
+hdiutil detach "$MOUNT" >/dev/null
+ATTACHED=0
+# Patch the saved window only while Finder has no mounted volume to overwrite.
+hdiutil attach -noautoopen -nobrowse -mountpoint "$MOUNT" "$WORK/layout.dmg" >/dev/null
+ATTACHED=1
+python3 "$SCRIPT_DIR/dmg-window.py" "$MOUNT/.DS_Store" --hide-tab-bar
+cp "$MOUNT/.DS_Store" "$WORK/expected.DS_Store"
+cp "$MOUNT/.background/background.tiff" "$WORK/expected-background.tiff"
+hdiutil detach "$MOUNT" >/dev/null
+ATTACHED=0
+hdiutil convert "$WORK/layout.dmg" -format UDZO -o "$WORK/candidate.dmg" >/dev/null
+hdiutil verify "$WORK/candidate.dmg" >/dev/null
+hdiutil attach -readonly -noautoopen -nobrowse -mountpoint "$MOUNT" "$WORK/candidate.dmg" >/dev/null
+ATTACHED=1
+cmp "$WORK/expected.DS_Store" "$MOUNT/.DS_Store"
+cmp "$WORK/expected-background.tiff" "$MOUNT/.background/background.tiff"
+cmp "$WORK/background/build.json" "$MOUNT/.background/build.json"
+python3 "$SCRIPT_DIR/dmg-window.py" "$MOUNT/.DS_Store"
 python3 "$SCRIPT_DIR/release-metadata.py" bundle "${ARGS[@]}" --app "$MOUNT/GOAT.app"
 codesign --verify --deep --strict "$MOUNT/GOAT.app"
-codesign --verify --strict "$MOUNT/goat"
-cmp "$CLI" "$MOUNT/goat"
+codesign --verify --strict "$MOUNT/CLI Tools/goat"
+cmp "$CLI" "$MOUNT/CLI Tools/goat"
 for NOTICE in LICENSE.txt LICENSE-ART.txt THIRD-PARTY-NOTICES.txt; do
-  cmp "$LICENSE_SOURCE/$NOTICE" "$MOUNT/Licenses/$NOTICE"
+  cmp "$LICENSE_SOURCE/$NOTICE" "$MOUNT/Licence/$NOTICE"
   cmp "$LICENSE_SOURCE/$NOTICE" "$MOUNT/GOAT.app/Contents/Resources/Licenses/$NOTICE"
 done
-[ "$(readlink "$MOUNT/Applications")" = /Applications ]
+swift "$SCRIPT_DIR/dmg-applications-shortcut.swift" verify /Applications "$MOUNT/Applications"
+cmp "$WORK/stage/Applications/..namedfork/rsrc" "$MOUNT/Applications/..namedfork/rsrc"
 hdiutil detach "$MOUNT" >/dev/null
 ATTACHED=0
 # Prepare the manifest before publishing any local output.
