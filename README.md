@@ -1,6 +1,13 @@
 <div align="center">
 <h1><picture><source media="(prefers-color-scheme: light)" srcset="assets/goat-readme-light.svg"><img src="assets/goat-readme-dark.svg" width="180" height="92" alt=""></picture><br>GOAT</h1>
 
+[![CI](https://github.com/goatsoft/GOAT/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/goatsoft/GOAT/actions/workflows/ci.yml?query=branch%3Amain)
+[![Latest release](https://img.shields.io/github/v/release/goatsoft/GOAT?display_name=tag&sort=semver&label=release&color=8b5cf6)](https://github.com/goatsoft/GOAT/releases/latest)
+[![Release asset downloads](https://img.shields.io/github/downloads/goatsoft/GOAT/total?label=asset%20downloads&color=06b6d4)](https://github.com/goatsoft/GOAT/releases)
+[![macOS 26 or later](https://img.shields.io/badge/macOS-26%2B-0ea5e9?logo=apple&logoColor=white)](https://goatherd.dev/Getting-Started#requirements)
+[![Apple Silicon](https://img.shields.io/badge/Apple%20Silicon-arm64-6366f1)](https://goatherd.dev/Getting-Started#requirements)
+[![Code licence: MIT](https://img.shields.io/badge/code%20licence-MIT-22c55e)](LICENSE)
+
 **A native AI workspace for Mac, built around local models and permissions you control.**
 
 [Website](https://goatapp.dev/) · [Get started](https://goatherd.dev/Getting-Started) · [Documentation](https://goatherd.dev/) · [Contribute](https://goatherd.dev/Contributing)

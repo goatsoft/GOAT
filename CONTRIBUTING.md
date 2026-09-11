@@ -4,7 +4,7 @@ Help improve a native Mac workspace for local AI. Code, documentation, accessibi
 
 Read the [Code of Conduct](CODE_OF_CONDUCT.md). For sensitive vulnerabilities, use [SECURITY.md](SECURITY.md) rather than a public issue.
 
-The first public tree is the **0.1 (Kid) source preview**. Start with the [preview guide](docs/PUBLIC-PREVIEW.md) for useful testing areas and current limitations. Apple Developer membership is not required to build or contribute; official signing credentials are never needed for contributor builds.
+The current published release is **0.1.1 (Kid)**. Start with the [preview guide](docs/PUBLIC-PREVIEW.md) for useful testing areas and current limitations. Apple Developer membership is not required to build or contribute; official signing credentials are never needed for contributor builds.
 
 ## Choose a focused change
 
@@ -41,6 +41,12 @@ npm run check:content
 ```
 
 The web toolchain requires Node 22 or later. Build output is ignored. Run `make module-docs` from the repository root after changing the module catalogue; generated module READMEs are not edited independently.
+
+CI skips the macOS lint, app tests and app build when a change only touches `docs/`, `web/`, shared brand `assets/`, or root `*.md` files, including newly added Markdown guides. The root Markdown rule excludes `LICENSE-ART.md` and `THIRD-PARTY-NOTICES.md` because they supply bundled app notices. Website tests, both site builds, content links, distribution notices and generated module documentation are still checked. App code, app dependencies, packaging, shared licence notices, build scripts, workflows and unrecognised paths trigger full app verification. An uncertain comparison also keeps full verification. Release tags retain their full release checks regardless of changed paths.
+
+After editing CI change detection, run `python3 -m unittest discover -s scripts/tests` from the repository root.
+
+[ADR-0083](docs/adrs/0083-selective-app-ci.md) records the CI routing decision and its fallback behavior.
 
 Real-inference tests require a deliberately configured service and are separate from normal fixture tests. Record the actual environment when reporting live compatibility. Do not interrupt another task’s app instance to run a test.
 

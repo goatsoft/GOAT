@@ -43,6 +43,8 @@ make release  # Release config, hardened runtime
 
 All targets work from the repo root (delegated) or from `apps/goat-macos` directly.
 
+Documentation and website-only changes use the web and content checks in [Contributing](CONTRIBUTING.md#verify-a-change); they do not require a local app rebuild. [ADR-0083](docs/adrs/0083-selective-app-ci.md) defines the corresponding CI path policy, including root Markdown guides and bundled-notice exceptions. App/build changes and release qualification still require full verification.
+
 ## Hard rules
 
 - **`.xcodeproj` is generated. Never commit it.** Edit `project.yml`, run `make gen`.
