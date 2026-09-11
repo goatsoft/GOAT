@@ -88,5 +88,6 @@ Older records retain the package and type names used when accepted. [ADR-0054](0
 | [0080](0080-explicit-first-engine-setup.md) | Explicit first-engine setup | Accepted · refines 0021 |
 | [0081](0081-owner-prepared-automatic-uninstall.md) | Owner-prepared automatic uninstall | Accepted |
 | [0082](0082-direct-preference-reset.md) | Direct preference reset | Accepted · refines 0081 |
+| [0083](0083-selective-app-ci.md) | Selective app verification for content changes | Accepted · refines 0018 |
 
 New session? Start with **[../../AGENT.md](../../AGENT.md)**, then [the roadmap](../ROADMAP.md).

@@ -108,6 +108,8 @@ Themes remain GTF v1. Fonts are local declarations, not bundled downloads. The p
 
 `make verify` runs the module and JUDAS boundary checks, formatting, package tests and hosted app tests. `make build` builds the app and `make cli` builds Hitch's executable. The website and docs build from `web/` with `npm run build:all`.
 
+[ADR-0083](adrs/0083-selective-app-ci.md) defines selective CI: documentation, website, shared brand assets and root Markdown guides skip macOS verification, while bundled notices, app/build changes and uncertain comparisons retain it. Website and content checks still run; release qualification is unchanged. See [Contributing](../CONTRIBUTING.md#verify-a-change) for the exact scope.
+
 Website and docs Aurora decorations share a page-owned WebGPU worker. Components own canvas leases and visibility; the worker owns the device, pipeline and bounded drawing schedule. Unsupported or failed worker rendering falls back without blocking navigation. The HTTPS development command serves both sites at one origin for secure browser capability testing. See [ADR-0079](adrs/0079-shared-aurora-worker.md) and the [website development guide](../web/README.md).
 
 The [release checklist](RELEASE-CHECKLIST.md) records qualification requirements. [ADR-0056](adrs/0056-bounded-rendering-and-responsive-io.md) explains bounded preview preparation, cache eviction, event-driven activity and blocking socket I/O ownership. SQLite remains the durable authority. Passing fixture tests does not establish every live service combination, clean-machine installation or signing/notarization.
