@@ -28,7 +28,7 @@ guard let info = try PropertyListSerialization.propertyList(from: plistData, for
 let text = "BUILD \(build)" as NSString
 let attributes: [NSAttributedString.Key: Any] = [
     .font: NSFont.monospacedSystemFont(ofSize: 9, weight: .medium),
-    .foregroundColor: NSColor.white,
+    .foregroundColor: NSColor(srgbRed: 0.02, green: 0.10, blue: 0.22, alpha: 1),
 ]
 let textSize = text.size(withAttributes: attributes)
 guard textSize.width <= 60 else { fail("build number does not fit the artwork capsule") }
