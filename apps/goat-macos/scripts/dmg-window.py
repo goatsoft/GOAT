@@ -74,7 +74,7 @@ def check_layout(data):
                 "labelOnBottom": True, "showIconPreview": False, "showItemInfo": False}
     for key, value in expected.items():
         if options.get(key) != value:
-            raise ValueError(f"unexpected Finder icon option: {key}")
+            raise ValueError(f"unexpected Finder icon option: {key}: {options.get(key)!r}, expected {value!r}")
     if not options.get("backgroundImageAlias"):
         raise ValueError("missing Finder background reference")
     for name, position in {"GOAT.app": (222, 180), "Applications": (499, 180),

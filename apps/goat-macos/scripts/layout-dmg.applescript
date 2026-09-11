@@ -5,6 +5,27 @@ on run argv
     tell application "Finder"
         open diskFolder
         delay 1
+        my configureWindow(diskFolder)
+        my placeItems(diskFolder)
+        update diskFolder without registering applications
+        delay 2
+        close container window of diskFolder
+        delay 2
+        open diskFolder
+        delay 2
+        -- Finder can inherit icon options on its first reopen. Reapply the
+        -- complete view configuration and anchors after its content has loaded.
+        my configureWindow(diskFolder)
+        my placeItems(diskFolder)
+        update diskFolder without registering applications
+        delay 2
+        if (count argv) is 1 then close container window of diskFolder
+        delay 2
+    end tell
+end run
+
+on configureWindow(diskFolder)
+    tell application "Finder"
         set installWindow to container window of diskFolder
         set current view of installWindow to icon view
         set toolbar visible of installWindow to false
@@ -20,22 +41,8 @@ on run argv
         set shows icon preview of viewOptions to false
         set background color of viewOptions to {0, 0, 0}
         set background picture of viewOptions to file ".background:background.tiff" of diskFolder
-        my placeItems(diskFolder)
-        update diskFolder without registering applications
-        delay 2
-        close installWindow
-        delay 2
-        open diskFolder
-        delay 2
-        -- A fresh Finder window can recalculate item geometry on its first
-        -- reopen. Reapply the anchors once its background and icons are loaded.
-        my placeItems(diskFolder)
-        update diskFolder without registering applications
-        delay 2
-        if (count argv) is 1 then close container window of diskFolder
-        delay 2
     end tell
-end run
+end configureWindow
 
 -- Anchors match the measured ImageGen landing zones. Smaller icons use 24-point padding.
 on placeItems(diskFolder)
