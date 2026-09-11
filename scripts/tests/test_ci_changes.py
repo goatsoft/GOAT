@@ -12,6 +12,16 @@ spec.loader.exec_module(ci)
 
 
 class PathTests(unittest.TestCase):
+    def test_any_root_markdown_skips_app(self):
+        for path in ["CHANGELOG.md", "PLAN.md", "new-guide.md", "release notes.md"]:
+            with self.subTest(path=path):
+                self.assertFalse(ci.requires_app([path]))
+
+    def test_root_markdown_rule_does_not_match_nested_or_other_files(self):
+        for path in ["apps/goat-macos/README.md", "new-directory/guide.md", "PLAN.md.py"]:
+            with self.subTest(path=path):
+                self.assertTrue(ci.requires_app([path]))
+
     def test_content_and_website_only_skip_app(self):
         self.assertFalse(ci.requires_app([
             "README.md", "docs/ROADMAP.md", "assets/logo.svg",
@@ -76,6 +86,14 @@ class GitDiffTests(unittest.TestCase):
 
     def test_app_deleted(self):
         Path("apps/goat-macos/app.swift").unlink()
+        self.assertTrue(self.push_needs_app(self.commit()))
+
+    def test_new_root_markdown_in_real_diff_skips_app(self):
+        self.write("CHANGELOG.md", "new release notes")
+        self.assertFalse(self.push_needs_app(self.commit()))
+
+    def test_app_renamed_to_root_markdown_still_requires_app(self):
+        Path("apps/goat-macos/app.swift").rename("EXAMPLE.md")
         self.assertTrue(self.push_needs_app(self.commit()))
 
     def test_app_renamed_into_docs(self):

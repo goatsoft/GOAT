@@ -7,16 +7,16 @@ from pathlib import Path
 import subprocess
 
 
-CONTENT_FILES = {
-    "README.md", "CONTRIBUTING.md", "CODE_OF_CONDUCT.md", "SECURITY.md",
-    "AGENT.md", "CLAUDE.md",
-}
+APP_NOTICE_FILES = {"LICENSE-ART.md", "THIRD-PARTY-NOTICES.md"}
 CONTENT_PREFIXES = ("docs/", "web/", "assets/")
 
 
 def requires_app(paths):
     # Unknown paths, shared notices, build scripts and workflows require the app.
-    return any(path not in CONTENT_FILES and not path.startswith(CONTENT_PREFIXES)
+    # Root *.md files are content unless they supply bundled app notices.
+    return any(path in APP_NOTICE_FILES or not (
+                   ("/" not in path and path.endswith(".md"))
+                   or path.startswith(CONTENT_PREFIXES))
                for path in paths)
 
 
