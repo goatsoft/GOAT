@@ -281,7 +281,10 @@ extension AppModel {
             contextLimitSource: .unknown,
             capabilities: [:],
             lifecycle: state,
-            finishReason: message.stats?.finishReason)
+            finishReason: message.stats?.finishReason,
+            failureCategory: message.generationFailureCategory.flatMap {
+                GenerationProvenanceRecord.FailureCategory(rawValue: $0)
+            })
         return try? String(data: JSONEncoder().encode(record), encoding: .utf8)
     }
 
@@ -321,6 +324,7 @@ extension AppModel {
                     do {
                         msg.generationProvenance =
                             try JSONDecoder().decode(GenerationProvenanceRecord.self, from: raw)
+                        msg.generationFailureCategory = msg.generationProvenance?.failureCategory?.rawValue
                     } catch {
                         msg.generationProvenanceUnavailable = true
                         dbWarning = "Some response provenance is unavailable because it could not be decoded."

@@ -550,6 +550,7 @@ public final class ShepherdModel {
             } catch {
                 if Task.isCancelled || !owns(turnID: turnID, sessionID: session.id) {
                     assistant.generationLifecycle = GenerationProvenanceRecord.Lifecycle.cancelled.rawValue
+                    assistant.generationFailureCategory = GenerationProvenanceRecord.FailureCategory.cancelled.rawValue
                     assistant.error = "Stopped by you before the response finished."
                     assistant.complete = true
                     assistant.markRenderChanged()
@@ -557,7 +558,8 @@ public final class ShepherdModel {
                     break shepherd
                 }
                 assistant.generationLifecycle = GenerationProvenanceRecord.Lifecycle.failed.rawValue
-                assistant.error = error.localizedDescription
+                assistant.generationFailureCategory = Self.failureCategory(for: error).rawValue
+                assistant.error = (error as? EngineError)?.userFacingFailureDescription ?? error.localizedDescription
                 assistant.complete = true
                 assistant.markRenderChanged()
                 await env.persist(assistant, in: session)
@@ -600,6 +602,7 @@ public final class ShepherdModel {
             if toolCalls.isEmpty,
                 Self.hasUnexecutedToolMarkup(assistant.text, toolNames: Set(specs.map(\.name)))
             {
+                assistant.generationFailureCategory = GenerationProvenanceRecord.FailureCategory.toolFormatRecovery.rawValue
                 let canRetry = !repairedToolFormat && !Task.isCancelled
                 assistant.error =
                     canRetry
@@ -629,6 +632,7 @@ public final class ShepherdModel {
                 acceptsLead = false
                 if Task.isCancelled {
                     assistant.generationLifecycle = GenerationProvenanceRecord.Lifecycle.cancelled.rawValue
+                    assistant.generationFailureCategory = GenerationProvenanceRecord.FailureCategory.cancelled.rawValue
                     assistant.error = "Stopped by you before the turn finished."
                 } else if assistant.text.isEmpty {
                     assistant.error =
@@ -787,28 +791,20 @@ public final class ShepherdModel {
     }
 
     private static let toolFormatRecoveryPrompt = """
-        Your previous response printed a malformed tool call as ordinary text. No tool from that response was executed.
-        Continue the user's request using the supplied structured tool interface and its exact function names and argument schemas. For the Qwen XML tool format, include the complete <tool_call> envelope around the function and parameters; do not omit its opening tag. Do not repeat tool actions that already have completed results in the conversation.
-        If the user only asked for an explanation, answer normally and put any illustrative tool syntax inside a fenced code block. Do not claim that an action happened without a successful tool result.
+        The last response printed a tool invocation as text. Use the supplied structured tool interface with its exact function names and JSON schemas. Do not print tool envelopes. Do not repeat actions with completed results.
+        If the user only asked for an explanation, answer normally and put illustrative syntax inside a fenced code block. Do not claim that an action happened without a successful tool result.
         """
 
     static func hasUnexecutedToolMarkup(_ text: String, toolNames: Set<String>) -> Bool {
-        // Examples inside Markdown fences are content, not failed attempts to invoke tools.
-        var fence: String?
-        var lines: [String] = []
-        for line in text.components(separatedBy: .newlines) {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if let current = fence {
-                if trimmed.hasPrefix(current) { fence = nil }
-            } else if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
-                fence = String(trimmed.prefix(3))
-            } else {
-                lines.append(line)
-            }
+        UnexecutedToolMarkupDetector.detect(text, toolNames: toolNames)?.confidence == .high
+    }
+
+    private static func failureCategory(for error: Error) -> GenerationProvenanceRecord.FailureCategory {
+        guard let engineError = error as? EngineError else { return .unknown }
+        switch engineError.classification {
+        case .modelUnavailable, .unsupportedModelArchitecture: return .unavailableModel
+        case .authentication, .connection, .malformedResponse, .unknown, .none: return .engine
         }
-        let candidate = lines.joined(separator: "\n")
-        return (candidate.contains("<tool_call>") || candidate.contains("</tool_call>"))
-            && toolNames.contains { candidate.contains("<function=\($0)>") }
     }
 
     private func releaseReservation(turnID: UUID, sessionID: UUID) {

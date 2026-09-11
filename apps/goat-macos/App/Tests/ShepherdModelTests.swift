@@ -1633,14 +1633,20 @@ func automaticTitlesNameToolWorkflowsWithAnEmptyFinalMessage(narrated: Bool) asy
     #expect(requests[2].turns.contains { $0.role == .tool && $0.text.contains("denied") })
 }
 
-@Test @MainActor func toolMarkupDetectionAcceptsMissingOpenersButIgnoresFencedExamples() {
-    let body = "<function=pen_list_files>\n<parameter=path>. </parameter>\n</function>\n</tool_call>"
+@Test @MainActor func toolMarkupDetectionRequiresStandaloneKnownEnvelopes() {
+    let body = "<tool_call>\n<function=pen_list_files>\n<parameter=path>. </parameter>\n</function>\n</tool_call>"
     let names: Set<String> = ["pen_list_files"]
     #expect(ShepherdModel.hasUnexecutedToolMarkup(body, toolNames: names))
-    #expect(ShepherdModel.hasUnexecutedToolMarkup("<tool_call>\n" + body, toolNames: names))
+    #expect(!ShepherdModel.hasUnexecutedToolMarkup("Example: " + body, toolNames: names))
     #expect(!ShepherdModel.hasUnexecutedToolMarkup("Example:\n```xml\n" + body + "\n```", toolNames: names))
     #expect(!ShepherdModel.hasUnexecutedToolMarkup("Example:\n~~~xml\n" + body + "\n~~~", toolNames: names))
     #expect(!ShepherdModel.hasUnexecutedToolMarkup(body, toolNames: []))
+    #expect(!ShepherdModel.hasUnexecutedToolMarkup("</tool_call>", toolNames: names))
+    #expect(!ShepherdModel.hasUnexecutedToolMarkup("<tool_call>\nunknown\n<arg_key>x</arg_key><arg_value>y</arg_value>\n</tool_call>", toolNames: names))
+    let glm = "<tool_call>\npen_list_files\n<arg_key>path</arg_key><arg_value>.</arg_value>\n</tool_call>"
+    #expect(UnexecutedToolMarkupDetector.detect(glm, toolNames: names)?.style == .glm)
+    #expect(UnexecutedToolMarkupDetector.detect("</tool_call>", toolNames: names)?.confidence == .low)
+    #expect(!ShepherdModel.hasUnexecutedToolMarkup("vec4<f32>(1.0) < T", toolNames: names))
 }
 
 @Test @MainActor func toolFormatRecoveryStopsIfItsFailedResponseCannotBeSaved() async {

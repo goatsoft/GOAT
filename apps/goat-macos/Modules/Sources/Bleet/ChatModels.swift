@@ -27,6 +27,7 @@ public final class ChatMessage: Identifiable {
     public var generationParameters: EffectiveGenerationParameters?
     public var generationLifecycle: String?
     public var generationSelectedEffort: String?
+    public var generationFailureCategory: String?
     public var generationProvenance: GenerationProvenanceRecord?
     public var generationProvenanceUnavailable = false
     /// Session-local prompt-budget notice. It is UI metadata, never model-visible content.

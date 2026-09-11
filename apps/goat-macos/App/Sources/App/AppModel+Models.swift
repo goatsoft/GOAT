@@ -95,12 +95,39 @@ extension AppModel {
     }
 
     func refreshModelCatalog() async {
-        guard startupPhase.hasLocalState, activeEngineProfile != nil, !shepherd.hasActiveTurn else {
+        guard startupPhase.hasLocalState, activeEngineProfile != nil, !shepherd.hasActiveTurn,
+            !modelCatalogRefreshing
+        else {
             return
         }
         modelCatalogRefreshing = true
+        defer { modelCatalogRefreshing = false }
         await discover()
-        modelCatalogRefreshing = false
+    }
+
+    struct ModelCatalogPollingTrigger: Equatable {
+        let ready: Bool
+        let sceneActive: Bool
+        let engineProfileID: String?
+    }
+
+    func modelCatalogPollingTrigger(sceneActive: Bool) -> ModelCatalogPollingTrigger {
+        ModelCatalogPollingTrigger(
+            ready: startupPhase.hasLocalState,
+            sceneActive: sceneActive,
+            engineProfileID: activeEngineProfile?.id)
+    }
+
+    func modelCatalogPollingLoop(sceneActive: Bool) async {
+        guard sceneActive, startupPhase.hasLocalState, activeEngineProfile != nil else { return }
+        while !Task.isCancelled {
+            await refreshModelCatalog()
+            do {
+                try await Task.sleep(for: .seconds(30))
+            } catch {
+                return
+            }
+        }
     }
 
     func inspectModel(_ identity: ModelIdentity) async {
