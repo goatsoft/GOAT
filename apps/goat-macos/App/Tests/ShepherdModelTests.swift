@@ -1633,6 +1633,41 @@ func automaticTitlesNameToolWorkflowsWithAnEmptyFinalMessage(narrated: Bool) asy
     #expect(requests[2].turns.contains { $0.role == .tool && $0.text.contains("denied") })
 }
 
+@Test @MainActor func mixedPrintedMarkupExecutesOnlyStructuredToolAndContinues() async {
+    let tools = FakeToolSource()
+    tools.specs = [ToolSpec(name: "srv__tool", description: "Fixture tool", parametersJSON: "{}")]
+    tools.mapping = ["srv__tool": fakeToolRoute()]
+    let (shepherd, engine, _, env) = makeShepherd(
+        script: [
+            [
+                .token("Narrative before the printed <tool_call> markup."),
+                .toolCalls([
+                    ToolCallEvent(id: "structured-1", name: "srv__tool", argumentsJSON: "{}")
+                ]),
+                .token("Narrative after the printed markup."),
+                .done(GenStats(ttft: nil, tokens: 12, duration: 0.01)),
+            ],
+            [
+                .token("The structured tool result was received."),
+                .done(GenStats(ttft: nil, tokens: 8, duration: 0.01)),
+            ],
+        ], tools: tools)
+    defer { _ = env }
+    let session = ChatSession(effort: .trot, modelID: "test-model")
+    session.title = "Tool fixture"
+    let user = ChatMessage(role: .user)
+    user.text = "Run the fixture tool"
+    user.complete = true
+    session.messages = [user]
+
+    #expect(shepherd.run(in: session))
+    await shepherd.streamTask?.value
+    #expect(tools.invocations == 1)
+    #expect(!tools.permissionRequested)
+    #expect(await engine.requests.count == 2)
+    #expect(session.messages.contains { $0.text.contains("structured tool result") })
+}
+
 @Test @MainActor func toolMarkupDetectionRequiresStandaloneKnownEnvelopes() {
     let body = "<tool_call>\n<function=pen_list_files>\n<parameter=path>. </parameter>\n</function>\n</tool_call>"
     let names: Set<String> = ["pen_list_files"]
