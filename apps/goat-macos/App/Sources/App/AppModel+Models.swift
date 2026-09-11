@@ -1,8 +1,16 @@
 import Foundation
+import Bleet
 import Herd
 import Inference
 
 extension AppModel {
+    func selectEffort(_ effort: Effort, in session: ChatSession? = nil) {
+        guard !shepherd.hasActiveTurn, !engineTransitioning else { return }
+        guard let target = session ?? currentSession else { return }
+        target.effort = effort
+        persistMeta(target)
+    }
+
     func setModelFavourite(_ isFavourite: Bool, for identity: ModelIdentity) async -> Bool {
         guard validModelIdentity(identity) else { return false }
         var next = modelPreferences

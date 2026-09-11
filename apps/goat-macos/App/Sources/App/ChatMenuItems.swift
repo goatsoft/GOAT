@@ -12,14 +12,17 @@ struct ModelMenuItems: View {
     private var model: AppModel { .shared }
 
     var body: some View {
-        if model.models.isEmpty {
+        let projection = ModelMenuProjection(
+            models: model.models, preferences: model.modelPreferences,
+            engineProfileID: model.activeEngineProfile?.id, selectedModelID: activeID)
+        if model.models.isEmpty && projection.unavailableFavourites.isEmpty {
             if model.activeEngineProfile == nil {
                 Button("Set Up an Engine to Inspect Models") { model.settingsTab = .engine }
             } else {
                 Button("No Models - Refresh Engine") { Task { await model.refreshModelCatalog() } }
             }
         } else {
-            ForEach(model.models) { ref in
+            ForEach(projection.favourites) { ref in
                 Toggle(isOn: binding(for: ref.id)) {
                     Label {
                         Text("\(ref.displayName) - \(subtitle(for: ref))")
@@ -27,7 +30,24 @@ struct ModelMenuItems: View {
                         Image(systemName: ref.looksVisionCapable ? "eye" : "cpu")
                     }
                 }
+                .disabled(model.shepherd.hasActiveTurn || model.engineTransitioning)
             }
+            ForEach(projection.unavailableFavourites, id: \.identity) { preference in
+                Label("\(ModelRef(id: preference.identity.modelID).displayName) - Unavailable", systemImage: "slash.circle")
+            }
+            Menu("Other models") {
+                if projection.otherModels.isEmpty {
+                    Text("No other models")
+                } else {
+                    ForEach(projection.otherModels) { ref in
+                        Toggle(isOn: binding(for: ref.id)) {
+                            Label("\(ref.displayName) - \(subtitle(for: ref))", systemImage: ref.looksVisionCapable ? "eye" : "cpu")
+                        }
+                        .disabled(model.shepherd.hasActiveTurn || model.engineTransitioning)
+                    }
+                }
+            }
+            .disabled(projection.otherModels.isEmpty)
         }
     }
 
@@ -80,8 +100,7 @@ struct EffortMenuItems: View {
             get: { model.currentSession?.effort == effort },
             set: { isOn in
                 guard isOn, let session = model.currentSession else { return }
-                session.effort = effort
-                model.persistMeta(session)
+                model.selectEffort(effort, in: session)
             })
     }
 }
