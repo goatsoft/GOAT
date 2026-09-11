@@ -1,5 +1,13 @@
 # ImageGen prompts
 
+## Label alignment refinement
+
+undefined
+
+## Final label contrast and footer refinement
+
+undefined
+
 ## Final header refinement
 
 Use case: precise-object-edit. Make ONLY two colour corrections in the top-left branding of this existing 1536x1024 Finder installer background. 1. Restore a strong but tasteful cyan-to-violet horizontal gradient across the actual letter fills of the word 'GOAT', from icy cyan at G through clear blue to lilac/violet at T. The word must no longer be plain white. Preserve the exact GOAT letterforms, bold weight, position and size. 2. Change the small EMPTY rounded build capsule immediately beside GOAT from intense saturated royal blue to a softer lighter sky blue, approximately #66BCF5 with a restrained pale-cyan edge and reduced glow. Keep its exact position, shape and dimensions and leave it completely empty for later build metadata. Preserve the welcome sentence, landscape, both large empty squircle recesses, arrow, the smaller separated CLI recess with its clear gap from the app, the installation sentence and all other pixels and geometry as closely as possible. No added icons, no new words, no label backings, no footer line, no additional edits.

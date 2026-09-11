@@ -44,9 +44,9 @@ on placeItems(diskFolder)
     tell application "Finder"
         set position of item "GOAT.app" of diskFolder to {222, 180}
         set position of item "Applications" of diskFolder to {499, 180}
-        set position of item "CLI Tools" of diskFolder to {292, 249}
-        set position of item "Licence" of diskFolder to {638, 401}
-        set position of item ".background" of diskFolder to {532, 401}
+        set position of item "CLI Tools" of diskFolder to {296, 247}
+        set position of item "Licence" of diskFolder to {638, 375}
+        set position of item ".background" of diskFolder to {532, 375}
         set extraX to 316
         repeat with rootName in rootNames
             set supportName to contents of rootName
@@ -54,10 +54,10 @@ on placeItems(diskFolder)
                 set supportFolder to item supportName of diskFolder
                 if class of supportFolder is folder then
                     if supportName is ".fseventsd" then
-                        set position of supportFolder to {426, 401}
+                        set position of supportFolder to {426, 375}
                     else
                         if extraX < 60 then error "Too many hidden support folders for the installer footer"
-                        set position of supportFolder to {extraX, 401}
+                        set position of supportFolder to {extraX, 375}
                         set extraX to extraX - 110
                     end if
                 end if

@@ -78,7 +78,7 @@ def check_layout(data):
     if not options.get("backgroundImageAlias"):
         raise ValueError("missing Finder background reference")
     for name, position in {"GOAT.app": (222, 180), "Applications": (499, 180),
-                           "CLI Tools": (292, 249), "Licence": (638, 401), ".background": (532, 401)}.items():
+                           "CLI Tools": (296, 247), "Licence": (638, 375), ".background": (532, 375)}.items():
         _, blob = blob_record(data, name, b"Iloc")
         if len(blob) != 16 or struct.unpack_from(">II", blob) != position:
             actual = struct.unpack_from(">II", blob) if len(blob) >= 8 else None
@@ -90,8 +90,8 @@ def check_hidden_folders(data, names):
     for name in names:
         _, blob = blob_record(data, name, b"Iloc")
         position = struct.unpack_from(">II", blob) if len(blob) == 16 else None
-        allowed = {".background": {(532, 401)}, ".fseventsd": {(426, 401)}}.get(
-            name, {(316, 401), (206, 401), (96, 401)})
+        allowed = {".background": {(532, 375)}, ".fseventsd": {(426, 375)}}.get(
+            name, {(316, 375), (206, 375), (96, 375)})
         if position not in allowed or position in occupied:
             raise ValueError(f"hidden folder must have its own footer slot: {name}: {position}")
         occupied.add(position)

@@ -46,11 +46,11 @@ class FinderWindowTests(unittest.TestCase):
             return (struct.pack(">I", len(name)) + name.encode("utf-16be") + b"Ilocblob"
                     + struct.pack(">I", len(blob)) + blob)
 
-        correct = position_record(".background", 532, 401) + position_record(".fseventsd", 426, 401)
+        correct = position_record(".background", 532, 375) + position_record(".fseventsd", 426, 375)
         window.check_hidden_folders(correct, [".background", ".fseventsd"])
         with self.assertRaisesRegex(ValueError, "footer slot"):
             window.check_hidden_folders(position_record(".fseventsd", 264, 64), [".fseventsd"])
         with self.assertRaisesRegex(ValueError, "footer slot"):
-            window.check_hidden_folders(position_record(".a", 316, 401) + position_record(".b", 316, 401), [".a", ".b"])
+            window.check_hidden_folders(position_record(".a", 316, 375) + position_record(".b", 316, 375), [".a", ".b"])
         with self.assertRaises(ValueError):
             window.check_hidden_folders(correct, [".missing"])
