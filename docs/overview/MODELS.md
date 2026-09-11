@@ -20,8 +20,12 @@ Token counts and timing are reported by the engine when available. GOAT labels e
 
 Follow [Connect an engine](../wiki/Engines.md). For endpoints, defaults and compatibility evidence, use the [engine reference](../ENGINES.md).
 
-## Planned model management
+## Model management
 
-The [next roadmap tranche](../ROADMAP.md#next-model-selection-capabilities-and-recovery) adds Models settings for catalog and capability inspection, engine-scoped favourites, an Other models submenu and an Effort row that shows the selected preset. Diagnostic work will distinguish checkpoint loadability, request-style compatibility and per-response generation evidence. These controls are planned and are not available in Kid 0.1.1.
+The current model-management work keeps engine ownership separate from model selection. The Models settings tab discovers models from configured engines, persists a small preference record, and derives model capabilities from engine metadata rather than hard-coded UI assumptions.
 
-Compatibility will default to Automatic for each engine/model pairing, with an advanced override in model details. Switching models will resolve the new model's supported controls instead of inheriting another model family's settings from engine setup. The OpenAI-compatible API describes the connection protocol; the engine applies each model's actual chat template.
+When no engine or model is configured, the UI explains that an engine must be added before model capabilities can be inspected. Model discovery can be refreshed manually and is also refreshed while the active app scene is open, so models that become available in an engine can appear without restarting the app.
+
+Model selection is resolved per model at request time. Unsupported capabilities are surfaced before inference, and request provenance records the selected model, engine, resolved capabilities, and sanitized diagnostics. Model load failures, printed tool markup, and interrupted file repair are reported as recoverable states rather than being silently treated as successful inference.
+
+The model-management design is recorded in [ADR-0084](../adrs/0084-model-inspection-favourites-and-recovery.md). Live engine and model qualification remains separate from catalog discovery and must not be inferred from the presence of a model in the menu.

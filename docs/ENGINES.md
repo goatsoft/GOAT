@@ -32,6 +32,14 @@ Fresh installations start with no configured engines and open Engine settings wi
 
 Choosing a preset in the editor fills the URL; use Test to check the connection. You can still edit the port by hand. Ports are conventional defaults. Change the URL if your server listens elsewhere.
 
+## Model management and recovery
+
+The Models settings tab is the place to inspect discovered models, mark favourites, and choose a preferred model. If no engine or model is configured, it provides setup guidance rather than showing an empty capability screen.
+
+Model catalogs support both manual refresh and active-scene refresh. The app re-queries configured engines while the active scene is open, allowing models added or made available by an engine to appear without requiring an app restart. Discovery is not qualification: a discovered model is not treated as live-tested or compatible until the relevant engine evidence exists.
+
+Compatibility is resolved per model at request time. The request snapshot records the selected engine and model plus the resolved capability set, while provenance and diagnostics retain sanitized information needed to explain a result. Typed load failures, unexecuted printed tool markup, and resumable file-repair progress are surfaced through recovery paths instead of being silently executed or discarded.
+
 ## Feature matrix
 
 Optional metadata can fall back to generic chat behavior; required endpoint or protocol failures still surface as errors. Normalization happens in one place (`StreamAssembler`, ADR-0016).
@@ -76,6 +84,8 @@ LM Studio's native model list reports reasoning availability and options for its
 GOAT stores normalized reasoning locally for transcript disclosure. Generic engines never receive it again. The explicit local-Qwen profile is the narrow exception: it returns a prior assistant trace through `reasoning_content`, rather than concatenating it into visible message content. Ordinary chat and OpenAI-style tool calls remain available.
 
 ## Compatibility evidence
+
+Compatibility evidence must be captured from the actual configured engine and model. Catalog discovery alone is not sufficient evidence for a capability claim, and live candidate qualification remains a separate release activity.
 
 | Server | Status |
 |---|---|

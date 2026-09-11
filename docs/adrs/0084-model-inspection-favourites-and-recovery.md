@@ -2,6 +2,12 @@
 
 **Status:** Proposed · 2026-09-11 · extends [ADR-0021](0021-engines-as-managed-list.md), [ADR-0024](0024-deterministic-prompt-budgeting.md), [ADR-0065](0065-bounded-tool-format-recovery.md) and [ADR-0066](0066-lead-and-continuous-tool-work.md)
 
+## Implementation status
+
+The current development branch implements the core design described here: a Models settings tab with favourites and setup guidance, compact native model menus, per-model compatibility resolution, preference migration and fallback, active-scene catalog refresh, request provenance, typed engine/model failure diagnostics, printed-tool-markup safety, and bounded file-repair progress.
+
+Build/test qualification and live engine/model qualification remain pending. This ADR stays Proposed until those checks are complete and the design is reviewed for acceptance.
+
 ## Context
 
 The composer menu becomes difficult to scan as an engine's model catalog grows. Discovery labels do not expose enough evidence to distinguish capabilities, load failures and incompatible request styles. A speculative draft checkpoint can appear beside complete chat models even though it requires a base model and a compatible runtime.
@@ -46,7 +52,7 @@ Expose details and a local, user-reviewed report. The default shareable form omi
 
 Extend bounded malformed-tool diagnosis to observed supported formats while preserving fenced examples and ordinary source code. Never execute printed XML, partial arguments or truncated calls. Recovery must not duplicate completed structured calls from a mixed response or teach an unrelated engine's template.
 
-Keep file-exists recovery focused on read/edit or skipping already-correct content. Legitimate obsolete-file deletion belongs in separate guidance. Design a bounded no-progress check for repeated same-path destructive repair cycles and unchanged failures, with an actionable pause and explicit recovery. Preserve productive long-running work, legitimate repeated edits, permissions, cancellation and the stored transcript. Do not replace this with a global tool-round cap or an automatic model switch.
+Keep file-exists recovery focused on read/edit or skipping already-correct content. Legitimate obsolete-file deletion belongs in separate guidance. Use the bounded no-progress check implemented for repeated same-path destructive repair cycles and unchanged failures, with an actionable pause and explicit recovery. Preserve productive long-running work, legitimate repeated edits, permissions, cancellation and the stored transcript. Do not replace this with a global tool-round cap or an automatic model switch.
 
 ## Consequences and acceptance
 

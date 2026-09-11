@@ -9,6 +9,12 @@ Qualify the sidebar visibility/width fixes, direct preference reset, recoverable
 ## Product and content
 
 - Verify the intended release’s current workflows: engine/model selection, chat, Pens, native file and command tools, Lead, permissions, memory, previews, extensions and local control.
+- Verify model-management states with zero, one, and many discovered models, including no-engine/no-model setup guidance.
+- Verify missing, offline, stale-catalog, newly available, and migrated model preferences.
+- Verify per-model compatibility, request snapshots, provenance, sanitized diagnostics, and typed load-error recovery.
+- Verify compact model and effort menus with keyboard navigation, VoiceOver labels, focus restoration, and screen-edge placement.
+- Verify printed tool markup is never executed and interrupted file repair reports bounded resumable progress.
+- Confirm all model qualification claims are backed by actual engine evidence; do not publish untested candidate claims.
 - Review the website, seven interface illustrations, documentation, README and known issues against the implemented build.
 - Confirm private reporting contacts, privacy/storage disclosures, MIT/artwork scope and complete bundled notices.
 - Review every file in the proposed public tree. Exclude private planning, diagnostic logs, credentials, generated build outputs and development-history backups.
