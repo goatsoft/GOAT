@@ -8,6 +8,8 @@ struct ModelsSettingsView: View {
     @State private var search = ""
     @State private var favouritesOnly = false
     @State private var selection: ModelIdentity?
+    @State private var showingModelResults = false
+    @FocusState private var searchFocused: Bool
 
     private var engineID: String? { model.activeEngineProfile?.id }
     private var projection: ModelCatalogProjection? { model.modelCatalogProjection }
@@ -22,22 +24,31 @@ struct ModelsSettingsView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Caprine.Models.spacing) {
-            header
-            Divider()
-            HSplitView {
-                inventory
-                    .frame(minWidth: Caprine.Models.listMinWidth, idealWidth: Caprine.Models.listIdealWidth)
+        ZStack(alignment: .topLeading) {
+            VStack(alignment: .leading, spacing: Caprine.Models.spacing) {
+                header
                 if let selection {
                     ModelDetailView(identity: selection, modelRef: selectedModelRef)
+                        .contentShape(Rectangle())
+                        .onTapGesture { dismissModelMenu() }
                 } else {
-                    ContentUnavailableView("Select a model", systemImage: "square.stack.3d.up")
-                        .frame(minWidth: Caprine.Models.detailMinWidth, maxWidth: .infinity, maxHeight: .infinity)
+                    ContentUnavailableView {
+                        Label("Choose a model to inspect", systemImage: "square.stack.3d.up")
+                    } description: {
+                        Text("Search the configured engine's catalog to inspect a model's capabilities and metadata.")
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                    .onTapGesture { dismissModelMenu() }
                 }
             }
         }
         .padding(Caprine.Models.inset)
         .onChange(of: model.activeEngineProfile?.id) { _, _ in selection = nil }
+        .onChange(of: selection) { _, value in
+            if value != nil { dismissModelMenu() }
+        }
+        .onAppear { dismissModelMenu() }
     }
 
     private var header: some View {
@@ -48,59 +59,178 @@ struct ModelsSettingsView: View {
                     Text(engineSummary).font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("Engine Settings…") { model.settingsTab = .engine; openSettings() }
+                Button("Engine Settings…") {
+                    model.settingsTab = .engine
+                    openSettings()
+                }
                 Button {
                     Task { await model.refreshModelCatalog() }
                 } label: {
-                    Label("Refresh Models", systemImage: model.modelCatalogRefreshing ? "arrow.triangle.2.circlepath" : "arrow.clockwise")
+                    Label(
+                        "Refresh Models",
+                        systemImage: model.modelCatalogRefreshing ? "arrow.triangle.2.circlepath" : "arrow.clockwise")
                 }
                 .disabled(model.modelCatalogRefreshing || engineID == nil || model.shepherd.hasActiveTurn)
             }
             HStack(spacing: Caprine.Models.spacing) {
-                TextField("Search models", text: $search)
-                    .textFieldStyle(.roundedBorder)
+                modelSearchField
                 Toggle("Favourites only", isOn: $favouritesOnly)
                     .toggleStyle(.checkbox)
             }
         }
+        .zIndex(showingModelResults ? 100 : 0)
     }
 
-    private var inventory: some View {
+    private var modelSearchField: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            TextField("Search available models", text: $search)
+                .textFieldStyle(.plain)
+                .focused($searchFocused)
+                .onSubmit(selectFirstMatch)
+            if !search.isEmpty {
+                Button {
+                    search = ""
+                    searchFocused = true
+                    showingModelResults = true
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+            }
+            Image(systemName: "chevron.down")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 30)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: Caprine.Models.cornerRadius))
+        .overlay {
+            RoundedRectangle(cornerRadius: Caprine.Models.cornerRadius)
+                .stroke(searchFocused ? Color.accentColor : Color.secondary.opacity(0.25), lineWidth: 1)
+        }
+        .overlay(alignment: .topLeading) {
+            if showingModelResults {
+                modelResultsDropdown
+                    .offset(y: 38)
+                    .zIndex(10)
+            }
+        }
+        .onChange(of: search) { _, _ in
+            if searchFocused { showingModelResults = true }
+        }
+        .onChange(of: searchFocused) { _, focused in
+            showingModelResults = focused
+        }
+    }
+
+    private var modelResultsDropdown: some View {
         Group {
             if shouldShowEmptyState {
                 emptyState
+                    .frame(maxWidth: .infinity)
+                    .frame(minHeight: 170)
             } else {
-                List(selection: $selection) {
-                    if !filteredFavouriteModels.isEmpty {
-                        Section("Favourites") {
-                            ForEach(filteredFavouriteModels) { ref in row(for: ref) }
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            Color.clear
+                                .frame(height: 1)
+                                .id("model-menu-top")
+                            if !filteredFavouriteModels.isEmpty {
+                                sectionHeader("Favourites")
+                                ForEach(filteredFavouriteModels) { ref in
+                                    resultRow(ref)
+                                }
+                            }
+                            if !filteredOtherModels.isEmpty {
+                                sectionHeader("Available")
+                                ForEach(filteredOtherModels) { ref in
+                                    resultRow(ref)
+                                }
+                            }
+                            if !filteredUnavailable.isEmpty {
+                                sectionHeader("Unavailable favourites")
+                                ForEach(filteredUnavailable, id: \.identity) { preference in
+                                    resultRow(
+                                        identity: preference.identity,
+                                        modelRef: nil,
+                                        isUnavailable: true)
+                                }
+                            }
                         }
+                        .padding(.vertical, 2)
                     }
-                    if !filteredOtherModels.isEmpty {
-                        Section("Available") {
-                            ForEach(filteredOtherModels) { ref in row(for: ref) }
-                        }
-                    }
-                    if !filteredUnavailable.isEmpty {
-                        Section("Unavailable favourites") {
-                            ForEach(filteredUnavailable, id: \.identity) { preference in
-                                let identity = preference.identity
-                                ModelInventoryRow(identity: identity, modelRef: nil, isSelected: selection == identity, isUnavailable: true)
-                                    .tag(identity)
+                    .frame(maxWidth: .infinity, minHeight: 310, maxHeight: 310)
+                    .onChange(of: showingModelResults) { _, isShowing in
+                        if isShowing {
+                            withAnimation(.none) {
+                                proxy.scrollTo("model-menu-top", anchor: .top)
                             }
                         }
                     }
                 }
-                .listStyle(.inset)
             }
         }
-        .frame(maxHeight: .infinity)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 4)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: Caprine.Models.cornerRadius))
+        .overlay {
+            RoundedRectangle(cornerRadius: Caprine.Models.cornerRadius)
+                .stroke(Color.secondary.opacity(0.28), lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.24), radius: 14, y: 6)
+        .onExitCommand { dismissModelMenu() }
+    }
+
+    private func dismissModelMenu() {
+        showingModelResults = false
+        searchFocused = false
+    }
+
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.top, 6)
+            .padding(.bottom, 4)
+    }
+
+    private func resultRow(_ ref: ModelRef) -> some View {
+        resultRow(
+            identity: ModelIdentity(engineProfileID: engineID ?? "", modelID: ref.id),
+            modelRef: ref,
+            isUnavailable: false)
+    }
+
+    private func resultRow(
+        identity: ModelIdentity,
+        modelRef: ModelRef?,
+        isUnavailable: Bool
+    ) -> some View {
+        ModelInventoryRow(
+            identity: identity,
+            modelRef: modelRef,
+            isSelected: selection == identity,
+            isUnavailable: isUnavailable,
+            onSelect: {
+                selection = identity
+                dismissModelMenu()
+            }
+        )
+        .padding(.horizontal, 16)
     }
 
     private func row(for ref: ModelRef) -> some View {
         let identity = ModelIdentity(engineProfileID: engineID ?? "", modelID: ref.id)
-        return ModelInventoryRow(identity: identity, modelRef: ref, isSelected: selection == identity, isUnavailable: false)
-            .tag(identity)
+        return ModelInventoryRow(
+            identity: identity, modelRef: ref, isSelected: selection == identity, isUnavailable: false
+        )
+        .tag(identity)
     }
 
     private var shouldShowEmptyState: Bool {
@@ -114,16 +244,24 @@ struct ModelsSettingsView: View {
             } description: {
                 Text("Add an engine to discover models and inspect their capabilities.")
             } actions: {
-                Button("Open Engine Settings…") { model.settingsTab = .engine; openSettings() }
+                Button("Open Engine Settings…") {
+                    model.settingsTab = .engine
+                    openSettings()
+                }
             }
         } else if !model.health.isOK {
             ContentUnavailableView {
                 Label("Model catalog unavailable", systemImage: "wifi.exclamationmark")
             } description: {
-                Text("Connect the configured engine to discover models and inspect their capabilities. Saved favourites will remain here while it is offline.")
+                Text(
+                    "Connect the configured engine to discover models and inspect their capabilities. Saved favourites will remain here while it is offline."
+                )
             } actions: {
                 Button("Refresh Models") { Task { await model.refreshModelCatalog() } }
-                Button("Open Engine Settings…") { model.settingsTab = .engine; openSettings() }
+                Button("Open Engine Settings…") {
+                    model.settingsTab = .engine
+                    openSettings()
+                }
             }
         } else if model.models.isEmpty && search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             ContentUnavailableView {
@@ -145,10 +283,18 @@ struct ModelsSettingsView: View {
         return "\(profile.name) - \(model.models.count) model\(model.models.count == 1 ? "" : "s") available"
     }
 
-    private func filter(_ values: [ModelRef]) -> [ModelRef] { values.filter { matches($0.id) } }
+    private func filter(_ values: [ModelRef]) -> [ModelRef] {
+        values.filter { matches($0.displayName) || matches($0.id) }
+    }
 
     private func matches(_ value: String) -> Bool {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
         return query.isEmpty || value.localizedCaseInsensitiveContains(query)
+    }
+
+    private func selectFirstMatch() {
+        let first = filteredFavouriteModels.first ?? filteredOtherModels.first
+        guard let first else { return }
+        selection = ModelIdentity(engineProfileID: engineID ?? "", modelID: first.id)
     }
 }

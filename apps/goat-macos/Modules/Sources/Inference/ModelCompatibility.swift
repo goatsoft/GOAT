@@ -118,8 +118,9 @@ public struct EffectiveGenerationParameters: Codable, Equatable, Sendable {
             qwenEnableThinking = qwen ? true : nil
             qwenReasoningEffort = qwen ? "xhigh" : nil
         }
-        outputTokenCap = request.maxTokens ?? request.effort.maxTokens
-        nativeReasoningEffort = qwen
+        outputTokenCap = request.maxTokens ?? request.effort.outputCeiling(for: request.modelCapabilities)
+        nativeReasoningEffort =
+            qwen
             ? nil : request.modelCapabilities.nativeReasoningEffort(for: request.effort)
         replayReasoningHistory = qwen
         qwenPreserveThinking = qwen ? true : nil

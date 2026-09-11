@@ -114,6 +114,12 @@ public struct PromptBudgetReport: Sendable, Equatable {
     public let inputBudget: Int
     public let estimatedInputTokensBefore: Int
     public let estimatedInputTokensAfter: Int
+    /// Ratio applied to raw estimates when comparing against the input budget (ADR-0085).
+    public let calibrationRatio: Double
+    /// `estimatedInputTokensAfter` scaled by `calibrationRatio`; the figure the meter shows.
+    public var calibratedInputTokensAfter: Int {
+        PromptBudgeter.calibrated(estimatedInputTokensAfter, ratio: calibrationRatio)
+    }
     public let breakdownBefore: PromptTokenBreakdown
     public let breakdownAfter: PromptTokenBreakdown
     public let memoryTokenLimit: Int
@@ -158,11 +164,18 @@ public struct PromptBudgetFailure: Error, LocalizedError, Sendable, Equatable {
 
 /// Deterministic policy for estimating and selecting a protocol-valid prompt suffix.
 public struct PromptBudgeter: Sendable {
-    public static let policyVersion = 3
-    public static let fallbackWindowTokens = 8_192
+    public static let policyVersion = 4
+    public static let fallbackWindowTokens = 16_384
     public static let memoryTokenLimit = 1_536
+    /// Calibration is clamped so a single odd usage report cannot halve or double the budget.
+    public static let minimumCalibration = 0.5
+    public static let maximumCalibration = 2.0
 
     private static let naturalBytesPerToken = 2
+    /// Protocol payloads (tool results, arguments, schemas, identifiers) are charged at seven
+    /// bytes per two tokens, the cautious end of measured code and JSON tokenization. Long
+    /// unbroken ASCII runs stay byte-for-byte because they are usually hashes or base64.
+    private static let protocolBytesPerTwoTokens = 7
     private static let opaqueRunThreshold = 24
     private static let requestWrapperTokens = 4
     private static let turnWrapperTokens = 6
@@ -179,17 +192,24 @@ public struct PromptBudgeter: Sendable {
     public func plan(
         _ unpreparedRequest: GenerationRequest,
         model: ModelRef,
-        memory: [PromptMemoryEntry] = []
+        memory: [PromptMemoryEntry] = [],
+        calibration: Double = 1.0
     ) throws -> PromptPlan {
         let request = CanonicalRequestPreparation.prepare(unpreparedRequest)
         let replaysReasoning = request.modelCapabilities.replaysReasoningHistory
         let reportedWindow = model.contextLength.flatMap { $0 > 0 ? $0 : nil }
         let windowTokens = reportedWindow ?? Self.fallbackWindowTokens
         let windowSource: PromptContextWindowSource = reportedWindow == nil ? .fallback : .reported
-        let requestedOutputTokens = max(1, request.maxTokens ?? request.effort.maxTokens)
+        let requestedOutputTokens = max(
+            1, request.maxTokens ?? request.effort.outputCeiling(for: request.modelCapabilities))
         let outputReserve = min(requestedOutputTokens, windowTokens / 2)
         let safetyReserve = min(2_048, max(256, windowTokens / 20))
-        let inputBudget = windowTokens - outputReserve - safetyReserve
+        let calibrationRatio = Self.clampedCalibration(calibration)
+        let realInputBudget = windowTokens - outputReserve - safetyReserve
+        // Raw estimates are compared against the budget scaled by the inverse ratio. This is the
+        // same test as scaling every estimate and keeps the selection code unchanged; the report
+        // carries the real budget and the calibrated figure.
+        let inputBudget = Self.rawComparisonBudget(realInputBudget, calibration: calibrationRatio)
 
         let originalLeadingSystemCount = request.turns.prefix { $0.role == .system }.count
         let originalSystemTurns = Array(request.turns.prefix(originalLeadingSystemCount))
@@ -217,7 +237,8 @@ public struct PromptBudgeter: Sendable {
                 request: request, model: model, windowTokens: windowTokens,
                 windowSource: windowSource, requestedOutputTokens: requestedOutputTokens,
                 outputReserve: outputReserve, safetyReserve: safetyReserve,
-                inputBudget: inputBudget, before: beforeBreakdown, after: initiallySelectedBreakdown,
+                inputBudget: realInputBudget, calibration: calibrationRatio, before: beforeBreakdown,
+                after: initiallySelectedBreakdown,
                 retainedExchangeCount: 0, droppedExchangeCount: 0, droppedTurnCount: 0,
                 textTruncations: [], omittedImages: [], memory: preparedMemory,
                 failure: .modelMismatch)
@@ -227,12 +248,13 @@ public struct PromptBudgeter: Sendable {
                 report: report)
         }
 
-        if inputBudget <= 0 {
+        if realInputBudget <= 0 {
             let report = makeReport(
                 request: request, model: model, windowTokens: windowTokens,
                 windowSource: windowSource, requestedOutputTokens: requestedOutputTokens,
                 outputReserve: outputReserve, safetyReserve: safetyReserve,
-                inputBudget: inputBudget, before: beforeBreakdown, after: initiallySelectedBreakdown,
+                inputBudget: realInputBudget, calibration: calibrationRatio, before: beforeBreakdown,
+                after: initiallySelectedBreakdown,
                 retainedExchangeCount: 0, droppedExchangeCount: 0, droppedTurnCount: 0,
                 textTruncations: [], omittedImages: [], memory: preparedMemory,
                 failure: .inputCapacity)
@@ -252,7 +274,8 @@ public struct PromptBudgeter: Sendable {
                 request: request, model: model, windowTokens: windowTokens,
                 windowSource: windowSource, requestedOutputTokens: requestedOutputTokens,
                 outputReserve: outputReserve, safetyReserve: safetyReserve,
-                inputBudget: inputBudget, before: beforeBreakdown, after: initiallySelectedBreakdown,
+                inputBudget: realInputBudget, calibration: calibrationRatio, before: beforeBreakdown,
+                after: initiallySelectedBreakdown,
                 retainedExchangeCount: 0, droppedExchangeCount: 0, droppedTurnCount: 0,
                 textTruncations: [], omittedImages: [], memory: preparedMemory,
                 failure: .invalidHistory)
@@ -265,7 +288,8 @@ public struct PromptBudgeter: Sendable {
                 request: request, model: model, windowTokens: windowTokens,
                 windowSource: windowSource, requestedOutputTokens: requestedOutputTokens,
                 outputReserve: outputReserve, safetyReserve: safetyReserve,
-                inputBudget: inputBudget, before: beforeBreakdown, after: initiallySelectedBreakdown,
+                inputBudget: realInputBudget, calibration: calibrationRatio, before: beforeBreakdown,
+                after: initiallySelectedBreakdown,
                 retainedExchangeCount: 0, droppedExchangeCount: 0, droppedTurnCount: 0,
                 textTruncations: [], omittedImages: [], memory: preparedMemory,
                 failure: .invalidHistory)
@@ -292,7 +316,8 @@ public struct PromptBudgeter: Sendable {
                 request: request, model: model, windowTokens: windowTokens,
                 windowSource: windowSource, requestedOutputTokens: requestedOutputTokens,
                 outputReserve: outputReserve, safetyReserve: safetyReserve,
-                inputBudget: inputBudget, before: beforeBreakdown, after: afterBreakdown,
+                inputBudget: realInputBudget, calibration: calibrationRatio, before: beforeBreakdown,
+                after: afterBreakdown,
                 retainedExchangeCount: 1, droppedExchangeCount: olderExchangeCount,
                 droppedTurnCount: exchanges.dropLast().reduce(0) { $0 + $1.turns.count },
                 textTruncations: [], omittedImages: [], memory: preparedMemory,
@@ -329,7 +354,8 @@ public struct PromptBudgeter: Sendable {
                 request: request, model: model, windowTokens: windowTokens,
                 windowSource: windowSource, requestedOutputTokens: requestedOutputTokens,
                 outputReserve: outputReserve, safetyReserve: safetyReserve,
-                inputBudget: inputBudget, before: beforeBreakdown, after: afterBreakdown,
+                inputBudget: realInputBudget, calibration: calibrationRatio, before: beforeBreakdown,
+                after: afterBreakdown,
                 retainedExchangeCount: 1, droppedExchangeCount: olderExchangeCount,
                 droppedTurnCount: exchanges.dropLast().reduce(0) { $0 + $1.turns.count },
                 textTruncations: textTruncations, omittedImages: omittedImages,
@@ -371,7 +397,7 @@ public struct PromptBudgeter: Sendable {
             request: request, model: model, windowTokens: windowTokens,
             windowSource: windowSource, requestedOutputTokens: requestedOutputTokens,
             outputReserve: outputReserve, safetyReserve: safetyReserve,
-            inputBudget: inputBudget, before: beforeBreakdown, after: afterBreakdown,
+            inputBudget: realInputBudget, calibration: calibrationRatio, before: beforeBreakdown, after: afterBreakdown,
             retainedExchangeCount: retainedExchanges.count,
             droppedExchangeCount: droppedExchangeCount, droppedTurnCount: droppedTurnCount,
             textTruncations: textTruncations, omittedImages: omittedImages,
@@ -387,7 +413,7 @@ public struct PromptBudgeter: Sendable {
     private func makeReport(
         request: GenerationRequest, model: ModelRef, windowTokens: Int,
         windowSource: PromptContextWindowSource, requestedOutputTokens: Int,
-        outputReserve: Int, safetyReserve: Int, inputBudget: Int,
+        outputReserve: Int, safetyReserve: Int, inputBudget: Int, calibration: Double,
         before: PromptTokenBreakdown, after: PromptTokenBreakdown,
         retainedExchangeCount: Int, droppedExchangeCount: Int, droppedTurnCount: Int,
         textTruncations: [PromptTextTruncation], omittedImages: [PromptImageOmission],
@@ -406,6 +432,7 @@ public struct PromptBudgeter: Sendable {
             inputBudget: inputBudget,
             estimatedInputTokensBefore: before.total,
             estimatedInputTokensAfter: after.total,
+            calibrationRatio: calibration,
             breakdownBefore: before,
             breakdownAfter: after,
             memoryTokenLimit: Self.memoryTokenLimit,
@@ -933,9 +960,52 @@ public struct PromptBudgeter: Sendable {
         return max(byteFloor, structural)
     }
 
-    /// Protocol payloads are untrusted and can be high-entropy. One token per UTF-8
-    /// byte is deliberately conservative across the supported tokenizer families.
-    private static func estimateOpaqueText(_ text: String) -> Int { text.utf8.count }
+    /// Protocol payloads: file contents, command output, argument JSON, schemas, identifiers.
+    /// Charged at 3.5 bytes per token, except unbroken ASCII runs at or above the opaque
+    /// threshold, which are charged byte-for-byte (hashes, base64, minified data).
+    private static func estimateOpaqueText(_ text: String) -> Int {
+        let bytes = text.utf8.count
+        guard bytes > 0 else { return 0 }
+        var opaqueBytes = 0
+        var runBytes = 0
+        func flushRun() {
+            if runBytes >= opaqueRunThreshold { opaqueBytes = saturatingAdd(opaqueBytes, runBytes) }
+            runBytes = 0
+        }
+        for scalar in text.unicodeScalars {
+            let value = scalar.value
+            let isASCIIWord =
+                (48...57).contains(value) || (65...90).contains(value)
+                || (97...122).contains(value) || value == 95 || value == 43 || value == 47
+                || value == 61
+            if scalar.isASCII, isASCIIWord {
+                runBytes = saturatingAdd(runBytes, 1)
+            } else {
+                flushRun()
+            }
+        }
+        flushRun()
+        let regular = max(0, bytes - opaqueBytes)
+        let regularTokens = ceilingDivide(regular * 2, by: protocolBytesPerTwoTokens)
+        return max(1, saturatingAdd(regularTokens, opaqueBytes))
+    }
+
+    static func clampedCalibration(_ ratio: Double) -> Double {
+        guard ratio.isFinite, ratio > 0 else { return 1.0 }
+        return min(maximumCalibration, max(minimumCalibration, ratio))
+    }
+
+    /// The raw-estimate budget equivalent to `budget` real tokens under `calibration`.
+    static func rawComparisonBudget(_ budget: Int, calibration: Double) -> Int {
+        guard budget > 0 else { return budget }
+        let scaled = Double(budget) / clampedCalibration(calibration)
+        return scaled >= Double(Int.max) ? Int.max : Int(scaled.rounded(.down))
+    }
+
+    static func calibrated(_ estimate: Int, ratio: Double) -> Int {
+        let scaled = Double(estimate) * clampedCalibration(ratio)
+        return scaled >= Double(Int.max) ? Int.max : Int(scaled.rounded(.up))
+    }
 
     private static func ceilingDivide(_ value: Int, by divisor: Int) -> Int {
         let quotient = value / divisor

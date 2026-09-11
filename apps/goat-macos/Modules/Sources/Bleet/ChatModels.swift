@@ -120,6 +120,11 @@ public final class ChatSession: Identifiable {
     /// Capacity used for warning pressure. Preflight uses the input budget; completion uses the window.
     public var lastContextPressureLimit: Int?
     public var lastPromptWasTrimmed = false
+    /// Ratio of the engine's exact `usage.prompt_tokens` to GOAT's raw estimate for this chat,
+    /// learned per response and applied to the next plan (ADR-0085). Session-scoped; a fresh
+    /// launch starts at 1.0 until the first exact usage arrives.
+    public var contextCalibrationRatio: Double = 1.0
+    public var contextCalibrationSamples = 0
     public let createdAt: Date
     public var updatedAt: Date
 

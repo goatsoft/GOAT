@@ -1,6 +1,6 @@
 # ADR-0085: Prefix-stable prompts and usage-calibrated budgeting
 
-Status: Proposed · 2026-09-11
+Status: Accepted · 2026-09-11
 
 Revises [ADR-0024](0024-deterministic-prompt-budgeting.md) (prompt budget policy version 4) and the title timing in [ADR-0066](0066-lead-and-continuous-tool-work.md). Informed by the 2026-09-11 harness audit (opencode, pi, oh-my-pi, Cline, goose, Plandex, TrueForge, Open SWE, deepagents).
 
@@ -18,7 +18,9 @@ The reference harnesses converge on three practices: volatile text goes after th
 
 The system message is derived only from the GOAT preamble, the day, the Pen brief and agent guide, the enabled tool catalog, the skills catalog and the memory index. It is byte-identical across every round of a turn and across turns unless one of those inputs changes.
 
-Per-round steering leaves the system turn. Recovery hints and the one-round tool-format repair instruction are delivered as a trailing host note: a final user-role message prefixed `[GOAT note]` that the budgeter treats as part of the newest exchange and that is never persisted as transcript. Hindsight recall entries and any memory index that can vary per request are rendered as the first message after the system turn, before retained history, so a recall change invalidates only the suffix.
+Per-round steering leaves the system turn. Recovery hints and the one-round tool-format repair instruction are delivered as a host note prefixed `[GOAT note]` appended to the final turn of the newest exchange: the last tool result when the round ended in tools, otherwise the newest user message. It never becomes a turn of its own, so exchange structure, role alternation and the budget are unchanged, and it is never persisted as transcript.
+
+The memory index stays at the end of the system turn: it is stable for the life of a chat with the built-in stores, and moving it to a separate message would break role alternation on templates that require it. Per-request Hindsight recall is the remaining volatile input; keeping it stable across a turn is left to the compaction work in [ADR-0087](0087-conversation-compaction.md).
 
 Automatic titles are requested after `executeTurn` returns, never between a response and its tools. The title prompt uses the first user message and the first non-empty reply as today.
 
@@ -26,7 +28,7 @@ Automatic titles are requested after `executeTurn` returns, never between a resp
 
 Tool results, arguments, identifiers and schemas are charged at 3.5 bytes per token. The byte-for-byte rule is retained only for runs that look like base64, hashes or minified data under the existing opaque-run threshold. Natural text keeps its adaptive estimator.
 
-Each completed response with exact server `usage.prompt_tokens` records a calibration ratio for the chat: `usage.prompt_tokens / report.estimatedInputTokensAfter`, clamped to 0.5...2.0 and smoothed by a simple moving average. The next plan multiplies its estimate by the ratio and records both the raw and calibrated figures in the report. A chat without usage keeps ratio 1.0. The plan remains deterministic: the ratio is an explicit input recorded in `PromptBudgetReport`, and fixtures pin its arithmetic.
+Each completed response with exact server `usage.prompt_tokens` records a calibration ratio for the chat: `usage.prompt_tokens / report.estimatedInputTokensAfter`, clamped to 0.5...2.0 and smoothed by averaging with the previous ratio. The next plan compares raw estimates against the budget divided by the ratio, which is the same test as scaling every estimate, and the report records the ratio, the raw estimate and the calibrated estimate; the meter shows the calibrated figure. A chat without usage keeps ratio 1.0, and the ratio is session-scoped. The plan remains deterministic: the ratio is an explicit input recorded in `PromptBudgetReport`, and fixtures pin its arithmetic.
 
 `prompt_tokens_details.cached_tokens` is decoded when present and recorded in `GenStats` and provenance, so the activity log and Nerd Stats can show prefix-cache hits.
 

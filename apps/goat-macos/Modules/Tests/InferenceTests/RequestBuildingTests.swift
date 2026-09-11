@@ -56,7 +56,7 @@ private func encodeToJSON(_ r: GenerationRequest) throws -> [String: Any] {
             #expect(json["chat_template_kwargs"] == nil)
             #expect(json["reasoning_effort"] == nil)
             #expect(json["temperature"] as? Double == effort.temperature)
-            #expect(json["max_tokens"] as? Int == effort.maxTokens)
+            #expect(json["max_tokens"] as? Int == effort.reasoningOutputCeiling)
         }
     }
 }
@@ -172,6 +172,7 @@ private func encodeToJSON(_ r: GenerationRequest) throws -> [String: Any] {
         "mistralai/Ministral-3-8B-Instruct-2512",
         "microsoft/Phi-4-multimodal-instruct",
         "moonshotai/Kimi-K2.5",
+        "Muse-Glimmer-30B-4bit",
         "zai-org/GLM-4.5V",
         "mlx-community/llava-1.5-7b-4bit",
     ]

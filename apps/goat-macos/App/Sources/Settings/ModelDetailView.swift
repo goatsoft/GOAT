@@ -7,6 +7,7 @@ struct ModelDetailView: View {
     @Environment(AppModel.self) private var model
     let identity: ModelIdentity
     let modelRef: ModelRef?
+    @State private var contextOverrideText = ""
 
     private var preference: ModelPreference? {
         model.modelPreferences.first { $0.identity == identity }
@@ -16,32 +17,36 @@ struct ModelDetailView: View {
         model.modelInspectionStates[identity]?.snapshot
     }
 
-    private var review: LegacyCompatibilityReview? {
-        model.legacyCompatibilityReviews.first {
-            $0.engineProfileID == identity.engineProfileID && $0.state == .pending
-        }
-    }
-
     private var canUseInChat: Bool {
-        modelRef != nil && !model.shepherd.hasActiveTurn && !model.engineTransitioning && review == nil
+        modelRef != nil && !model.shepherd.hasActiveTurn && !model.engineTransitioning
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: Caprine.Models.sectionSpacing) {
-                titleSection
-                availabilitySection
-                if let modelRef {
-                    capabilitiesSection(modelRef)
-                    metadataSection(snapshot: snapshot, model: modelRef)
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: Caprine.Models.sectionSpacing) {
+                    titleSection
+                    availabilitySection
+                    if let modelRef {
+                        capabilitiesSection(modelRef)
+                        metadataSection(snapshot: snapshot, model: modelRef)
+                    }
+                    diagnosticsSection
                 }
-                ModelCompatibilitySection(identity: identity, review: review)
-                diagnosticsSection
+                .padding(Caprine.Models.inset)
+                .id("model-detail-top")
             }
-            .padding(Caprine.Models.inset)
+            .frame(
+                minWidth: Caprine.Models.detailMinWidth, maxWidth: .infinity, maxHeight: .infinity,
+                alignment: .topLeading
+            )
+            .onChange(of: identity) { _, _ in
+                withAnimation(.none) {
+                    proxy.scrollTo("model-detail-top", anchor: .top)
+                }
+            }
+            .task(id: identity) { await model.inspectModel(identity) }
         }
-        .frame(minWidth: Caprine.Models.detailMinWidth, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .task(id: identity) { await model.inspectModel(identity) }
     }
 
     private var titleSection: some View {
@@ -65,7 +70,7 @@ struct ModelDetailView: View {
                 Button("Use in Chat") { model.selectModel(identity.modelID) }
                     .disabled(!canUseInChat)
                 if !canUseInChat {
-                    Text(review != nil ? "Resolve compatibility migration first" : "Unavailable during an active turn or engine change")
+                    Text("Unavailable during an active turn or engine change")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -99,6 +104,14 @@ struct ModelDetailView: View {
 
     private func capabilitiesSection(_ ref: ModelRef) -> some View {
         SectionCard(title: "Capabilities", systemImage: "checklist") {
+            if ref.capabilities.hasConflict {
+                Label(
+                    "Engine metadata conflicts with family knowledge. Conflicting capabilities remain unverified.",
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                .font(.caption)
+                .foregroundStyle(.orange)
+            }
             capabilityRow("Tools", claim: ref.capabilities.tools)
             capabilityRow("Vision", claim: ref.capabilities.vision)
             capabilityRow("Reasoning", claim: ref.capabilities.reasoning)
@@ -109,23 +122,75 @@ struct ModelDetailView: View {
     private func capabilityRow(_ title: String, claim: CapabilityClaim) -> some View {
         LabeledContent(title) {
             HStack(spacing: 5) {
-                Image(systemName: claim.support == .supported ? "checkmark.circle.fill" : claim.support == .unsupported ? "xmark.circle" : "questionmark.circle")
-                Text(claim.support == .supported ? "Supported" : claim.support == .unsupported ? "Unsupported" : "Unknown")
-                if !claim.evidence.isEmpty { Text(claim.evidence.map(\.rawValue).sorted().joined(separator: ", ")).font(.caption2).foregroundStyle(.secondary) }
+                Image(
+                    systemName: claim.isConflict
+                        ? "exclamationmark.triangle.fill"
+                        : claim.support == .supported
+                            ? "checkmark.circle.fill"
+                            : claim.support == .unsupported ? "xmark.circle" : "questionmark.circle")
+                Text(
+                    claim.isConflict
+                        ? "Conflict"
+                        : claim.support == .supported
+                            ? "Supported" : claim.support == .unsupported ? "Unsupported" : "Unknown")
+                if !claim.evidence.isEmpty {
+                    Text(claim.evidence.map(\.rawValue).sorted().joined(separator: ", ")).font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
-            .foregroundStyle(claim.support == .supported ? .green : claim.support == .unsupported ? .secondary : .orange)
+            .foregroundStyle(
+                claim.isConflict
+                    ? .red : claim.support == .supported ? .green : claim.support == .unsupported ? .secondary : .orange
+            )
         }
     }
 
     private func metadataSection(snapshot: ModelInspectionSnapshot?, model ref: ModelRef) -> some View {
         SectionCard(title: "Reported model details", systemImage: "info.circle") {
             detail("Context", value: ref.contextLength.map { "\($0) tokens" })
+            contextOverrideRow(reported: ref.contextLength)
             detail("Format", value: snapshot?.format)
             detail("Quantization", value: snapshot?.quantization)
             detail("Architecture", value: snapshot?.architecture)
             detail("Checkpoint", value: snapshot?.checkpointRole == .unknown ? nil : snapshot?.checkpointRole.rawValue)
             detail("Weight size", value: formattedByteCount(snapshot?.weightBytes))
         }
+    }
+
+    /// The budget window GOAT plans against. A value fills a missing engine window or lowers a
+    /// reported one; it never raises what the engine reports (ADR-0085).
+    private func contextOverrideRow(reported: Int?) -> some View {
+        LabeledContent("Budget window") {
+            HStack(spacing: 6) {
+                TextField(
+                    reported.map { "\($0)" } ?? "\(PromptBudgeter.fallbackWindowTokens)",
+                    text: $contextOverrideText
+                )
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 110)
+                .multilineTextAlignment(.trailing)
+                .onSubmit { commitContextOverride() }
+                Text("tokens").foregroundStyle(.secondary)
+                if preference?.contextWindowOverride != nil {
+                    Button("Reset") {
+                        contextOverrideText = ""
+                        Task { _ = await model.setContextWindowOverride(nil, for: identity) }
+                    }
+                    .buttonStyle(.borderless)
+                }
+            }
+        }
+        .onAppear { contextOverrideText = preference?.contextWindowOverride.map { "\($0)" } ?? "" }
+        .onChange(of: identity) { _, _ in
+            contextOverrideText = preference?.contextWindowOverride.map { "\($0)" } ?? ""
+        }
+    }
+
+    private func commitContextOverride() {
+        let trimmed = contextOverrideText.trimmingCharacters(in: .whitespaces)
+        let value = trimmed.isEmpty ? nil : Int(trimmed.replacingOccurrences(of: ",", with: ""))
+        guard trimmed.isEmpty || value != nil else { return }
+        Task { _ = await model.setContextWindowOverride(value, for: identity) }
     }
 
     private func formattedByteCount(_ bytes: Int64?) -> String? {
@@ -143,7 +208,8 @@ struct ModelDetailView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Button("Copy Model Report") {
-                let report = "Model: \(identity.modelID)\nEngine: \(model.activeEngineProfile?.name ?? "Not configured")\nStatus: \(modelRef == nil ? "Unavailable" : "Available")"
+                let report =
+                    "Model: \(identity.modelID)\nEngine: \(model.activeEngineProfile?.name ?? "Not configured")\nStatus: \(modelRef == nil ? "Unavailable" : "Available")"
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(report, forType: .string)
             }
@@ -162,6 +228,7 @@ private struct SectionCard<Content: View>: View {
             content
         }
         .padding(Caprine.Models.inset)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: Caprine.Models.cornerRadius))
     }
 }

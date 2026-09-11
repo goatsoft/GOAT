@@ -8,6 +8,21 @@ struct ModelInventoryRow: View {
     let modelRef: ModelRef?
     let isSelected: Bool
     let isUnavailable: Bool
+    let onSelect: (() -> Void)?
+
+    init(
+        identity: ModelIdentity,
+        modelRef: ModelRef?,
+        isSelected: Bool,
+        isUnavailable: Bool,
+        onSelect: (() -> Void)? = nil
+    ) {
+        self.identity = identity
+        self.modelRef = modelRef
+        self.isSelected = isSelected
+        self.isUnavailable = isUnavailable
+        self.onSelect = onSelect
+    }
 
     private var preference: ModelPreference? {
         model.modelPreferences.first { $0.identity == identity }
@@ -48,5 +63,6 @@ struct ModelInventoryRow: View {
         .padding(.vertical, Caprine.Models.rowInset)
         .contentShape(Rectangle())
         .opacity(isUnavailable ? 0.72 : 1)
+        .onTapGesture { onSelect?() }
     }
 }

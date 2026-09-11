@@ -11,8 +11,11 @@ public enum CapabilitySupport: String, Codable, Hashable, Sendable {
 public enum CapabilityEvidence: String, CaseIterable, Codable, Hashable, Sendable {
     case modelList
     case modelDetail
+    case modelFamily
+    case userModelFamily
     case engineConfiguration
     case observedResponse
+    case liveQualification
 }
 
 /// One capability claim plus the server or configuration evidence behind it.
@@ -36,6 +39,12 @@ public struct CapabilityClaim: Codable, Hashable, Sendable {
 
     public static func unsupported(by evidence: CapabilityEvidence) -> CapabilityClaim {
         CapabilityClaim(support: .unsupported, evidence: [evidence])
+    }
+
+    /// A model-family claim and an explicit engine claim disagree when the merged
+    /// value is unknown but retains evidence from both sources.
+    public var isConflict: Bool {
+        support == .unknown && evidence.count > 1
     }
 
     /// Combines independent claims without allowing a conflict to enable a feature.
@@ -98,6 +107,11 @@ public struct ModelCapabilities: Codable, Hashable, Sendable {
     /// Explicitly advertised values. Nil means the engine advertised the parameter
     /// without listing values. An empty set means it explicitly listed no usable values.
     public var reasoningEffortValues: Set<ReasoningEffortValue>?
+
+    public var hasConflict: Bool {
+        vision.isConflict || tools.isConflict || reasoning.isConflict
+            || reasoningHistory.isConflict
+    }
 
     public init(
         vision: CapabilityClaim = .unknown,

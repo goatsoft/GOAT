@@ -28,6 +28,10 @@ struct ShepherdPromptSnapshot: Sendable {
     let date: Date
     let project: ShepherdProjectContext?
     let extensionSections: [String]
+    /// Per-round steering (recovery hints, format repair). Never part of the system turn: it is
+    /// appended to the final turn of the newest exchange so the cached prefix stays byte-stable
+    /// (ADR-0085). Not persisted.
+    var hostNotes: [String] = []
     let messages: [Message]
 }
 
@@ -132,7 +136,6 @@ actor ShepherdGenerationWorker {
                 No callable tools are available for this response. You can explain or draft code, but cannot inspect, create, edit, or execute project files. If the request requires those actions, explain that a connected file or shell tool must be enabled for this chat with a model and engine that support tool calling. Do not claim the work was executed.
                 """
         }
-        if toolsAvailable { system += Self.recoveryGuidance(snapshot: snapshot, toolNames: toolNames) }
         if let project = snapshot.project {
             system += """
 
@@ -228,7 +231,29 @@ actor ShepherdGenerationWorker {
                 continue
             }
         }
+        var notes = snapshot.hostNotes
+        if toolsAvailable {
+            let recovery = Self.recoveryGuidance(snapshot: snapshot, toolNames: toolNames)
+            if !recovery.isEmpty { notes.append(recovery) }
+        }
+        Self.attachHostNotes(notes, to: &result)
         return result
+    }
+
+    /// Steering text rides on the last turn of the newest exchange: a tool result when the round
+    /// ended in tools, otherwise the newest user message. It never becomes its own turn, so the
+    /// exchange structure, role alternation and the cached prefix are unchanged (ADR-0085).
+    static func attachHostNotes(_ notes: [String], to turns: inout [ChatTurn]) {
+        let notes = notes.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        guard !notes.isEmpty, let index = turns.lastIndex(where: { $0.role != .system }) else { return }
+        let last = turns[index]
+        guard last.role == .user || last.role == .tool else { return }
+        let block = "[GOAT note]\n" + notes.joined(separator: "\n\n")
+        turns[index] = ChatTurn(
+            role: last.role,
+            text: last.text.isEmpty ? block : last.text + "\n\n" + block,
+            thinking: last.thinking, images: last.images,
+            toolCalls: last.toolCalls, toolCallID: last.toolCallID)
     }
 
     static func recoveryGuidance(snapshot: ShepherdPromptSnapshot, toolNames: Set<String>) -> String {
@@ -258,7 +283,7 @@ actor ShepherdGenerationWorker {
             default: break
             }
         }
-        return hints.isEmpty ? "" : "\n\nNext-action correction from GOAT:\n" + hints.joined(separator: "\n")
+        return hints.isEmpty ? "" : "Next-action correction from GOAT:\n" + hints.joined(separator: "\n")
     }
 
     func plan(
@@ -267,7 +292,8 @@ actor ShepherdGenerationWorker {
         effort: Effort,
         tools: [ToolSpec],
         memory: [PromptMemoryEntry] = [],
-        compatibility: ResolvedModelCompatibility? = nil
+        compatibility: ResolvedModelCompatibility? = nil,
+        calibration: Double = 1.0
     ) async throws -> PromptPlan {
         try Task.checkCancellation()
         let request = GenerationRequest(
@@ -277,7 +303,7 @@ actor ShepherdGenerationWorker {
             tools: tools,
             modelCapabilities: model.capabilities,
             compatibility: compatibility)
-        let plan = try promptBudgeter.plan(request, model: model, memory: memory)
+        let plan = try promptBudgeter.plan(request, model: model, memory: memory, calibration: calibration)
         try Task.checkCancellation()
         return plan
     }

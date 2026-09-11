@@ -55,9 +55,9 @@ public actor OpenAICompatEngine: InferenceEngine {
 
     /// Best-effort metadata handshake for the selected model. Failure returns the catalog
     /// snapshot unchanged so a healthy generic Chat Completions path remains usable.
-    public func probeCapabilities(for model: ModelRef) async -> ModelRef {
+    public func inspectModel(_ model: ModelRef) async -> EngineModelInspection {
         let config = self.config
-        guard config.isValidEndpoint else { return model }
+        guard config.isValidEndpoint else { return EngineModelInspection(model: model) }
         let revision = configRevision
 
         let metadata: ProbedModelMetadata?
@@ -73,10 +73,18 @@ public actor OpenAICompatEngine: InferenceEngine {
         }
 
         guard revision == configRevision, config == self.config, !Task.isCancelled else {
-            return model
+            return EngineModelInspection(model: model)
         }
-        let enriched = (metadata?.observed(at: .now) ?? .unknown).applying(to: model)
-        return enriched
+        let reported = metadata?.observed(at: .now) ?? .unknown
+        let enriched =
+            EngineCapabilityMetadataParser
+            .applyingKnownProfile(reported, for: model.id)
+        return EngineModelInspection(
+            model: enriched.applying(to: model), metadata: enriched.inspection)
+    }
+
+    public func probeCapabilities(for model: ModelRef) async -> ModelRef {
+        await inspectModel(model).model
     }
 
     private static func probeGenericDetail(
@@ -87,7 +95,7 @@ public actor OpenAICompatEngine: InferenceEngine {
                 baseURL: config.baseURL, modelID: modelID)
         else { return nil }
         guard let data = await metadataData(url: url, config: config) else { return nil }
-        return try? EngineCapabilityMetadataParser.openAIModelDetail(data)
+        return try? EngineCapabilityMetadataParser.openAIModelDetail(data, modelID: modelID)
     }
 
     private static func probeLMStudio(
@@ -521,7 +529,8 @@ struct StreamAssembler {
                     promptTokens: usage?.prompt_tokens,
                     tokensAreExact: usage?.completion_tokens != nil,
                     generationTokensPerSecond: serverGenerationRate,
-                    finishReason: finishReason
+                    finishReason: finishReason,
+                    cachedPromptTokens: usage?.cachedPromptTokens
                 )))
         return events
     }
@@ -648,11 +657,24 @@ struct StreamChunk: Decodable {
         let finish_reason: String?
     }
     struct Usage: Decodable {
+        struct PromptTokensDetails: Decodable {
+            let cached_tokens: Int?
+        }
         let prompt_tokens: Int?
         let completion_tokens: Int?
         let time_to_first_token: Double?
         let generation_duration: Double?
         let generation_tokens_per_second: Double?
+        /// OpenAI-style prefix-cache accounting; several local servers report it too.
+        let prompt_tokens_details: PromptTokensDetails?
+        /// llama.cpp and some MLX servers report the cached prefix at the top level.
+        let cached_tokens: Int?
+        let prompt_cache_hit_tokens: Int?
+
+        var cachedPromptTokens: Int? {
+            [prompt_tokens_details?.cached_tokens, cached_tokens, prompt_cache_hit_tokens]
+                .compactMap { $0 }.first(where: { $0 >= 0 })
+        }
     }
     struct Timings: Decodable {
         let predicted_ms: Double?

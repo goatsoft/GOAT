@@ -452,11 +452,12 @@ public final class ShepherdModel {
                     excludedMCPServers: session.disabledMCPServers)
                 : ([], [:])
             guard owns(turnID: turnID, sessionID: session.id), !Task.isCancelled else { break }
-            let snapshot = await promptSnapshot(
+            var snapshot = await promptSnapshot(
                 for: session,
-                extensionSections: extensionSections + (repairNextRound ? [Self.toolFormatRecoveryPrompt] : []),
+                extensionSections: extensionSections,
                 requestedSkillName: requestedSkillName,
                 handoffCommand: handoffCommand)
+            if repairNextRound { snapshot.hostNotes.append(Self.toolFormatRecoveryPrompt) }
             guard owns(turnID: turnID, sessionID: session.id), !Task.isCancelled else { break }
             let plan: PromptPlan
             do {
@@ -466,7 +467,8 @@ public final class ShepherdModel {
                     effort: session.effort,
                     tools: specs,
                     memory: memory,
-                    compatibility: context.compatibility)
+                    compatibility: context.compatibility,
+                    calibration: session.contextCalibrationRatio)
             } catch {
                 guard owns(turnID: turnID, sessionID: session.id), !Task.isCancelled else {
                     break shepherd
@@ -589,11 +591,13 @@ public final class ShepherdModel {
             if let s = assistant.stats {
                 let tokenApprox = s.tokensAreExact ? "" : "~"
                 let speedApprox = s.speedIsServerReported ? "" : "~"
+                let cache = s.cachedPromptTokens.map { " · \($0) cached" } ?? ""
                 activity.log(
                     .engine,
-                    "\(tokenApprox)\(s.tokens) tok · \(speedApprox)\(Int(s.toksPerSec)) tok/s\(s.ttft.map { String(format: " · %.1fs ttft", $0) } ?? "")"
+                    "\(tokenApprox)\(s.tokens) tok · \(speedApprox)\(Int(s.toksPerSec)) tok/s\(s.ttft.map { String(format: " · %.1fs ttft", $0) } ?? "")\(cache)"
                 )
             }
+            calibrateContextEstimate(session, report: plan.report, stats: assistant.stats)
             updateContextGauge(
                 session, report: plan.report, stats: assistant.stats,
                 reply: assistant.text + assistant.thinking)
@@ -609,7 +613,8 @@ public final class ShepherdModel {
             if toolCalls.isEmpty,
                 Self.hasUnexecutedToolMarkup(assistant.text, toolNames: Set(specs.map(\.name)))
             {
-                assistant.generationFailureCategory = GenerationProvenanceRecord.FailureCategory.toolFormatRecovery.rawValue
+                assistant.generationFailureCategory =
+                    GenerationProvenanceRecord.FailureCategory.toolFormatRecovery.rawValue
                 let canRetry = !repairedToolFormat && !Task.isCancelled
                 assistant.error =
                     canRetry
@@ -693,7 +698,6 @@ public final class ShepherdModel {
                 break shepherd
             }
 
-            if !Task.isCancelled { await autoTitle(session, model: model, context: context) }
             for (index, call) in toolCalls.enumerated() {
                 await drainLeadSave()
                 // Finish the current response's first tool step, including its approval.
@@ -793,8 +797,9 @@ public final class ShepherdModel {
                     break shepherd
                 }
             }
-            if !Task.isCancelled { await autoTitle(session, model: model, context: context) }
             // Loop: next round streams a fresh assistant message with the results in context.
+            // Titles wait until the turn ends so no foreign prompt evicts the cached prefix
+            // between rounds (ADR-0085).
         }
         acceptsLead = false
         if let warning = await tools.finishPendingWork() {
@@ -863,8 +868,30 @@ public final class ShepherdModel {
         }
     }
 
+    /// Exact server usage for the request just planned teaches the next plan how far the
+    /// estimator sits from this engine's tokenizer (ADR-0085). Clamped and smoothed so one
+    /// unusual response cannot swing the budget.
+    private func calibrateContextEstimate(
+        _ session: ChatSession, report: PromptBudgetReport, stats: GenStats?
+    ) {
+        guard let stats, stats.tokensAreExact, let prompt = stats.promptTokens, prompt > 0,
+            report.estimatedInputTokensAfter > 0
+        else { return }
+        let observed = Double(prompt) / Double(report.estimatedInputTokensAfter)
+        let clamped = min(PromptBudgeter.maximumCalibration, max(PromptBudgeter.minimumCalibration, observed))
+        let previous = session.contextCalibrationRatio
+        session.contextCalibrationRatio =
+            previous == 1.0 && session.contextCalibrationSamples == 0
+            ? clamped : (previous + clamped) / 2
+        session.contextCalibrationSamples += 1
+        activity.log(
+            .info,
+            "context: estimate ~\(report.estimatedInputTokensAfter) vs usage \(prompt) tok (ratio \(String(format: "%.2f", observed)), calibration \(String(format: "%.2f", session.contextCalibrationRatio)))"
+        )
+    }
+
     private func applyPreflight(_ report: PromptBudgetReport, to session: ChatSession) {
-        session.lastContextTokens = report.estimatedInputTokensAfter
+        session.lastContextTokens = report.calibratedInputTokensAfter
         session.contextIsExact = false
         session.lastContextWindow = report.windowTokens
         session.contextWindowIsExact = report.windowSource == .reported
@@ -891,7 +918,7 @@ public final class ShepherdModel {
         }
         activity.log(
             .info,
-            "context: ~\(report.estimatedInputTokensBefore) → ~\(report.estimatedInputTokensAfter) input tok, \(report.droppedExchangeCount) exchanges dropped, \(report.textTruncations.count) fields truncated, \(report.omittedImages.count) images omitted, \(report.omittedMemoryEntries.count) memory summaries omitted"
+            "context: ~\(report.estimatedInputTokensBefore) → ~\(report.estimatedInputTokensAfter) input tok (calibrated ~\(report.calibratedInputTokensAfter)), \(report.droppedExchangeCount) exchanges dropped, \(report.textTruncations.count) fields truncated, \(report.omittedImages.count) images omitted, \(report.omittedMemoryEntries.count) memory summaries omitted"
         )
     }
 
@@ -909,7 +936,7 @@ public final class ShepherdModel {
             session.lastContextWindow = failure.report.windowTokens
             session.contextWindowIsExact = failure.report.windowSource == .reported
             session.lastContextPressureLimit = max(1, failure.report.inputBudget)
-            session.lastContextTokens = failure.report.estimatedInputTokensAfter
+            session.lastContextTokens = failure.report.calibratedInputTokensAfter
             session.contextIsExact = false
             session.messages.last(where: { $0.role == .user })?.contextNotice =
                 "This prompt could not fit the model's context window."
@@ -933,7 +960,7 @@ public final class ShepherdModel {
             session.lastContextTokens = sum.overflow ? Int.max : sum.partialValue
             session.contextIsExact = true
         } else {
-            let prompt = stats?.promptTokens ?? report.estimatedInputTokensAfter
+            let prompt = stats?.promptTokens ?? report.calibratedInputTokensAfter
             let completion = stats?.tokens ?? ((reply.utf8.count + 2) / 3)
             let sum = prompt.addingReportingOverflow(completion)
             session.lastContextTokens = sum.overflow ? Int.max : sum.partialValue

@@ -1,5 +1,5 @@
-import Foundation
 import Bleet
+import Foundation
 import Herd
 import Inference
 
@@ -35,6 +35,23 @@ extension AppModel {
             next.append(
                 ModelPreference(
                     identity: identity, compatibilityOverride: compatibilityOverride))
+        }
+        return await commitModelPreferences(models: next, reviews: legacyCompatibilityReviews)
+    }
+
+    /// A user-asserted context window (ADR-0085). Nil clears the override. Values below 1,024
+    /// are rejected because no usable prompt fits under them.
+    func setContextWindowOverride(_ tokens: Int?, for identity: ModelIdentity) async -> Bool {
+        guard validModelIdentity(identity), !shepherd.hasActiveTurn else { return false }
+        if let tokens, tokens < 1_024 { return false }
+        var next = modelPreferences
+        if let index = next.firstIndex(where: { $0.identity == identity }) {
+            next[index].contextWindowOverride = tokens
+            next[index].updatedAt = .now
+        } else if tokens != nil {
+            next.append(ModelPreference(identity: identity, contextWindowOverride: tokens))
+        } else {
+            return true
         }
         return await commitModelPreferences(models: next, reviews: legacyCompatibilityReviews)
     }
@@ -147,10 +164,11 @@ extension AppModel {
         let configurationRevision = engineIntentRevision
         modelInspectionTask = Task { [weak self] in
             guard let self else { return }
-            let enriched = await self.engine.probeCapabilities(for: model)
+            let inspection = await self.engine.inspectModel(model)
             guard !Task.isCancelled else { return }
             await self.publishInspection(
-                identity: identity, model: enriched, configurationRevision: configurationRevision,
+                identity: identity, model: inspection.model, metadata: inspection.metadata,
+                configurationRevision: configurationRevision,
                 revision: revision)
         }
         await modelInspectionTask?.value
@@ -158,22 +176,35 @@ extension AppModel {
     }
 
     private func publishInspection(
-        identity: ModelIdentity, model: ModelRef, configurationRevision: UInt64, revision: UInt64
+        identity: ModelIdentity, model: ModelRef, metadata: EngineModelInspectionMetadata?,
+        configurationRevision: UInt64, revision: UInt64
     ) {
         guard modelInspectionRevision == revision,
             activeEngineProfile?.id == identity.engineProfileID,
             engineIntentRevision == configurationRevision,
             models.contains(where: { $0.id == identity.modelID })
         else { return }
-        let sources = Set([
-            model.capabilities.vision.evidence.map(\.rawValue),
-            model.capabilities.tools.evidence.map(\.rawValue),
-            model.capabilities.reasoning.evidence.map(\.rawValue)
-        ].flatMap { $0 }).sorted()
+        let sources = Set(
+            [
+                model.capabilities.vision.evidence.map(\.rawValue),
+                model.capabilities.tools.evidence.map(\.rawValue),
+                model.capabilities.reasoning.evidence.map(\.rawValue),
+            ].flatMap { $0 }
+        ).sorted()
         let snapshot = ModelInspectionSnapshot(
             identity: identity, model: model, fetchedAt: .now,
             engineConfigurationRevision: configurationRevision,
-            metadataSources: sources)
+            metadataSources: sources,
+            format: metadata?.format,
+            quantization: metadata?.quantization,
+            architecture: metadata?.architecture,
+            modelType: metadata?.modelType,
+            parameterCount: metadata?.parameterCount,
+            weightBytes: metadata?.weightBytes,
+            engineVersion: metadata?.engineVersion,
+            checkpointRole: ModelCheckpointRole(rawValue: metadata?.checkpointRole ?? "") ?? .unknown,
+            templateIdentifier: metadata?.templateIdentifier,
+            parserIdentifier: metadata?.parserIdentifier)
         modelInspectionStates[identity] = .loaded(snapshot: snapshot)
     }
 

@@ -98,6 +98,9 @@ public struct ModelRef: Codable, Identifiable, Hashable, Sendable {
     /// Heuristic only - used for a gentle hint, never to block sending.
     public var looksVisionCapable: Bool {
         let s = id.lowercased()
+        if KnownModelProfiles.profile(for: id)?.capabilities.vision.support == .supported {
+            return true
+        }
         if [
             "-vl", "vl-", "vision", "multimodal", "llava", "pixtral", "internvl",
             "paligemma", "moondream",
@@ -201,11 +204,13 @@ public struct GenerationRequest: Sendable {
         self.maxTokens = maxTokens
         self.tools = tools
         self.modelCapabilities = modelCapabilities
-        self.compatibility = compatibility ?? ResolvedModelCompatibility(
-            identity: ModelIdentity(engineProfileID: "", modelID: model),
-            effectiveStyle: .genericOpenAI,
-            source: .genericFallback,
-            capabilities: modelCapabilities)
+        self.compatibility =
+            compatibility
+            ?? ResolvedModelCompatibility(
+                identity: ModelIdentity(engineProfileID: "", modelID: model),
+                effectiveStyle: .genericOpenAI,
+                source: .genericFallback,
+                capabilities: modelCapabilities)
     }
 }
 
@@ -223,6 +228,8 @@ public struct GenStats: Sendable, Equatable {
     /// Decode throughput reported by the server or derived from its generation duration.
     public var generationTokensPerSecond: Double?
     public var finishReason: String?
+    /// Prompt tokens the server served from its prefix cache, when it reports them (ADR-0085).
+    public var cachedPromptTokens: Int?
     public var speedIsServerReported: Bool { generationTokensPerSecond != nil }
     public var toksPerSec: Double {
         if let generationTokensPerSecond { return generationTokensPerSecond }
@@ -239,9 +246,11 @@ public struct GenStats: Sendable, Equatable {
     public init(
         ttft: TimeInterval?, tokens: Int, duration: TimeInterval,
         promptTokens: Int? = nil, tokensAreExact: Bool = false,
-        generationTokensPerSecond: Double? = nil, finishReason: String? = nil
+        generationTokensPerSecond: Double? = nil, finishReason: String? = nil,
+        cachedPromptTokens: Int? = nil
     ) {
         self.finishReason = finishReason
+        self.cachedPromptTokens = cachedPromptTokens.flatMap { $0 >= 0 ? $0 : nil }
         self.ttft = ttft
         self.tokens = tokens
         self.duration = duration
@@ -291,10 +300,15 @@ public enum EngineError: LocalizedError, Sendable {
 public protocol InferenceEngine: Actor {
     func health() async -> EngineHealth
     func probeCapabilities(for model: ModelRef) async -> ModelRef
+    func inspectModel(_ model: ModelRef) async -> EngineModelInspection
     func stream(_ request: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error>
 }
 
 public extension InferenceEngine {
     /// Unknown is the portable fallback for engines without a metadata adapter.
     func probeCapabilities(for model: ModelRef) async -> ModelRef { model }
+
+    func inspectModel(_ model: ModelRef) async -> EngineModelInspection {
+        EngineModelInspection(model: await probeCapabilities(for: model))
+    }
 }

@@ -23,18 +23,45 @@ public struct ModelPreference: Codable, Equatable, Sendable {
     public var identity: ModelIdentity
     public var isFavourite: Bool
     public var compatibilityOverride: ModelCompatibilityOverride
+    /// A user-asserted context window for prompt budgeting (ADR-0085). It fills a missing
+    /// engine window or lowers a reported one; it never raises an engine-reported window.
+    public var contextWindowOverride: Int?
     public var updatedAt: Date
 
     public init(
         identity: ModelIdentity,
         isFavourite: Bool = false,
         compatibilityOverride: ModelCompatibilityOverride = .automatic,
+        contextWindowOverride: Int? = nil,
         updatedAt: Date = .now
     ) {
         self.identity = identity
         self.isFavourite = isFavourite
         self.compatibilityOverride = compatibilityOverride
+        self.contextWindowOverride = contextWindowOverride
         self.updatedAt = updatedAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case identity, isFavourite, compatibilityOverride, contextWindowOverride, updatedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            identity: try container.decode(ModelIdentity.self, forKey: .identity),
+            isFavourite: try container.decodeIfPresent(Bool.self, forKey: .isFavourite) ?? false,
+            compatibilityOverride: try container.decodeIfPresent(
+                ModelCompatibilityOverride.self, forKey: .compatibilityOverride) ?? .automatic,
+            contextWindowOverride: try container.decodeIfPresent(Int.self, forKey: .contextWindowOverride),
+            updatedAt: try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? .now)
+    }
+
+    /// The window the budgeter should use for `reported`, honouring the override rule above.
+    public func effectiveContextLength(reported: Int?) -> Int? {
+        guard let override = contextWindowOverride, override > 0 else { return reported }
+        guard let reported, reported > 0 else { return override }
+        return min(reported, override)
     }
 }
 
@@ -145,10 +172,12 @@ public enum ModelPreferencesStore {
                 reason: "unsupported model preferences schema version \(file.schemaVersion)")
         }
         let identities = file.models.map(\.identity)
-        guard identities.allSatisfy({
-            !$0.engineProfileID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                && !$0.modelID.isEmpty
-        }) else {
+        guard
+            identities.allSatisfy({
+                !$0.engineProfileID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    && !$0.modelID.isEmpty
+            })
+        else {
             throw LocalStoreError.invalidData(
                 path: url.path, reason: "model preference engine and model IDs must be non-empty")
         }

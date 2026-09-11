@@ -115,18 +115,30 @@ extension AppModel {
 // MARK: - The Shepherd's view of the app
 
 extension AppModel: ShepherdEnvironment {
-    var availableModels: [ModelRef] { models }
+    /// The catalog with per-model context-window overrides applied (ADR-0085). An override
+    /// fills a missing window or lowers a reported one; capabilities are untouched.
+    var availableModels: [ModelRef] {
+        guard let profile = activeEngineProfile else { return models }
+        return models.map { model in
+            let identity = ModelIdentity(engineProfileID: profile.id, modelID: model.id)
+            guard let preference = modelPreferences.first(where: { $0.identity == identity }),
+                preference.contextWindowOverride != nil
+            else { return model }
+            return ModelRef(
+                id: model.id,
+                contextLength: preference.effectiveContextLength(reported: model.contextLength),
+                capabilities: model.capabilities)
+        }
+    }
     var fallbackModelID: String? { defaultModelID }
 
     func generationContext(for modelID: String) -> GenerationContext? {
         guard let profile = activeEngineProfile,
-            let model = models.first(where: { $0.id == modelID }),
-            !legacyCompatibilityReviews.contains(where: {
-                $0.engineProfileID == profile.id && $0.state == .pending
-            })
+            let model = models.first(where: { $0.id == modelID })
         else { return nil }
         let identity = ModelIdentity(engineProfileID: profile.id, modelID: modelID)
-        let override = modelPreferences.first(where: { $0.identity == identity })?.compatibilityOverride
+        let override =
+            modelPreferences.first(where: { $0.identity == identity })?.compatibilityOverride
             ?? .automatic
         let compatibility = ModelCompatibilityResolver.resolve(
             identity: identity, override: override, now: .now)

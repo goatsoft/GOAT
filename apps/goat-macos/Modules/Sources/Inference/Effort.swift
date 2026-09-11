@@ -43,6 +43,8 @@ public enum Effort: String, CaseIterable, Codable, Sendable, Identifiable {
         }
     }
 
+    /// Requested output ceiling for a model that explicitly cannot reason. The prompt budget
+    /// still clamps this to half the context window.
     public var maxTokens: Int {
         switch self {
         case .graze: 1024
@@ -50,5 +52,14 @@ public enum Effort: String, CaseIterable, Codable, Sendable, Identifiable {
         case .climb: 4096
         case .summit: 8192
         }
+    }
+
+    /// Reasoning tokens count against `max_tokens` on every OpenAI-compatible engine, so a
+    /// model that may think gets twice the ceiling (ADR-0085). Unknown counts as "may think":
+    /// the budget clamp, not the effort preset, protects the input side.
+    public var reasoningOutputCeiling: Int { maxTokens * 2 }
+
+    public func outputCeiling(for capabilities: ModelCapabilities) -> Int {
+        capabilities.reasoning.support == .unsupported ? maxTokens : reasoningOutputCeiling
     }
 }

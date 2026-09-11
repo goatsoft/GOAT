@@ -248,7 +248,11 @@ private final class FakeEnv: ShepherdEnvironment {
     func persist(_ message: ChatMessage, in session: ChatSession) async -> Bool {
         persistenceAttempts += 1
         if failingPersistenceAttempts.contains(persistenceAttempts) { return false }
-        if (blockInitialPersistence && !message.complete) || (blockLeadPersistence && message.role == .user) {
+        // Block only the first incomplete row: the lifecycle path saves the same row again as
+        // `started` before streaming, and that second save must not wait on a resolver.
+        if (blockInitialPersistence && !message.complete && !initialPersistenceRequested)
+            || (blockLeadPersistence && message.role == .user)
+        {
             initialPersistenceRequested = true
             if let pendingPersistenceResult {
                 self.pendingPersistenceResult = nil
@@ -540,7 +544,7 @@ private func workerRequest() -> GenerationRequest {
     let tools = FakeToolSource()
     tools.mapping = ["srv__tool": fakeToolRoute()]
     let env = FakeEnv()
-    env.failingPersistenceAttempts = [2]
+    env.failingPersistenceAttempts = [3]  // 1 prepared, 2 started, 3 tool-call transcript
     let (shepherd, engine, sameTools, sameEnv) = makeShepherd(
         script: [toolCallRound()], tools: tools, env: env)
     defer { _ = sameEnv }
@@ -563,7 +567,7 @@ private func workerRequest() -> GenerationRequest {
     let tools = FakeToolSource()
     tools.mapping = ["srv__tool": fakeToolRoute()]
     let env = FakeEnv()
-    env.failingPersistenceAttempts = [3]
+    env.failingPersistenceAttempts = [4]  // 1 prepared, 2 started, 3 transcript, 4 result
     let (shepherd, engine, sameTools, sameEnv) = makeShepherd(
         script: [toolCallRound(), toolCallRound()], tools: tools, env: env)
     defer { _ = sameEnv }
@@ -1458,11 +1462,12 @@ func automaticTitlesNameToolWorkflowsWithAnEmptyFinalMessage(narrated: Bool) asy
     tools.mapping = ["srv__tool": fakeToolRoute()]
     let firstRound: [GenerationEvent] =
         (narrated ? [.token("Let me create the Vite configuration file.")] : []) + toolCallRound()
+    // The title request follows the whole turn (ADR-0085), so it is the last scripted response.
     let (shepherd, engine, _, env) = makeShepherd(
         script: [
             firstRound,
-            [.token("Vue TypeScript Project Setup")],
             [.done(GenStats(ttft: nil, tokens: 0, duration: 0.01))],
+            [.token("Vue TypeScript Project Setup")],
         ], tools: tools)
     defer { _ = env }
     let session = ChatSession(effort: .graze, modelID: "test-model")
@@ -1689,7 +1694,9 @@ func automaticTitlesNameToolWorkflowsWithAnEmptyFinalMessage(narrated: Bool) asy
     #expect(!ShepherdModel.hasUnexecutedToolMarkup("Example:\n~~~xml\n" + body + "\n~~~", toolNames: names))
     #expect(!ShepherdModel.hasUnexecutedToolMarkup(body, toolNames: []))
     #expect(!ShepherdModel.hasUnexecutedToolMarkup("</tool_call>", toolNames: names))
-    #expect(!ShepherdModel.hasUnexecutedToolMarkup("<tool_call>\nunknown\n<arg_key>x</arg_key><arg_value>y</arg_value>\n</tool_call>", toolNames: names))
+    #expect(
+        !ShepherdModel.hasUnexecutedToolMarkup(
+            "<tool_call>\nunknown\n<arg_key>x</arg_key><arg_value>y</arg_value>\n</tool_call>", toolNames: names))
     let glm = "<tool_call>\npen_list_files\n<arg_key>path</arg_key><arg_value>.</arg_value>\n</tool_call>"
     #expect(UnexecutedToolMarkupDetector.detect(glm, toolNames: names)?.style == .glm)
     #expect(UnexecutedToolMarkupDetector.detect("</tool_call>", toolNames: names)?.confidence == .low)
@@ -1715,11 +1722,12 @@ func automaticTitlesNameToolWorkflowsWithAnEmptyFinalMessage(narrated: Bool) asy
     var cycleTracker = FileRepairProgressTracker()
     var stop: String?
     for digest in ["B", "A", "B", "A", "B"] {
-        stop = cycleTracker.observe(ToolExecutionDiagnostic(fileObservations: [
-            FileOperationObservation(
-                workspaceIdentity: key.workspaceIdentity, relativePath: key.relativePath,
-                kind: .edit, outcome: .succeeded, beforeDigest: "previous", afterDigest: digest)
-        ]))
+        stop = cycleTracker.observe(
+            ToolExecutionDiagnostic(fileObservations: [
+                FileOperationObservation(
+                    workspaceIdentity: key.workspaceIdentity, relativePath: key.relativePath,
+                    kind: .edit, outcome: .succeeded, beforeDigest: "previous", afterDigest: digest)
+            ]))
     }
     #expect(stop?.contains("content cycle") == true)
 }
@@ -1728,7 +1736,7 @@ func automaticTitlesNameToolWorkflowsWithAnEmptyFinalMessage(narrated: Bool) asy
     let tools = FakeToolSource()
     tools.specs = [ToolSpec(name: "srv__tool", description: "Tool", parametersJSON: "{}")]
     let env = FakeEnv()
-    env.failingPersistenceAttempts = [2]
+    env.failingPersistenceAttempts = [3]  // 1 prepared, 2 started, 3 failed row
     let (shepherd, engine, _, _) = makeShepherd(
         script: [[.token("<function=srv__tool></function></tool_call>")], toolCallRound()],
         tools: tools, env: env)
@@ -1913,11 +1921,12 @@ func leadWaitsForTheCurrentApprovalAndPreservesItsOutcome(approved: Bool) async 
     let tools = FakeToolSource()
     tools.mapping = ["srv__tool": fakeToolRoute()]
     tools.blockPermission = true
+    // The title request follows the whole turn (ADR-0085), so it is the last scripted response.
     let (shepherd, engine, _, env) = makeShepherd(
         script: [
             [.token("I will create the files.")] + toolCallRound(),
-            [.token("Create Vue Project")],
             [.token("I will explain the next step.")],
+            [.token("Create Vue Project")],
         ], tools: tools)
     defer { _ = env }
     let session = ChatSession(effort: .graze, modelID: "test-model")
@@ -1927,13 +1936,13 @@ func leadWaitsForTheCurrentApprovalAndPreservesItsOutcome(approved: Bool) async 
     session.messages = [user]
     shepherd.run(in: session)
     await tools.waitUntilPermissionRequested()
-    #expect(session.title == "Create Vue Project")
+    #expect(session.hasDefaultTitle)
     #expect(session.isStreaming)
     #expect(await shepherd.lead("Explain the next step after this action", in: session))
     #expect(tools.cancellationRequests == 0)
     #expect(shepherd.pendingLeadCount == 1)
     #expect(session.messages.flatMap(\.toolEvents).first?.result == nil)
-    #expect(await engine.requests.count == 2)
+    #expect(await engine.requests.count == 1)
     tools.resolvePermission(approved)
     await shepherd.streamTask?.value
     #expect(tools.invocations == (approved ? 1 : 0))
@@ -1941,8 +1950,11 @@ func leadWaitsForTheCurrentApprovalAndPreservesItsOutcome(approved: Bool) async 
     #expect(call?.denied == !approved)
     #expect(call?.result == (approved ? "ok" : "User denied this tool call."))
     let requests = await engine.requests
-    #expect(requests.last?.turns.last?.text == "Explain the next step after this action")
+    #expect(requests.count == 3)
+    #expect(requests[1].turns.last?.text == "Explain the next step after this action")
+    #expect(requests.last?.turns.first?.text.contains("Write a 3-5 word title") == true)
     #expect(session.messages.last?.text == "I will explain the next step.")
+    #expect(session.title == "Create Vue Project")
 }
 
 @Test @MainActor func failedLeadSaveKeepsItOutOfTheConversationAndStopDoesNotRestart() async {
@@ -2247,4 +2259,143 @@ func leadWaitsForTheCurrentApprovalAndPreservesItsOutcome(approved: Bool) async 
     #expect(turns.last?.text.contains("goats.swift") == true)
     #expect(turns.last?.text.contains("let goats = 7") == true)
     #expect(turns.last?.images == [image])
+}
+
+// MARK: - Prefix stability (ADR-0085)
+
+private func failedEditSnapshot(hostNotes: [String] = [], trailingUser: Bool = false) -> ShepherdPromptSnapshot {
+    var messages = [
+        ShepherdPromptSnapshot.Message(
+            role: .user, text: "Fix the import.", thinking: "", complete: true, error: nil,
+            attachmentPaths: [], toolEvents: []),
+        ShepherdPromptSnapshot.Message(
+            role: .assistant, text: "", thinking: "", complete: true, error: nil,
+            attachmentPaths: [],
+            toolEvents: [
+                ShepherdPromptSnapshot.ToolEvent(
+                    id: "edit-1", requestName: "pen_edit_file",
+                    arguments: #"{"path":"a.ts","old_text":"x","new_text":"y"}"#,
+                    result: "old_text was not found.", isError: true)
+            ]),
+    ]
+    if trailingUser {
+        messages.append(
+            ShepherdPromptSnapshot.Message(
+                role: .user, text: "Try again.", thinking: "", complete: true, error: nil,
+                attachmentPaths: [], toolEvents: []))
+    }
+    var snapshot = ShepherdPromptSnapshot(
+        date: Date(timeIntervalSince1970: 0), project: nil, extensionSections: [], messages: messages)
+    snapshot.hostNotes = hostNotes
+    return snapshot
+}
+
+@Test func recoveryHintsRideOnTheNewestToolResultAndLeaveTheSystemTurnUnchanged() async {
+    let worker = ShepherdGenerationWorker(engine: FakeEngine(script: []))
+    let toolNames: Set<String> = ["pen_edit_file", "pen_read_file"]
+    let withFailure = await worker.turns(for: failedEditSnapshot(), toolsAvailable: true, toolNames: toolNames)
+    let clean = await worker.turns(
+        for: ShepherdPromptSnapshot(
+            date: Date(timeIntervalSince1970: 0), project: nil, extensionSections: [],
+            messages: [failedEditSnapshot().messages[0]]),
+        toolsAvailable: true, toolNames: toolNames)
+
+    // Byte-identical system turn whether or not the last round failed.
+    #expect(withFailure.first?.role == .system)
+    #expect(withFailure.first?.text == clean.first?.text)
+    #expect(withFailure.first?.text.contains("Next-action correction") == false)
+
+    let last = withFailure.last
+    #expect(last?.role == .tool)
+    #expect(last?.toolCallID == "edit-1")
+    #expect(last?.text.hasPrefix("old_text was not found.") == true)
+    #expect(last?.text.contains("[GOAT note]") == true)
+    #expect(last?.text.contains("Next-action correction") == true)
+    #expect(last?.text.contains("pen_edit_file failed") == true)
+}
+
+@Test func hostNotesAttachToTheNewestUserTurnWhenNoToolResultEndsTheExchange() async {
+    let worker = ShepherdGenerationWorker(engine: FakeEngine(script: []))
+    let turns = await worker.turns(
+        for: failedEditSnapshot(hostNotes: ["Use the structured tool interface."], trailingUser: true),
+        toolsAvailable: true, toolNames: ["pen_edit_file"])
+
+    #expect(turns.last?.role == .user)
+    #expect(turns.last?.text.hasPrefix("Try again.") == true)
+    #expect(turns.last?.text.contains("[GOAT note]\nUse the structured tool interface.") == true)
+    #expect(turns.filter { $0.role == .user }.count == 2)
+    #expect(turns.first?.text.contains("structured tool interface") == false)
+}
+
+@Test @MainActor func automaticTitleWaitsUntilTheToolTurnEnds() async throws {
+    let tools = FakeToolSource()
+    tools.specs = [ToolSpec(name: "srv__tool", description: "Fixture tool", parametersJSON: "{}")]
+    tools.mapping = ["srv__tool": fakeToolRoute()]
+    let (shepherd, engine, _, env) = makeShepherd(
+        script: [
+            toolCallRound(),
+            [.token("Done."), .done(GenStats(ttft: nil, tokens: 1, duration: 0.01))],
+            [.token("Fixture Tool Run"), .done(GenStats(ttft: nil, tokens: 3, duration: 0.01))],
+        ], tools: tools)
+    defer { _ = env }
+    let session = ChatSession(effort: .trot, modelID: "test-model")
+    let user = ChatMessage(role: .user)
+    user.text = "Run the fixture tool"
+    user.complete = true
+    session.messages = [user]
+
+    #expect(shepherd.run(in: session))
+    await shepherd.streamTask?.value
+
+    let requests = await engine.requests
+    #expect(requests.count == 3)
+    // Rounds one and two share the prefix; only the final request is the title prompt.
+    #expect(requests[0].turns.first?.text == requests[1].turns.first?.text)
+    #expect(requests[1].turns.contains { $0.role == .tool })
+    #expect(requests[2].turns.first?.role == .user)
+    #expect(requests[2].turns.first?.text.contains("Write a 3-5 word title") == true)
+    #expect(session.title == "Fixture Tool Run")
+    #expect(tools.invocations == 1)
+}
+
+@Test @MainActor func exactUsageCalibratesTheNextPlanForTheChat() async throws {
+    let env = FakeEnv()
+    env.availableModels = [ModelRef(id: "test-model", contextLength: 32_000)]
+    let (shepherd, engine, _, sameEnv) = makeShepherd(
+        script: [
+            [
+                .token("First."),
+                .done(GenStats(ttft: nil, tokens: 1, duration: 0.01, promptTokens: 40, tokensAreExact: true)),
+            ],
+            [
+                .token("Second."),
+                .done(GenStats(ttft: nil, tokens: 1, duration: 0.01, promptTokens: 60, tokensAreExact: true)),
+            ],
+        ], env: env)
+    defer { _ = sameEnv }
+    let session = ChatSession(effort: .trot, modelID: "test-model")
+    session.title = "Calibrated"
+    let user = ChatMessage(role: .user)
+    user.text = "hello"
+    user.complete = true
+    session.messages = [user]
+
+    #expect(session.contextCalibrationRatio == 1.0)
+    #expect(shepherd.run(in: session))
+    await shepherd.streamTask?.value
+    let first = session.contextCalibrationRatio
+    #expect(first != 1.0)
+    #expect(first >= PromptBudgeter.minimumCalibration && first <= PromptBudgeter.maximumCalibration)
+    #expect(session.contextCalibrationSamples == 1)
+    #expect(session.lastContextTokens == 41)
+    #expect(session.contextIsExact)
+
+    let follow = ChatMessage(role: .user)
+    follow.text = "again"
+    follow.complete = true
+    session.messages.append(follow)
+    #expect(shepherd.run(in: session))
+    await shepherd.streamTask?.value
+    #expect(session.contextCalibrationSamples == 2)
+    #expect(await engine.requests.count == 2)
 }
