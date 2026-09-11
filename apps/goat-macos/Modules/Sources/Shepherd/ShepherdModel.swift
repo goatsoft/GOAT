@@ -376,12 +376,30 @@ public final class ShepherdModel {
             releaseReservation(turnID: turnID, sessionID: session.id)
             return
         }
-        guard let model = env.availableModels.first(where: { $0.id == requestedModelID }),
-            let context = env.generationContext(for: requestedModelID)
+        // Heal a chat whose model left the live catalogue, for example when the engine unloads it
+        // mid session. Fall back to the engine default, then the first available model, so the turn
+        // still runs. Selection made through the app already resolves at chat open; this is the
+        // in-turn safety net, and it persists the healed choice for an explicitly set model.
+        let effectiveModelID: String
+        if env.availableModels.contains(where: { $0.id == requestedModelID }) {
+            effectiveModelID = requestedModelID
+        } else if let fallback = env.fallbackModelID,
+            env.availableModels.contains(where: { $0.id == fallback })
+        {
+            effectiveModelID = fallback
+        } else {
+            effectiveModelID = env.availableModels.first?.id ?? requestedModelID
+        }
+        guard let model = env.availableModels.first(where: { $0.id == effectiveModelID }),
+            let context = env.generationContext(for: effectiveModelID)
         else {
             activity.log(.warn, "Model \(requestedModelID) is unavailable or needs compatibility review")
             releaseReservation(turnID: turnID, sessionID: session.id)
             return
+        }
+        if let explicit = session.modelID, explicit != effectiveModelID {
+            session.modelID = effectiveModelID
+            env.sessionMetaChanged(session)
         }
         activity.log(.engine, "→ \(model.displayName) · \(session.effort.label)")
 

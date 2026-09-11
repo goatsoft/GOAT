@@ -711,7 +711,8 @@ func missingPenFileCapabilitiesAreNeverAdvertised(readOnly: Bool) async throws {
     await shepherd.streamTask?.value
     #expect(await engine.requests.first?.tools.count == 1)
     #expect(tools.invocations == 0)
-    #expect(tools.permissionRequested)
+    // Fenced syntax is ordinary content (ADR-0065): no tool runs and no approval is requested.
+    #expect(!tools.permissionRequested)
 }
 
 @Test @MainActor func incompleteAndErroredMessagesStayOutOfThePrompt() async {
