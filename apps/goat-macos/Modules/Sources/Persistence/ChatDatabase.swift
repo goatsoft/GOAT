@@ -215,6 +215,12 @@ public final class ChatDatabase: Sendable {
                 table.add(column: "statsFinishReason", .text)
             }
         }
+
+        migrator.registerMigration("v12-cached-prompt-tokens") { db in
+            try db.alter(table: "message") { table in
+                table.add(column: "statsCachedPromptTokens", .integer)
+            }
+        }
         return migrator
     }
 

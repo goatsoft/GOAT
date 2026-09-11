@@ -26,6 +26,7 @@ private func makeChat(id: String = UUID().uuidString, projectId: String? = nil) 
             id: "m1", chatId: chat.id, role: "assistant", text: "hi", thinking: "",
             error: nil, statsTtft: 1.25, statsTokens: 40, statsDuration: 2.25,
             statsGenerationTokensPerSecond: 41.5, statsTokensAreExact: true,
+            statsCachedPromptTokens: 512,
             complete: true, position: 0, createdAt: .now))
     let chats = try await db.chats()
     let messages = try await db.messages(chatId: chat.id)
@@ -34,6 +35,7 @@ private func makeChat(id: String = UUID().uuidString, projectId: String? = nil) 
     #expect(messages.first?.text == "hi")
     #expect(messages.first?.statsGenerationTokensPerSecond == 41.5)
     #expect(messages.first?.statsTokensAreExact == true)
+    #expect(messages.first?.statsCachedPromptTokens == 512)
 }
 
 @Test func killedStreamIsSealedOnReopenKeepingCheckpointedText() async throws {

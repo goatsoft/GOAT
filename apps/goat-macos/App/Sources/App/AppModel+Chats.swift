@@ -230,6 +230,7 @@ extension AppModel {
             statsDuration: msg.stats?.duration,
             statsGenerationTokensPerSecond: msg.stats?.generationTokensPerSecond,
             statsTokensAreExact: msg.stats?.tokensAreExact,
+            statsCachedPromptTokens: msg.stats?.cachedPromptTokens,
             complete: msg.complete,
             position: position,
             createdAt: msg.createdAt,
@@ -350,7 +351,8 @@ extension AppModel {
                         duration: duration,
                         tokensAreExact: record.statsTokensAreExact ?? false,
                         generationTokensPerSecond: record.statsGenerationTokensPerSecond,
-                        finishReason: record.statsFinishReason)
+                        finishReason: record.statsFinishReason,
+                        cachedPromptTokens: record.statsCachedPromptTokens)
                 }
                 return msg
             }

@@ -64,6 +64,7 @@ public struct MessageRecord: Codable, FetchableRecord, PersistableRecord, Sendab
     public var statsDuration: Double?
     public var statsGenerationTokensPerSecond: Double?
     public var statsTokensAreExact: Bool?
+    public var statsCachedPromptTokens: Int?
     public var complete: Bool
     public var position: Int
     public var createdAt: Date
@@ -77,6 +78,7 @@ public struct MessageRecord: Codable, FetchableRecord, PersistableRecord, Sendab
         id: String, chatId: String, role: String, text: String, thinking: String,
         error: String?, statsTtft: Double?, statsTokens: Int?, statsDuration: Double?,
         statsGenerationTokensPerSecond: Double? = nil, statsTokensAreExact: Bool? = nil,
+        statsCachedPromptTokens: Int? = nil,
         complete: Bool, position: Int, createdAt: Date, attachmentsJson: String? = nil,
         toolsJson: String? = nil, rating: Int? = nil,
         generationProvenanceJson: String? = nil, statsFinishReason: String? = nil
@@ -92,6 +94,7 @@ public struct MessageRecord: Codable, FetchableRecord, PersistableRecord, Sendab
         self.statsDuration = statsDuration
         self.statsGenerationTokensPerSecond = statsGenerationTokensPerSecond
         self.statsTokensAreExact = statsTokensAreExact
+        self.statsCachedPromptTokens = statsCachedPromptTokens
         self.complete = complete
         self.position = position
         self.createdAt = createdAt
