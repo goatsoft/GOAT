@@ -2629,3 +2629,45 @@ private actor HangingEngine: InferenceEngine {
     #expect(await engine.requests.count == 3)  // no fourth round after the pause
     #expect(session.messages.last?.error?.contains("without making progress") == true)
 }
+
+@Test @MainActor func compactionRowFoldsCoveredHistoryAndRidesAsAUserTurn() async throws {
+    let (shepherd, _, _, env) = makeShepherd(script: [])
+    let session = ChatSession(effort: .trot, modelID: "test-model")
+
+    let oldUser = ChatMessage(role: .user)
+    oldUser.text = "old question about the water shader"
+    oldUser.complete = true
+    let oldAnswer = ChatMessage(role: .assistant)
+    oldAnswer.text = "old answer about the water shader"
+    oldAnswer.complete = true
+    let summary = ChatMessage(role: .user)
+    summary.text = "Goal: ship the water system."
+    summary.kind = .compaction
+    summary.compaction = CompactionInfo(
+        coversUpToMessageID: oldAnswer.id.uuidString, coveredExchangeCount: 1,
+        filesRead: ["src/a.ts"], filesEdited: ["src/b.ts"])
+    summary.complete = true
+    let newUser = ChatMessage(role: .user)
+    newUser.text = "new question about lakes"
+    newUser.complete = true
+    session.messages = [oldUser, oldAnswer, summary, newUser]
+
+    let turns = await shepherd.turns(for: session)
+
+    // Covered rows are gone; the summary rides as a user turn carrying the appended file lists.
+    #expect(!turns.contains { $0.text.contains("old question about the water shader") })
+    #expect(!turns.contains { $0.text.contains("old answer about the water shader") })
+    let summaryTurn = try #require(
+        turns.first { $0.role == .user && $0.text.contains("Goal: ship the water system.") })
+    #expect(summaryTurn.text.contains("Files edited:"))
+    #expect(summaryTurn.text.contains("- src/b.ts"))
+    #expect(summaryTurn.text.contains("Files read:"))
+    #expect(summaryTurn.text.contains("- src/a.ts"))
+    #expect(turns.contains { $0.text.contains("new question about lakes") })
+
+    // The summary turn precedes the newest user turn in the prompt.
+    let summaryPos = try #require(turns.firstIndex { $0.text.contains("Goal: ship the water system.") })
+    let newPos = try #require(turns.firstIndex { $0.text.contains("new question about lakes") })
+    #expect(summaryPos < newPos)
+    _ = env
+}

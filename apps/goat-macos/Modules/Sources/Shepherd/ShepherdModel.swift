@@ -1157,17 +1157,23 @@ public final class ShepherdModel {
         }
 
         let latestUserIndex = session.messages.lastIndex(where: { $0.role == .user })
+        let lastCompactionIndex = session.messages.lastIndex { $0.kind == .compaction }
         let messages = session.messages.enumerated().map { index, message in
-            let text =
-                if let handoffCommand, message.id == handoffCommand.messageID {
-                    handoffCommand.modelRequest()
-                } else if index == latestUserIndex, let requestedSkillName {
-                    SkillCommand.modelRequest(
-                        in: message.text,
-                        invokedSkill: requestedSkillName)
-                } else {
-                    message.text
-                }
+            let text: String
+            if message.kind == .compaction, let info = message.compaction {
+                // ADR-0087: the folded summary rides as a user turn; GOAT appends the file lists.
+                let lists = ConversationCompaction.fileListsSection(
+                    read: info.filesRead, edited: info.filesEdited)
+                text = lists.isEmpty ? message.text : message.text + "\n\n" + lists
+            } else if let handoffCommand, message.id == handoffCommand.messageID {
+                text = handoffCommand.modelRequest()
+            } else if index == latestUserIndex, let requestedSkillName {
+                text = SkillCommand.modelRequest(
+                    in: message.text,
+                    invokedSkill: requestedSkillName)
+            } else {
+                text = message.text
+            }
             return ShepherdPromptSnapshot.Message(
                 role: message.role,
                 text: text,
@@ -1185,7 +1191,8 @@ public final class ShepherdModel {
                         result: event.result, isError: event.isError, denied: event.denied)
                 },
                 excludeFromPrompt: message.generationFailureCategory
-                    == GenerationProvenanceRecord.FailureCategory.toolFormatRecovery.rawValue,
+                    == GenerationProvenanceRecord.FailureCategory.toolFormatRecovery.rawValue
+                    || (lastCompactionIndex.map { index < $0 } ?? false),
                 failureSuffix: Self.promptFailureSuffix(for: message))
         }
         return ShepherdPromptSnapshot(
