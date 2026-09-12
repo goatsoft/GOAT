@@ -336,7 +336,9 @@ public actor PenCommandTools {
         let path = arguments[1]
         guard !path.isEmpty, !path.hasPrefix("/"), !path.contains("\0"), !path.contains("*") else { return nil }
         let components = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
-        guard !components.isEmpty, !components.contains(".."), !components.contains(where: { $0.hasPrefix("-") }) else { return nil }
+        guard !components.isEmpty, !components.contains(".."), !components.contains(where: { $0.hasPrefix("-") }) else {
+            return nil
+        }
         return FileOperationObservation(
             workspaceIdentity: workspaceIdentity, relativePath: components.joined(separator: "/"),
             kind: .remove, outcome: .succeeded)

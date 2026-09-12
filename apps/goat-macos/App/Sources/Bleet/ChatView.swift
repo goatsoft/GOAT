@@ -888,4 +888,3 @@ private struct SkillCatalogContext: Hashable {
 }
 
 // MARK: - The capsule: "Qwen3-8B-4bit · Trot ⌄"
-

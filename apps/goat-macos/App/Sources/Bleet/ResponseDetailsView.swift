@@ -22,13 +22,17 @@ struct ResponseDetailsView: View {
                     LabeledContent("Style", value: message.generationProvenance?.resolvedRequestStyle ?? "Unknown")
                     LabeledContent("Resolution", value: message.generationProvenance?.resolutionSource ?? "Unknown")
                     LabeledContent("Effort", value: message.generationProvenance?.selectedEffort ?? "Unknown")
-                    LabeledContent("Temperature", value: message.generationProvenance.map {
-                        String(format: "%.3f", $0.actualTemperature)
-                    } ?? "Unknown")
+                    LabeledContent(
+                        "Temperature",
+                        value: message.generationProvenance.map {
+                            String(format: "%.3f", $0.actualTemperature)
+                        } ?? "Unknown")
                 }
                 Section("Outcome") {
                     LabeledContent("Lifecycle", value: message.generationProvenance?.lifecycle.rawValue ?? "Unknown")
-                    LabeledContent("Finish reason", value: message.generationProvenance?.finishReason ?? message.stats?.finishReason ?? "Unknown")
+                    LabeledContent(
+                        "Finish reason",
+                        value: message.generationProvenance?.finishReason ?? message.stats?.finishReason ?? "Unknown")
                     if message.generationProvenanceUnavailable {
                         Label("Saved provenance could not be decoded.", systemImage: "exclamationmark.triangle")
                             .foregroundStyle(.secondary)

@@ -334,26 +334,32 @@ public actor PenFileTools {
                 throw Failure(
                     "No change: old_text and new_text are identical. Nothing was written. Skip this edit if the file is already correct, or supply a replacement that changes the requested content.",
                     diagnostic: ToolExecutionDiagnostic(
-                        fileObservations: [FileOperationObservation(
-                            workspaceIdentity: workspaceIdentity, relativePath: path,
-                            kind: .edit, outcome: .unchanged, beforeDigest: Self.digest(data))],
+                        fileObservations: [
+                            FileOperationObservation(
+                                workspaceIdentity: workspaceIdentity, relativePath: path,
+                                kind: .edit, outcome: .unchanged, beforeDigest: Self.digest(data))
+                        ],
                         failureCategory: .fileUnchanged)
                 )
             }
             guard !old.isEmpty, let match = content.range(of: old) else {
                 throw Failure(
                     "old_text was not found. Nothing was written. Call pen_read_file for this path and copy an exact, unique fragment from its content; do not guess the existing text.",
-                    diagnostic: ToolExecutionDiagnostic(fileObservations: [FileOperationObservation(
-                        workspaceIdentity: workspaceIdentity, relativePath: path,
-                        kind: .edit, outcome: .failed, beforeDigest: Self.digest(data))])
+                    diagnostic: ToolExecutionDiagnostic(fileObservations: [
+                        FileOperationObservation(
+                            workspaceIdentity: workspaceIdentity, relativePath: path,
+                            kind: .edit, outcome: .failed, beforeDigest: Self.digest(data))
+                    ])
                 )
             }
             guard content.range(of: old, range: content.index(after: match.lowerBound)..<content.endIndex) == nil else {
                 throw Failure(
                     "old_text matches more than once. Nothing was written. Read the file and include more surrounding text to select one location.",
-                    diagnostic: ToolExecutionDiagnostic(fileObservations: [FileOperationObservation(
-                        workspaceIdentity: workspaceIdentity, relativePath: path,
-                        kind: .edit, outcome: .failed, beforeDigest: Self.digest(data))])
+                    diagnostic: ToolExecutionDiagnostic(fileObservations: [
+                        FileOperationObservation(
+                            workspaceIdentity: workspaceIdentity, relativePath: path,
+                            kind: .edit, outcome: .failed, beforeDigest: Self.digest(data))
+                    ])
                 )
             }
             original = data
@@ -418,9 +424,11 @@ public actor PenFileTools {
                 throw Failure(
                     "File already exists. Nothing was overwritten. Call pen_read_file for this path, then pen_edit_file with an exact fragment from that read. If the content is already correct, skip it; do not recreate completed files. Empty content does not delete a file.",
                     diagnostic: ToolExecutionDiagnostic(
-                        fileObservations: [FileOperationObservation(
-                            workspaceIdentity: workspaceIdentity, relativePath: write.path,
-                            kind: .create, outcome: .alreadyExists)],
+                        fileObservations: [
+                            FileOperationObservation(
+                                workspaceIdentity: workspaceIdentity, relativePath: write.path,
+                                kind: .create, outcome: .alreadyExists)
+                        ],
                         failureCategory: .fileAlreadyExists)
                 )
             }

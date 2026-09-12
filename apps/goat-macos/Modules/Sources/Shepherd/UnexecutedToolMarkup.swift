@@ -84,8 +84,8 @@ public enum UnexecutedToolMarkupDetector {
     private static func isStandalone(_ text: String, range: Range<String.Index>, closing: Range<String.Index>) -> Bool {
         let lineStart = text[..<range.lowerBound].lastIndex(of: "\n").map { text.index(after: $0) } ?? text.startIndex
         let lineEnd = text[closing.upperBound...].firstIndex(of: "\n") ?? text.endIndex
-        return text[lineStart..<range.lowerBound].trimmingCharacters(in: .whitespaces) .isEmpty
-            && text[closing.upperBound..<lineEnd].trimmingCharacters(in: .whitespaces) .isEmpty
+        return text[lineStart..<range.lowerBound].trimmingCharacters(in: .whitespaces).isEmpty
+            && text[closing.upperBound..<lineEnd].trimmingCharacters(in: .whitespaces).isEmpty
     }
 
     private static func excludingCode(_ text: String) -> String {
@@ -99,7 +99,10 @@ public enum UnexecutedToolMarkupDetector {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if let marker = fence {
                 let run = trimmed.prefix { $0 == marker }.count
-                if run >= fenceLength { fence = nil; fenceLength = 0 }
+                if run >= fenceLength {
+                    fence = nil
+                    fenceLength = 0
+                }
                 result += "\n"
                 continue
             }
@@ -119,7 +122,10 @@ public enum UnexecutedToolMarkupDetector {
                     if character == delimiter {
                         var end = index
                         while end < line.endIndex && line[end] == delimiter { end = line.index(after: end) }
-                        if line.distance(from: index, to: end) >= inlineLength { inlineDelimiter = nil; inlineLength = 0 }
+                        if line.distance(from: index, to: end) >= inlineLength {
+                            inlineDelimiter = nil
+                            inlineLength = 0
+                        }
                         index = end
                     } else {
                         index = line.index(after: index)

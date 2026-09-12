@@ -69,10 +69,15 @@ public struct FileRepairProgressTracker: Sendable, Equatable {
             case (.edit, let outcome):
                 guard outcome != .succeeded else { break }
                 let signature = "\(observation.kind.rawValue):\(outcome.rawValue)"
-                if state.repeatedFailureSignature == signature { state.repeatedFailureCount += 1 }
-                else { state.repeatedFailureSignature = signature; state.repeatedFailureCount = 1 }
+                if state.repeatedFailureSignature == signature {
+                    state.repeatedFailureCount += 1
+                } else {
+                    state.repeatedFailureSignature = signature
+                    state.repeatedFailureCount = 1
+                }
                 if state.repeatedFailureCount >= 3 {
-                    stopMessage = "Stopped: three identical failed file mutations made no progress. Read the file and continue with a changed exact edit."
+                    stopMessage =
+                        "Stopped: three identical failed file mutations made no progress. Read the file and continue with a changed exact edit."
                 }
             case (.create, let outcome):
                 guard outcome != .succeeded else { break }
@@ -84,7 +89,8 @@ public struct FileRepairProgressTracker: Sendable, Equatable {
                     state.repeatedFailureCount = 1
                 }
                 if state.repeatedFailureCount >= 3 {
-                    stopMessage = "Stopped: three identical failed file mutations made no progress. Read the file and continue with a changed exact edit."
+                    stopMessage =
+                        "Stopped: three identical failed file mutations made no progress. Read the file and continue with a changed exact edit."
                 }
             case (.remove, .succeeded):
                 state.recoveryRequired = false
@@ -95,7 +101,8 @@ public struct FileRepairProgressTracker: Sendable, Equatable {
 
             states[key] = state
             if cycleDetected(state.mutationDigests) {
-                stopMessage = "Stopped: the same file content cycle repeated. Inspect the file and continue with a new message."
+                stopMessage =
+                    "Stopped: the same file content cycle repeated. Inspect the file and continue with a new message."
             }
         }
         return stopMessage

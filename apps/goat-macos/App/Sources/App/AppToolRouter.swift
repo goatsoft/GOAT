@@ -303,8 +303,7 @@ final class AppToolRouter: ShepherdToolSource {
                 }
                 return ToolResult(
                     content: result.content, isError: result.isError, diagnostic: result.diagnostic)
-            } catch is OwnerDeniedTool { return nil }
-            catch let error as PenFileTools.Failure {
+            } catch is OwnerDeniedTool { return nil } catch let error as PenFileTools.Failure {
                 return ToolResult(content: error.localizedDescription, isError: true, diagnostic: error.diagnostic)
             }
         case .mcp:

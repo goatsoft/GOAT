@@ -13,7 +13,7 @@ struct ModelInspectionTests {
                 isFavourite: true),
             ModelPreference(
                 identity: ModelIdentity(engineProfileID: "engine", modelID: "missing"),
-                isFavourite: true)
+                isFavourite: true),
         ]
         let projection = ModelCatalogProjection(
             models: models, preferences: preferences, engineProfileID: "engine")

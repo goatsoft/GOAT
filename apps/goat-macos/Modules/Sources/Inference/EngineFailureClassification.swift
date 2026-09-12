@@ -26,7 +26,8 @@ public extension EngineError {
         guard classification == .unsupportedModelArchitecture else {
             return Self.redacted(errorDescription ?? "The engine request failed.")
         }
-        return "The engine cannot load this model architecture. Check the checkpoint type and the engine’s supported architectures, then refresh models."
+        return
+            "The engine cannot load this model architecture. Check the checkpoint type and the engine’s supported architectures, then refresh models."
     }
 
     private static func redacted(_ text: String) -> String {

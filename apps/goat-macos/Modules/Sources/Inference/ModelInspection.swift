@@ -111,7 +111,8 @@ public struct ModelCatalogProjection: Equatable, Sendable {
             models.filter { preferencesByID[$0.id]?.isFavourite == true })
         availableOthers = sortModels(
             models.filter { preferencesByID[$0.id]?.isFavourite != true })
-        unavailableFavourites = preferences
+        unavailableFavourites =
+            preferences
             .filter {
                 $0.identity.engineProfileID == engineProfileID
                     && $0.isFavourite && !availableIDs.contains($0.identity.modelID)

@@ -19,7 +19,7 @@ struct ModelPreferencesTests {
         #expect(first != second)
         let file = ModelPreferencesFile(models: [
             ModelPreference(identity: first, isFavourite: true),
-            ModelPreference(identity: second, compatibilityOverride: .genericOpenAI)
+            ModelPreference(identity: second, compatibilityOverride: .genericOpenAI),
         ])
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("goat-model-preferences-\(UUID().uuidString).json")
@@ -32,7 +32,7 @@ struct ModelPreferencesTests {
     func duplicatePairingsAreRejected() throws {
         let identity = ModelIdentity(engineProfileID: "one", modelID: "model")
         let file = ModelPreferencesFile(models: [
-            ModelPreference(identity: identity), ModelPreference(identity: identity)
+            ModelPreference(identity: identity), ModelPreference(identity: identity),
         ])
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("goat-model-preferences-\(UUID().uuidString).json")

@@ -16,7 +16,7 @@ enum ModelDiagnosticReportBuilder {
             "Native reasoning value: \(provenance.nativeReasoningValue ?? "Unknown")",
             "Reasoning history replayed: \(provenance.reasoningHistoryReplayed ? "Yes" : "No")",
             "Lifecycle: \(provenance.lifecycle.rawValue)",
-            "Finish reason: \(provenance.finishReason ?? "Unknown")"
+            "Finish reason: \(provenance.finishReason ?? "Unknown")",
         ]
         if let adapter = provenance.adapterIdentifier { lines.append("Adapter: \(adapter)") }
         if let category = provenance.failureCategory {

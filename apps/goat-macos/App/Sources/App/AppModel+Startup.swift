@@ -115,7 +115,8 @@ extension AppModel {
         modelPreferences = snapshot.modelPreferences.models
         legacyCompatibilityReviews = snapshot.modelPreferences.legacyReviews
         durableModelPreferences = snapshot.modelPreferences
-        modelPreferencesWarning = snapshot.databaseWarning?.contains("Model preferences") == true
+        modelPreferencesWarning =
+            snapshot.databaseWarning?.contains("Model preferences") == true
             ? snapshot.databaseWarning : nil
         modelPreferencesLoading = false
         userThemes = snapshot.themes
