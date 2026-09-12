@@ -209,6 +209,14 @@ public actor OpenAICompatEngine: InferenceEngine {
 
     // MARK: Generation
 
+    /// Parses a `Retry-After` header. Handles the numeric-seconds form; the HTTP-date form is
+    /// treated as absent (ADR-0089). Returns nil when the header is missing or unparseable.
+    static func parseRetryAfter(_ value: String?) -> TimeInterval? {
+        guard let value = value?.trimmingCharacters(in: .whitespaces), !value.isEmpty else { return nil }
+        if let seconds = TimeInterval(value) { return max(0, seconds) }
+        return nil
+    }
+
     public func stream(_ r: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
         let config = self.config
         return AsyncThrowingStream { continuation in
@@ -247,7 +255,9 @@ public actor OpenAICompatEngine: InferenceEngine {
                             parsed
                             ?? (String(data: errorBody, encoding: .utf8)?
                                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
-                        throw EngineError.httpDetail(http.statusCode, String(detail.prefix(300)))
+                        throw EngineError.httpDetail(
+                            http.statusCode, String(detail.prefix(300)),
+                            retryAfter: Self.parseRetryAfter(http.value(forHTTPHeaderField: "Retry-After")))
                     }
 
                     for try await line in bytes.lines {

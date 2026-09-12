@@ -2409,3 +2409,101 @@ private func failedEditSnapshot(hostNotes: [String] = [], trailingUser: Bool = f
     #expect(session.contextCalibrationSamples == 2)
     #expect(await engine.requests.count == 2)
 }
+
+// MARK: - ADR-0089 Stage B: retry before the first token
+
+/// Yields a fixed prefix of events, then fails the stream. Proves output-started disables retry.
+private actor MidStreamFailEngine: InferenceEngine {
+    private(set) var requests: [GenerationRequest] = []
+    private let events: [GenerationEvent]
+    private let failure: Error
+    init(yield events: [GenerationEvent], thenThrow failure: Error) {
+        self.events = events
+        self.failure = failure
+    }
+    func health() async -> EngineHealth { .ok([]) }
+    func stream(_ request: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
+        requests.append(request)
+        let events = self.events
+        let failure = self.failure
+        return AsyncThrowingStream { continuation in
+            for event in events { continuation.yield(event) }
+            continuation.finish(throwing: failure)
+        }
+    }
+}
+
+@Test @MainActor func streamRetriesATransientFailureBeforeAnyOutput() async throws {
+    let engine = FakeEngine(
+        script: [[.token("recovered"), .done(GenStats(ttft: nil, tokens: 1, duration: 0.01))]],
+        failingRequest: 1)
+    let worker = ShepherdGenerationWorker(engine: engine, retryBaseDelaySeconds: 0)
+    var updates: [ShepherdStreamUpdate] = []
+    let result = try await worker.stream(workerRequest()) { update in
+        updates.append(update)
+        return true
+    }
+    #expect(await engine.requests.count == 2)  // one 503, then success
+    #expect(updates.map(\.text).joined() == "recovered")
+    #expect(result.stats?.tokens == 1)
+}
+
+@Test @MainActor func streamDoesNotRetryOnceOutputHasStarted() async throws {
+    let engine = MidStreamFailEngine(yield: [.token("partial")], thenThrow: EngineError.http(503))
+    let worker = ShepherdGenerationWorker(engine: engine, retryBaseDelaySeconds: 0)
+    var updates: [ShepherdStreamUpdate] = []
+    var threw = false
+    do {
+        _ = try await worker.stream(workerRequest()) { update in
+            updates.append(update)
+            return true
+        }
+    } catch {
+        threw = true
+    }
+    #expect(threw)
+    #expect(await engine.requests.count == 1)  // a shown token disables retry
+    #expect(updates.map(\.text).joined() == "partial")
+}
+
+@Test @MainActor func streamRetriesAWhollyEmptyResponseOnce() async throws {
+    let engine = FakeEngine(script: [
+        [.done(GenStats(ttft: nil, tokens: 0, duration: 0.01))],
+        [.token("recovered"), .done(GenStats(ttft: nil, tokens: 1, duration: 0.01))],
+    ])
+    let worker = ShepherdGenerationWorker(engine: engine, retryBaseDelaySeconds: 0)
+    var updates: [ShepherdStreamUpdate] = []
+    let result = try await worker.stream(workerRequest()) { update in
+        updates.append(update)
+        return true
+    }
+    #expect(await engine.requests.count == 2)
+    #expect(updates.map(\.text).joined() == "recovered")
+    #expect(result.stats?.tokens == 1)
+}
+
+@Test @MainActor func streamStopsAfterASecondEmptyResponse() async throws {
+    let engine = FakeEngine(script: [
+        [.done(GenStats(ttft: nil, tokens: 0, duration: 0.01))],
+        [.done(GenStats(ttft: nil, tokens: 0, duration: 0.01))],
+    ])
+    let worker = ShepherdGenerationWorker(engine: engine, retryBaseDelaySeconds: 0)
+    let result = try await worker.stream(workerRequest()) { _ in true }
+    #expect(await engine.requests.count == 2)  // one silent retry only
+    #expect(result.toolCalls.isEmpty)
+    #expect(result.stats?.tokens == 0)
+}
+
+@Test func retryPredicateMatchesTransientStatusesAndResetsOnly() {
+    #expect(ShepherdGenerationWorker.isRetryableBeforeFirstToken(EngineError.http(503)))
+    #expect(
+        ShepherdGenerationWorker.isRetryableBeforeFirstToken(
+            EngineError.httpDetail(429, "slow down", retryAfter: 2)))
+    #expect(ShepherdGenerationWorker.isRetryableBeforeFirstToken(URLError(.networkConnectionLost)))
+    #expect(!ShepherdGenerationWorker.isRetryableBeforeFirstToken(EngineError.http(400)))
+    #expect(!ShepherdGenerationWorker.isRetryableBeforeFirstToken(EngineError.http(500)))
+    #expect(!ShepherdGenerationWorker.isRetryableBeforeFirstToken(EngineError.notConfigured))
+    #expect(
+        ShepherdGenerationWorker.retryAfter(
+            from: EngineError.httpDetail(429, "x", retryAfter: 5)) == 5)
+}

@@ -59,15 +59,23 @@ actor ShepherdGenerationWorker {
     private let engine: any InferenceEngine
     private let promptBudgeter = PromptBudgeter()
     private let attachmentLoader: @Sendable (String) async -> Data?
+    /// Retry-before-first-token backoff (ADR-0089). Base doubles per attempt, jittered, then capped.
+    private let retryBaseDelaySeconds: Double
+    private let maxStreamRetries: Int
+    private let maxRetryDelaySeconds: Double = 30
 
     init(
         engine: any InferenceEngine,
         attachmentLoader: @escaping @Sendable (String) async -> Data? = {
             AttachmentStore.load($0)
-        }
+        },
+        retryBaseDelaySeconds: Double = 1.0,
+        maxStreamRetries: Int = 3
     ) {
         self.engine = engine
         self.attachmentLoader = attachmentLoader
+        self.retryBaseDelaySeconds = retryBaseDelaySeconds
+        self.maxStreamRetries = maxStreamRetries
     }
 
     func turns(
@@ -321,67 +329,133 @@ actor ShepherdGenerationWorker {
         _ request: GenerationRequest,
         publish: @escaping StreamPublisher
     ) async throws -> ShepherdStreamResult {
-        var textBuffer = ""
-        var thinkingBuffer = ""
-        var toolInputBytes = 0
-        var toolCalls: [ToolCallEvent] = []
-        var stats: GenStats?
-        var lastFlush = ContinuousClock.now
-        var lastCheckpoint = ContinuousClock.now
+        var attempt = 0
+        var emptyRetried = false
+        while true {
+            var textBuffer = ""
+            var thinkingBuffer = ""
+            var toolInputBytes = 0
+            var toolCalls: [ToolCallEvent] = []
+            var stats: GenStats?
+            var lastFlush = ContinuousClock.now
+            var lastCheckpoint = ContinuousClock.now
+            var receivedContentEvent = false
 
-        do {
-            for try await event in await engine.stream(request) {
-                try Task.checkCancellation()
-                switch event {
-                case .token(let text):
-                    textBuffer += text
-                case .thinking(let thinking):
-                    thinkingBuffer += thinking
-                case .toolInput(let bytes):
-                    toolInputBytes += max(0, bytes)
-                case .toolCalls(let calls):
-                    toolCalls = calls
-                case .done(let finalStats):
-                    stats = finalStats
+            do {
+                for try await event in await engine.stream(request) {
+                    try Task.checkCancellation()
+                    switch event {
+                    case .token(let text):
+                        textBuffer += text
+                        receivedContentEvent = true
+                    case .thinking(let thinking):
+                        thinkingBuffer += thinking
+                        receivedContentEvent = true
+                    case .toolInput(let bytes):
+                        toolInputBytes += max(0, bytes)
+                        receivedContentEvent = true
+                    case .toolCalls(let calls):
+                        toolCalls = calls
+                        receivedContentEvent = true
+                    case .done(let finalStats):
+                        stats = finalStats
+                    }
+
+                    let now = ContinuousClock.now
+                    let shouldCheckpoint = lastCheckpoint.duration(to: now) > .seconds(1)
+                    guard lastFlush.duration(to: now) > .milliseconds(33) || shouldCheckpoint else {
+                        continue
+                    }
+                    let update = ShepherdStreamUpdate(
+                        text: textBuffer,
+                        thinking: thinkingBuffer,
+                        shouldCheckpoint: shouldCheckpoint, toolInputBytes: toolInputBytes)
+                    textBuffer = ""
+                    thinkingBuffer = ""
+                    toolInputBytes = 0
+                    lastFlush = now
+                    if shouldCheckpoint { lastCheckpoint = now }
+                    guard await publish(update) else { throw CancellationError() }
                 }
-
-                let now = ContinuousClock.now
-                let shouldCheckpoint = lastCheckpoint.duration(to: now) > .seconds(1)
-                guard lastFlush.duration(to: now) > .milliseconds(33) || shouldCheckpoint else {
+            } catch {
+                // Retry a transient failure only while nothing has been shown yet (ADR-0089).
+                if !receivedContentEvent, Self.isRetryableBeforeFirstToken(error),
+                    attempt < maxStreamRetries
+                {
+                    attempt += 1
+                    try await Task.sleep(for: retryDelay(attempt: attempt, error: error))
+                    try Task.checkCancellation()
                     continue
                 }
-                let update = ShepherdStreamUpdate(
-                    text: textBuffer,
-                    thinking: thinkingBuffer,
-                    shouldCheckpoint: shouldCheckpoint, toolInputBytes: toolInputBytes)
-                textBuffer = ""
-                thinkingBuffer = ""
-                toolInputBytes = 0
-                lastFlush = now
-                if shouldCheckpoint { lastCheckpoint = now }
-                guard await publish(update) else { throw CancellationError() }
+                if !textBuffer.isEmpty || !thinkingBuffer.isEmpty || toolInputBytes > 0 {
+                    _ = await publish(
+                        ShepherdStreamUpdate(
+                            text: textBuffer,
+                            thinking: thinkingBuffer,
+                            shouldCheckpoint: false, toolInputBytes: toolInputBytes))
+                }
+                throw error
             }
-        } catch {
+
+            // A wholly empty initial response is retried once, silently (ADR-0089). Only round 0
+            // qualifies: retrying a tool-loop continuation could re-run tools with side effects, and
+            // an empty final after tool work is a legitimate end-of-turn, not a failure to recover.
+            if !receivedContentEvent, request.round == 0, !emptyRetried, !Task.isCancelled {
+                emptyRetried = true
+                continue
+            }
+
             if !textBuffer.isEmpty || !thinkingBuffer.isEmpty || toolInputBytes > 0 {
-                _ = await publish(
+                let accepted = await publish(
                     ShepherdStreamUpdate(
                         text: textBuffer,
                         thinking: thinkingBuffer,
                         shouldCheckpoint: false, toolInputBytes: toolInputBytes))
+                guard accepted else { throw CancellationError() }
             }
-            throw error
+            try Task.checkCancellation()
+            return ShepherdStreamResult(toolCalls: toolCalls, stats: stats)
         }
+    }
 
-        if !textBuffer.isEmpty || !thinkingBuffer.isEmpty || toolInputBytes > 0 {
-            let accepted = await publish(
-                ShepherdStreamUpdate(
-                    text: textBuffer,
-                    thinking: thinkingBuffer,
-                    shouldCheckpoint: false, toolInputBytes: toolInputBytes))
-            guard accepted else { throw CancellationError() }
+    /// Transient failures worth retrying before any output has been shown (ADR-0089): HTTP 408, 429,
+    /// 502, 503, 504 and connection-level resets. Context-overflow and other 4xx/5xx are not retried.
+    static func isRetryableBeforeFirstToken(_ error: Error) -> Bool {
+        if let engine = error as? EngineError {
+            switch engine {
+            case .http(let code), .httpDetail(let code, _, _):
+                return retryableStatusCodes.contains(code)
+            case .notConfigured:
+                return false
+            }
         }
-        try Task.checkCancellation()
-        return ShepherdStreamResult(toolCalls: toolCalls, stats: stats)
+        if let url = error as? URLError {
+            return retryableURLErrorCodes.contains(url.code)
+        }
+        return false
+    }
+
+    static let retryableStatusCodes: Set<Int> = [408, 429, 502, 503, 504]
+    static let retryableURLErrorCodes: Set<URLError.Code> = [
+        .networkConnectionLost, .timedOut, .cannotConnectToHost,
+    ]
+
+    /// A server-supplied `Retry-After`, when the engine surfaced one (ADR-0089).
+    static func retryAfter(from error: Error) -> TimeInterval? {
+        guard let engine = error as? EngineError else { return nil }
+        if case .httpDetail(_, _, let retryAfter) = engine { return retryAfter }
+        return nil
+    }
+
+    /// Exponential backoff with equal jitter, honouring `Retry-After` when present (ADR-0089).
+    private func retryDelay(attempt: Int, error: Error) -> Duration {
+        if let retryAfter = Self.retryAfter(from: error) {
+            return .seconds(min(max(retryAfter, 0), maxRetryDelaySeconds))
+        }
+        let exponential = retryBaseDelaySeconds * pow(2.0, Double(attempt - 1))
+        let capped = min(exponential, maxRetryDelaySeconds)
+        let jittered = capped / 2 + Double.random(in: 0...(capped / 2))
+        return .seconds(jittered)
     }
 
     /// Auto-title generation has no live UI consumer, so collect its small response entirely on

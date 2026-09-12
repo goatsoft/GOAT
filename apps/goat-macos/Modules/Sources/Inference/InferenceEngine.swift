@@ -282,7 +282,7 @@ public enum GenerationEvent: Sendable {
 
 public enum EngineError: LocalizedError, Sendable {
     case http(Int)
-    case httpDetail(Int, String)
+    case httpDetail(Int, String, retryAfter: TimeInterval?)
     case notConfigured
 
     public var errorDescription: String? {
@@ -291,7 +291,7 @@ public enum EngineError: LocalizedError, Sendable {
             code == 401 || code == 403
                 ? "The engine wants an API key. Add one in Settings → Engine."
                 : "Engine returned HTTP \(code)."
-        case .httpDetail(let code, let detail):
+        case .httpDetail(let code, let detail, _):
             code == 401 || code == 403
                 ? "The engine wants an API key. Add one in Settings → Engine."
                 : "Engine returned HTTP \(code)\(detail.isEmpty ? "." : " - \(detail)")"

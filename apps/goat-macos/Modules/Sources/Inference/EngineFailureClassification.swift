@@ -17,7 +17,7 @@ public extension EngineError {
             return .connection
         case .http(let code):
             return Self.classification(for: code, detail: "")
-        case .httpDetail(let code, let detail):
+        case .httpDetail(let code, let detail, _):
             return Self.classification(for: code, detail: detail)
         }
     }

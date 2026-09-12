@@ -22,7 +22,7 @@ Beside the file-repair tracker, a turn-scoped repetition tracker records each ex
 
 ### Retry before the first token
 
-A request that fails with HTTP 408, 429, 502, 503, 504, a connection reset or a classified `unsupportedParameter` (see [ADR-0086](0086-sampling-parameters-are-model-facts.md)) is retried up to three times with exponential backoff starting at one second, jittered, honouring `retry-after`, provided no token or tool fragment has been received. Once output has started there is no retry; the partial row is kept per the rule above. Context-overflow errors are never retried here; they route to [ADR-0087](0087-conversation-compaction.md). An empty completed response is retried once silently before the "ended without a final reply" message appears.
+A request that fails with HTTP 408, 429, 502, 503, 504, a connection reset or a classified `unsupportedParameter` (see [ADR-0086](0086-sampling-parameters-are-model-facts.md)) is retried up to three times with exponential backoff starting at one second, jittered, honouring `retry-after`, provided no token or tool fragment has been received. Once output has started there is no retry; the partial row is kept per the rule above. Context-overflow errors are never retried here; they route to [ADR-0087](0087-conversation-compaction.md). An empty initial response (round 0, before any tool round, so completed tool actions are never re-run) is retried once silently before the "ended without a final reply" message appears.
 
 ### Stall watchdog
 
