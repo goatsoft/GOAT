@@ -18,32 +18,120 @@ struct ModelEffortControl: View {
 
     private var activeModelID: String? { model.resolvedModelID(for: session) }
 
+    private var nativeMenuLabel: AttributedString {
+        var modelPart = AttributedString(projection.selectedDisplayName)
+        modelPart.foregroundColor = .white
+
+        var separator = AttributedString(" · ")
+        separator.foregroundColor = .secondary
+
+        var effortPart = AttributedString(session.effort.label)
+        effortPart.foregroundColor = session.effort.presentationColor(in: model.theme)
+
+        modelPart.append(separator)
+        modelPart.append(effortPart)
+        return modelPart
+    }
+
     var body: some View {
-        Button { showMenu.toggle() } label: {
-            HStack(spacing: 6) {
-                if model.modelCapabilitiesLoading, model.capabilityProbeModelID == activeModelID {
-                    GoatLoadingIndicator().controlSize(.mini)
-                }
-                Text(projection.selectedDisplayName)
-                    .fontWeight(.medium)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Text(session.effort.label)
-                    .foregroundStyle(session.effort.presentationColor(in: model.theme))
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 9))
-                    .foregroundStyle(.tertiary)
-            }
-            .font(.system(size: 12))
-            .padding(.vertical, 4)
-            .contentShape(Rectangle())
+        Menu {
+            nativeMenuContent
+        } label: {
+            Text(nativeMenuLabel)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.primary)
         }
+        .menuStyle(.borderlessButton)
         .buttonStyle(.plain)
+        .tint(.white)
+        .foregroundStyle(.white)
         .accessibilityLabel("Model and effort")
-        .accessibilityValue("\(projection.selectedDisplayName), \(projection.selectedAvailability), \(session.effort.label)")
+        .accessibilityValue(
+            "\(projection.selectedDisplayName), \(projection.selectedAvailability), \(session.effort.label)"
+        )
         .help("Model and effort - \(session.effort.blurb) (Command-1 through Command-4)")
-        .popover(isPresented: $showMenu, arrowEdge: .bottom) {
-            menuContent.frame(width: Caprine.ModelMenu.width)
+    }
+
+    @ViewBuilder
+    private var nativeMenuContent: some View {
+        let selected = projection.selectedModel
+        let favourites = projection.favourites.filter { $0.id != selected?.id }
+        let others = projection.otherModels.filter { $0.id != selected?.id }
+        Section {
+            if let selected {
+                systemModelRow(
+                    selected, favourite: projection.favourites.contains { $0.id == selected.id }
+                )
+                .disabled(model.shepherd.hasActiveTurn || model.engineTransitioning)
+            }
+            ForEach(favourites) { ref in
+                systemModelRow(ref, favourite: true)
+                    .disabled(model.shepherd.hasActiveTurn || model.engineTransitioning)
+            }
+            ForEach(projection.unavailableFavourites, id: \.identity) { preference in
+                systemModelRow(
+                    ModelRef(id: preference.identity.modelID), favourite: true,
+                    subtitle: "Unavailable"
+                )
+                .disabled(true)
+            }
+            if selected == nil, favourites.isEmpty, projection.unavailableFavourites.isEmpty {
+                Text("No models available")
+            }
+        } header: {
+            Text("MODEL")
+        }
+
+        Menu("Other models") {
+            if others.isEmpty {
+                Text("No other models")
+            } else {
+                ForEach(others) { ref in
+                    systemModelRow(ref)
+                        .disabled(model.shepherd.hasActiveTurn || model.engineTransitioning)
+                }
+            }
+        }
+        .disabled(others.isEmpty)
+
+        Menu("Effort") {
+            ForEach(Effort.allCases) { effort in
+                Toggle(isOn: effortBinding(for: effort)) {
+                    Text("\(effort.label) - \(effort.blurb)")
+                        .foregroundStyle(effort.presentationColor(in: model.theme))
+                }
+            }
+        }
+
+        Divider()
+        Button("Manage Models…") {
+            model.settingsTab = .models
+            openSettings()
+        }
+        if model.activeEngineProfile != nil {
+            Button("Refresh Models") { Task { await model.refreshModelCatalog() } }
+        }
+    }
+
+    private func systemModelRow(
+        _ ref: ModelRef, favourite: Bool = false, subtitle: String? = nil
+    ) -> some View {
+        Button {
+            guard !model.shepherd.hasActiveTurn, !model.engineTransitioning else { return }
+            model.selectModel(ref.id, in: session)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: ref.menuTypeSymbol)
+                    .foregroundStyle(.white)
+                Text("\(ref.displayName) · \(subtitle ?? self.subtitle(for: ref))")
+                Spacer(minLength: 16)
+                if favourite {
+                    Image(systemName: "star.fill").foregroundStyle(.yellow)
+                }
+                if ref.id == activeModelID {
+                    Image(systemName: "checkmark").foregroundStyle(.white)
+                }
+            }
         }
     }
 
@@ -64,7 +152,7 @@ struct ModelEffortControl: View {
                         }
                     } else {
                         ForEach(projection.favourites) { ref in
-                            twoLineRow(ref, selected: ref.id == activeModelID) {
+                            twoLineRow(ref, selected: ref.id == activeModelID, favourite: true) {
                                 model.selectModel(ref.id, in: session)
                                 showMenu = false
                             }
@@ -72,8 +160,11 @@ struct ModelEffortControl: View {
                         }
                     }
                     ForEach(projection.unavailableFavourites, id: \.identity) { preference in
-                        twoLineRow(ModelRef(id: preference.identity.modelID), selected: false, subtitle: "Unavailable") {}
-                            .disabled(true)
+                        twoLineRow(
+                            ModelRef(id: preference.identity.modelID), selected: false,
+                            favourite: true, subtitle: "Unavailable"
+                        ) {}
+                        .disabled(true)
                     }
                 }
             }
@@ -87,9 +178,7 @@ struct ModelEffortControl: View {
                     Text("No other models")
                 } else {
                     ForEach(projection.otherModels) { ref in
-                        Toggle(isOn: modelSelectionBinding(for: ref.id)) {
-                            Text("\(ref.displayName) · \(subtitle(for: ref))")
-                        }
+                        modelMenuRow(ref, selected: ref.id == activeModelID)
                     }
                 }
             }
@@ -99,6 +188,7 @@ struct ModelEffortControl: View {
                 ForEach(Effort.allCases) { effort in
                     Toggle(isOn: effortBinding(for: effort)) {
                         Text("\(effort.label) - \(effort.blurb)")
+                            .foregroundStyle(effort.presentationColor(in: model.theme))
                     }
                 }
             }
@@ -108,12 +198,6 @@ struct ModelEffortControl: View {
                 showMenu = false
                 model.settingsTab = .models
                 openSettings()
-            }
-            if model.engineAppURL != nil {
-                plainRow("Open \(model.enginePreset.name)…") {
-                    showMenu = false
-                    model.openEngineApp()
-                }
             }
             if model.activeEngineProfile != nil {
                 plainRow("Refresh Models") {
@@ -125,33 +209,49 @@ struct ModelEffortControl: View {
         .padding(.vertical, Caprine.ModelMenu.verticalInset)
     }
 
-    private func submenu<Content: View>(title: String, value: String?, disabled: Bool, @ViewBuilder content: () -> Content) -> some View {
-        Menu { content() } label: {
+    private func submenu<Content: View>(
+        title: String, value: String?, disabled: Bool, @ViewBuilder content: () -> Content
+    ) -> some View {
+        Menu {
+            content()
+        } label: {
             HStack(spacing: Caprine.ModelMenu.spacing) {
                 Text(title)
                 Spacer()
                 if let value { Text(value).foregroundStyle(.secondary) }
-                Image(systemName: "chevron.right")
             }
             .padding(.horizontal, Caprine.ModelMenu.horizontalInset)
             .padding(.vertical, Caprine.ModelMenu.verticalInset)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
         .disabled(disabled)
         .accessibilityLabel(value.map { "\(title), \($0)" } ?? title)
     }
 
-    private func modelSelectionBinding(for id: String) -> Binding<Bool> {
-        Binding(
-            get: { activeModelID == id },
-            set: { selected in
-                guard selected, !model.shepherd.hasActiveTurn, !model.engineTransitioning else { return }
-                model.selectModel(id, in: session)
-                showMenu = false
-            })
+    private func modelMenuRow(_ ref: ModelRef, selected: Bool) -> some View {
+        Button {
+            guard !model.shepherd.hasActiveTurn, !model.engineTransitioning else { return }
+            model.selectModel(ref.id, in: session)
+            showMenu = false
+        } label: {
+            HStack(spacing: 9) {
+                Image(systemName: ref.looksVisionCapable ? "eye" : "cpu")
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(Color.secondary)
+                Text("\(ref.displayName) · \(subtitle(for: ref))")
+                Spacer(minLength: 12)
+                if selected {
+                    Image(systemName: "checkmark")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .font(Caprine.ModelMenu.titleFont)
+            .padding(.horizontal, Caprine.ModelMenu.horizontalInset)
+            .padding(.vertical, Caprine.ModelMenu.verticalInset)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(.plain)
     }
 
     private func effortBinding(for effort: Effort) -> Binding<Bool> {
@@ -164,15 +264,25 @@ struct ModelEffortControl: View {
             })
     }
 
-    private func twoLineRow(_ ref: ModelRef, selected: Bool, subtitle: String? = nil, action: @escaping () -> Void) -> some View {
+    private func twoLineRow(
+        _ ref: ModelRef, selected: Bool, favourite: Bool = false, subtitle: String? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
         Button(action: action) {
             HStack(spacing: 9) {
+                if favourite {
+                    Image(systemName: "star.fill")
+                        .foregroundStyle(.yellow)
+                }
                 VStack(alignment: .leading, spacing: 1) {
                     Text(ref.displayName).font(.system(size: 13, weight: .semibold))
                     Text(subtitle ?? self.subtitle(for: ref)).font(.system(size: 11)).foregroundStyle(.secondary)
                 }
                 Spacer()
-                if selected { Image(systemName: "checkmark").font(.system(size: 11, weight: .semibold)).foregroundStyle(model.theme.tokens.tint) }
+                if selected {
+                    Image(systemName: "checkmark").font(.system(size: 11, weight: .semibold)).foregroundStyle(
+                        model.theme.tokens.tint)
+                }
             }
             .padding(.horizontal, Caprine.ModelMenu.horizontalInset)
             .padding(.vertical, Caprine.ModelMenu.verticalInset)
@@ -199,5 +309,19 @@ struct ModelEffortControl: View {
         if ref.capabilities.vision.support == .supported || ref.looksVisionCapable { traits.append("Vision") }
         traits.append(ref.id.contains("/") ? String(ref.id.split(separator: "/")[0]) : "local")
         return traits.joined(separator: " · ")
+    }
+}
+
+extension ModelRef {
+    /// A distinct SF Symbol per model type for the compact model menus. Presentation only,
+    /// derived from resolved capabilities and name heuristics; never authoritative.
+    var menuTypeSymbol: String {
+        let vision = capabilities.vision.support == .supported || looksVisionCapable
+        let reasoning = capabilities.reasoning.support == .supported
+        if isCoderFocused { return "chevron.left.forwardslash.chevron.right" }
+        if vision && reasoning { return "sparkles" }
+        if vision { return "eye" }
+        if reasoning { return "brain" }
+        return "cpu"
     }
 }

@@ -22,32 +22,35 @@ struct ModelMenuItems: View {
                 Button("No Models - Refresh Engine") { Task { await model.refreshModelCatalog() } }
             }
         } else {
-            ForEach(projection.favourites) { ref in
-                Toggle(isOn: binding(for: ref.id)) {
-                    Label {
-                        Text("\(ref.displayName) - \(subtitle(for: ref))")
-                    } icon: {
-                        Image(systemName: ref.looksVisionCapable ? "eye" : "cpu")
-                    }
-                }
-                .disabled(model.shepherd.hasActiveTurn || model.engineTransitioning)
+            let selected = projection.selectedModel
+            let favourites = projection.favourites.filter { $0.id != selected?.id }
+            let others = projection.otherModels.filter { $0.id != selected?.id }
+            if let selected {
+                modelRow(selected, favourite: projection.favourites.contains { $0.id == selected.id })
+                    .disabled(model.shepherd.hasActiveTurn || model.engineTransitioning)
+            }
+            ForEach(favourites) { ref in
+                modelRow(ref, favourite: true)
+                    .disabled(model.shepherd.hasActiveTurn || model.engineTransitioning)
             }
             ForEach(projection.unavailableFavourites, id: \.identity) { preference in
-                Label("\(ModelRef(id: preference.identity.modelID).displayName) - Unavailable", systemImage: "slash.circle")
+                Label {
+                    Text("\(ModelRef(id: preference.identity.modelID).displayName) - Unavailable")
+                } icon: {
+                    Image(systemName: "star.fill").foregroundStyle(.yellow)
+                }
             }
             Menu("Other models") {
-                if projection.otherModels.isEmpty {
+                if others.isEmpty {
                     Text("No other models")
                 } else {
-                    ForEach(projection.otherModels) { ref in
-                        Toggle(isOn: binding(for: ref.id)) {
-                            Label("\(ref.displayName) - \(subtitle(for: ref))", systemImage: ref.looksVisionCapable ? "eye" : "cpu")
-                        }
-                        .disabled(model.shepherd.hasActiveTurn || model.engineTransitioning)
+                    ForEach(others) { ref in
+                        modelRow(ref, favourite: false)
+                            .disabled(model.shepherd.hasActiveTurn || model.engineTransitioning)
                     }
                 }
             }
-            .disabled(projection.otherModels.isEmpty)
+            .disabled(others.isEmpty)
         }
     }
 
@@ -68,13 +71,23 @@ struct ModelMenuItems: View {
         return traits.joined(separator: " · ")
     }
 
-    private func binding(for id: String) -> Binding<Bool> {
-        Binding(
-            get: { activeID == id },
-            set: { isOn in
-                guard isOn else { return }
-                model.selectModel(id, in: model.currentSession)
-            })
+    private func modelRow(_ ref: ModelRef, favourite: Bool) -> some View {
+        Button {
+            model.selectModel(ref.id, in: model.currentSession)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: ref.menuTypeSymbol)
+                    .foregroundStyle(.white)
+                Text("\(ref.displayName) - \(subtitle(for: ref))")
+                Spacer(minLength: 12)
+                if favourite {
+                    Image(systemName: "star.fill").foregroundStyle(.yellow)
+                }
+                if activeID == ref.id {
+                    Image(systemName: "checkmark").foregroundStyle(.white)
+                }
+            }
+        }
     }
 }
 
@@ -87,6 +100,7 @@ struct EffortMenuItems: View {
             Toggle(isOn: binding(for: effort)) {
                 Label {
                     Text("\(effort.label) - \(effort.blurb)")
+                        .foregroundStyle(effort.presentationColor(in: model.theme))
                 } icon: {
                     if model.presentation.isEnabled { effort.goatie.image.resizable().frame(width: 16, height: 16) }
                 }

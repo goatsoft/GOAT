@@ -15,7 +15,7 @@ extension Caprine {
     public enum ModelMenu {
         public static let width: CGFloat = 290
         public static let horizontalInset: CGFloat = 12
-        public static let verticalInset: CGFloat = 6
+        public static let verticalInset: CGFloat = 4
         public static let spacing: CGFloat = 6
         public static let maxListHeight: CGFloat = 360
         public static let titleFont: Font = .callout
