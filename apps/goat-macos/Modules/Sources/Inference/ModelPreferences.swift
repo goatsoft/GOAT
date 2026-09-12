@@ -198,3 +198,30 @@ public enum ModelPreferencesStore {
         }
     }
 }
+
+/// Migrates the legacy engine-wide request style (ADR-0021) into per-engine review data when GOAT
+/// adopts per-model compatibility (ADR-0084). Each stored engine whose `requestStyle` is not
+/// `.automatic` gains one pending `LegacyCompatibilityReview`, so the previous choice is preserved
+/// as reviewable data instead of being copied onto every model. The step is idempotent: an engine
+/// that already has a review (pending, assigned or discarded) is left untouched, so a resolved or
+/// discarded choice is never resurrected on a later launch. Automatic engines assert no legacy
+/// dialect and are skipped, and no model override is written here; a legacy style binds to a model
+/// only when the owner assigns it (`AppModel.resolveLegacyCompatibility`).
+public enum LegacyCompatibilityMigration {
+    /// Adds any missing pending reviews to `file` and reports whether it changed.
+    @discardableResult
+    public static func migrate(
+        _ file: inout ModelPreferencesFile, engines: [EngineProfile]
+    ) -> Bool {
+        var changed = false
+        for engine in engines where engine.requestStyle != .automatic {
+            guard !file.legacyReviews.contains(where: { $0.engineProfileID == engine.id })
+            else { continue }
+            file.legacyReviews.append(
+                LegacyCompatibilityReview(
+                    engineProfileID: engine.id, legacyStyle: engine.requestStyle))
+            changed = true
+        }
+        return changed
+    }
+}
