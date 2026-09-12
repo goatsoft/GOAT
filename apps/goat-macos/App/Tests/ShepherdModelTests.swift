@@ -220,6 +220,7 @@ private func fakeToolRoute(server: String = "srv", tool: String = "tool") -> She
 @MainActor
 private final class FakeEnv: ShepherdEnvironment {
     var automaticChatTitles = true
+    var autoCompactEnabled = true
     var compactAtPercent = 80
     var availableModels: [ModelRef] = [ModelRef(id: "test-model")]
     var fallbackModelID: String? = "test-model"
@@ -2765,5 +2766,79 @@ private actor HangingEngine: InferenceEngine {
     let turns = await shepherd.turns(for: session)
     #expect(!turns.contains { $0.text.contains("start the water shader work") })
     #expect(turns.contains { $0.text.contains("Goal: ship the water system.") })
+    _ = sameEnv
+}
+
+@Test @MainActor func autoCompactionFoldsHistoryBeforeTheSendWhenOverThreshold() async throws {
+    let env = FakeEnv()
+    env.autoCompactEnabled = true
+    env.compactAtPercent = 80
+    let (shepherd, engine, _, sameEnv) = makeShepherd(
+        script: [
+            [.token("SUMMARY"), .done(GenStats(ttft: nil, tokens: 1, duration: 0.01))],
+            [.token("REPLY"), .done(GenStats(ttft: nil, tokens: 1, duration: 0.01))],
+        ],
+        env: env)
+    defer { _ = engine }
+    let session = ChatSession(effort: .trot, modelID: "test-model")
+    // The previous response left the context 90% full, over the 80% threshold.
+    session.lastContextTokens = 900
+    session.lastContextWindow = 1_000
+
+    let oldUser = ChatMessage(role: .user)
+    oldUser.text = "old work"
+    oldUser.complete = true
+    let oldAnswer = ChatMessage(role: .assistant)
+    oldAnswer.text = "old done"
+    oldAnswer.complete = true
+    let newUser = ChatMessage(role: .user)
+    newUser.text = "new question"
+    newUser.complete = true
+    session.messages = [oldUser, oldAnswer, newUser]
+
+    #expect(shepherd.run(in: session))
+    await shepherd.streamTask?.value
+
+    let row = try #require(session.messages.first { $0.kind == .compaction })
+    #expect(row.text == "SUMMARY")
+    #expect(row.compaction?.coveredExchangeCount == 1)
+    let rowIndex = try #require(session.messages.firstIndex { $0.id == row.id })
+    let newUserIndex = try #require(session.messages.firstIndex { $0.id == newUser.id })
+    #expect(rowIndex < newUserIndex)
+    #expect(session.messages.last?.role == .assistant)
+    #expect(session.messages.last?.text == "REPLY")
+    _ = sameEnv
+}
+
+@Test @MainActor func autoCompactionSkippedWhenUnderThreshold() async throws {
+    let env = FakeEnv()
+    env.autoCompactEnabled = true
+    env.compactAtPercent = 80
+    let (shepherd, engine, _, sameEnv) = makeShepherd(
+        script: [[.token("REPLY"), .done(GenStats(ttft: nil, tokens: 1, duration: 0.01))]],
+        env: env)
+    defer { _ = engine }
+    let session = ChatSession(effort: .trot, modelID: "test-model")
+    // Only 10% full, well under the threshold.
+    session.lastContextTokens = 100
+    session.lastContextWindow = 1_000
+
+    let oldUser = ChatMessage(role: .user)
+    oldUser.text = "old work"
+    oldUser.complete = true
+    let oldAnswer = ChatMessage(role: .assistant)
+    oldAnswer.text = "old done"
+    oldAnswer.complete = true
+    let newUser = ChatMessage(role: .user)
+    newUser.text = "new question"
+    newUser.complete = true
+    session.messages = [oldUser, oldAnswer, newUser]
+
+    #expect(shepherd.run(in: session))
+    await shepherd.streamTask?.value
+
+    #expect(!session.messages.contains { $0.kind == .compaction })
+    #expect(session.messages.count == 4)
+    #expect(session.messages.last?.text == "REPLY")
     _ = sameEnv
 }

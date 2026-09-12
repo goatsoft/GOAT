@@ -187,6 +187,8 @@ public protocol ShepherdEnvironment: AnyObject {
     var fallbackModelID: String? { get }
     func generationContext(for modelID: String) -> GenerationContext?
     var automaticChatTitles: Bool { get }
+    /// ADR-0087. Whether auto-compaction runs at the threshold (default on).
+    var autoCompactEnabled: Bool { get }
     /// ADR-0087. Compaction threshold as a percent of the input budget (default 80).
     var compactAtPercent: Int { get }
     func projectContext(forProject id: UUID) async -> ShepherdProjectContext?
@@ -199,7 +201,8 @@ public protocol ShepherdEnvironment: AnyObject {
 }
 
 extension ShepherdEnvironment {
-    /// ADR-0087 default. AppModel overrides this from the General settings value.
+    /// ADR-0087 defaults. AppModel overrides these from the General settings values.
+    public var autoCompactEnabled: Bool { true }
     public var compactAtPercent: Int { 80 }
 }
 
@@ -501,6 +504,12 @@ public final class ShepherdModel {
                 command: compactionCommand, in: session, turnID: turnID, model: model,
                 context: context, env: env, memory: memory)
             return
+        }
+        if env.autoCompactEnabled, shouldAutoCompact(session, compactAtPercent: env.compactAtPercent) {
+            await runAutoCompaction(
+                in: session, turnID: turnID, model: model, context: context, env: env,
+                memory: memory)
+            guard owns(turnID: turnID, sessionID: session.id), !Task.isCancelled else { return }
         }
         let handoffCommand = Self.handoffCommand(in: session)
         let requestedSkillName = handoffCommand == nil ? Self.requestedSkillName(in: session) : nil
@@ -1227,7 +1236,7 @@ public final class ShepherdModel {
             plan = try await worker.plan(
                 snapshot: await promptSnapshot(
                     for: session, extensionSections: [CompactionCommand.promptSection],
-                    compactionCommand: command),
+                    truncateAfterIndex: compactIndex, appendedUserRequest: command.modelRequest()),
                 model: model, effort: session.effort, tools: [], memory: memory,
                 compatibility: context.compatibility, calibration: session.contextCalibrationRatio)
         } catch {
@@ -1298,6 +1307,101 @@ public final class ShepherdModel {
         }
     }
 
+    /// ADR-0087 cheap trigger: after the last response left the context at or above the threshold,
+    /// compaction runs at the start of the next send. Uses the recorded usage so no extra plan runs
+    /// on an ordinary under-threshold send.
+    private func shouldAutoCompact(_ session: ChatSession, compactAtPercent: Int) -> Bool {
+        guard let used = session.lastContextTokens, let window = session.lastContextWindow,
+            window > 0
+        else { return false }
+        return used * 100 >= compactAtPercent * window
+    }
+
+    /// ADR-0087 Tier-2 automatic compaction, run before planning the current send. Best effort: a
+    /// failed or cancelled summary leaves the chat unchanged and the send proceeds with Tier-1 only.
+    /// Folds everything before the newest user message into a compaction row inserted before it.
+    private func runAutoCompaction(
+        in session: ChatSession, turnID: UUID, model: ModelRef, context: GenerationContext,
+        env: ShepherdEnvironment, memory: [PromptMemoryEntry]
+    ) async {
+        guard let newUserIndex = session.messages.lastIndex(where: { $0.role == .user })
+        else { return }
+        let priorCompactionIndex = session.messages[..<newUserIndex].lastIndex {
+            $0.kind == .compaction
+        }
+        let coveredRange = (priorCompactionIndex.map { $0 + 1 } ?? 0)..<newUserIndex
+        let coveredMessages = Array(session.messages[coveredRange])
+        guard
+            coveredMessages.contains(where: {
+                $0.complete && $0.error == nil
+                    && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            })
+        else { return }
+
+        let plan: PromptPlan
+        do {
+            plan = try await worker.plan(
+                snapshot: await promptSnapshot(
+                    for: session, extensionSections: [CompactionCommand.promptSection],
+                    truncateAfterIndex: newUserIndex,
+                    appendedUserRequest: ConversationCompaction.modelRequest()),
+                model: model, effort: session.effort, tools: [], memory: memory,
+                compatibility: context.compatibility, calibration: session.contextCalibrationRatio)
+        } catch {
+            return
+        }
+        var request = plan.request
+        request.round = 0
+        let scratch = ChatMessage(role: .assistant)
+        do {
+            _ = try await worker.stream(request) { update in
+                guard self.owns(turnID: turnID, sessionID: session.id) else { return false }
+                self.apply(update, to: scratch)
+                return self.owns(turnID: turnID, sessionID: session.id) && !Task.isCancelled
+            }
+        } catch {
+            return
+        }
+        guard owns(turnID: turnID, sessionID: session.id), !Task.isCancelled else { return }
+        let summary = scratch.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !summary.isEmpty else { return }
+
+        let coveredTurns = coveredMessages.map { message in
+            ChatTurn(
+                role: message.role, text: message.text,
+                toolCalls: message.toolEvents.map {
+                    ToolCallEvent(id: $0.id, name: $0.tool, argumentsJSON: $0.arguments)
+                })
+        }
+        var lists = ConversationCompaction.fileLists(from: coveredTurns)
+        if let priorCompactionIndex, let prior = session.messages[priorCompactionIndex].compaction {
+            lists = Self.mergeFileLists(prior: prior, adding: lists)
+        }
+        let priorExchanges =
+            priorCompactionIndex.flatMap { session.messages[$0].compaction?.coveredExchangeCount }
+            ?? 0
+        let newExchanges = coveredMessages.filter { $0.role == .user && $0.kind == .regular }.count
+
+        let newUser = session.messages[newUserIndex]
+        let row = ChatMessage(role: .user)
+        row.kind = .compaction
+        row.text = summary
+        row.complete = true
+        row.compaction = CompactionInfo(
+            coversUpToMessageID: session.messages[newUserIndex - 1].id.uuidString,
+            coveredExchangeCount: priorExchanges + newExchanges,
+            filesRead: lists.read, filesEdited: lists.edited)
+        session.messages.insert(row, at: newUserIndex)
+        row.markRenderChanged()
+        guard await env.persist(row, in: session) else {
+            activity.log(.warn, "persistence: auto-compaction row was not saved")
+            return
+        }
+        // The new user message shifted by one; re-persist it so its stored position is correct.
+        _ = await env.persist(newUser, in: session)
+        activity.log(.info, "context: auto-compacted \(newExchanges) exchange(s) into a summary")
+    }
+
     private static func mergeFileLists(
         prior: CompactionInfo, adding new: (read: [String], edited: [String])
     ) -> (read: [String], edited: [String]) {
@@ -1314,24 +1418,25 @@ public final class ShepherdModel {
         extensionSections: [String] = [],
         requestedSkillName: String? = nil,
         handoffCommand: HandoffCommand? = nil,
-        compactionCommand: CompactionCommand? = nil
+        truncateAfterIndex: Int? = nil,
+        appendedUserRequest: String? = nil
     ) async -> ShepherdPromptSnapshot {
         var project: ShepherdProjectContext?
         if let projectID = session.projectID {
             project = await env?.projectContext(forProject: projectID)
         }
 
-        let latestUserIndex = session.messages.lastIndex(where: { $0.role == .user })
-        let lastCompactionIndex = session.messages.lastIndex { $0.kind == .compaction }
-        let messages = session.messages.enumerated().map { index, message in
+        let workingMessages =
+            truncateAfterIndex.map { Array(session.messages.prefix($0)) } ?? session.messages
+        let latestUserIndex = workingMessages.lastIndex(where: { $0.role == .user })
+        let lastCompactionIndex = workingMessages.lastIndex { $0.kind == .compaction }
+        var messages = workingMessages.enumerated().map { index, message in
             let text: String
             if message.kind == .compaction, let info = message.compaction {
                 // ADR-0087: the folded summary rides as a user turn; GOAT appends the file lists.
                 let lists = ConversationCompaction.fileListsSection(
                     read: info.filesRead, edited: info.filesEdited)
                 text = lists.isEmpty ? message.text : message.text + "\n\n" + lists
-            } else if let compactionCommand, message.id == compactionCommand.messageID {
-                text = compactionCommand.modelRequest()
             } else if let handoffCommand, message.id == handoffCommand.messageID {
                 text = handoffCommand.modelRequest()
             } else if index == latestUserIndex, let requestedSkillName {
@@ -1361,6 +1466,12 @@ public final class ShepherdModel {
                     == GenerationProvenanceRecord.FailureCategory.toolFormatRecovery.rawValue
                     || (lastCompactionIndex.map { index < $0 } ?? false),
                 failureSuffix: Self.promptFailureSuffix(for: message))
+        }
+        if let appendedUserRequest {
+            messages.append(
+                ShepherdPromptSnapshot.Message(
+                    role: .user, text: appendedUserRequest, thinking: "", complete: true,
+                    error: nil, attachmentPaths: [], toolEvents: []))
         }
         return ShepherdPromptSnapshot(
             date: .now,
