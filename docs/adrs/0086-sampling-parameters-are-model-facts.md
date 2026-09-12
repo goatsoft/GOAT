@@ -35,7 +35,7 @@ capabilities. Built-in families ship as `model-families.builtin.json` bundled wi
 module, in the same `ModelFamilyRegistryDocument` schema as the user file and decoded by the same
 validator; correcting or adding a shipped family is a JSON edit rather than a Swift one, and a
 user file in GOAT Home (`~/.goat/config/model-families.json`, ADR-0009) adds or overrides
-families without a rebuild. The former hard-coded Swift rule table and the `KnownModelProfiles`
+families without a rebuild. A user rule wins over a built-in it matches — the user file is consulted first and its rule replaces the built-in outright rather than merging — so an owner can patch or correct a family ahead of a release; the built-ins are the fallback. The former hard-coded Swift rule table and the `KnownModelProfiles`
 shim that wrapped it are removed; every call site resolves through `ModelFamilyRegistry`.
 
 Automatic compatibility resolution consults the registry. `ModelCompatibilityResolver.resolve`

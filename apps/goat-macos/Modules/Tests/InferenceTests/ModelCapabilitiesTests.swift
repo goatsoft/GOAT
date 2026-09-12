@@ -200,7 +200,7 @@ func genericAndSubstringOnlyNamesStayNeutral(modelID: String) {
     #expect(resolved.capabilities.tools.support == .unknown)
 }
 
-@Test func userFamilyRulesAreAdditiveAndNeverOverrideBuiltIns() throws {
+@Test func userFamilyRulesOverrideBuiltInsAndAddNewFamilies() throws {
     let url = FileManager.default.temporaryDirectory
         .appendingPathComponent("goat-model-families-\(UUID().uuidString).json")
     defer { try? FileManager.default.removeItem(at: url) }
@@ -212,22 +212,29 @@ func genericAndSubstringOnlyNamesStayNeutral(modelID: String) {
                 matchAny: ["acme/vision-model"],
                 capabilities: ["vision"]),
             ModelFamilyRule(
-                id: "attempted-muse-override",
+                id: "muse-patch",
                 matchAny: ["muse-glimmer-30b"],
-                capabilities: ["reasoning_history"]),
+                contextLength: 65_536,
+                capabilities: ["tools"]),
         ])
     try JSONEncoder().encode(document).write(to: url)
 
+    // A family no built-in covers is added from the user file.
     let customProfile = try #require(
         ModelFamilyRegistry.profile(for: "acme/vision-model", userFileURL: url))
     #expect(customProfile.capabilities.vision.support == .supported)
     #expect(customProfile.capabilities.vision.evidence == [.userModelFamily])
     #expect(customProfile.capabilities.tools.support == .unknown)
 
-    let builtIn = try #require(
+    // A user rule matching a built-in model wins outright (replace, not merge), so an owner can
+    // patch a family before a release. The built-in muse-glimmer is fully superseded.
+    let patched = try #require(
         ModelFamilyRegistry.profile(for: "Muse-Glimmer-30B-4bit", userFileURL: url))
-    #expect(builtIn.capabilities.reasoningHistory.support == .unknown)
-    #expect(builtIn.capabilities.vision.evidence == [.modelFamily])
+    #expect(patched.capabilities.tools.support == .supported)
+    #expect(patched.capabilities.tools.evidence == [.userModelFamily])
+    #expect(patched.capabilities.vision.support == .unknown)
+    #expect(patched.capabilities.reasoning.support == .unknown)
+    #expect(patched.contextLength == 65_536)
 }
 
 @Test func newerModelProbeOwnsPublication() async throws {

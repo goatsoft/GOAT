@@ -167,12 +167,15 @@ public enum ModelFamilyRegistry {
         for modelID: String,
         userFileURL: URL? = userConfigurationURL()
     ) -> KnownModelProfile? {
-        if let builtIn = builtInRules.first(where: { $0.matches(modelID) }) {
-            return builtIn.profile(evidence: .modelFamily)
+        // A user file wins over the shipped built-ins so an owner can patch or correct a family
+        // ahead of a release without rebuilding GOAT; a matching user rule replaces the built-in
+        // outright rather than merging with it. Built-ins are the fallback.
+        if let userRule = cachedUserRules(from: userFileURL).first(where: { $0.matches(modelID) }) {
+            return userRule.profile(evidence: .userModelFamily)
         }
-        guard let userRule = cachedUserRules(from: userFileURL).first(where: { $0.matches(modelID) })
+        guard let builtIn = builtInRules.first(where: { $0.matches(modelID) })
         else { return nil }
-        return userRule.profile(evidence: .userModelFamily)
+        return builtIn.profile(evidence: .modelFamily)
     }
 
     public static func loadUserRules(
