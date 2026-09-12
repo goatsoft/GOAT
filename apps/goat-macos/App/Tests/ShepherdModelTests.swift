@@ -220,6 +220,7 @@ private func fakeToolRoute(server: String = "srv", tool: String = "tool") -> She
 @MainActor
 private final class FakeEnv: ShepherdEnvironment {
     var automaticChatTitles = true
+    var compactAtPercent = 80
     var availableModels: [ModelRef] = [ModelRef(id: "test-model")]
     var fallbackModelID: String? = "test-model"
     var project: ShepherdProjectContext?
@@ -2670,4 +2671,99 @@ private actor HangingEngine: InferenceEngine {
     let newPos = try #require(turns.firstIndex { $0.text.contains("new question about lakes") })
     #expect(summaryPos < newPos)
     _ = env
+}
+
+@Test @MainActor func manualCompactWithNothingToFoldNotifies() async throws {
+    let env = FakeEnv()
+    env.compactAtPercent = 0
+    let (shepherd, _, _, sameEnv) = makeShepherd(script: [], env: env)
+    let session = ChatSession(effort: .trot, modelID: "test-model")
+    let compact = ChatMessage(role: .user)
+    compact.text = "/compact"
+    compact.complete = true
+    session.messages = [compact]
+
+    #expect(shepherd.run(in: session))
+    await shepherd.streamTask?.value
+
+    #expect(session.messages.count == 1)
+    #expect(compact.kind == .regular)
+    #expect(compact.contextNotice == "Nothing to compact yet.")
+    _ = sameEnv
+}
+
+@Test @MainActor func manualCompactBelowThresholdIsANoOpWithANotice() async throws {
+    let env = FakeEnv()
+    env.compactAtPercent = 95
+    let (shepherd, _, _, sameEnv) = makeShepherd(script: [], env: env)
+    let session = ChatSession(effort: .trot, modelID: "test-model")
+    let user = ChatMessage(role: .user)
+    user.text = "a short question"
+    user.complete = true
+    let assistant = ChatMessage(role: .assistant)
+    assistant.text = "a short answer"
+    assistant.complete = true
+    let compact = ChatMessage(role: .user)
+    compact.text = "/compact"
+    compact.complete = true
+    session.messages = [user, assistant, compact]
+
+    #expect(shepherd.run(in: session))
+    await shepherd.streamTask?.value
+
+    #expect(session.messages.count == 3)
+    #expect(compact.kind == .regular)
+    #expect(compact.compaction == nil)
+    #expect(compact.contextNotice?.contains("under your 95% threshold") == true)
+    _ = sameEnv
+}
+
+@Test @MainActor func manualCompactFoldsHistoryIntoACompactionRow() async throws {
+    let env = FakeEnv()
+    env.compactAtPercent = 0  // always over threshold, so the gate never blocks this test
+    let (shepherd, engine, _, sameEnv) = makeShepherd(
+        script: [
+            [
+                .token("Goal: ship the water system."),
+                .done(GenStats(ttft: nil, tokens: 5, duration: 0.01)),
+            ]
+        ],
+        env: env)
+    defer { _ = engine }
+    let session = ChatSession(effort: .trot, modelID: "test-model")
+
+    let user = ChatMessage(role: .user)
+    user.text = "start the water shader work"
+    user.complete = true
+    let assistant = ChatMessage(role: .assistant)
+    assistant.text = "done"
+    assistant.complete = true
+    assistant.toolEvents = [
+        ToolEventSnapshot(
+            id: "w1", server: "GOATed", tool: "pen_write_file",
+            arguments: #"{"path":"src/water.ts"}"#, result: "saved")
+    ]
+    let compact = ChatMessage(role: .user)
+    compact.text = "/compact keep the shader constraints"
+    compact.complete = true
+    session.messages = [user, assistant, compact]
+
+    #expect(shepherd.run(in: session))
+    await shepherd.streamTask?.value
+
+    // The /compact message became the compaction row; no assistant response was added.
+    #expect(session.messages.count == 3)
+    let row = try #require(session.messages.last)
+    #expect(row.id == compact.id)
+    #expect(row.kind == .compaction)
+    #expect(row.text == "Goal: ship the water system.")
+    #expect(row.compaction?.filesEdited == ["src/water.ts"])
+    #expect(row.compaction?.coveredExchangeCount == 1)
+    #expect(row.contextNotice == nil)
+
+    // The prompt now folds the covered rows behind the summary turn.
+    let turns = await shepherd.turns(for: session)
+    #expect(!turns.contains { $0.text.contains("start the water shader work") })
+    #expect(turns.contains { $0.text.contains("Goal: ship the water system.") })
+    _ = sameEnv
 }

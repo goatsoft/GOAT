@@ -187,6 +187,8 @@ public protocol ShepherdEnvironment: AnyObject {
     var fallbackModelID: String? { get }
     func generationContext(for modelID: String) -> GenerationContext?
     var automaticChatTitles: Bool { get }
+    /// ADR-0087. Compaction threshold as a percent of the input budget (default 80).
+    var compactAtPercent: Int { get }
     func projectContext(forProject id: UUID) async -> ShepherdProjectContext?
     @discardableResult
     func persist(_ message: ChatMessage, in session: ChatSession) async -> Bool
@@ -194,6 +196,11 @@ public protocol ShepherdEnvironment: AnyObject {
     func sessionTouched(_ session: ChatSession)
     func sessionMetaChanged(_ session: ChatSession)
     func turnOwnershipChanged(activeSessionID: UUID?)
+}
+
+extension ShepherdEnvironment {
+    /// ADR-0087 default. AppModel overrides this from the General settings value.
+    public var compactAtPercent: Int { 80 }
 }
 
 /// The Shepherd: orchestrates one turn - streams a round, executes tool calls behind
@@ -295,6 +302,13 @@ public final class ShepherdModel {
             let fence = String(repeating: "`", count: max(3, longestRun + 1))
             return "\(fence)markdown\n\(document)\n\(fence)"
         }
+    }
+
+    private struct CompactionCommand {
+        let messageID: UUID
+        let focus: String
+        static let promptSection = ConversationCompaction.promptSection
+        func modelRequest() -> String { ConversationCompaction.modelRequest(focus: focus) }
     }
 
     private let tools: ShepherdToolSource
@@ -482,6 +496,12 @@ public final class ShepherdModel {
             return
         }
         guard owns(turnID: turnID, sessionID: session.id), !Task.isCancelled else { return }
+        if let compactionCommand = Self.compactionCommand(in: session) {
+            await runManualCompaction(
+                command: compactionCommand, in: session, turnID: turnID, model: model,
+                context: context, env: env, memory: memory)
+            return
+        }
         let handoffCommand = Self.handoffCommand(in: session)
         let requestedSkillName = handoffCommand == nil ? Self.requestedSkillName(in: session) : nil
         let extensionSections =
@@ -1108,6 +1128,13 @@ public final class ShepherdModel {
         return HandoffCommand(messageID: message.id, additionalRequest: additionalRequest)
     }
 
+    private static func compactionCommand(in session: ChatSession) -> CompactionCommand? {
+        guard let message = session.messages.last(where: { $0.role == .user }),
+            let parsed = ConversationCompaction.command(from: message.text)
+        else { return nil }
+        return CompactionCommand(messageID: message.id, focus: parsed.focus)
+    }
+
     private static func persistedTurn(
         from session: ChatSession,
         handoffCommand: HandoffCommand?
@@ -1145,11 +1172,149 @@ public final class ShepherdModel {
         return nil
     }
 
+    /// ADR-0087 Tier-2 manual compaction. Gate on the configured threshold, generate a summary with
+    /// the handoff-shaped compaction prompt, then transform the /compact message in place into the
+    /// compaction row that folds the history before it. A gated or failed run leaves the chat
+    /// unchanged and reports through the message's contextNotice.
+    private func runManualCompaction(
+        command: CompactionCommand, in session: ChatSession, turnID: UUID,
+        model: ModelRef, context: GenerationContext, env: ShepherdEnvironment,
+        memory: [PromptMemoryEntry]
+    ) async {
+        guard let compactIndex = session.messages.firstIndex(where: { $0.id == command.messageID })
+        else { return }
+        let commandMessage = session.messages[compactIndex]
+        let priorCompactionIndex = session.messages[..<compactIndex].lastIndex { $0.kind == .compaction }
+        let coveredRange = (priorCompactionIndex.map { $0 + 1 } ?? 0)..<compactIndex
+        let coveredMessages = Array(session.messages[coveredRange])
+        let hasFoldableContent = coveredMessages.contains {
+            $0.complete && $0.error == nil
+                && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+
+        func finish(notice: String) async {
+            commandMessage.contextNotice = notice
+            commandMessage.markRenderChanged()
+            _ = await env.persist(commandMessage, in: session)
+        }
+
+        guard hasFoldableContent else {
+            await finish(notice: "Nothing to compact yet.")
+            return
+        }
+
+        // Gate on the threshold, the single user-settable lever. Below it, do nothing.
+        if let gatePlan = try? await worker.plan(
+            snapshot: await promptSnapshot(for: session), model: model, effort: session.effort,
+            tools: [], memory: memory, compatibility: context.compatibility,
+            calibration: session.contextCalibrationRatio)
+        {
+            let budget = max(1, gatePlan.report.inputBudget)
+            let used = gatePlan.report.calibratedInputTokensAfter
+            if used * 100 < env.compactAtPercent * budget {
+                let pct = min(100, used * 100 / budget)
+                await finish(
+                    notice:
+                        "Not compacting: about \(pct)% of the input budget, under your "
+                        + "\(env.compactAtPercent)% threshold. Lower Compact at in Settings to compact sooner.")
+                return
+            }
+        }
+        guard owns(turnID: turnID, sessionID: session.id), !Task.isCancelled else { return }
+
+        let plan: PromptPlan
+        do {
+            plan = try await worker.plan(
+                snapshot: await promptSnapshot(
+                    for: session, extensionSections: [CompactionCommand.promptSection],
+                    compactionCommand: command),
+                model: model, effort: session.effort, tools: [], memory: memory,
+                compatibility: context.compatibility, calibration: session.contextCalibrationRatio)
+        } catch {
+            guard owns(turnID: turnID, sessionID: session.id), !Task.isCancelled else { return }
+            await finish(notice: "Compaction could not be prepared. The chat is unchanged.")
+            return
+        }
+        var request = plan.request
+        request.round = 0
+        let scratch = ChatMessage(role: .assistant)
+        do {
+            _ = try await worker.stream(request) { update in
+                guard self.owns(turnID: turnID, sessionID: session.id) else { return false }
+                self.apply(update, to: scratch)
+                return self.owns(turnID: turnID, sessionID: session.id) && !Task.isCancelled
+            }
+        } catch {
+            guard owns(turnID: turnID, sessionID: session.id), !Task.isCancelled else { return }
+            await finish(notice: "Compaction did not complete. The chat is unchanged.")
+            return
+        }
+        guard owns(turnID: turnID, sessionID: session.id), !Task.isCancelled else { return }
+
+        let summary = scratch.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !summary.isEmpty else {
+            await finish(notice: "Compaction produced no summary. The chat is unchanged.")
+            return
+        }
+
+        // Files read/edited: carry a prior summary forward, then add the newly covered tool calls.
+        let coveredTurns = coveredMessages.map { message in
+            ChatTurn(
+                role: message.role, text: message.text,
+                toolCalls: message.toolEvents.map {
+                    ToolCallEvent(id: $0.id, name: $0.tool, argumentsJSON: $0.arguments)
+                })
+        }
+        var lists = ConversationCompaction.fileLists(from: coveredTurns)
+        if let priorCompactionIndex, let prior = session.messages[priorCompactionIndex].compaction {
+            lists = Self.mergeFileLists(prior: prior, adding: lists)
+        }
+        let priorExchanges =
+            priorCompactionIndex.flatMap { session.messages[$0].compaction?.coveredExchangeCount } ?? 0
+        let newExchanges = coveredMessages.filter { $0.role == .user && $0.kind == .regular }.count
+
+        commandMessage.kind = .compaction
+        commandMessage.text = summary
+        commandMessage.contextNotice = nil
+        commandMessage.compaction = CompactionInfo(
+            coversUpToMessageID: session.messages[compactIndex - 1].id.uuidString,
+            coveredExchangeCount: priorExchanges + newExchanges,
+            filesRead: lists.read, filesEdited: lists.edited)
+        commandMessage.complete = true
+        commandMessage.markRenderChanged()
+        guard await env.persist(commandMessage, in: session) else {
+            activity.log(.warn, "persistence: compaction row was not saved")
+            return
+        }
+        activity.log(.info, "context: compacted \(newExchanges) exchange(s) into a summary")
+
+        // Reflect the reduced usage on the pasture meter.
+        if let postPlan = try? await worker.plan(
+            snapshot: await promptSnapshot(for: session), model: model, effort: session.effort,
+            tools: [], memory: memory, compatibility: context.compatibility,
+            calibration: session.contextCalibrationRatio)
+        {
+            applyPreflight(postPlan.report, to: session)
+        }
+    }
+
+    private static func mergeFileLists(
+        prior: CompactionInfo, adding new: (read: [String], edited: [String])
+    ) -> (read: [String], edited: [String]) {
+        var edited = prior.filesEdited
+        for path in new.edited where !edited.contains(path) { edited.append(path) }
+        var read = prior.filesRead
+        for path in new.read where !read.contains(path) { read.append(path) }
+        read.removeAll { edited.contains($0) }
+        return (read, edited)
+    }
+
     private func promptSnapshot(
         for session: ChatSession,
         extensionSections: [String] = [],
         requestedSkillName: String? = nil,
-        handoffCommand: HandoffCommand? = nil
+        handoffCommand: HandoffCommand? = nil,
+        compactionCommand: CompactionCommand? = nil
     ) async -> ShepherdPromptSnapshot {
         var project: ShepherdProjectContext?
         if let projectID = session.projectID {
@@ -1165,6 +1330,8 @@ public final class ShepherdModel {
                 let lists = ConversationCompaction.fileListsSection(
                     read: info.filesRead, edited: info.filesEdited)
                 text = lists.isEmpty ? message.text : message.text + "\n\n" + lists
+            } else if let compactionCommand, message.id == compactionCommand.messageID {
+                text = compactionCommand.modelRequest()
             } else if let handoffCommand, message.id == handoffCommand.messageID {
                 text = handoffCommand.modelRequest()
             } else if index == latestUserIndex, let requestedSkillName {
