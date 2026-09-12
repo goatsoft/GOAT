@@ -73,6 +73,10 @@ public struct MessageRecord: Codable, FetchableRecord, PersistableRecord, Sendab
     public var rating: Int?
     public var generationProvenanceJson: String?
     public var statsFinishReason: String?
+    /// ADR-0087 message kind: "regular" or "compaction". Legacy rows migrate to "regular".
+    public var kind: String
+    /// ADR-0087 compaction metadata (CompactionInfo as JSON) for kind == "compaction".
+    public var compactionJson: String?
 
     public init(
         id: String, chatId: String, role: String, text: String, thinking: String,
@@ -81,7 +85,8 @@ public struct MessageRecord: Codable, FetchableRecord, PersistableRecord, Sendab
         statsCachedPromptTokens: Int? = nil,
         complete: Bool, position: Int, createdAt: Date, attachmentsJson: String? = nil,
         toolsJson: String? = nil, rating: Int? = nil,
-        generationProvenanceJson: String? = nil, statsFinishReason: String? = nil
+        generationProvenanceJson: String? = nil, statsFinishReason: String? = nil,
+        kind: String = "regular", compactionJson: String? = nil
     ) {
         self.id = id
         self.chatId = chatId
@@ -103,6 +108,29 @@ public struct MessageRecord: Codable, FetchableRecord, PersistableRecord, Sendab
         self.rating = rating
         self.generationProvenanceJson = generationProvenanceJson
         self.statsFinishReason = statsFinishReason
+        self.kind = kind
+        self.compactionJson = compactionJson
+    }
+}
+
+/// ADR-0087 compaction row metadata, persisted as JSON in `MessageRecord.compactionJson`.
+public struct CompactionInfo: Codable, Sendable, Equatable {
+    /// The id of the last message this summary covers; earlier rows are excluded from the prompt.
+    public var coversUpToMessageID: String
+    /// Number of exchanges folded, for the "Compacted N exchanges" transcript row.
+    public var coveredExchangeCount: Int
+    /// Files read and edited so far, carried forward across re-summarisation.
+    public var filesRead: [String]
+    public var filesEdited: [String]
+
+    public init(
+        coversUpToMessageID: String, coveredExchangeCount: Int,
+        filesRead: [String], filesEdited: [String]
+    ) {
+        self.coversUpToMessageID = coversUpToMessageID
+        self.coveredExchangeCount = coveredExchangeCount
+        self.filesRead = filesRead
+        self.filesEdited = filesEdited
     }
 }
 

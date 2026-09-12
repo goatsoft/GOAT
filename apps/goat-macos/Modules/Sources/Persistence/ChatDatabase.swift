@@ -221,6 +221,13 @@ public final class ChatDatabase: Sendable {
                 table.add(column: "statsCachedPromptTokens", .integer)
             }
         }
+        migrator.registerMigration("v13-compaction-message-kind") { db in
+            // ADR-0087. Legacy rows migrate to "regular"; compaction rows carry CompactionInfo JSON.
+            try db.alter(table: "message") { table in
+                table.add(column: "kind", .text).notNull().defaults(to: "regular")
+                table.add(column: "compactionJson", .text)
+            }
+        }
         return migrator
     }
 

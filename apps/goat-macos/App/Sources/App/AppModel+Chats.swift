@@ -242,7 +242,11 @@ extension AppModel {
                 : (try? JSONEncoder().encode(msg.toolEvents)).flatMap { String(data: $0, encoding: .utf8) },
             rating: msg.rating,
             generationProvenanceJson: provenanceJSON(for: msg),
-            statsFinishReason: msg.stats?.finishReason
+            statsFinishReason: msg.stats?.finishReason,
+            kind: msg.kind.rawValue,
+            compactionJson: msg.compaction.flatMap { info in
+                (try? JSONEncoder().encode(info)).flatMap { String(data: $0, encoding: .utf8) }
+            }
         )
     }
 
@@ -360,6 +364,12 @@ extension AppModel {
                 msg.error = record.error
                 msg.rating = record.rating
                 msg.complete = record.complete
+                msg.kind = ChatMessageKind(rawValue: record.kind) ?? .regular
+                if let raw = record.compactionJson?.data(using: .utf8),
+                    let info = try? JSONDecoder().decode(CompactionInfo.self, from: raw)
+                {
+                    msg.compaction = info
+                }
                 if let rawText = record.generationProvenanceJson,
                     rawText.utf8.count <= 256 * 1_024,
                     let raw = rawText.data(using: .utf8)

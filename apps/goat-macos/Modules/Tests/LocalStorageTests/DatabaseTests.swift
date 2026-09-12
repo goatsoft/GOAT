@@ -367,3 +367,36 @@ private func makeChat(id: String = UUID().uuidString, projectId: String? = nil) 
     #expect(messages[1].error?.contains("interrupted") == true)
     #expect(try await ChatDatabase(path: path).messages(chatId: chat.id) == messages)
 }
+
+@Test func compactionMessageKindAndMetadataRoundTrip() async throws {
+    let (db, _) = try tempDB()
+    let chat = makeChat()
+    try await db.save(chat)
+    let info = CompactionInfo(
+        coversUpToMessageID: "m0", coveredExchangeCount: 4,
+        filesRead: ["src/a.ts"], filesEdited: ["src/b.ts", "src/c.ts"])
+    let json = String(decoding: try JSONEncoder().encode(info), as: UTF8.self)
+    try await db.save(
+        MessageRecord(
+            id: "m1", chatId: chat.id, role: "user", text: "folded summary", thinking: "",
+            error: nil, statsTtft: nil, statsTokens: nil, statsDuration: nil,
+            complete: true, position: 0, createdAt: .now,
+            kind: "compaction", compactionJson: json))
+    try await db.save(
+        MessageRecord(
+            id: "m2", chatId: chat.id, role: "assistant", text: "after", thinking: "",
+            error: nil, statsTtft: nil, statsTokens: nil, statsDuration: nil,
+            complete: true, position: 1, createdAt: .now))
+
+    let messages = try await db.messages(chatId: chat.id)
+    let compaction = try #require(messages.first { $0.id == "m1" })
+    #expect(compaction.kind == "compaction")
+    let decoded = try #require(
+        compaction.compactionJson?.data(using: .utf8)
+            .flatMap { try? JSONDecoder().decode(CompactionInfo.self, from: $0) })
+    #expect(decoded == info)
+    // A row saved without a kind defaults to "regular" and carries no compaction metadata.
+    let regular = try #require(messages.first { $0.id == "m2" })
+    #expect(regular.kind == "regular")
+    #expect(regular.compactionJson == nil)
+}

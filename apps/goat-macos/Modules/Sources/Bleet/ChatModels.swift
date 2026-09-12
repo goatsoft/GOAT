@@ -3,6 +3,12 @@ import Inference
 import Observation
 import Persistence
 
+/// ADR-0087 transcript entry kind: ordinary messages and folded compaction summaries.
+public enum ChatMessageKind: String, Sendable, Equatable {
+    case regular
+    case compaction
+}
+
 /// One transcript entry. Mutable while streaming; `complete` seals it.
 @MainActor
 @Observable
@@ -21,6 +27,10 @@ public final class ChatMessage: Identifiable {
     public var complete = false
     public var attachmentPaths: [String] = []
     public var toolEvents: [ToolEventSnapshot] = []
+    /// ADR-0087 message kind. A compaction row carries the folded summary in `text` and its
+    /// metadata in `compaction`; the transcript shows it as a collapsible "Compacted N exchanges" row.
+    public var kind: ChatMessageKind = .regular
+    public var compaction: CompactionInfo?
     /// User feedback is persisted separately from the streamed message body.
     public var rating: Int?
     public var generationContext: GenerationContext?
