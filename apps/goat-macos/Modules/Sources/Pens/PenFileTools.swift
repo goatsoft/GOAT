@@ -7,7 +7,7 @@ import Tools
 /// One turn's authority over one user-configured workspace. Blocking file work stays on this actor.
 public actor PenFileTools {
     public static let maximumFileBytes = 1_024 * 1_024
-    private static let maximumReadBytes = 32 * 1_024
+    private static let maximumReadBytes = 48 * 1_024
     public static let schemas: [ToolSchema] = [
         ToolSchema(
             name: "pen_list_files",
@@ -19,9 +19,9 @@ public actor PenFileTools {
         ToolSchema(
             name: "pen_read_file",
             description:
-                "Read a UTF-8 Pen file up to 1 MiB. Returns exact content for up to 200 lines and 32 KiB. Use next_start_line to continue a truncated read. Line numbers are 1-based; old_text for edits must come from content, not metadata.",
+                "Read a UTF-8 Pen file up to 1 MiB as plain text: a one-line header (path, the line range and total, and next_start_line when more remains) followed by the raw file content. Up to 2000 lines and 48 KiB per call; pass next_start_line back as start_line to continue. Set line_numbers true to prefix each line with its 1-based number and a tab; those numbers are not part of the file, so never copy them into old_text for edits.",
             inputSchemaJSON:
-                #"{"type":"object","properties":{"path":{"type":"string"},"start_line":{"type":"integer","minimum":1},"line_count":{"type":"integer","minimum":1,"maximum":200}},"required":["path"],"additionalProperties":false}"#
+                #"{"type":"object","properties":{"path":{"type":"string"},"start_line":{"type":"integer","minimum":1},"line_count":{"type":"integer","minimum":1,"maximum":2000},"line_numbers":{"type":"boolean"}},"required":["path"],"additionalProperties":false}"#
         ),
         ToolSchema(
             name: "pen_search",
@@ -105,37 +105,40 @@ public actor PenFileTools {
             if remaining.count > page.count { result["next_after"] = page.last }
             return ToolResult(content: try json(result))
         case "pen_read_file":
-            try validateKeys(args, allowed: ["path", "start_line", "line_count"])
+            try validateKeys(args, allowed: ["path", "start_line", "line_count", "line_numbers"])
             let start = try integer(args, key: "start_line", fallback: 1, range: 1...Int.max)
-            let count = try integer(args, key: "line_count", fallback: 200, range: 1...200)
+            let count = try integer(args, key: "line_count", fallback: 2_000, range: 1...2_000)
+            let numbered = try boolean(args, key: "line_numbers", fallback: false)
             let (data, _) = try readFile(components(path))
             guard let content = String(data: data, encoding: .utf8) else { throw Failure("File is not UTF-8 text.") }
             let lines = Self.lines(content)
             guard start <= max(1, lines.count) else {
                 throw Failure("start_line exceeds this file's \(lines.count) lines.")
             }
-            var excerpt = ""
+            // Plain text keeps a small model's old_text fragments byte-exact: a one-line header,
+            // then the raw file bytes (optionally line-number prefixed) with no JSON escaping.
+            var body = ""
             var end = start - 1
             for line in lines.dropFirst(start - 1).prefix(count) {
                 guard line.utf8.count <= Self.maximumReadBytes else {
-                    if excerpt.isEmpty {
+                    if body.isEmpty {
                         throw Failure(
-                            "Line \(start) exceeds the 32 KiB read limit. Use pen_search to locate a smaller source file; this may be generated or minified content."
+                            "Line \(end + 1) exceeds the 48 KiB read limit. Use pen_search to locate a smaller source file; this may be generated or minified content."
                         )
                     }
                     break
                 }
-                guard excerpt.utf8.count + line.utf8.count <= Self.maximumReadBytes else { break }
-                excerpt += line
+                let rendered = numbered ? "\(end + 1)\t\(line)" : line
+                guard body.utf8.count + rendered.utf8.count <= Self.maximumReadBytes else { break }
+                body += rendered
                 end += 1
             }
-            var result: [String: Any] = [
-                "path": path, "content": excerpt, "start_line": start,
-                "end_line": end, "total_lines": lines.count, "truncated": end < lines.count,
-            ]
-            if end < lines.count { result["next_start_line"] = end + 1 }
+            let truncated = end < lines.count
+            var header = "\(path), lines \(start)-\(end) of \(lines.count)"
+            if numbered { header += " (line numbers are not file content)" }
+            if truncated { header += ", next_start_line \(end + 1)" }
             return ToolResult(
-                content: try json(result),
+                content: header + "\n" + body,
                 diagnostic: ToolExecutionDiagnostic(fileObservations: [
                     FileOperationObservation(
                         workspaceIdentity: workspaceIdentity, relativePath: path, kind: .read,
@@ -311,6 +314,14 @@ public actor PenFileTools {
             range.contains(number.intValue)
         else { throw Failure("\(key) must be an integer in \(range).") }
         return number.intValue
+    }
+
+    private func boolean(_ args: [String: Any], key: String, fallback: Bool) throws -> Bool {
+        guard let value = args[key] else { return fallback }
+        guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else {
+            throw Failure("\(key) must be true or false.")
+        }
+        return number.boolValue
     }
 
     public func prepare(tool: String, argumentsJSON: String) throws -> PreparedWrite {
