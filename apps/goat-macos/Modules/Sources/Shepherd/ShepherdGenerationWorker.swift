@@ -14,6 +14,12 @@ struct ShepherdPromptSnapshot: Sendable {
         let error: String?
         let attachmentPaths: [String]
         let toolEvents: [ToolEvent]
+        /// True only for tool-format-recovery rows, which stay excluded from prompt history
+        /// (ADR-0065, ADR-0089). Other failed or stopped rows are kept.
+        var excludeFromPrompt = false
+        /// A short model-visible suffix appended to a retained row's text for length and cancelled
+        /// terminations (ADR-0089), e.g. "[response truncated by the output limit]".
+        var failureSuffix: String?
     }
 
     struct ToolEvent: Sendable {
@@ -104,6 +110,13 @@ actor ShepherdGenerationWorker {
         self.retryBaseDelaySeconds = retryBaseDelaySeconds
         self.maxStreamRetries = maxStreamRetries
         self.postFirstTokenStallSeconds = postFirstTokenStallSeconds
+    }
+
+    /// Appends a model-visible failure suffix (length or cancelled) to a retained row's text
+    /// (ADR-0089). Empty text becomes the suffix alone, so a stop with no output still says so.
+    private static func appendingFailureSuffix(_ text: String, _ suffix: String?) -> String {
+        guard let suffix, !suffix.isEmpty else { return text }
+        return text.isEmpty ? suffix : text + "\n\n" + suffix
     }
 
     func turns(
@@ -213,7 +226,7 @@ actor ShepherdGenerationWorker {
         }
 
         var result = [ChatTurn(role: .system, text: system)]
-        for message in snapshot.messages where message.complete && message.error == nil {
+        for message in snapshot.messages where message.complete && !message.excludeFromPrompt {
             guard !Task.isCancelled else { return [] }
             switch message.role {
             case .user:
@@ -239,6 +252,7 @@ actor ShepherdGenerationWorker {
                 guard !text.isEmpty || !images.isEmpty else { continue }
                 result.append(ChatTurn(role: .user, text: text, images: images))
             case .assistant:
+                let assistantText = Self.appendingFailureSuffix(message.text, message.failureSuffix)
                 if !message.toolEvents.isEmpty {
                     let calls = message.toolEvents.map {
                         ToolCallEvent(
@@ -249,7 +263,7 @@ actor ShepherdGenerationWorker {
                     result.append(
                         ChatTurn(
                             role: .assistant,
-                            text: message.text,
+                            text: assistantText,
                             thinking: message.thinking,
                             toolCalls: calls))
                     for event in message.toolEvents {
@@ -259,9 +273,9 @@ actor ShepherdGenerationWorker {
                                 text: event.result ?? "(no result)",
                                 toolCallID: event.id))
                     }
-                } else if !message.text.isEmpty {
+                } else if !assistantText.isEmpty {
                     result.append(
-                        ChatTurn(role: .assistant, text: message.text, thinking: message.thinking))
+                        ChatTurn(role: .assistant, text: assistantText, thinking: message.thinking))
                 }
             default:
                 continue

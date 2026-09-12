@@ -715,21 +715,55 @@ func missingPenFileCapabilitiesAreNeverAdvertised(readOnly: Bool) async throws {
     #expect(!tools.permissionRequested)
 }
 
-@Test @MainActor func incompleteAndErroredMessagesStayOutOfThePrompt() async {
+@Test @MainActor func incompleteAndToolFormatRecoveryRowsStayOutOfThePrompt() async {
     let (shepherd, _, _, _) = makeShepherd(script: [])
     let session = ChatSession(effort: .trot, modelID: "test-model")
     let good = ChatMessage(role: .user)
     good.text = "hello"
     good.complete = true
     let streaming = ChatMessage(role: .assistant)
-    streaming.text = "half a rep"
+    streaming.text = "half a rep"  // still streaming: excluded
+    let recovered = ChatMessage(role: .assistant)
+    recovered.text = "printed a tool call as text"
+    recovered.complete = true
+    recovered.error = "tool-call markup returned as text"
+    recovered.generationFailureCategory =
+        GenerationProvenanceRecord.FailureCategory.toolFormatRecovery.rawValue  // excluded (ADR-0065)
     let errored = ChatMessage(role: .assistant)
     errored.text = "boom"
     errored.complete = true
-    errored.error = "engine exploded"
-    session.messages = [good, streaming, errored]
+    errored.error = "engine exploded"  // ADR-0089: a failed row with partial output is kept
+    session.messages = [good, streaming, recovered, errored]
     let turns = await shepherd.turns(for: session)
-    #expect(turns.count == 2)  // system + the one good user turn
+    let assistantTexts = turns.filter { $0.role == .assistant }.map(\.text)
+    #expect(assistantTexts == ["boom"])
+}
+
+@Test @MainActor func lengthLimitedAndStoppedRowsStayWithAModelVisibleSuffix() async {
+    let (shepherd, _, _, _) = makeShepherd(script: [])
+    let session = ChatSession(effort: .trot, modelID: "test-model")
+    let user = ChatMessage(role: .user)
+    user.text = "write an essay"
+    user.complete = true
+    let truncated = ChatMessage(role: .assistant)
+    truncated.text = "Here is the start"
+    truncated.complete = true
+    truncated.stats = GenStats(ttft: nil, tokens: 10, duration: 0.1, finishReason: "length")
+    truncated.error = "reached its output limit"
+    let follow = ChatMessage(role: .user)
+    follow.text = "continue"
+    follow.complete = true
+    let stopped = ChatMessage(role: .assistant)
+    stopped.text = ""
+    stopped.complete = true
+    stopped.generationFailureCategory =
+        GenerationProvenanceRecord.FailureCategory.cancelled.rawValue
+    stopped.error = "stopped by you"
+    session.messages = [user, truncated, follow, stopped]
+    let turns = await shepherd.turns(for: session)
+    let assistantTexts = turns.filter { $0.role == .assistant }.map(\.text)
+    #expect(assistantTexts.contains("Here is the start\n\n[response truncated by the output limit]"))
+    #expect(assistantTexts.contains("[stopped by the user before the response finished]"))
 }
 
 @Test @MainActor func unknownModelNeverSilentlyDropsUserImages() async throws {

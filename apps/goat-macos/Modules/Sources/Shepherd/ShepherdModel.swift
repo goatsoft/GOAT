@@ -1114,6 +1114,20 @@ public final class ShepherdModel {
             messages: messages)
     }
 
+    /// The model-visible suffix for a retained failed or stopped row (ADR-0089): length truncation
+    /// and user cancellation each get a short marker; other terminations get none.
+    private static func promptFailureSuffix(for message: ChatMessage) -> String? {
+        if message.stats?.finishReason == "length" {
+            return "[response truncated by the output limit]"
+        }
+        if message.generationFailureCategory
+            == GenerationProvenanceRecord.FailureCategory.cancelled.rawValue
+        {
+            return "[stopped by the user before the response finished]"
+        }
+        return nil
+    }
+
     private func promptSnapshot(
         for session: ChatSession,
         extensionSections: [String] = [],
@@ -1152,7 +1166,10 @@ public final class ShepherdModel {
                             tool: event.tool),
                         arguments: event.arguments,
                         result: event.result, isError: event.isError, denied: event.denied)
-                })
+                },
+                excludeFromPrompt: message.generationFailureCategory
+                    == GenerationProvenanceRecord.FailureCategory.toolFormatRecovery.rawValue,
+                failureSuffix: Self.promptFailureSuffix(for: message))
         }
         return ShepherdPromptSnapshot(
             date: .now,
