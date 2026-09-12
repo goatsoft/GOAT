@@ -494,6 +494,7 @@ public final class ShepherdModel {
         var repairedToolFormat = false
         var repairNextRound = false
         var repairProgress = FileRepairProgressTracker()
+        var repetitionGuard = RepetitionGuard()
         var toolRound = 0
         shepherd: while true {
             guard owns(turnID: turnID, sessionID: session.id), !Task.isCancelled else { break }
@@ -803,6 +804,7 @@ public final class ShepherdModel {
                         guard let route = mapping[toolCalls[i].name] else { return nil }
                         return ConcurrentToolCall(index: i, route: route, argumentsJSON: toolCalls[i].argumentsJSON)
                     }
+                    var repetitionStop: String?
                     for outcome in await tools.invokeConcurrently(jobs) {
                         let route = mapping[toolCalls[outcome.index].name]
                         if let result = outcome.result {
@@ -813,6 +815,12 @@ public final class ShepherdModel {
                                     server: route.server, tool: route.tool,
                                     status: result.isError ? "error" : "ok", duration: outcome.duration)
                             }
+                            if repetitionStop == nil {
+                                repetitionStop = repetitionGuard.observe(
+                                    name: toolCalls[outcome.index].name,
+                                    argumentsJSON: toolCalls[outcome.index].argumentsJSON,
+                                    result: result.content)
+                            }
                         } else {
                             assistant.toolEvents[outcome.index].result = "Not executed."
                             assistant.toolEvents[outcome.index].isError = true
@@ -821,6 +829,12 @@ public final class ShepherdModel {
                     assistant.markRenderChanged()
                     batchedThrough = end
                     guard await env.persist(assistant, in: session) else { break shepherd }
+                    if let repetitionStop {
+                        assistant.error = repetitionStop
+                        assistant.markRenderChanged()
+                        _ = await env.persist(assistant, in: session)
+                        break shepherd
+                    }
                     if Task.isCancelled || !owns(turnID: turnID, sessionID: session.id) {
                         await finishPendingToolsAsStopped()
                         break shepherd
@@ -840,6 +854,7 @@ public final class ShepherdModel {
                 }
                 let started = Date()
                 var repairStop: String?
+                var repetitionStop: String?
                 do {
                     let result = try await tools.authorizeAndInvoke(
                         route: target, argumentsJSON: call.argumentsJSON)
@@ -851,6 +866,8 @@ public final class ShepherdModel {
                         if let diagnostic = result.diagnostic {
                             repairStop = repairProgress.observe(diagnostic)
                         }
+                        repetitionStop = repetitionGuard.observe(
+                            name: call.name, argumentsJSON: call.argumentsJSON, result: result.content)
                         assistant.markRenderChanged()
                         tools.logCall(
                             server: target.server, tool: target.tool,
@@ -885,8 +902,8 @@ public final class ShepherdModel {
                     activity.log(.warn, "persistence: tool result was not saved")
                     break shepherd
                 }
-                if let repairStop {
-                    assistant.error = repairStop
+                if let stop = repairStop ?? repetitionStop {
+                    assistant.error = stop
                     assistant.markRenderChanged()
                     _ = await env.persist(assistant, in: session)
                     break shepherd

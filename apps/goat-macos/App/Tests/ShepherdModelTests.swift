@@ -113,6 +113,7 @@ private final class FakeToolSource: ShepherdToolSource {
     var allow = true
     var blockPermission = false
     var blockExecution = false
+    var resultContent: (@Sendable (String) -> String)?
     var pendingWorkNotice: String?
     func finishPendingWork() async -> String? { pendingWorkNotice }
     private var executionContinuation: CheckedContinuation<Void, Never>?
@@ -182,7 +183,7 @@ private final class FakeToolSource: ShepherdToolSource {
         guard allowed, !Task.isCancelled else { return nil }
         invocations += 1
         if blockExecution { await withCheckedContinuation { executionContinuation = $0 } }
-        return ToolResult(content: "ok", isError: false)
+        return ToolResult(content: resultContent?(argumentsJSON) ?? "ok", isError: false)
     }
 
     func finishExecution() {
@@ -806,9 +807,19 @@ func missingPenFileCapabilitiesAreNeverAdvertised(readOnly: Bool) async throws {
 @Test @MainActor func toolWorkContinuesPastEightRoundsUntilTheModelFinishes() async {
     let tools = FakeToolSource()
     tools.mapping = ["srv__tool": fakeToolRoute()]
-    // A longer coding workflow must reach its final response without a round cutoff.
+    tools.resultContent = { $0 }  // distinct results per argument, so the no-progress guard is not tripped
+    // A longer coding workflow must reach its final response without a round cutoff. Each round does
+    // distinct work (different arguments and results), which the repetition guard leaves alone.
+    let rounds = (0..<12).map { i -> [GenerationEvent] in
+        [
+            .toolCalls([
+                ToolCallEvent(id: "c" + String(i), name: "srv__tool", argumentsJSON: "arg" + String(i))
+            ]),
+            .done(GenStats(ttft: nil, tokens: 1, duration: 0.01)),
+        ]
+    }
     let (shepherd, _, sameTools, env) = makeShepherd(
-        script: Array(repeating: toolCallRound(), count: 12) + [[.token("All twelve actions are complete.")]],
+        script: rounds + [[.token("All twelve actions are complete.")]],
         tools: tools, env: FakeEnv()
     )
     let session = ChatSession(effort: .trot, modelID: "test-model")
@@ -2571,4 +2582,50 @@ private actor HangingEngine: InferenceEngine {
     }
     #expect(caught is WorkerStall)
     #expect(await engine.requests.count == 1)  // a stall is not a before-first-token retry
+}
+
+// MARK: - ADR-0089 Stage E: repetition guard
+
+@Test func repetitionGuardStopsAfterThreeIdenticalCalls() {
+    var tracker = RepetitionGuard()
+    #expect(tracker.observe(name: "srv__search", argumentsJSON: #"{"q":"x"}"#, result: "a") == nil)
+    #expect(tracker.observe(name: "srv__search", argumentsJSON: #"{"q":"x"}"#, result: "b") == nil)
+    // Canonically identical arguments (reordered whitespace) still count as the same call.
+    #expect(tracker.observe(name: "srv__search", argumentsJSON: #"{ "q" : "x" }"#, result: "c") != nil)
+}
+
+@Test func repetitionGuardStopsAfterThreeIdenticalResults() {
+    var tracker = RepetitionGuard()
+    // Different arguments each time, so only the identical results trip the guard.
+    #expect(tracker.observe(name: "srv__ls", argumentsJSON: #"{"p":"a"}"#, result: "empty") == nil)
+    #expect(tracker.observe(name: "srv__ls", argumentsJSON: #"{"p":"b"}"#, result: "empty") == nil)
+    #expect(tracker.observe(name: "srv__ls", argumentsJSON: #"{"p":"c"}"#, result: "empty") != nil)
+}
+
+@Test func repetitionGuardLeavesProductiveVariedWorkAlone() {
+    var tracker = RepetitionGuard()
+    #expect(tracker.observe(name: "srv__edit", argumentsJSON: #"{"n":1}"#, result: "edited 1") == nil)
+    #expect(tracker.observe(name: "srv__edit", argumentsJSON: #"{"n":2}"#, result: "edited 2") == nil)
+    #expect(tracker.observe(name: "srv__edit", argumentsJSON: #"{"n":3}"#, result: "edited 3") == nil)
+    #expect(tracker.observe(name: "srv__edit", argumentsJSON: #"{"n":4}"#, result: "edited 4") == nil)
+}
+
+@Test @MainActor func repeatedIdenticalToolCallsPauseTheTurn() async {
+    let tools = FakeToolSource()
+    tools.mapping = ["srv__tool": fakeToolRoute()]
+    let (shepherd, engine, sameTools, env) = makeShepherd(
+        script: [toolCallRound(), toolCallRound(), toolCallRound()],
+        tools: tools)
+    defer { _ = env }
+    let session = ChatSession(effort: .trot, modelID: "test-model")
+    session.title = "Looping"  // named, so auto-title makes no extra engine request
+    let user = ChatMessage(role: .user)
+    user.text = "loop please"
+    user.complete = true
+    session.messages = [user]
+    #expect(shepherd.run(in: session))
+    await shepherd.streamTask?.value
+    #expect(sameTools.invocations == 3)  // the third identical call trips the guard
+    #expect(await engine.requests.count == 3)  // no fourth round after the pause
+    #expect(session.messages.last?.error?.contains("without making progress") == true)
 }
