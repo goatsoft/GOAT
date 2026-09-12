@@ -246,6 +246,47 @@ extension AppModel {
         )
     }
 
+    /// The context window a turn planned against and where the figure came from, mirroring the
+    /// budgeter's precedence (ADR-0085): a user override, else the engine- or family-reported
+    /// window, else the estimated fallback. Recorded in provenance so a slow prefill or an
+    /// overflow can be attributed to the window that was actually in force.
+    func effectiveContextWindow(forModelID id: String)
+        -> (limit: Int?, source: GenerationProvenanceRecord.ContextLimitSource)
+    {
+        let identity = ModelIdentity(engineProfileID: activeEngineProfile?.id ?? "", modelID: id)
+        let preference = modelPreferences.first { $0.identity == identity }
+        let reported = models.first { $0.id == id }?.contextLength
+        if preference?.contextWindowOverride != nil {
+            return (preference?.effectiveContextLength(reported: reported), .userOverride)
+        }
+        if let reported {
+            return (reported, .reported)
+        }
+        if let family = ModelFamilyRegistry.profile(for: id)?.contextLength {
+            return (family, .modelFamily)
+        }
+        return (PromptBudgeter.fallbackWindowTokens, .fallback)
+    }
+
+    /// Flatten resolved model capabilities into the provenance record's claim map, dropping
+    /// unknowns so the log shows only what was actually established.
+    static func provenanceCapabilities(_ capabilities: ModelCapabilities)
+        -> [String: GenerationProvenanceRecord.CapabilityClaim]
+    {
+        var result: [String: GenerationProvenanceRecord.CapabilityClaim] = [:]
+        func record(_ name: String, _ claim: CapabilityClaim) {
+            guard claim.support != .unknown else { return }
+            result[name] = GenerationProvenanceRecord.CapabilityClaim(
+                support: claim.support.rawValue,
+                evidence: claim.evidence.map(\.rawValue))
+        }
+        record("vision", capabilities.vision)
+        record("tools", capabilities.tools)
+        record("reasoning", capabilities.reasoning)
+        record("reasoningHistory", capabilities.reasoningHistory)
+        return result
+    }
+
     private func provenanceJSON(for message: ChatMessage) -> String? {
         if let existing = message.generationProvenance {
             return try? String(data: JSONEncoder().encode(existing), encoding: .utf8)
@@ -255,6 +296,7 @@ extension AppModel {
             let lifecycle = message.generationLifecycle,
             let state = GenerationProvenanceRecord.Lifecycle(rawValue: lifecycle)
         else { return nil }
+        let contextWindow = effectiveContextWindow(forModelID: context.identity.modelID)
         let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown"
         let appBuild = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "Unknown"
         let record = GenerationProvenanceRecord(
@@ -278,9 +320,9 @@ extension AppModel {
                     preserveThinking: parameters.qwenPreserveThinking ?? false,
                     reasoningEffort: parameters.qwenReasoningEffort)
             },
-            effectiveContextLimit: nil,
-            contextLimitSource: .unknown,
-            capabilities: [:],
+            effectiveContextLimit: contextWindow.limit,
+            contextLimitSource: contextWindow.source,
+            capabilities: Self.provenanceCapabilities(context.compatibility.capabilities),
             lifecycle: state,
             finishReason: message.stats?.finishReason,
             failureCategory: message.generationFailureCategory.flatMap {

@@ -427,7 +427,7 @@ enum EngineCapabilityMetadataParser {
         _ reported: ProbedModelMetadata, for modelID: String?
     ) -> ProbedModelMetadata {
         guard let modelID else { return reported }
-        let profile = KnownModelProfiles.profile(for: modelID)
+        let profile = ModelFamilyRegistry.profile(for: modelID)
         let nameHints = Self.inspectionHints(fromModelID: modelID)
         guard profile != nil || nameHints != nil else { return reported }
         let known = ProbedModelMetadata(

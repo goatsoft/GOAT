@@ -37,7 +37,9 @@ let package = Package(
         .target(name: "Herd", dependencies: [], exclude: ["README.md"]),
         .target(name: "Hindsight", dependencies: ["Herd", "JUDAS", "MCPClient", "Memory", "Tools"], exclude: ["README.md"]),
         .target(name: "Hitch", dependencies: ["GOATed"], exclude: ["README.md"]),
-        .target(name: "Inference", dependencies: ["Herd", "JUDAS"], exclude: ["README.md"]),
+        .target(
+            name: "Inference", dependencies: ["Herd", "JUDAS"], exclude: ["README.md"],
+            resources: [.process("Resources/model-families.builtin.json")]),
         .target(name: "JUDAS", dependencies: [], exclude: ["README.md"]),
         .target(name: "MCPClient", dependencies: ["JUDAS", "Tools", .product(name: "MCP", package: "swift-sdk")], exclude: ["README.md"]),
         .target(name: "Memory", dependencies: ["Herd", "JUDAS"], exclude: ["README.md"]),

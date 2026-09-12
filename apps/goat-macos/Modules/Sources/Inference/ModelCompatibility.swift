@@ -8,6 +8,7 @@ public enum ResolvedRequestStyle: String, Codable, Sendable {
 public enum CompatibilityResolutionSource: String, Codable, Sendable {
     case explicitOverride
     case engineMetadata
+    case modelFamily
     case genericFallback
 }
 
@@ -134,6 +135,7 @@ public enum ModelCompatibilityResolver {
         identity: ModelIdentity,
         override: ModelCompatibilityOverride = .automatic,
         metadata: ModelCompatibilityMetadata? = nil,
+        familyProfile: KnownModelProfile? = nil,
         now: Date = .now
     ) -> ResolvedModelCompatibility {
         let metadataMatches = metadata?.identity == identity
@@ -164,6 +166,16 @@ public enum ModelCompatibilityResolver {
                 adapterIdentifier: metadata.adapterIdentifier,
                 metadataAt: metadata.observedAt,
                 capabilities: metadata.capabilities)
+        }
+        // Verified family knowledge (built-in JSON or the user file) fills the gap when the
+        // engine exposed no usable metadata. Dialect stays engine configuration (ADR-0024,
+        // ADR-0086); the family supplies capabilities only. A concrete engine window still wins
+        // downstream when the catalog reports one.
+        if let familyProfile {
+            return ResolvedModelCompatibility(
+                identity: identity, effectiveStyle: .genericOpenAI,
+                source: .modelFamily,
+                capabilities: familyProfile.capabilities)
         }
         return ResolvedModelCompatibility(
             identity: identity, effectiveStyle: .genericOpenAI,

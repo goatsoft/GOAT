@@ -98,7 +98,7 @@ public struct ModelRef: Codable, Identifiable, Hashable, Sendable {
     /// Heuristic only - used for a gentle hint, never to block sending.
     public var looksVisionCapable: Bool {
         let s = id.lowercased()
-        if KnownModelProfiles.profile(for: id)?.capabilities.vision.support == .supported {
+        if ModelFamilyRegistry.profile(for: id)?.capabilities.vision.support == .supported {
             return true
         }
         if [

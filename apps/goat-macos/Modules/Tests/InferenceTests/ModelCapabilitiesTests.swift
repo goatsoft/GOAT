@@ -161,8 +161,43 @@ func genericAndSubstringOnlyNamesStayNeutral(modelID: String) {
 }
 
 @Test func museFamilyProfileExcludesTextVariants() {
-    #expect(KnownModelProfiles.profile(for: "Muse-Glimmer-30B-4bit") != nil)
-    #expect(KnownModelProfiles.profile(for: "Muse-Glimmer-30B-Text-4bit") == nil)
+    #expect(ModelFamilyRegistry.profile(for: "Muse-Glimmer-30B-4bit") != nil)
+    #expect(ModelFamilyRegistry.profile(for: "Muse-Glimmer-30B-Text-4bit") == nil)
+}
+
+@Test func builtInFamiliesLoadFromBundledResource() {
+    // Built-ins ship as `model-families.builtin.json` in the Inference bundle. A missing or
+    // malformed resource would silently drop every family to generic, so pin its presence,
+    // ordering (first match wins) and a spread of coverage here.
+    let rules = ModelFamilyRegistry.builtInRules
+    #expect(rules.count >= 30)
+    #expect(rules.first?.id == "muse-glimmer")
+    #expect(rules.contains { $0.id == "gpt-oss" })
+    #expect(rules.contains { $0.id == "qwen3" })
+    #expect(ModelFamilyRegistry.profile(for: "openai/gpt-oss-120b") != nil)
+    #expect(ModelFamilyRegistry.profile(for: "an-unlisted-model-xyz") == nil)
+}
+
+@Test func automaticResolutionUsesFamilyProfileWhenEngineIsSilent() {
+    // The path generationContext takes: automatic override, no engine metadata, registry
+    // consulted. A known family must resolve to real capabilities, not genericFallback.
+    let identity = ModelIdentity(engineProfileID: "engine", modelID: "Muse-Glimmer-30B-4bit")
+    let resolved = ModelCompatibilityResolver.resolve(
+        identity: identity,
+        familyProfile: ModelFamilyRegistry.profile(for: identity.modelID))
+    #expect(resolved.source == .modelFamily)
+    #expect(resolved.capabilities.vision.support == .supported)
+    #expect(resolved.capabilities.tools.support == .supported)
+    #expect(resolved.capabilities.reasoning.support == .supported)
+}
+
+@Test func automaticResolutionFallsBackWhenNoFamilyMatches() {
+    let identity = ModelIdentity(engineProfileID: "engine", modelID: "unlisted-model-42b")
+    let resolved = ModelCompatibilityResolver.resolve(
+        identity: identity,
+        familyProfile: ModelFamilyRegistry.profile(for: identity.modelID))
+    #expect(resolved.source == .genericFallback)
+    #expect(resolved.capabilities.tools.support == .unknown)
 }
 
 @Test func userFamilyRulesAreAdditiveAndNeverOverrideBuiltIns() throws {
@@ -260,7 +295,7 @@ func genericAndSubstringOnlyNamesStayNeutral(modelID: String) {
 func builtInFamilyRulesSupplyPositiveClaimsOnly(
     modelID: String, supported: [String], unknown: [String]
 ) {
-    let profile = KnownModelProfiles.profile(for: modelID)
+    let profile = ModelFamilyRegistry.profile(for: modelID)
     func claim(_ name: String) -> CapabilityClaim? {
         switch name {
         case "vision": profile?.capabilities.vision
@@ -280,14 +315,14 @@ func builtInFamilyRulesSupplyPositiveClaimsOnly(
 }
 
 @Test func builtInFamilyRulesDeclareContextOnlyWhereStable() {
-    #expect(KnownModelProfiles.profile(for: "openai/gpt-oss-120b")?.contextLength == 131_072)
-    #expect(KnownModelProfiles.profile(for: "meta-llama/Llama-3.1-8B-Instruct")?.contextLength == 131_072)
-    #expect(KnownModelProfiles.profile(for: "mlx-community/Qwen3-8B-4bit")?.contextLength == nil)
-    #expect(KnownModelProfiles.profile(for: "zai-org/GLM-4.6")?.contextLength == nil)
+    #expect(ModelFamilyRegistry.profile(for: "openai/gpt-oss-120b")?.contextLength == 131_072)
+    #expect(ModelFamilyRegistry.profile(for: "meta-llama/Llama-3.1-8B-Instruct")?.contextLength == 131_072)
+    #expect(ModelFamilyRegistry.profile(for: "mlx-community/Qwen3-8B-4bit")?.contextLength == nil)
+    #expect(ModelFamilyRegistry.profile(for: "zai-org/GLM-4.6")?.contextLength == nil)
 }
 
 @Test func familyRulesCarryStaticInspectionFactsAndIDsCarryPackagingHints() {
-    let muse = KnownModelProfiles.profile(for: "Muse-Glimmer-30B-4bit")
+    let muse = ModelFamilyRegistry.profile(for: "Muse-Glimmer-30B-4bit")
     #expect(muse?.inspection?.architecture == "Muse-Glimmer")
     #expect(muse?.inspection?.parameterCount == 30_000_000_000)
 

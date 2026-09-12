@@ -141,7 +141,8 @@ extension AppModel: ShepherdEnvironment {
             modelPreferences.first(where: { $0.identity == identity })?.compatibilityOverride
             ?? .automatic
         let compatibility = ModelCompatibilityResolver.resolve(
-            identity: identity, override: override, now: .now)
+            identity: identity, override: override,
+            familyProfile: ModelFamilyRegistry.profile(for: modelID), now: .now)
         return GenerationContext(
             engineProfileID: profile.id,
             engineName: profile.name,

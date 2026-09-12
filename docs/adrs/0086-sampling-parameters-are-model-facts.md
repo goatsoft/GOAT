@@ -28,6 +28,23 @@ Engine metadata can veto but never supply: when `supported_parameters` is presen
 
 The explicit Qwen local chat-template profile keeps its documented values, but its constants are re-verified against the current Qwen model card before this ADR is accepted; the present 1.0 for thinking modes does not match the 0.6 that Qwen3 documents.
 
+### One registry for model facts, loaded from JSON
+
+The model-family registry is the single source of family knowledge for both sampling and
+capabilities. Built-in families ship as `model-families.builtin.json` bundled with the Inference
+module, in the same `ModelFamilyRegistryDocument` schema as the user file and decoded by the same
+validator; correcting or adding a shipped family is a JSON edit rather than a Swift one, and a
+user file in GOAT Home (`~/.goat/config/model-families.json`, ADR-0009) adds or overrides
+families without a rebuild. The former hard-coded Swift rule table and the `KnownModelProfiles`
+shim that wrapped it are removed; every call site resolves through `ModelFamilyRegistry`.
+
+Automatic compatibility resolution consults the registry. `ModelCompatibilityResolver.resolve`
+takes the matched family profile and, when there is no explicit user override and no usable
+engine metadata, resolves to source `modelFamily` with the family's capabilities instead of
+`genericFallback`. Dialect stays engine configuration (ADR-0024); the family supplies
+capabilities and, where published, a context window only. An engine-reported context window
+always wins over the family's declared one on merge.
+
 ### Rejection recovery
 
 An HTTP 400 whose body names a request parameter is classified `unsupportedParameter(name)`. The parameter is recorded on that model's compatibility metadata as unsupported with `observedResponse` evidence, the request is retried once without it, and the activity log records the change. This happens only before any token has been received.
@@ -38,7 +55,7 @@ Model details show Sampling: Engine default, Family recommendation (with the rul
 
 ## Consequences
 
-Models run at the settings their authors tuned, endpoints that reject sampling fields work without configuration, and a user can still pin values per model. Existing chats keep their persisted provenance; new responses record the new source field. The effort table in docs/ENGINES.md loses its temperature column. Fixture tests cover omission by default, each precedence level, the metadata veto, thinking versus non-thinking selection and the one-shot rejection retry.
+Models run at the settings their authors tuned, endpoints that reject sampling fields work without configuration, and a user can still pin values per model. Existing chats keep their persisted provenance; new responses record the new source field. Provenance also stops under-reporting model resolution: `resolutionSource` shows `modelFamily` for a recognized model instead of a blanket `genericFallback`, `capabilities` records the resolved claims, and `effectiveContextLimit`/`contextLimitSource` report the window actually in force (user override, engine- or family-reported, or the estimated fallback) so a slow prefill or an overflow can be attributed. The effort table in docs/ENGINES.md loses its temperature column. Fixture tests cover omission by default, each precedence level, the metadata veto, thinking versus non-thinking selection and the one-shot rejection retry.
 
 ## Alternatives considered
 

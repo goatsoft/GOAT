@@ -178,9 +178,14 @@ public enum ModelFamilyRegistry {
     public static func loadUserRules(
         from url: URL? = userConfigurationURL()
     ) -> [ModelFamilyRule] {
-        guard let url,
-            let data = try? Data(contentsOf: url),
-            let document = try? JSONDecoder().decode(ModelFamilyRegistryDocument.self, from: data),
+        guard let url, let data = try? Data(contentsOf: url) else { return [] }
+        return decodeRules(from: data)
+    }
+
+    /// Decode a registry document from JSON, keeping only well-formed rules. Shared by the
+    /// bundled built-ins and the user file so both honour the same schema and validation.
+    static func decodeRules(from data: Data) -> [ModelFamilyRule] {
+        guard let document = try? JSONDecoder().decode(ModelFamilyRegistryDocument.self, from: data),
             document.schema == 1
         else { return [] }
         return document.families.filter { !$0.id.isEmpty && !$0.matchAny.isEmpty }
@@ -198,129 +203,21 @@ public enum ModelFamilyRegistry {
         }
     }
 
-    /// Curated, positive-only knowledge for common local model families. Ordered specific
-    /// to general; the first matching rule wins. Context lengths are declared only where the
-    /// family publishes one stable figure; an engine-reported window always wins on merge.
-    static let builtInRules: [ModelFamilyRule] = [
-        ModelFamilyRule(
-            id: "muse-glimmer",
-            matchAny: ["muse-glimmer-30b", "meta-models/muse-glimmer-30b"],
-            exclude: ["text"],
-            contextLength: 131_072,
-            capabilities: ["vision", "tools", "reasoning"],
-            architecture: "Muse-Glimmer", modelType: "multimodal",
-            parameterCount: 30_000_000_000),
-
-        // DeepSeek (before Qwen: R1 distills carry a Qwen base name but behave as R1)
-        ModelFamilyRule(
-            id: "deepseek-r1", matchAny: ["deepseek-r1"], capabilities: ["reasoning"]),
-        ModelFamilyRule(
-            id: "deepseek-v3-hybrid", matchAny: ["deepseek-v3.1", "deepseek-v3.2"],
-            capabilities: ["tools", "reasoning"]),
-        ModelFamilyRule(
-            id: "deepseek-v3", matchAny: ["deepseek-v3"], capabilities: ["tools"]),
-
-        // Qwen
-        ModelFamilyRule(
-            id: "qwen3-coder", matchAny: ["qwen3-coder"], capabilities: ["tools"]),
-        ModelFamilyRule(
-            id: "qwen3-vl-thinking", matchAny: ["qwen3-vl"], matchAll: ["thinking"],
-            capabilities: ["vision", "tools", "reasoning"]),
-        ModelFamilyRule(
-            id: "qwen3-vl", matchAny: ["qwen3-vl"], capabilities: ["vision", "tools"]),
-        ModelFamilyRule(
-            id: "qwen3-thinking", matchAny: ["qwen3"], matchAll: ["thinking"],
-            exclude: ["vl", "embedding", "reranker", "guard"],
-            capabilities: ["tools", "reasoning"]),
-        ModelFamilyRule(
-            id: "qwen3-instruct", matchAny: ["qwen3"], matchAll: ["instruct"],
-            exclude: ["vl", "coder", "embedding", "reranker", "guard"],
-            capabilities: ["tools"]),
-        ModelFamilyRule(
-            id: "qwen3", matchAny: ["qwen3"],
-            exclude: ["vl", "coder", "embedding", "reranker", "omni", "guard", "tts", "asr"],
-            capabilities: ["tools", "reasoning"]),
-        ModelFamilyRule(
-            id: "qwen2.5-vl", matchAny: ["qwen2.5-vl", "qwen2-vl"], capabilities: ["vision", "tools"]),
-        ModelFamilyRule(
-            id: "qwen2.5", matchAny: ["qwen2.5"],
-            exclude: ["vl", "omni", "math", "embedding", "reranker", "audio"],
-            capabilities: ["tools"]),
-
-        // OpenAI open weights
-        ModelFamilyRule(
-            id: "gpt-oss", matchAny: ["gpt-oss"], contextLength: 131_072,
-            capabilities: ["tools", "reasoning"]),
-
-        // Zhipu GLM
-        ModelFamilyRule(
-            id: "glm-vision", matchAny: ["glm-4.1v", "glm-4.5v", "glm-4.6v", "glm-4.7v", "glm-5v"],
-            capabilities: ["vision", "tools", "reasoning"]),
-        ModelFamilyRule(
-            id: "glm", matchAny: ["glm-4.5", "glm-4.6", "glm-4.7", "glm-5"],
-            capabilities: ["tools", "reasoning"]),
-
-        // Meta Llama
-        ModelFamilyRule(
-            id: "llama-4", matchAny: ["llama-4"], capabilities: ["vision", "tools"]),
-        ModelFamilyRule(
-            id: "llama-3.2-vision", matchAny: ["llama-3.2"], matchAll: ["vision"],
-            contextLength: 131_072, capabilities: ["vision"]),
-        ModelFamilyRule(
-            id: "llama-3", matchAny: ["llama-3.1", "llama-3.2", "llama-3.3"],
-            exclude: ["guard"], contextLength: 131_072, capabilities: ["tools"]),
-
-        // Google Gemma (no native tool-call format; tools stay unknown)
-        ModelFamilyRule(
-            id: "gemma-3-multimodal", matchAny: ["gemma-3-4b", "gemma-3-12b", "gemma-3-27b"],
-            contextLength: 131_072, capabilities: ["vision"]),
-        ModelFamilyRule(
-            id: "gemma-3n", matchAny: ["gemma-3n"], capabilities: ["vision"]),
-
-        // Mistral
-        ModelFamilyRule(
-            id: "mistral-small-3",
-            matchAny: ["mistral-small-3.1", "mistral-small-3.2", "mistral-small-2503", "mistral-small-2506"],
-            contextLength: 131_072, capabilities: ["vision", "tools"]),
-        ModelFamilyRule(
-            id: "magistral", matchAny: ["magistral"], capabilities: ["tools", "reasoning"]),
-        ModelFamilyRule(
-            id: "devstral", matchAny: ["devstral"], capabilities: ["tools"]),
-
-        // Moonshot Kimi
-        ModelFamilyRule(
-            id: "kimi-k2.5", matchAny: ["kimi-k2.5"], capabilities: ["vision", "tools", "reasoning"]),
-        ModelFamilyRule(
-            id: "kimi-k2-thinking", matchAny: ["kimi-k2"], matchAll: ["thinking"],
-            capabilities: ["tools", "reasoning"]),
-        ModelFamilyRule(
-            id: "kimi-k2", matchAny: ["kimi-k2"], capabilities: ["tools"]),
-
-        // MiniMax
-        ModelFamilyRule(
-            id: "minimax-m2", matchAny: ["minimax-m2"], capabilities: ["tools", "reasoning"]),
-
-        // Microsoft Phi
-        ModelFamilyRule(
-            id: "phi-4-multimodal", matchAny: ["phi-4-multimodal"], capabilities: ["vision"]),
-        ModelFamilyRule(
-            id: "phi-4-reasoning", matchAny: ["phi-4-reasoning", "phi-4-mini-reasoning"],
-            capabilities: ["reasoning"]),
-        ModelFamilyRule(
-            id: "phi-4-mini", matchAny: ["phi-4-mini"], capabilities: ["tools"]),
-
-        // Others with documented native tool calling
-        ModelFamilyRule(
-            id: "seed-oss", matchAny: ["seed-oss"], capabilities: ["tools", "reasoning"]),
-        ModelFamilyRule(
-            id: "granite-4", matchAny: ["granite-4"], capabilities: ["tools"]),
-    ]
-}
-
-/// Family knowledge is separate from name heuristics and is merged conservatively
-/// with active engine metadata. Built-ins take precedence over user additions.
-public enum KnownModelProfiles {
-    public static func profile(for modelID: String) -> KnownModelProfile? {
-        ModelFamilyRegistry.profile(for: modelID)
-    }
+    /// Curated, positive-only knowledge for common local model families, loaded from the
+    /// bundled `model-families.builtin.json` resource in the registry's own document format
+    /// (ADR-0009, ADR-0086). Ordered specific to general; the first matching rule wins. Editing
+    /// the shipped set is a JSON change, not a Swift one, and a user file in GOAT Home adds or
+    /// overrides families without rebuilding. Context lengths are declared only where the family
+    /// publishes one stable figure; an engine-reported window always wins on merge.
+    static let builtInRules: [ModelFamilyRule] = {
+        guard
+            let url = Bundle.module.url(
+                forResource: "model-families.builtin", withExtension: "json"),
+            let data = try? Data(contentsOf: url)
+        else {
+            assertionFailure("model-families.builtin.json missing from Inference resources")
+            return []
+        }
+        return decodeRules(from: data)
+    }()
 }

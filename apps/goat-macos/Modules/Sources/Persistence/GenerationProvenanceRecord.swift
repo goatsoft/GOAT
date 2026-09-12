@@ -13,6 +13,8 @@ public struct GenerationProvenanceRecord: Codable, Equatable, Sendable {
 
     public enum ContextLimitSource: String, Codable, Sendable {
         case reported
+        case userOverride
+        case modelFamily
         case fallback
         case unknown
     }
