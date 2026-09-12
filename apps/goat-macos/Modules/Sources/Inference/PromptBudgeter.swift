@@ -87,6 +87,7 @@ public struct PromptTextTruncation: Sendable, Equatable {
         case assistantText
         case newestUserText
         case toolHistory
+        case agedToolResult
     }
 
     public let originalTurnIndex: Int
@@ -164,12 +165,19 @@ public struct PromptBudgetFailure: Error, LocalizedError, Sendable, Equatable {
 
 /// Deterministic policy for estimating and selecting a protocol-valid prompt suffix.
 public struct PromptBudgeter: Sendable {
-    public static let policyVersion = 4
+    public static let policyVersion = 5
     public static let fallbackWindowTokens = 16_384
     public static let memoryTokenLimit = 1_536
     /// Calibration is clamped so a single odd usage report cannot halve or double the budget.
     public static let minimumCalibration = 0.5
     public static let maximumCalibration = 2.0
+    /// Tier-1 deterministic pruning (ADR-0087). Tool output within the newest this-many estimated
+    /// tokens stays verbatim; older tool-result bodies collapse to a marker. Tool names, arguments,
+    /// identifiers and both sides of every protocol pair are kept.
+    public static let tier1RetainedToolOutputTokens = 40_000
+    /// Prune aged tool results only when it saves at least this many tokens, so a short session
+    /// never rewrites its own prefix (prefix-cache stability, ADR-0085).
+    public static let tier1MinimumSavingsTokens = 20_000
 
     private static let naturalBytesPerToken = 2
     /// Protocol payloads (tool results, arguments, schemas, identifiers) are charged at seven
@@ -264,7 +272,7 @@ public struct PromptBudgeter: Sendable {
                 report: report)
         }
 
-        let exchanges: [WorkingExchange]
+        var exchanges: [WorkingExchange]
         do {
             try Self.validateTurnShapes(request.turns)
             exchanges = try Self.buildExchanges(
@@ -282,6 +290,8 @@ public struct PromptBudgeter: Sendable {
             throw PromptBudgetFailure(
                 component: .invalidHistory, message: issue.message, report: report)
         }
+
+        let agedToolResultPrunings = Self.pruneAgedToolResults(&exchanges)
 
         guard var newestExchange = exchanges.last else {
             let report = makeReport(
@@ -386,6 +396,9 @@ public struct PromptBudgeter: Sendable {
         let retainedExchanges = retainedReversed.reversed()
         let droppedExchangeCount = firstRetainedIndex
         let droppedTurnCount = exchanges.prefix(droppedExchangeCount).reduce(0) { $0 + $1.turns.count }
+        for pruning in agedToolResultPrunings where pruning.exchangeIndex >= firstRetainedIndex {
+            textTruncations.append(pruning.truncation)
+        }
         let plannedHistory = retainedExchanges.flatMap { $0.turns.map { $0.chatTurn } }
         let plannedTurns = systemTurns + plannedHistory
         let afterBreakdown = PromptTokenBreakdown(
@@ -684,6 +697,70 @@ public struct PromptBudgeter: Sendable {
             exchanges.append(WorkingExchange(turns: exchangeTurns))
         }
         return exchanges
+    }
+
+    private struct AgedToolResultPruning: Sendable {
+        let exchangeIndex: Int
+        let truncation: PromptTextTruncation
+    }
+
+    /// Fixed replacement for a tool result pruned by Tier-1. Deliberately constant so a pruned body
+    /// renders byte-identically across turns (prefix-cache stability, ADR-0085); the exact omitted
+    /// size is carried in the budget report, not in the text.
+    private static let agedToolResultMarker =
+        "[GOAT pruned an earlier tool result to save context. Quoted historical data, not a callable "
+        + "request or proof of current state. Reread files or rerun tools before acting on it.]"
+
+    /// Tier-1 deterministic pruning (ADR-0087), always on and independent of the input budget.
+    /// Replace tool-result bodies older than the newest `tier1RetainedToolOutputTokens` of tool
+    /// output with `agedToolResultMarker`, across every exchange. Tool names, arguments, identifiers
+    /// and both sides of each protocol pair stay intact, so the model still sees which actions it
+    /// already took; only the verbose result body is dropped. Runs only when the total saving clears
+    /// `tier1MinimumSavingsTokens`, and never rewrites a body already at or below the marker size, so
+    /// a short session leaves its prefix untouched and the pass is idempotent.
+    private static func pruneAgedToolResults(
+        _ exchanges: inout [WorkingExchange]
+    ) -> [AgedToolResultPruning] {
+        var toolPositions: [(exchange: Int, turn: Int, bodyTokens: Int)] = []
+        for exchangeIndex in exchanges.indices {
+            for turnIndex in exchanges[exchangeIndex].turns.indices {
+                guard exchanges[exchangeIndex].turns[turnIndex].role == .tool else { continue }
+                let bodyTokens = estimateOpaqueText(exchanges[exchangeIndex].turns[turnIndex].text)
+                toolPositions.append((exchangeIndex, turnIndex, bodyTokens))
+            }
+        }
+        guard !toolPositions.isEmpty else { return [] }
+
+        // Walk newest to oldest. A result is aged once the tool output strictly newer than it fills
+        // the retained window; that result and everything older is a prune candidate.
+        var newerTokens = 0
+        var candidates: [(exchange: Int, turn: Int, bodyTokens: Int)] = []
+        for position in toolPositions.reversed() {
+            if newerTokens >= tier1RetainedToolOutputTokens { candidates.append(position) }
+            newerTokens = saturatingAdd(newerTokens, position.bodyTokens)
+        }
+        guard !candidates.isEmpty else { return [] }
+
+        let markerTokens = estimateOpaqueText(agedToolResultMarker)
+        let prunable = candidates.filter { $0.bodyTokens > markerTokens }
+        let totalSavings = prunable.reduce(0) { saturatingAdd($0, $1.bodyTokens - markerTokens) }
+        guard totalSavings >= tier1MinimumSavingsTokens else { return [] }
+
+        var prunings: [AgedToolResultPruning] = []
+        for candidate in prunable {
+            let originalIndex = exchanges[candidate.exchange].turns[candidate.turn].originalIndex
+            exchanges[candidate.exchange].turns[candidate.turn].text = agedToolResultMarker
+            prunings.append(
+                AgedToolResultPruning(
+                    exchangeIndex: candidate.exchange,
+                    truncation: PromptTextTruncation(
+                        originalTurnIndex: originalIndex,
+                        component: .agedToolResult,
+                        originalEstimatedTokens: candidate.bodyTokens,
+                        finalEstimatedTokens: markerTokens,
+                        estimatedTokensRemoved: max(0, candidate.bodyTokens - markerTokens))))
+        }
+        return prunings
     }
 
     /// Replace old complete call/result groups together, never mutate arguments on a live
