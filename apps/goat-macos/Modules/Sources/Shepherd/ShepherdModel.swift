@@ -494,6 +494,7 @@ public final class ShepherdModel {
         var repairedToolFormat = false
         var repairNextRound = false
         var repairProgress = FileRepairProgressTracker()
+        var toolRound = 0
         shepherd: while true {
             guard owns(turnID: turnID, sessionID: session.id), !Task.isCancelled else { break }
             await drainLeadSave()
@@ -568,7 +569,9 @@ public final class ShepherdModel {
                 guard await env.persist(assistant, in: session) else { break shepherd }
                 continue shepherd
             }
-            let request = plan.request
+            var request = plan.request
+            request.round = toolRound
+            toolRound += 1
             assistant.generationLifecycle = GenerationProvenanceRecord.Lifecycle.started.rawValue
             guard await env.persist(assistant, in: session) else {
                 assistant.generationLifecycle = GenerationProvenanceRecord.Lifecycle.failed.rawValue

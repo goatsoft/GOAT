@@ -213,7 +213,7 @@ public actor OpenAICompatEngine: InferenceEngine {
         let config = self.config
         return AsyncThrowingStream { continuation in
             let task = Task {
-                var assembler = StreamAssembler()
+                var assembler = StreamAssembler(round: r.round)
 
                 do {
                     guard config.isValidEndpoint else { throw EngineError.notConfigured }
@@ -306,6 +306,42 @@ private struct OllamaShowRequest: Encodable {
 
 // MARK: - Wire types (OpenAI dialect)
 
+/// Deterministic helpers for tool-call identifiers on the request wire (ADR-0089).
+enum ToolCallIdentifier {
+    /// Upper bound many OpenAI-dialect engines enforce on `tool_call_id` length.
+    static let maxRequestByteLength = 40
+
+    /// Returns an identifier no longer than `maxRequestByteLength` UTF-8 bytes. Ids within the limit
+    /// are returned unchanged, so an assistant tool call and its matching tool result collapse to the
+    /// same value and stay linked. A longer id is cut on a character boundary and given a stable hash
+    /// suffix, so distinct long ids do not collide after truncation.
+    static func requestSafe(_ id: String) -> String {
+        guard id.utf8.count > maxRequestByteLength else { return id }
+        let suffix = "_" + String(format: "%08x", fnv1a32(id))
+        let prefixByteBudget = maxRequestByteLength - suffix.utf8.count
+        var prefix = ""
+        var used = 0
+        for character in id {
+            let width = String(character).utf8.count
+            if used + width > prefixByteBudget { break }
+            prefix.append(character)
+            used += width
+        }
+        return prefix + suffix
+    }
+
+    /// FNV-1a 32-bit over the UTF-8 bytes. Deterministic across processes, unlike `Hasher`, so the
+    /// truncated id is stable for tests and for matching a call to its result.
+    private static func fnv1a32(_ value: String) -> UInt32 {
+        var hash: UInt32 = 0x811c_9dc5
+        for byte in value.utf8 {
+            hash ^= UInt32(byte)
+            hash = hash &* 0x0100_0193
+        }
+        return hash
+    }
+}
+
 struct CompletionBody: Encodable {
     struct Message: Encodable {
         let role: String
@@ -357,12 +393,14 @@ struct CompletionBody: Encodable {
                 try c.encode(thinking, forKey: .reasoningContent)
             }
             if let toolCallID {
-                try c.encode(toolCallID, forKey: .toolCallID)
+                try c.encode(ToolCallIdentifier.requestSafe(toolCallID), forKey: .toolCallID)
             }
             if !toolCalls.isEmpty {
                 try c.encode(
                     toolCalls.map {
-                        ToolCallOut(id: $0.id, function: .init(name: $0.name, arguments: $0.argumentsJSON))
+                        ToolCallOut(
+                            id: ToolCallIdentifier.requestSafe($0.id),
+                            function: .init(name: $0.name, arguments: $0.argumentsJSON))
                     }, forKey: .toolCalls)
             }
             if imagesBase64.isEmpty {
@@ -453,9 +491,12 @@ struct StreamAssembler {
     private var parser = ThinkTagParser()
     private var toolAccumulator = ToolCallAccumulator()
     private let start: Date
+    /// The tool-loop round this stream belongs to, forwarded to fallback id generation (ADR-0089).
+    private let round: Int
 
-    init(start: Date = Date()) {
+    init(start: Date = Date(), round: Int = 0) {
         self.start = start
+        self.round = round
     }
 
     mutating func feed(_ chunk: StreamChunk) -> [GenerationEvent] {
@@ -503,7 +544,7 @@ struct StreamAssembler {
     mutating func finish() -> [GenerationEvent] {
         var events = parser.flush().map(Self.event(for:))
         if !toolAccumulator.isEmpty {
-            events.append(.toolCalls(toolAccumulator.events))
+            events.append(.toolCalls(toolAccumulator.events(round: round)))
         }
         let tokenCount = usage?.completion_tokens ?? chunkCount
         let serverTTFT = usage?.time_to_first_token.flatMap { value in
@@ -563,10 +604,12 @@ struct ToolCallAccumulator {
 
     var isEmpty: Bool { items.isEmpty }
 
-    var events: [ToolCallEvent] {
+    /// Assembled calls in index order. Fallback identifiers are `call_<round>_<index>` so they stay
+    /// unique across the tool-loop rounds of one turn (ADR-0089).
+    func events(round: Int) -> [ToolCallEvent] {
         items.sorted { $0.key < $1.key }.map { index, item in
             ToolCallEvent(
-                id: item.id.isEmpty ? "call_\(index)" : item.id,
+                id: item.id.isEmpty ? "call_\(round)_\(index)" : item.id,
                 name: item.name,
                 argumentsJSON: item.args.isEmpty ? "{}" : item.args
             )

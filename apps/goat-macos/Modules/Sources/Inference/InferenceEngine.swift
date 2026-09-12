@@ -193,10 +193,13 @@ public struct GenerationRequest: Sendable {
     /// Immutable snapshot captured with model selection, so a later switch cannot alter this request.
     public var modelCapabilities: ModelCapabilities
     public var compatibility: ResolvedModelCompatibility
+    /// Zero-based index of this request within its turn's tool-call loop (ADR-0089). Makes fallback
+    /// tool-call identifiers unique across rounds.
+    public var round: Int
     public init(
         model: String, turns: [ChatTurn], effort: Effort, maxTokens: Int? = nil,
         tools: [ToolSpec] = [], modelCapabilities: ModelCapabilities = .unknown,
-        compatibility: ResolvedModelCompatibility? = nil
+        compatibility: ResolvedModelCompatibility? = nil, round: Int = 0
     ) {
         self.model = model
         self.turns = turns
@@ -204,6 +207,7 @@ public struct GenerationRequest: Sendable {
         self.maxTokens = maxTokens
         self.tools = tools
         self.modelCapabilities = modelCapabilities
+        self.round = round
         self.compatibility =
             compatibility
             ?? ResolvedModelCompatibility(

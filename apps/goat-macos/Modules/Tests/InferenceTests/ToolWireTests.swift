@@ -17,7 +17,7 @@ import Testing
         if let calls = chunk.choices.first?.delta?.tool_calls { acc.feed(calls) }
     }
     #expect(!acc.isEmpty)
-    let events = acc.events
+    let events = acc.events(round: 0)
     #expect(events.count == 1)
     #expect(events[0].id == "call_4b510a24")
     #expect(events[0].name == "get_weather")
@@ -81,4 +81,60 @@ import Testing
     let data = try JSONEncoder().encode(OpenAICompatEngine.makeBody(for: request))
     let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
     #expect(json["tools"] == nil)
+}
+
+// ADR-0089 Stage A: fallback identifiers are unique across rounds, and request-side ids over
+// 40 bytes are truncated deterministically before encoding.
+
+@Test func fallbackToolCallIdsAreUniqueAcrossRounds() throws {
+    func fallbackID(round: Int) throws -> String {
+        let raw =
+            #"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"pen_read_file","arguments":"{}"}}]}}]}"#
+        let chunk = try JSONDecoder().decode(StreamChunk.self, from: Data(raw.utf8))
+        var acc = ToolCallAccumulator()
+        if let calls = chunk.choices.first?.delta?.tool_calls { acc.feed(calls) }
+        return try #require(acc.events(round: round).first).id
+    }
+    let r0 = try fallbackID(round: 0)
+    let r1 = try fallbackID(round: 1)
+    #expect(r0 == "call_0_0")
+    #expect(r1 == "call_1_0")
+    #expect(try fallbackID(round: 3) == "call_3_0")
+    #expect(r0 != r1)
+}
+
+@Test func modelSuppliedToolCallIdsIgnoreTheRound() throws {
+    let raw =
+        #"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_abc","function":{"name":"pen_read_file","arguments":"{}"}}]}}]}"#
+    let chunk = try JSONDecoder().decode(StreamChunk.self, from: Data(raw.utf8))
+    var acc = ToolCallAccumulator()
+    if let calls = chunk.choices.first?.delta?.tool_calls { acc.feed(calls) }
+    #expect(try #require(acc.events(round: 7).first).id == "call_abc")
+}
+
+@Test func shortRequestIdentifiersPassThroughUnchanged() {
+    #expect(ToolCallIdentifier.requestSafe("call_1") == "call_1")
+    let exactly40 = String(repeating: "a", count: 40)
+    #expect(ToolCallIdentifier.requestSafe(exactly40) == exactly40)
+}
+
+@Test func longRequestIdentifiersAreTruncatedDeterministicallyUnderTheLimit() {
+    let long = "call_" + String(repeating: "z", count: 80)
+    let safe = ToolCallIdentifier.requestSafe(long)
+    #expect(safe.utf8.count <= ToolCallIdentifier.maxRequestByteLength)
+    #expect(safe != long)
+    // A tool call and its matching result truncate identically, so the pair stays linked.
+    #expect(ToolCallIdentifier.requestSafe(long) == safe)
+    // Distinct long ids do not collide after truncation.
+    #expect(ToolCallIdentifier.requestSafe(long + "-other") != safe)
+}
+
+@Test func truncatedIdentifiersNeverSplitAMultibyteCharacter() {
+    let goat = "\u{1F410}"  // 4 UTF-8 bytes each
+    let long = String(repeating: goat, count: 30)  // 120 bytes
+    let safe = ToolCallIdentifier.requestSafe(long)
+    #expect(safe.utf8.count <= ToolCallIdentifier.maxRequestByteLength)
+    // 7 whole scalars (28 bytes) + "_" + 8 hex (9 bytes) = 37 bytes; an 8th would overflow the budget.
+    #expect(safe.hasPrefix(String(repeating: goat, count: 7)))
+    #expect(!safe.hasPrefix(String(repeating: goat, count: 8)))
 }
