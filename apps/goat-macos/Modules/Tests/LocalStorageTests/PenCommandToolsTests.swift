@@ -20,17 +20,9 @@ private func commandObject(_ text: String) throws -> [String: Any] {
 
 private func runCommand(_ runner: PenCommandTools, _ input: [String: Any]) async throws -> [String: Any] {
     let command = try await runner.prepare(argumentsJSON: commandJSON(input))
-    let started = try commandObject(await runner.start(command).content)
-    let id = try #require(started["job_id"] as? String)
-    for _ in 0..<20 {
-        let result = try commandObject(
-            await runner.invoke(
-                tool: "pen_command_status", argumentsJSON: commandJSON(["job_id": id, "wait_seconds": 1])
-            ).content)
-        if result["running"] as? Bool == false { return result }
-    }
-    await runner.stopAll()
-    throw CocoaError(.executableRuntimeMismatch)
+    let result = try commandObject(await runner.start(command).content)
+    #expect(result["running"] as? Bool == false)
+    return result
 }
 
 @Test func commandsRunWithLiteralArgumentsAndConfinedFileAccess() async throws {
@@ -84,8 +76,13 @@ private func runCommand(_ runner: PenCommandTools, _ input: [String: Any]) async
     let result = try await runCommand(runner, ["command": "/bin/sh", "args": ["-c", "yes x | head -c 200000"]])
     #expect(result["exit_code"] as? Int == 0)
     #expect(result["output_truncated"] as? Bool == true)
-    #expect((result["output"] as? String)?.utf8.count == 32 * 1_024)
-    let command = try await runner.prepare(argumentsJSON: commandJSON(["command": "sleep", "args": ["20"]]))
+    let output = try #require(result["output"] as? String)
+    #expect(output.contains("bytes omitted"))
+    #expect(output.hasPrefix("x"))
+    #expect(output.utf8.count > 32 * 1_024)
+    #expect(output.utf8.count < 33 * 1_024)
+    let command = try await runner.prepare(
+        argumentsJSON: commandJSON(["command": "sleep", "args": ["20"], "background": true]))
     let started = try commandObject(await runner.start(command).content)
     let id = try #require(started["job_id"] as? String)
     await runner.stopAll()
@@ -210,7 +207,8 @@ func nativeNpmInstallsBuildsAndTestsWithAnIsolatedHome() async throws {
     defer { try? FileManager.default.removeItem(at: root) }
     let policy = Judas()
     let runner = PenCommandTools(workspace: root, files: try PenFileTools(workspace: root), judas: policy)
-    let prepared = try await runner.prepare(argumentsJSON: #"{"command":"sleep","args":["10"],"network":true}"#)
+    let prepared = try await runner.prepare(
+        argumentsJSON: #"{"command":"sleep","args":["10"],"network":true,"background":true}"#)
     let started = try commandObject(await runner.start(prepared).content)
     let id = try #require(started["job_id"] as? String)
     policy.setMode(.blocked)

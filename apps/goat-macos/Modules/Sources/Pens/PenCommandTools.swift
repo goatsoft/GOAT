@@ -10,9 +10,9 @@ public actor PenCommandTools {
         ToolSchema(
             name: "pen_run_command",
             description:
-                "Start a non-interactive command in the Pen. command is an executable name or path; args are literal arguments, not shell syntax. For shell scripts request command 'sh' with args ['-c', script]. Commands outside the owner's whitelist require approval. Filesystem access is confined to the Pen, private scratch and read-only toolchains. network defaults false; request true for dependency downloads or networking tests, subject to approval and JUDAS. Returns a job_id. Poll pen_command_status until finished; do not claim success before exit_code 0. Jobs stop at the turn end or their deadline. Use installed tools; explain missing executables.",
+                "Run a non-interactive command in the Pen to completion (or its timeout) and return exit_code, timed_out and the combined stdout/stderr in one result. command is an executable name or path; args are literal arguments, not shell syntax. For shell scripts request command 'sh' with args ['-c', script]. Commands outside the owner's whitelist require approval. Filesystem access is confined to the Pen, private scratch and read-only toolchains. network defaults false; request true for dependency downloads or networking tests, subject to approval and JUDAS. Output over 32 KiB keeps the head and tail with a marker for the omitted middle; for the full log, redirect to a workspace file (for example command > out.log 2>&1) and read it with pen_read_file. Set background true for a server or watcher: it returns a job_id you poll with pen_command_status. Do not claim success before exit_code 0. Jobs stop at the turn end or their deadline. Use installed tools; explain missing executables.",
             inputSchemaJSON:
-                #"{"type":"object","properties":{"command":{"type":"string","minLength":1,"maxLength":4096},"args":{"type":"array","items":{"type":"string"},"maxItems":128},"working_directory":{"type":"string","maxLength":4096},"network":{"type":"boolean"},"timeout_seconds":{"type":"integer","minimum":1,"maximum":600}},"required":["command","args"],"additionalProperties":false}"#
+                #"{"type":"object","properties":{"command":{"type":"string","minLength":1,"maxLength":4096},"args":{"type":"array","items":{"type":"string"},"maxItems":128},"working_directory":{"type":"string","maxLength":4096},"network":{"type":"boolean"},"background":{"type":"boolean"},"timeout_seconds":{"type":"integer","minimum":1,"maximum":600}},"required":["command","args"],"additionalProperties":false}"#
         ),
         ToolSchema(
             name: "pen_command_status",
@@ -37,6 +37,7 @@ public actor PenCommandTools {
         fileprivate let directory: String
         fileprivate let timeout: Int
         fileprivate let runtimeRoots: [String]
+        fileprivate let background: Bool
         public var executablePath: String { executable }
         public let commandIdentity: String
         public let displayName: String
@@ -78,6 +79,7 @@ public actor PenCommandTools {
         let args: [String]
         var working_directory: String?
         var network: Bool?
+        var background: Bool?
         var timeout_seconds: Int?
     }
 
@@ -88,8 +90,10 @@ public actor PenCommandTools {
         let scratch: URL
         let deadline: Date
         let network: Bool
-        var output = Data()
-        var truncated = false
+        var head = Data()
+        var tail = Data()
+        var totalBytes = 0
+        var timedOut = false
         var exitCode: Int32?
         var stopped: String?
         var finished = false
@@ -139,6 +143,7 @@ public actor PenCommandTools {
         let executable = try resolveExecutable(input.command, directory: directory)
         let commandIdentity = try Self.executableIdentity(executable)
         let network = input.network ?? false
+        let background = input.background ?? false
         try judas.authorizePenCommand(network: network)
         let roots = Self.runtimeRoots(executable: executable, searchPaths: searchPaths)
         let preview: [String: Any] = [
@@ -149,10 +154,13 @@ public actor PenCommandTools {
             "permission_scope":
                 "Remembering this command permits any arguments and child commands under the same filesystem and network restrictions. File approvals do not grant command permission.",
             "timeout_seconds": input.timeout_seconds ?? defaultTimeout,
+            "execution": background
+                ? "Background job you poll with pen_command_status" : "Runs to completion in one result",
         ]
         return PreparedCommand(
             owner: identity, executable: executable, arguments: input.args, directory: directory,
-            timeout: input.timeout_seconds ?? defaultTimeout, runtimeRoots: roots, commandIdentity: commandIdentity,
+            timeout: input.timeout_seconds ?? defaultTimeout, runtimeRoots: roots, background: background,
+            commandIdentity: commandIdentity,
             displayName: URL(fileURLWithPath: executable).lastPathComponent, network: network,
             directRemovalObservation: Self.directRemovalObservation(
                 executable: executable, arguments: input.args, workspaceIdentity: files.workspaceIdentity),
@@ -223,7 +231,16 @@ public actor PenCommandTools {
                 try? await Task.sleep(for: .milliseconds(40))
             }
         }
-        return try snapshot(id)
+        guard !command.background else { return try snapshot(id) }
+        // Foreground: block until the command finishes or hits its deadline, then return one result.
+        await jobs[id]?.monitor?.value
+        if jobs[id]?.finished == false {
+            await stop(id, reason: "Stopped before completion. File changes were not rolled back.")
+        }
+        let result = try snapshot(id)
+        jobs.removeValue(forKey: id)
+        jobOrder.removeAll { $0 == id }
+        return result
     }
 
     public func invoke(tool: String, argumentsJSON: String) async throws -> ToolResult {
@@ -278,6 +295,7 @@ public actor PenCommandTools {
         }
         jobs[id] = job
         if !job.finished && Date() >= job.deadline {
+            jobs[id]?.timedOut = true
             await stop(
                 id, reason: "Command timed out. File changes were not rolled back; inspect state before retrying.")
         }
@@ -310,9 +328,20 @@ public actor PenCommandTools {
 
     private func snapshot(_ id: String) throws -> ToolResult {
         guard var job = jobs[id] else { throw Failure("Unknown command job.") }
+        let elided = job.totalBytes > job.head.count + job.tail.count
+        let output: String
+        if elided {
+            let omitted = job.totalBytes - job.head.count - job.tail.count
+            output =
+                String(decoding: job.head, as: UTF8.self)
+                + "\n...[\(omitted) bytes omitted; redirect to a file and pen_read_file it for the full log]...\n"
+                + String(decoding: job.tail, as: UTF8.self)
+        } else {
+            output = String(decoding: job.head + job.tail, as: UTF8.self)
+        }
         var object: [String: Any] = [
             "job_id": id, "running": !job.finished,
-            "output": String(decoding: job.output, as: UTF8.self), "output_truncated": job.truncated,
+            "output": output, "output_truncated": elided, "timed_out": job.timedOut,
         ]
         object["exit_code"] = job.exitCode
         object["notice"] = job.stopped
@@ -349,10 +378,24 @@ public actor PenCommandTools {
         for _ in 0..<16 {
             let count = Darwin.read(job.outputFD, &buffer, buffer.count)
             guard count > 0 else { return }
-            let remaining = max(0, 32 * 1_024 - job.output.count)
-            job.output.append(contentsOf: buffer.prefix(min(remaining, count)))
-            if count > remaining { job.truncated = true }
+            job.totalBytes += count
+            let chunk = buffer.prefix(count)
+            let headRoom = max(0, 16 * 1_024 - job.head.count)
+            if headRoom > 0 {
+                job.head.append(contentsOf: chunk.prefix(headRoom))
+                Self.appendTail(&job, chunk.dropFirst(headRoom))
+            } else {
+                Self.appendTail(&job, chunk)
+            }
         }
+    }
+
+    /// Retains only the most recent 16 KiB beyond the head so the failing tail of long output stays
+    /// visible while total memory stays bounded regardless of how much the command prints.
+    private static func appendTail(_ job: inout Job, _ bytes: ArraySlice<UInt8>) {
+        guard !bytes.isEmpty else { return }
+        job.tail.append(contentsOf: bytes)
+        if job.tail.count > 16 * 1_024 { job.tail.removeFirst(job.tail.count - 16 * 1_024) }
     }
 
     /// Reject a broad root that would give a command authority over its own permission store.
