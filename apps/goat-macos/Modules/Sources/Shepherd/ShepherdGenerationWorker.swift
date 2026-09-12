@@ -52,6 +52,29 @@ struct ShepherdStreamResult: Sendable, Equatable {
 /// Performs blocking prompt file reads, CPU-heavy prompt planning, and engine stream
 /// consumption away from the main actor. It publishes already-coalesced deltas at display
 /// cadence instead of making the UI executor process every token.
+/// The failure raised when the engine goes silent after output has started (ADR-0089).
+enum WorkerStall: LocalizedError {
+    case stalled
+    var errorDescription: String? {
+        "The engine stopped sending output, so the response was ended to avoid hanging. Send a message to continue."
+    }
+}
+
+/// Tracks the time since the last streamed event and whether any output has started, so the stall
+/// watchdog can distinguish a post-first-token stall from ordinary prefill silence (ADR-0089).
+private actor StallActivity {
+    private var last = Date()
+    private var contentSeen = false
+    func touch() { last = Date() }
+    func markContent() {
+        last = Date()
+        contentSeen = true
+    }
+    func status() -> (idleSeconds: TimeInterval, contentSeen: Bool) {
+        (Date().timeIntervalSince(last), contentSeen)
+    }
+}
+
 actor ShepherdGenerationWorker {
     typealias StreamPublisher =
         @MainActor @Sendable (ShepherdStreamUpdate) async -> Bool
@@ -63,6 +86,9 @@ actor ShepherdGenerationWorker {
     private let retryBaseDelaySeconds: Double
     private let maxStreamRetries: Int
     private let maxRetryDelaySeconds: Double = 30
+    /// Post-first-token stall threshold (ADR-0089): if no event arrives for this long after output
+    /// has started, the turn fails rather than hanging. Recorded in ENGINES.md. Injectable for tests.
+    private let postFirstTokenStallSeconds: TimeInterval
 
     init(
         engine: any InferenceEngine,
@@ -70,12 +96,14 @@ actor ShepherdGenerationWorker {
             AttachmentStore.load($0)
         },
         retryBaseDelaySeconds: Double = 1.0,
-        maxStreamRetries: Int = 3
+        maxStreamRetries: Int = 3,
+        postFirstTokenStallSeconds: TimeInterval = 120
     ) {
         self.engine = engine
         self.attachmentLoader = attachmentLoader
         self.retryBaseDelaySeconds = retryBaseDelaySeconds
         self.maxStreamRetries = maxStreamRetries
+        self.postFirstTokenStallSeconds = postFirstTokenStallSeconds
     }
 
     func turns(
@@ -342,7 +370,7 @@ actor ShepherdGenerationWorker {
             var receivedContentEvent = false
 
             do {
-                for try await event in await engine.stream(request) {
+                for try await event in stallGuardedStream(request) {
                     try Task.checkCancellation()
                     switch event {
                     case .token(let text):
@@ -456,6 +484,56 @@ actor ShepherdGenerationWorker {
         let capped = min(exponential, maxRetryDelaySeconds)
         let jittered = capped / 2 + Double.random(in: 0...(capped / 2))
         return .seconds(jittered)
+    }
+
+    /// Wraps the engine stream with a post-first-token stall watchdog (ADR-0089). Once output has
+    /// started, if no event arrives within `postFirstTokenStallSeconds` the wrapped stream finishes
+    /// with `WorkerStall.stalled` and the underlying request is cancelled, so the turn fails instead
+    /// of hanging. Prefill silence is not failed here; the engine idle timeout bounds that.
+    private func stallGuardedStream(_ request: GenerationRequest)
+        -> AsyncThrowingStream<GenerationEvent, Error>
+    {
+        let timeout = postFirstTokenStallSeconds
+        let engine = self.engine
+        return AsyncThrowingStream { continuation in
+            let activity = StallActivity()
+            let forwarder = Task {
+                do {
+                    for try await event in await engine.stream(request) {
+                        if case .done = event {
+                            await activity.touch()
+                        } else {
+                            await activity.markContent()
+                        }
+                        continuation.yield(event)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            let watchdog = Task {
+                let poll = Self.stallPollInterval(for: timeout)
+                while true {
+                    do { try await Task.sleep(for: poll) } catch { return }
+                    let status = await activity.status()
+                    if status.contentSeen, status.idleSeconds > timeout {
+                        continuation.finish(throwing: WorkerStall.stalled)
+                        return
+                    }
+                }
+            }
+            continuation.onTermination = { _ in
+                forwarder.cancel()
+                watchdog.cancel()
+            }
+        }
+    }
+
+    /// Poll cadence for the stall watchdog: once per second in production, and a fraction of a short
+    /// injected timeout so fixtures detect a stall quickly without busy-looping.
+    private static func stallPollInterval(for timeout: TimeInterval) -> Duration {
+        .seconds(min(1.0, max(0.01, timeout / 4)))
     }
 
     /// Auto-title generation has no live UI consumer, so collect its small response entirely on

@@ -2507,3 +2507,34 @@ private actor MidStreamFailEngine: InferenceEngine {
         ShepherdGenerationWorker.retryAfter(
             from: EngineError.httpDetail(429, "x", retryAfter: 5)) == 5)
 }
+
+// MARK: - ADR-0089 Stage C: stall watchdog
+
+/// Yields a prefix of events, then never finishes: simulates an engine that stalls after output.
+private actor HangingEngine: InferenceEngine {
+    private(set) var requests: [GenerationRequest] = []
+    private let prefix: [GenerationEvent]
+    init(yield prefix: [GenerationEvent]) { self.prefix = prefix }
+    func health() async -> EngineHealth { .ok([]) }
+    func stream(_ request: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
+        requests.append(request)
+        let prefix = self.prefix
+        return AsyncThrowingStream { continuation in
+            for event in prefix { continuation.yield(event) }
+            // Intentionally never finishes.
+        }
+    }
+}
+
+@Test @MainActor func streamFailsWhenTheEngineStallsAfterFirstOutput() async {
+    let engine = HangingEngine(yield: [.token("partial")])
+    let worker = ShepherdGenerationWorker(engine: engine, postFirstTokenStallSeconds: 0.05)
+    var caught: Error?
+    do {
+        _ = try await worker.stream(workerRequest()) { _ in true }
+    } catch {
+        caught = error
+    }
+    #expect(caught is WorkerStall)
+    #expect(await engine.requests.count == 1)  // a stall is not a before-first-token retry
+}

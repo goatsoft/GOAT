@@ -151,7 +151,7 @@ struct MessageView: View {
                         } else {
                             AssistantStatusRow(startedAt: message.complete ? nil : message.createdAt) {
                                 if message.text.isEmpty {
-                                    ThinkingLabel(title: "Thinking…", live: true)
+                                    PrefillStatusLabel(startedAt: message.createdAt)
                                 }
                             }
                         }
@@ -661,6 +661,20 @@ struct ThinkingDisclosure: View {
                     }
                 }
             }
+        }
+    }
+}
+
+/// Prefill status shown before the first token. Reads "Thinking…" briefly, then switches to
+/// "Waiting for the engine (prefill)" once prompt evaluation passes a short threshold, so a long
+/// prefill does not read as a freeze (ADR-0089). The elapsed clock comes from AssistantStatusRow.
+struct PrefillStatusLabel: View {
+    let startedAt: Date
+    static let prefillNoticeThreshold: TimeInterval = 10
+    var body: some View {
+        TimelineView(.periodic(from: startedAt, by: 1)) { context in
+            let waiting = context.date.timeIntervalSince(startedAt) >= Self.prefillNoticeThreshold
+            ThinkingLabel(title: waiting ? "Waiting for the engine (prefill)" : "Thinking…", live: true)
         }
     }
 }

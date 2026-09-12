@@ -211,6 +211,10 @@ public actor OpenAICompatEngine: InferenceEngine {
 
     /// Parses a `Retry-After` header. Handles the numeric-seconds form; the HTTP-date form is
     /// treated as absent (ADR-0089). Returns nil when the header is missing or unparseable.
+    /// Idle timeout for the streaming request (ADR-0089). URLRequest.timeoutInterval resets on each
+    /// received byte, so this bounds how long a silent connection can hang. Recorded in ENGINES.md.
+    static let streamIdleTimeoutSeconds: TimeInterval = 300
+
     static func parseRetryAfter(_ value: String?) -> TimeInterval? {
         guard let value = value?.trimmingCharacters(in: .whitespaces), !value.isEmpty else { return nil }
         if let seconds = TimeInterval(value) { return max(0, seconds) }
@@ -226,6 +230,7 @@ public actor OpenAICompatEngine: InferenceEngine {
                 do {
                     guard config.isValidEndpoint else { throw EngineError.notConfigured }
                     var req = URLRequest(url: config.baseURL.appending(path: "v1/chat/completions"))
+                    req.timeoutInterval = Self.streamIdleTimeoutSeconds
                     req.httpMethod = "POST"
                     req.setValue("application/json", forHTTPHeaderField: "Content-Type")
                     if let key = config.apiKey, !key.isEmpty {

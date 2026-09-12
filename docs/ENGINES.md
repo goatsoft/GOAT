@@ -99,6 +99,10 @@ Compatibility evidence must be captured from the actual configured engine and mo
 | vMLX | Earlier development exercised its wire format; requalify the selected version for a release. |
 | Ollama · LM Studio · llama.cpp server · vLLM · mlx-lm | Preset-provided (Ollama/LM Studio/llama.cpp) or same-dialect: expected compatible, unverified; versioned compatibility reports and PRs welcome |
 
+## Streaming timeouts and stall detection (ADR-0089)
+
+The streaming `POST /v1/chat/completions` request uses a **300 second idle timeout** (reset on each received byte), so a silent connection cannot hang indefinitely. Independently, once output has started, if no further event arrives for **120 seconds** the turn fails with a stall error rather than hanging. Before the first token, prefill silence is not failed here (the idle timeout bounds it); after **10 seconds** of prefill the composer shows "Waiting for the engine (prefill)" with the elapsed clock so a long prompt evaluation does not read as a freeze. A request that fails before any output, with a transient error (HTTP 408, 429, 502, 503, 504 or a connection reset), is retried up to three times with jittered exponential backoff, honouring `Retry-After`.
+
 ## Remote engines
 
 Configured HTTP endpoints can be on this Mac, a local network or the internet, subject to JUDAS policy. A remote endpoint receives the context submitted for its work. Local servers can also make independent outbound connections. Do not treat generic API compatibility as a local-only network restriction; see [Privacy](PRIVACY.md) and [Connection policy](reference/CONNECTIONS.md).
