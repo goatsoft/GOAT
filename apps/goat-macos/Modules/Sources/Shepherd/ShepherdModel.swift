@@ -34,6 +34,28 @@ public struct ShepherdToolRoute: Sendable, Equatable {
     public let origin: ShepherdToolOrigin
 }
 
+public struct ConcurrentToolCall: Sendable {
+    public let index: Int
+    public let route: ShepherdToolRoute
+    public let argumentsJSON: String
+    public init(index: Int, route: ShepherdToolRoute, argumentsJSON: String) {
+        self.index = index
+        self.route = route
+        self.argumentsJSON = argumentsJSON
+    }
+}
+
+public struct ConcurrentToolOutcome: Sendable {
+    public let index: Int
+    public let result: ToolResult?
+    public let duration: TimeInterval
+    public init(index: Int, result: ToolResult?, duration: TimeInterval) {
+        self.index = index
+        self.result = result
+        self.duration = duration
+    }
+}
+
 public enum ShepherdPersistedTurnKind: Sendable, Equatable {
     case regular
     case handoff
@@ -110,6 +132,9 @@ public protocol ShepherdToolSource: AnyObject {
     func authorizeAndInvoke(
         route: ShepherdToolRoute, argumentsJSON: String
     ) async throws -> ToolResult?
+    /// Runs a batch of independent read-only tool calls and returns an outcome per call. The
+    /// default runs them sequentially; a source that can parallelize (AppToolRouter) overrides it.
+    func invokeConcurrently(_ calls: [ConcurrentToolCall]) async -> [ConcurrentToolOutcome]
     func previewToolEffect(
         route: ShepherdToolRoute, argumentsJSON: String
     ) async -> ToolExecutionDiagnostic?
@@ -124,6 +149,18 @@ extension ShepherdToolSource {
     public func previewToolEffect(
         route: ShepherdToolRoute, argumentsJSON: String
     ) async -> ToolExecutionDiagnostic? { nil }
+
+    public func invokeConcurrently(_ calls: [ConcurrentToolCall]) async -> [ConcurrentToolOutcome] {
+        var outcomes: [ConcurrentToolOutcome] = []
+        for call in calls {
+            let started = Date()
+            let result = try? await authorizeAndInvoke(route: call.route, argumentsJSON: call.argumentsJSON)
+            outcomes.append(
+                ConcurrentToolOutcome(
+                    index: call.index, result: result, duration: Date().timeIntervalSince(started)))
+        }
+        return outcomes
+    }
 }
 
 /// The selected Pen's prompt context. A workspace path describes the intended project;
@@ -716,7 +753,9 @@ public final class ShepherdModel {
                 break shepherd
             }
 
+            var batchedThrough = -1
             for (index, call) in toolCalls.enumerated() {
+                if index <= batchedThrough { continue }
                 await drainLeadSave()
                 // Finish the current response's first tool step, including its approval.
                 // Lead takes effect between actions; Stop owns cancellation.
@@ -742,6 +781,45 @@ public final class ShepherdModel {
                         assistant.error = "Tool processing stopped because its transcript could not be saved."
                         assistant.markRenderChanged()
                         activity.log(.warn, "persistence: unknown-tool result was not saved")
+                        break shepherd
+                    }
+                    continue
+                }
+                if Self.readOnlyPenTools.contains(call.name) {
+                    // Read-only tools take no approval and touch no shared write state, so a run of
+                    // consecutive reads runs concurrently (off the file actor); results are applied in
+                    // call order. Writes, edits and commands stay on the sequential path below.
+                    var end = index
+                    while end + 1 < toolCalls.count,
+                        Self.readOnlyPenTools.contains(toolCalls[end + 1].name),
+                        mapping[toolCalls[end + 1].name] != nil
+                    {
+                        end += 1
+                    }
+                    let jobs: [ConcurrentToolCall] = (index...end).compactMap { i in
+                        guard let route = mapping[toolCalls[i].name] else { return nil }
+                        return ConcurrentToolCall(index: i, route: route, argumentsJSON: toolCalls[i].argumentsJSON)
+                    }
+                    for outcome in await tools.invokeConcurrently(jobs) {
+                        let route = mapping[toolCalls[outcome.index].name]
+                        if let result = outcome.result {
+                            assistant.toolEvents[outcome.index].result = result.content
+                            assistant.toolEvents[outcome.index].isError = result.isError
+                            if let route {
+                                tools.logCall(
+                                    server: route.server, tool: route.tool,
+                                    status: result.isError ? "error" : "ok", duration: outcome.duration)
+                            }
+                        } else {
+                            assistant.toolEvents[outcome.index].result = "Not executed."
+                            assistant.toolEvents[outcome.index].isError = true
+                        }
+                    }
+                    assistant.markRenderChanged()
+                    batchedThrough = end
+                    guard await env.persist(assistant, in: session) else { break shepherd }
+                    if Task.isCancelled || !owns(turnID: turnID, sessionID: session.id) {
+                        await finishPendingToolsAsStopped()
                         break shepherd
                     }
                     continue
@@ -840,6 +918,10 @@ public final class ShepherdModel {
     private func owns(turnID: UUID, sessionID: UUID) -> Bool {
         activeTurnID == turnID && activeSessionID == sessionID
     }
+
+    private static let readOnlyPenTools: Set<String> = [
+        "pen_read_file", "pen_search", "pen_glob", "pen_list_files",
+    ]
 
     private static let toolFormatRecoveryPrompt = """
         The last response printed a tool invocation as text. Use the supplied structured tool interface with its exact function names and JSON schemas. Do not print tool envelopes. Do not repeat actions with completed results.

@@ -321,6 +321,26 @@ final class AppToolRouter: ShepherdToolSource {
         }
     }
 
+    func invokeConcurrently(_ calls: [ConcurrentToolCall]) async -> [ConcurrentToolOutcome] {
+        // Read-only calls are auto-allowed and their file I/O runs off the PenFileTools actor, so
+        // this router (a Sendable @MainActor type) fans them out concurrently and gathers the
+        // outcomes; the caller applies them in call order.
+        await withTaskGroup(of: ConcurrentToolOutcome.self) { group in
+            for call in calls {
+                group.addTask { [self] in
+                    let started = Date()
+                    let result = try? await self.authorizeAndInvoke(
+                        route: call.route, argumentsJSON: call.argumentsJSON)
+                    return ConcurrentToolOutcome(
+                        index: call.index, result: result, duration: Date().timeIntervalSince(started))
+                }
+            }
+            var outcomes: [ConcurrentToolOutcome] = []
+            for await outcome in group { outcomes.append(outcome) }
+            return outcomes
+        }
+    }
+
     func previewToolEffect(
         route: ShepherdToolRoute, argumentsJSON: String
     ) async -> ToolExecutionDiagnostic? {

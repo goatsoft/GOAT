@@ -84,7 +84,7 @@ public actor PenFileTools {
 
     public func validateWorkspace() throws { try validateRoot() }
 
-    public func read(tool: String, argumentsJSON: String) throws -> ToolResult {
+    public nonisolated func read(tool: String, argumentsJSON: String) async throws -> ToolResult {
         try Task.checkCancellation()
         try validateRoot()
         guard argumentsJSON.utf8.count <= 65_536,
@@ -186,7 +186,7 @@ public actor PenFileTools {
         var displayName: String { name + (directory ? "/" : "") }
     }
 
-    private func directoryEntries(_ parts: [String]) throws -> [DirectoryEntry] {
+    private nonisolated func directoryEntries(_ parts: [String]) throws -> [DirectoryEntry] {
         let directory = try traverse(parts)
         let duplicate = openat(directory.raw, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
         guard duplicate >= 0 else { throw failure("Open directory") }
@@ -221,7 +221,7 @@ public actor PenFileTools {
         return entries.sorted { $0.displayName < $1.displayName }
     }
 
-    private func search(
+    private nonisolated func search(
         path: String, query: String, glob: String, sensitive: Bool, regex useRegex: Bool, limit: Int
     ) throws -> ToolResult {
         let compiled: NSRegularExpression?
@@ -314,7 +314,7 @@ public actor PenFileTools {
         return ToolResult(content: ([header] + lines).joined(separator: "\n"))
     }
 
-    private func glob(path: String, pattern: String, limit: Int) throws -> ToolResult {
+    private nonisolated func glob(path: String, pattern: String, limit: Int) throws -> ToolResult {
         let excluded: Set<String> = [
             ".git", "node_modules", ".build", "dist", "build", ".next", ".venv", "venv", "__pycache__",
         ]
@@ -378,11 +378,13 @@ public actor PenFileTools {
         }
     }
 
-    private func validateKeys(_ args: [String: Any], allowed: Set<String>) throws {
+    private nonisolated func validateKeys(_ args: [String: Any], allowed: Set<String>) throws {
         guard Set(args.keys).isSubset(of: allowed) else { throw Failure("Use only the documented tool fields.") }
     }
 
-    private func integer(_ args: [String: Any], key: String, fallback: Int, range: ClosedRange<Int>) throws -> Int {
+    private nonisolated func integer(_ args: [String: Any], key: String, fallback: Int, range: ClosedRange<Int>) throws
+        -> Int
+    {
         guard let value = args[key] else { return fallback }
         guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
             number.doubleValue.isFinite, number.doubleValue.rounded() == number.doubleValue,
@@ -392,7 +394,7 @@ public actor PenFileTools {
         return number.intValue
     }
 
-    private func boolean(_ args: [String: Any], key: String, fallback: Bool) throws -> Bool {
+    private nonisolated func boolean(_ args: [String: Any], key: String, fallback: Bool) throws -> Bool {
         guard let value = args[key] else { return fallback }
         guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else {
             throw Failure("\(key) must be true or false.")
@@ -531,7 +533,7 @@ public actor PenFileTools {
             ]))
     }
 
-    private func validateRoot() throws {
+    private nonisolated func validateRoot() throws {
         let current = try Self.openDirectory(rootPath)
         var expected = stat()
         var actual = stat()
@@ -557,7 +559,7 @@ public actor PenFileTools {
         return directory
     }
 
-    private func traverse(_ parts: [String], create: Bool = false) throws -> Descriptor {
+    private nonisolated func traverse(_ parts: [String], create: Bool = false) throws -> Descriptor {
         var directory = root
         for part in parts {
             var next = openat(directory.raw, part, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
@@ -573,7 +575,7 @@ public actor PenFileTools {
         return directory
     }
 
-    private func readFile(_ parts: [String]) throws -> (Data, mode_t) {
+    private nonisolated func readFile(_ parts: [String]) throws -> (Data, mode_t) {
         guard let name = parts.last else { throw Failure("A file path is required.") }
         let parent = try traverse(Array(parts.dropLast()))
         let fd = openat(parent.raw, name, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
@@ -598,7 +600,7 @@ public actor PenFileTools {
         return (data, info.st_mode & 0o777)
     }
 
-    private func components(_ path: String, allowRoot: Bool = false) throws -> [String] {
+    private nonisolated func components(_ path: String, allowRoot: Bool = false) throws -> [String] {
         if allowRoot, path == "." { return [] }
         let parts = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
         guard !path.isEmpty, path.utf8.count <= 4096, !path.contains("\0"),
@@ -620,14 +622,14 @@ public actor PenFileTools {
         return value
     }
 
-    private func json(_ value: [String: Any]) throws -> String {
+    private nonisolated func json(_ value: [String: Any]) throws -> String {
         String(
             decoding: try JSONSerialization.data(
                 withJSONObject: value, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]),
             as: UTF8.self)
     }
 
-    private func failure(_ operation: String) -> Failure {
+    private nonisolated func failure(_ operation: String) -> Failure {
         Failure("\(operation): \(String(cString: strerror(errno))).")
     }
 
@@ -641,7 +643,7 @@ public actor PenFileTools {
         public var errorDescription: String? { message }
     }
 
-    private final class Descriptor {
+    private final class Descriptor: Sendable {
         let raw: Int32
         init(_ raw: Int32) { self.raw = raw }
         deinit { Darwin.close(raw) }
