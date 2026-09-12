@@ -111,7 +111,12 @@ extension AppModel {
         return await commitModelPreferences(models: next, reviews: reviews)
     }
 
-    func refreshModelCatalog() async {
+    /// Re-list the active engine's models. Routine polling passes `allowReconnect: false` so it
+    /// never begins a connection: when the engine is already connected this re-lists with a
+    /// lightweight health call that leaves the lifecycle untouched, and when it is offline it does
+    /// nothing - reconnection is owned by EngineRecoveryController. Explicit user refreshes keep
+    /// the default `allowReconnect: true`, which falls back to a full `discover()` when offline.
+    func refreshModelCatalog(allowReconnect: Bool = true) async {
         guard startupPhase.hasLocalState, activeEngineProfile != nil, !shepherd.hasActiveTurn,
             !modelCatalogRefreshing
         else {
@@ -119,6 +124,13 @@ extension AppModel {
         }
         modelCatalogRefreshing = true
         defer { modelCatalogRefreshing = false }
+        if case .ok = health, !engineTransitioning {
+            let refreshed = await engine.health()
+            guard !shepherd.hasActiveTurn, !engineTransitioning else { return }
+            apply(health: refreshed)
+            return
+        }
+        guard allowReconnect else { return }
         await discover()
     }
 
@@ -138,7 +150,7 @@ extension AppModel {
     func modelCatalogPollingLoop(sceneActive: Bool) async {
         guard sceneActive, startupPhase.hasLocalState, activeEngineProfile != nil else { return }
         while !Task.isCancelled {
-            await refreshModelCatalog()
+            await refreshModelCatalog(allowReconnect: false)
             do {
                 try await Task.sleep(for: .seconds(30))
             } catch {
