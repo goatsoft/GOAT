@@ -28,6 +28,12 @@ struct ModelInventoryRow: View {
         model.modelPreferences.first { $0.identity == identity }
     }
 
+    @State private var isHovering = false
+
+    private var isCurrentChatModel: Bool {
+        model.resolvedModelID(for: model.currentSession) == identity.modelID
+    }
+
     var body: some View {
         HStack(spacing: Caprine.Models.spacing) {
             Button {
@@ -40,9 +46,24 @@ struct ModelInventoryRow: View {
             .help(preference?.isFavourite == true ? "Remove favourite" : "Add favourite")
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(modelRef?.displayName ?? identity.modelID)
-                    .font(.body.weight(.medium))
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(modelRef?.displayName ?? identity.modelID)
+                        .font(.body.weight(.medium))
+                        .lineLimit(1)
+                    if let modelRef {
+                        Image(systemName: modelRef.menuTypeSymbol)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if isCurrentChatModel {
+                        Text("Current")
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 1)
+                            .background(Capsule().fill(Color.secondary.opacity(0.15)))
+                    }
+                }
                 Text(identity.modelID)
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
@@ -61,8 +82,17 @@ struct ModelInventoryRow: View {
             }
         }
         .padding(.vertical, Caprine.Models.rowInset)
+        .padding(.horizontal, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(
+                    isSelected
+                        ? Color.accentColor.opacity(0.16)
+                        : (isHovering ? Color.primary.opacity(0.06) : Color.clear))
+        )
         .contentShape(Rectangle())
         .opacity(isUnavailable ? 0.72 : 1)
+        .onHover { isHovering = $0 }
         .onTapGesture { onSelect?() }
     }
 }

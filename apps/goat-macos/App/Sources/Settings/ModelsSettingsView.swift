@@ -2,11 +2,37 @@ import Caprine
 import Inference
 import SwiftUI
 
+enum ModelFilterFacet: String, CaseIterable, Identifiable {
+    case favourites, coder, vision, multimodal, thinking, tools
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .favourites: "Favourites"
+        case .coder: "Coder"
+        case .vision: "Vision"
+        case .multimodal: "Multimodal"
+        case .thinking: "Thinking"
+        case .tools: "Tools"
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .favourites: "star.fill"
+        case .coder: "chevron.left.forwardslash.chevron.right"
+        case .vision: "eye"
+        case .multimodal: "sparkles"
+        case .thinking: "brain"
+        case .tools: "wrench.and.screwdriver"
+        }
+    }
+}
+
 struct ModelsSettingsView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.openSettings) private var openSettings
     @State private var search = ""
-    @State private var favouritesOnly = false
+    @State private var activeFilters: Set<ModelFilterFacet> = []
+    @State private var showFilters = false
     @State private var selection: ModelIdentity?
     @State private var showingModelResults = false
     @FocusState private var searchFocused: Bool
@@ -14,9 +40,10 @@ struct ModelsSettingsView: View {
     private var engineID: String? { model.activeEngineProfile?.id }
     private var projection: ModelCatalogProjection? { model.modelCatalogProjection }
     private var filteredFavouriteModels: [ModelRef] { filter(projection?.availableFavourites ?? []) }
-    private var filteredOtherModels: [ModelRef] { favouritesOnly ? [] : filter(projection?.availableOthers ?? []) }
+    private var filteredOtherModels: [ModelRef] { filter(projection?.availableOthers ?? []) }
     private var filteredUnavailable: [ModelPreference] {
-        (projection?.unavailableFavourites ?? []).filter { matches($0.identity.modelID) }
+        guard activeFilters.subtracting([.favourites]).isEmpty else { return [] }
+        return (projection?.unavailableFavourites ?? []).filter { matches($0.identity.modelID) }
     }
     private var selectedModelRef: ModelRef? {
         guard let selection else { return nil }
@@ -28,14 +55,23 @@ struct ModelsSettingsView: View {
             VStack(alignment: .leading, spacing: Caprine.Models.spacing) {
                 header
                 if let selection {
-                    ModelDetailView(identity: selection, modelRef: selectedModelRef)
-                        .contentShape(Rectangle())
-                        .onTapGesture { dismissModelMenu() }
+                    ModelDetailView(identity: selection, modelRef: selectedModelRef, onClear: { self.selection = nil })
                 } else {
-                    ContentUnavailableView {
-                        Label("Choose a model to inspect", systemImage: "square.stack.3d.up")
-                    } description: {
-                        Text("Search the configured engine's catalog to inspect a model's capabilities and metadata.")
+                    // Centre the empty state under the search column, not the whole pane: the
+                    // trailing hidden filter label reserves the same width the real control takes
+                    // in the header, so the two share a horizontal centre.
+                    HStack(spacing: Caprine.Models.spacing) {
+                        ContentUnavailableView {
+                            Label("Choose a model to inspect", systemImage: "square.stack.3d.up")
+                        } description: {
+                            Text(
+                                "Search the configured engine's catalog to inspect a model's capabilities and metadata."
+                            )
+                        }
+                        .frame(maxWidth: .infinity)
+                        Button(action: {}) { filterButtonLabel }
+                            .buttonStyle(.plain)
+                            .hidden()
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .contentShape(Rectangle())
@@ -59,10 +95,6 @@ struct ModelsSettingsView: View {
                     Text(engineSummary).font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("Engine Settings…") {
-                    model.settingsTab = .engine
-                    openSettings()
-                }
                 Button {
                     Task { await model.refreshModelCatalog() }
                 } label: {
@@ -71,11 +103,17 @@ struct ModelsSettingsView: View {
                         systemImage: model.modelCatalogRefreshing ? "arrow.triangle.2.circlepath" : "arrow.clockwise")
                 }
                 .disabled(model.modelCatalogRefreshing || engineID == nil || model.shepherd.hasActiveTurn)
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                Button("Engine Settings…") {
+                    model.settingsTab = .engine
+                    openSettings()
+                }
+                .buttonStyle(SecondaryChipButtonStyle())
             }
             HStack(spacing: Caprine.Models.spacing) {
                 modelSearchField
-                Toggle("Favourites only", isOn: $favouritesOnly)
-                    .toggleStyle(.checkbox)
+                filterControl
             }
         }
         .zIndex(showingModelResults ? 100 : 0)
@@ -222,7 +260,7 @@ struct ModelsSettingsView: View {
                 dismissModelMenu()
             }
         )
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 8)
     }
 
     private func row(for ref: ModelRef) -> some View {
@@ -284,7 +322,102 @@ struct ModelsSettingsView: View {
     }
 
     private func filter(_ values: [ModelRef]) -> [ModelRef] {
-        values.filter { matches($0.displayName) || matches($0.id) }
+        values.filter { (matches($0.displayName) || matches($0.id)) && facetMatches($0) }
+    }
+
+    /// Favourites is an AND constraint; the type facets are OR among themselves, and a type facet
+    /// matches any model that has that capability (Vision matches Muse-Glimmer, etc.).
+    private func facetMatches(_ ref: ModelRef) -> Bool {
+        if activeFilters.contains(.favourites), !isFavourite(ref) { return false }
+        let typeFacets = activeFilters.subtracting([.favourites])
+        guard !typeFacets.isEmpty else { return true }
+        let vision = ref.capabilities.vision.support == .supported || ref.looksVisionCapable
+        let reasoning = ref.capabilities.reasoning.support == .supported
+        let tools = ref.capabilities.tools.support == .supported
+        return typeFacets.contains { facet in
+            switch facet {
+            case .favourites: true
+            case .coder: ref.isCoderFocused
+            case .vision: vision
+            case .multimodal: vision && reasoning
+            case .thinking: reasoning
+            case .tools: tools
+            }
+        }
+    }
+
+    private func isFavourite(_ ref: ModelRef) -> Bool {
+        let identity = ModelIdentity(engineProfileID: engineID ?? "", modelID: ref.id)
+        return model.modelPreferences.first { $0.identity == identity }?.isFavourite ?? false
+    }
+
+    private func toggleFilter(_ facet: ModelFilterFacet) {
+        if activeFilters.contains(facet) {
+            activeFilters.remove(facet)
+        } else {
+            activeFilters.insert(facet)
+        }
+    }
+
+    private var filterButtonLabel: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "line.3.horizontal.decrease")
+                .font(.title2)
+            // Always laid out (hidden when zero) so the search field never shifts as the count
+            // appears or clears. The facet count is single-digit, so the pill width is stable.
+            Text("\(activeFilters.count)")
+                .font(.caption.weight(.semibold))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 1)
+                .background(Capsule().fill(Color.secondary.opacity(0.15)))
+                .opacity(activeFilters.isEmpty ? 0 : 1)
+        }
+        .foregroundStyle(.secondary)
+        .frame(height: 30)
+        .contentShape(Rectangle())
+    }
+
+    private var filterControl: some View {
+        Button {
+            showFilters.toggle()
+        } label: {
+            filterButtonLabel
+        }
+        .buttonStyle(.plain)
+        .help("Filter models")
+        .popover(isPresented: $showFilters, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(ModelFilterFacet.allCases) { facet in
+                    Button {
+                        toggleFilter(facet)
+                    } label: {
+                        HStack(spacing: 10) {
+                            Label(facet.label, systemImage: facet.symbol)
+                            Spacer(minLength: 24)
+                            Image(systemName: "checkmark")
+                                .foregroundStyle(.tint)
+                                .opacity(activeFilters.contains(facet) ? 1 : 0)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.vertical, 4)
+                    .padding(.horizontal, 4)
+                }
+                if !activeFilters.isEmpty {
+                    Divider()
+                    Button("Clear filters") { activeFilters.removeAll() }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .padding(.vertical, 4)
+                        .padding(.horizontal, 4)
+                }
+            }
+            .padding(10)
+            .frame(minWidth: 210, alignment: .leading)
+        }
     }
 
     private func matches(_ value: String) -> Bool {
