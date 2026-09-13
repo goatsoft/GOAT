@@ -285,7 +285,12 @@ final class AppToolRouter: ShepherdToolSource {
         switch route.origin {
         case .extensionTool(let handle):
             do {
-                let result = try await extensions.invoke(handle, argumentsJSON: argumentsJSON) {
+                let budget: ToolExecutionBudget =
+                    handle.registration.extensionID.rawValue == "goat.herder"
+                        && handle.name == "pen_run_command"
+                        && penFileSession?.turnID == handle.turnID ? .supervisedCommand : .standard
+                let result = try await extensions.invoke(handle, argumentsJSON: argumentsJSON, executionBudget: budget)
+                {
                     [weak self] handle, arguments in
                     let allowed: Bool
                     do {
@@ -527,11 +532,11 @@ final class AppToolRouter: ShepherdToolSource {
         ToolSpec(
             name: "memory_write",
             description:
-                "Write a concise durable memory note for this chat's current scope. Never claim a memory was saved unless this tool succeeds.",
+                "Write a concise durable memory note for this chat's current scope. Names use lowercase letters, numbers, hyphens or underscores, start and end with a letter or number, and cannot be memory. Never claim a memory was saved unless this tool succeeds.",
             parametersJSON: """
                 {"type":"object","additionalProperties":false,
                 "required":["name","description","body"],
-                "properties":{"name":{"type":"string","maxLength":64},
+                "properties":{"name":{"type":"string","minLength":1,"maxLength":64,"pattern":"^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$"},
                 "description":{"type":"string","maxLength":512},
                 "body":{"type":"string","maxLength":24576}}}
                 """),
@@ -547,11 +552,11 @@ final class AppToolRouter: ShepherdToolSource {
                 """),
         ToolSpec(
             name: "memory_delete",
-            description: "Delete a memory note from this chat's current write scope by safe name.",
+            description: "Delete a memory note from this chat's current write scope by its existing name.",
             parametersJSON: """
                 {"type":"object","additionalProperties":false,
                 "required":["name"],
-                "properties":{"name":{"type":"string","maxLength":64}}}
+                "properties":{"name":{"type":"string","minLength":1,"maxLength":64,"pattern":"^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$"}}}
                 """),
     ]
 

@@ -135,6 +135,40 @@ private func context(pen: UUID? = nil) -> ExtensionContext {
     #expect(await runtime.activeExtensions().isEmpty)
 }
 
+@Test func missingToolArgumentsExplainRepairBeforeApprovalOrExecution() async throws {
+    let runtime = ExtensionRuntime()
+    let journal = Journal()
+    _ = try await runtime.activate(FixtureExtension("example.arguments", contributions: .init(tools: [journal])))
+    let snapshot = try await runtime.prepareTurn(context())
+    await #expect(throws: CapabilityError.missingRequiredArguments(["count"])) {
+        _ = try await runtime.invoke(snapshot.tools[0].handle, argumentsJSON: "{}") { _, _ in
+            Issue.record("Invalid arguments must not reach approval")
+            return true
+        }
+    }
+    #expect(await journal.invocations == 0)
+    let result = try await runtime.invoke(snapshot.tools[0].handle, argumentsJSON: #"{"count":1}"#) { _, _ in true }
+    #expect(result.content == "ok")
+    #expect(await journal.invocations == 1)
+}
+
+@Test func missingArgumentDiagnosticsAreBoundedAndDoNotEchoValues() throws {
+    let schema =
+        #"{"type":"object","additionalProperties":false,"properties":{"path":{"type":"string"},"old_text":{"type":"string"},"new_text":{"type":"string"}},"required":["path","new_text","old_text"]}"#
+    #expect(throws: CapabilityError.missingRequiredArguments(["new_text", "old_text"])) {
+        try Schema.validateArguments(#"{"path":"private-content"}"#, schema: schema)
+    }
+    #expect(throws: CapabilityError.invalidPayload) {
+        try Schema.validateArguments(#"{"path":"p","old_text":"a","new_text":null}"#, schema: schema)
+    }
+    let message = CapabilityError.missingRequiredArguments(
+        Array(repeating: String(repeating: "x\n", count: 200), count: 20)
+    )
+    .localizedDescription
+    #expect(message.count < 650)
+    #expect(!message.contains("\n"))
+}
+
 @Test func modelToolValidationAndHostAuthorizationPrecedeInvocation() async throws {
     let runtime = ExtensionRuntime()
     let journal = Journal()
@@ -280,6 +314,57 @@ private struct HungTool: ModelToolProvider {
         await entered.open()
         await release.wait()
         return ToolResult(content: "late")
+    }
+}
+
+private struct CommandBudgetClock: ExtensionClock {
+    let expected: Duration
+    let scheduled: Barrier
+    let advance: Barrier
+    func sleep(for duration: Duration) async throws {
+        if duration == expected {
+            await scheduled.open()
+            await advance.wait()
+        } else {
+            try await Task.sleep(for: duration)
+        }
+    }
+}
+
+@Test(arguments: [false, true])
+func supervisedCommandCanReturnItsReceiptWithoutQuarantiningOtherTools(expire: Bool) async throws {
+    let scheduled = Barrier()
+    let advance = Barrier()
+    let entered = Barrier()
+    let release = Barrier()
+    let runtime = ExtensionRuntime(
+        clock: CommandBudgetClock(expected: .seconds(630), scheduled: scheduled, advance: advance))
+    let journal = Journal()
+    _ = try await runtime.activate(
+        FixtureExtension(
+            "example.supervised", contributions: .init(tools: [HungTool(entered: entered, release: release), journal])))
+    let snapshot = try await runtime.prepareTurn(context())
+    let command = try #require(snapshot.tools.first { $0.handle.name == "hung_tool" })
+    let call = Task {
+        try await runtime.invoke(command.handle, argumentsJSON: "{}", executionBudget: .supervisedCommand) { _, _ in
+            true
+        }
+    }
+    await entered.wait()
+    await scheduled.wait()
+    if expire {
+        await advance.open()
+        await #expect(throws: CapabilityError.timedOut) { _ = try await call.value }
+        #expect(await runtime.activeExtensions().isEmpty)
+        await release.open()
+    } else {
+        await release.open()
+        #expect(try await call.value.content == "late")
+        let healthy = try #require(snapshot.tools.first { $0.handle.name == "fixture_tool" })
+        #expect(
+            try await runtime.invoke(healthy.handle, argumentsJSON: #"{"count":1}"#) { _, _ in true }.content == "ok")
+        #expect(await runtime.activeExtensions().count == 1)
+        await advance.open()
     }
 }
 

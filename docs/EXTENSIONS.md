@@ -66,6 +66,7 @@ Hindsight uses an adapter over the existing memory service, capturing configurat
 | Combined structured context | 256 KiB |
 | Observer receipt / retained diagnostic codes | 4 KiB / 128 entries |
 | Default call / model tool / post-persist observer deadline | 5 s / 120 s / 30 s |
+| Host-selected bundled command supervisor watchdog | 630 s; command job deadline remains at most 600 s |
 
 The host additionally bounds the observer transcript to the latest 64 messages with at most 4,096 characters per message; the memory transport retains its own byte limits. A test can inject `ExtensionClock` and a default deadline. Tests advance barriers instead of sleeping against real time.
 

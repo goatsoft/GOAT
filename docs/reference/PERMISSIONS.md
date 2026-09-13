@@ -7,8 +7,8 @@ Kid separates native file authority, native command authority, external MCP tool
 | Tool | Behavior |
 | --- | --- |
 | `pen_list_files` | Sorted, workspace-relative listing with bounded pages and `next_after`. |
-| `pen_read_file` | Bounded text read with `next_start_line` for continuation. |
-| `pen_search` | Literal-text search in eligible source files. |
+| `pen_read_file` | Text read, defaulting to the first 2,000 lines within a 48 KiB bound, with `next_start_line` for continuation. Use `line_count` for smaller reads. |
+| `pen_search` | Literal or optional per-line regular-expression search in a file or under a directory. `file_glob` filters filenames in either case. |
 | `pen_write_file` | Create a new file; an existing path is an error. |
 | `pen_edit_file` | Replace one exact unique fragment from the current file. |
 
@@ -23,7 +23,9 @@ Herder is available for a turn in a configured Pen workspace when chat tools and
 
 A Pen-wide grant is broader than a chat grant. Selecting a narrower composer option while one is active can affect other chats, as the UI explains. Resetting file permissions from the Pen page clears all file grants in the Pen. Moving a chat clears its chat-only grant; changing the workspace clears file grants for the Pen.
 
-Every write rechecks the prepared action, workspace and filesystem state. UTF-8 files are limited to 1 MiB. Reads return at most 200 lines and 32 KiB; directory pages at most 200 entries. Symbolic links, multiply linked files and `.git` metadata are excluded. Tool-call arguments are capped at 64 KiB by GOATed. An identical edit replacement reports No change; an intervening file change invalidates a prepared edit.
+Every write rechecks the prepared action, workspace and filesystem state. UTF-8 files are limited to 1 MiB. Reads return at most 2,000 lines and 48 KiB; directory pages at most 200 entries. Symbolic links, multiply linked files and `.git` metadata are excluded. Tool-call arguments are capped at 64 KiB by GOATed. An identical edit replacement reports No change; an intervening file change invalidates a prepared edit.
+
+GOATed validates tool arguments before requesting approval or invoking the provider. Missing top-level required arguments are named in a bounded error so the model can repair its call. The diagnostic does not echo supplied values; other schema violations still fail validation. When a file path is already known, the agent can read it directly without listing each parent directory.
 
 ## Native command jobs
 

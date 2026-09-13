@@ -335,9 +335,25 @@ private func navigationObject(_ content: String) throws -> [String: Any] {
             tool: "pen_search", argumentsJSON: #"{"path":"src","query":"Needle[a]","case_sensitive":false}"#
         ).content
     #expect(penSearchMatches(insensitive).count == 2)
+    let direct = try await files.read(
+        tool: "pen_search", argumentsJSON: #"{"path":"src/App.vue","query":"Needle[a]"}"#)
+    #expect(penSearchMatches(direct.content) == matchLines)
+    #expect(penSearchHeader(direct.content).contains("in 1 file"))
+    let directLimited = try await files.read(
+        tool: "pen_search",
+        argumentsJSON: #"{"path":"src/App.vue","query":"needle","regex":true,"case_sensitive":false,"max_results":1}"#)
+    #expect(penSearchMatches(directLimited.content).count == 1)
+    #expect(penSearchHeader(directLimited.content).contains("truncated"))
+    let filtered = try await files.read(
+        tool: "pen_search", argumentsJSON: #"{"path":"src/App.vue","query":"Needle","file_glob":"*.ts"}"#)
+    #expect(penSearchMatches(filtered.content).isEmpty)
+    try FileManager.default.createSymbolicLink(
+        at: root.appendingPathComponent("outside"), withDestinationURL: outside)
     for args in [
         #"{"path":"../","query":"Needle"}"#, #"{"path":".","query":""}"#,
         #"{"path":".","query":"Needle","case_sensitive":1}"#, #"{"path":".","query":"Needle","max_results":true}"#,
+        #"{"path":"escape.vue","query":"Needle"}"#, #"{"path":"hard.vue","query":"Needle"}"#,
+        #"{"path":"outside/secret.vue","query":"Needle"}"#,
     ] {
         await #expect(throws: (any Error).self) { _ = try await files.read(tool: "pen_search", argumentsJSON: args) }
     }

@@ -19,16 +19,16 @@ public actor PenFileTools {
         ToolSchema(
             name: "pen_read_file",
             description:
-                "Read a UTF-8 Pen file up to 1 MiB as plain text: a one-line header (path, the line range and total, and next_start_line when more remains) followed by the raw file content. Up to 2000 lines and 48 KiB per call; pass next_start_line back as start_line to continue. Set line_numbers true to prefix each line with its 1-based number and a tab; those numbers are not part of the file, so never copy them into old_text for edits.",
+                "Read a UTF-8 Pen file up to 1 MiB as plain text: a one-line header (path, the line range and total, and next_start_line when more remains) followed by the raw file content. Defaults to the first 2000 lines, bounded by 48 KiB per call; use start_line and line_count for focused reads, and pass next_start_line back as start_line to continue. Set line_numbers true to prefix each line with its 1-based number and a tab; those numbers are not part of the file, so never copy them into old_text for edits.",
             inputSchemaJSON:
                 #"{"type":"object","properties":{"path":{"type":"string"},"start_line":{"type":"integer","minimum":1},"line_count":{"type":"integer","minimum":1,"maximum":2000},"line_numbers":{"type":"boolean"}},"required":["path"],"additionalProperties":false}"#
         ),
         ToolSchema(
             name: "pen_search",
             description:
-                "Search UTF-8 Pen files and return plain text: a summary line, then one 'path:line: snippet' per match. query is literal text unless regex is true, when it is a regular expression matched per line. file_glob matches filenames (for example '*.vue'); case_sensitive defaults to true. Skips symlinks, .git and generated/dependency directories. Results and scanning are bounded (regex is time-capped per file); narrow path or query when truncated. Use pen_read_file before editing a match.",
+                "Search a UTF-8 Pen file or files under a directory and return plain text: a summary line, then one 'path:line: snippet' per match. path accepts a file or directory; use '.' for the workspace root. query is literal text unless regex is true, when it is a regular expression matched per line. file_glob filters filenames (for example '*.vue'), including an explicitly selected file; case_sensitive defaults to true. Skips symlinks, .git and generated/dependency directories during traversal. Results and scanning are bounded (regex is time-capped per file); narrow path or query when truncated. Use pen_read_file before editing a match.",
             inputSchemaJSON:
-                #"{"type":"object","properties":{"path":{"type":"string"},"query":{"type":"string","minLength":1,"maxLength":512},"file_glob":{"type":"string","maxLength":256},"case_sensitive":{"type":"boolean"},"regex":{"type":"boolean"},"max_results":{"type":"integer","minimum":1,"maximum":100}},"required":["path","query"],"additionalProperties":false}"#
+                #"{"type":"object","properties":{"path":{"type":"string","description":"Workspace-relative directory to search recursively, or '.' for the root. Not a file path."},"query":{"type":"string","minLength":1,"maxLength":512},"file_glob":{"type":"string","maxLength":256},"case_sensitive":{"type":"boolean"},"regex":{"type":"boolean"},"max_results":{"type":"integer","minimum":1,"maximum":100}},"required":["path","query"],"additionalProperties":false}"#
         ),
         ToolSchema(
             name: "pen_glob",
@@ -238,7 +238,21 @@ public actor PenFileTools {
         let excluded: Set<String> = [
             ".git", "node_modules", ".build", "dist", "build", ".next", ".venv", "venv", "__pycache__",
         ]
-        var directories = [try components(path, allowRoot: true)]
+        let requestedParts = try components(path, allowRoot: true)
+        var rootParts = requestedParts
+        var explicitFile: DirectoryEntry?
+        if let name = requestedParts.last {
+            let parent = try traverse(Array(requestedParts.dropLast()))
+            var info = stat()
+            guard fstatat(parent.raw, name, &info, AT_SYMLINK_NOFOLLOW) == 0 else {
+                throw failure("Inspect search path")
+            }
+            if (info.st_mode & S_IFMT) == S_IFREG, info.st_nlink == 1 {
+                rootParts = Array(requestedParts.dropLast())
+                explicitFile = DirectoryEntry(name: name, directory: false, regular: true, modified: info.st_mtimespec)
+            }
+        }
+        var directories = [rootParts]
         var lines: [String] = []
         var matchBytes = 0
         var scannedFiles = 0
@@ -248,9 +262,10 @@ public actor PenFileTools {
         search: while let parts = directories.popLast() {
             try Task.checkCancellation()
             let entries: [DirectoryEntry]
-            do { entries = try directoryEntries(parts) } catch is CancellationError { throw CancellationError() } catch
-            {
-                if parts == (try components(path, allowRoot: true)) { throw error }
+            do { entries = try explicitFile.map { [$0] } ?? directoryEntries(parts) } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                if parts == rootParts { throw error }
                 continue
             }
             for entry in entries {

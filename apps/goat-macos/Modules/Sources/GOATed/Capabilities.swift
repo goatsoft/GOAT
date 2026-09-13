@@ -1,6 +1,21 @@
 import Foundation
 import Tools
 
+/// Selected by the host, never by a model or an extension contribution.
+public enum ToolExecutionBudget: Sendable {
+    case standard
+    /// The trusted command supervisor enforces its own maximum 600-second job deadline.
+    /// Allow time for startup, termination and collecting the final command receipt.
+    case supervisedCommand
+
+    var deadline: Duration {
+        switch self {
+        case .standard: .seconds(120)
+        case .supervisedCommand: .seconds(630)
+        }
+    }
+}
+
 /// A host-selected, immutable scope. Providers receive data, never a mutable app model.
 public struct ExtensionContext: Sendable {
     public let view: ExtensionView
@@ -147,6 +162,7 @@ public struct ExtensionDiagnostic: Sendable, Equatable {
 public enum CapabilityError: Error, Sendable, Equatable {
     case invalidManifest, incompatibleAPI, missingDependency, duplicateExtension, duplicateService
     case capacity, timedOut, revoked, invalidPayload, argumentsTooLarge, unavailable, unauthorized
+    case missingRequiredArguments([String])
 }
 
 public protocol ExtensionClock: Sendable {
@@ -263,6 +279,14 @@ extension CapabilityError: LocalizedError {
         case .timedOut: "The extension exceeded its deadline and was disabled. Restart GOAT to retry."
         case .revoked: "This extension or turn is no longer active."
         case .invalidPayload: "The extension input or result does not match its supported contract."
+        case .missingRequiredArguments(let names):
+            "Missing required tool arguments: "
+                + names.prefix(8).map { name in
+                    String(
+                        String.UnicodeScalarView(
+                            name.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) }.prefix(64)))
+                }.joined(separator: ", ")
+                + ". Include them using the tool schema, then retry."
         case .argumentsTooLarge:
             "Tool arguments exceed 64 KiB. Split the work into smaller calls or focused edits; do not resend the same oversized arguments."
         case .unavailable: "The extension capability is unavailable. Check extension status in Settings."
