@@ -32,6 +32,8 @@ The summary is persisted as a message row of kind `compaction`, with the ID of t
 
 ### Failure
 
+Summary quality is a separate qualification gate from successful generation and token reduction. The compaction prompt explicitly prioritizes the latest user correction over repeated assistant success claims, distinguishes tool receipts from plans, and preserves each validation command and observed outcome separately. A passing bundle cannot become a passing full build, and a memory write cannot become a verified retrieval. Missing or conflicting evidence remains explicit. Prompt instructions alone do not prove faithful compression: live qualification must check corrected failures, outstanding work and the newest requested task before relying on the summary for continued coding.
+
 A failed or cancelled summary request leaves the chat unchanged and reports the failure; the send proceeds with tier 1 only. Persistence failure aborts compaction before any row is hidden. The summary request is charged against the same budget as any other request and can itself be trimmed by the planner.
 
 ## Consequences

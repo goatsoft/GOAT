@@ -117,6 +117,8 @@ private final class FakeToolSource: ShepherdToolSource {
     var blockPermission = false
     var blockExecution = false
     var resultContent: (@Sendable (String) -> String)?
+    var invocationFailure: (any Error)?
+    var resultOverride: ((ShepherdToolRoute, String) -> ToolResult)?
     var pendingWorkNotice: String?
     func finishPendingWork() async -> String? { pendingWorkNotice }
     private var executionContinuation: CheckedContinuation<Void, Never>?
@@ -185,7 +187,9 @@ private final class FakeToolSource: ShepherdToolSource {
             }
         guard allowed, !Task.isCancelled else { return nil }
         invocations += 1
+        if let invocationFailure { throw invocationFailure }
         if blockExecution { await withCheckedContinuation { executionContinuation = $0 } }
+        if let resultOverride { return resultOverride(route, argumentsJSON) }
         return ToolResult(content: resultContent?(argumentsJSON) ?? "ok", isError: false)
     }
 
@@ -1785,6 +1789,27 @@ func automaticTitlesNameToolWorkflowsWithAnEmptyFinalMessage(narrated: Bool) asy
     #expect(stop?.contains("content cycle") == true)
 }
 
+@Test(arguments: [0, 1, 3, 8, 24])
+func fileRepairTrackerAllowsLongProgressThenDetectsATrailingCycle(prefixCount: Int) {
+    var tracker = FileRepairProgressTracker()
+    var previous = "initial"
+    let digests = (0..<prefixCount).map { "revision-\($0)" } + ["B", "A", "B", "A", "B"]
+    for (index, digest) in digests.enumerated() {
+        let stop = tracker.observe(
+            ToolExecutionDiagnostic(fileObservations: [
+                FileOperationObservation(
+                    workspaceIdentity: "workspace", relativePath: "src/renderer.ts",
+                    kind: .edit, outcome: .succeeded, beforeDigest: previous, afterDigest: digest)
+            ]))
+        if index == digests.count - 1 {
+            #expect(stop?.contains("content cycle") == true)
+        } else {
+            #expect(stop == nil)
+        }
+        previous = digest
+    }
+}
+
 @Test @MainActor func toolFormatRecoveryStopsIfItsFailedResponseCannotBeSaved() async {
     let tools = FakeToolSource()
     tools.specs = [ToolSpec(name: "srv__tool", description: "Tool", parametersJSON: "{}")]
@@ -2462,6 +2487,49 @@ private func failedEditSnapshot(hostNotes: [String] = [], trailingUser: Bool = f
 
 // MARK: - ADR-0089 Stage B: retry before the first token
 
+@Test @MainActor func samplingRejectionRetriesOnceAndPublishesActualParameters() async throws {
+    let engine = FakeEngine(
+        script: [[.token("done"), .done(GenStats(ttft: 0, tokens: 1, duration: 1))]],
+        failingRequest: 1, failingError: EngineError.httpDetail(400, "Unsupported parameter: top_k", retryAfter: nil))
+    let family = ModelFamilyRegistry.profile(for: "Muse-Glimmer-30B", userFileURL: nil)
+    let compatibility = ModelCompatibilityResolver.resolve(
+        identity: ModelIdentity(engineProfileID: "fixture", modelID: "Muse-Glimmer-30B"), familyProfile: family)
+    let request = GenerationRequest(
+        model: "Muse-Glimmer-30B", turns: [ChatTurn(role: .user, text: "hello")],
+        effort: .climb, compatibility: compatibility)
+    let worker = ShepherdGenerationWorker(engine: engine, retryBaseDelaySeconds: 0)
+    var recorded: EffectiveGenerationParameters?
+    _ = try await worker.stream(request) { update in
+        if let parameters = update.effectiveParameters { recorded = parameters }
+        return true
+    }
+    let requests = await engine.requests
+    #expect(requests.count == 2)
+    #expect(EffectiveGenerationParameters(request: requests[0]).sampling.topK == 64)
+    #expect(EffectiveGenerationParameters(request: requests[1]).sampling.topK == nil)
+    #expect(recorded?.omittedSamplingParameters == ["top_k"])
+    #expect(recorded?.temperature == 1)
+}
+
+@Test @MainActor func samplingRejectionAfterOutputNeverRetries() async throws {
+    let engine = MidStreamFailEngine(
+        yield: [.token("partial")],
+        thenThrow: EngineError.httpDetail(400, "Unsupported parameter: temperature", retryAfter: nil))
+    let worker = ShepherdGenerationWorker(engine: engine, retryBaseDelaySeconds: 0)
+    let compatibility = ModelCompatibilityResolver.resolve(
+        identity: ModelIdentity(engineProfileID: "fixture", modelID: "generic"),
+        samplingOverride: SamplingOverride(temperature: 1))
+    do {
+        _ = try await worker.stream(
+            GenerationRequest(
+                model: "generic", turns: [], effort: .trot,
+                compatibility: compatibility)
+        ) { _ in true }
+        Issue.record("Expected the original failure")
+    } catch {}
+    #expect(await engine.requests.count == 1)
+}
+
 /// Yields a fixed prefix of events, then fails the stream. Proves output-started disables retry.
 private actor MidStreamFailEngine: InferenceEngine {
     private(set) var requests: [GenerationRequest] = []
@@ -2495,6 +2563,7 @@ private actor MidStreamFailEngine: InferenceEngine {
     }
     #expect(await engine.requests.count == 2)  // one 503, then success
     #expect(updates.map(\.text).joined() == "recovered")
+    #expect(updates.first?.status == "Retrying response (attempt 2)")
     #expect(result.stats?.tokens == 1)
 }
 
@@ -2576,12 +2645,16 @@ private actor HangingEngine: InferenceEngine {
     }
 }
 
-@Test @MainActor func streamFailsWhenTheEngineStallsAfterFirstOutput() async {
+@Test(arguments: [false, true]) @MainActor
+func streamFailsWhenTheEngineStallsAfterFirstOutput(hasTools: Bool) async {
     let engine = HangingEngine(yield: [.token("partial")])
-    let worker = ShepherdGenerationWorker(engine: engine, postFirstTokenStallSeconds: 0.05)
+    let worker = ShepherdGenerationWorker(
+        engine: engine, postFirstTokenStallSeconds: 0.05, toolResponseStallSeconds: 0.1)
+    var request = workerRequest()
+    if hasTools { request.tools = [ToolSpec(name: "edit", description: "Edit", parametersJSON: "{}")] }
     var caught: Error?
     do {
-        _ = try await worker.stream(workerRequest()) { _ in true }
+        _ = try await worker.stream(request) { _ in true }
     } catch {
         caught = error
     }
@@ -2589,14 +2662,88 @@ private actor HangingEngine: InferenceEngine {
     #expect(await engine.requests.count == 1)  // a stall is not a before-first-token retry
 }
 
+/// Models servers that stream prose, then withhold a tool call until parsing completes.
+private actor BufferedToolEngine: InferenceEngine {
+    func health() async -> EngineHealth { .ok([]) }
+    func stream(_ request: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                continuation.yield(.token("Preparing the edit."))
+                do {
+                    try await Task.sleep(for: .milliseconds(150))
+                    continuation.yield(.toolCalls([ToolCallEvent(id: "buffered", name: "edit", argumentsJSON: "{}")]))
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+}
+
+@Test @MainActor func bufferedToolResponseCanOutlastThePlainTextStallWindow() async throws {
+    let worker = ShepherdGenerationWorker(
+        engine: BufferedToolEngine(), postFirstTokenStallSeconds: 0.03, toolResponseStallSeconds: 2)
+    var request = workerRequest()
+    request.tools = [ToolSpec(name: "edit", description: "Edit", parametersJSON: "{}")]
+    let result = try await worker.stream(request) { _ in true }
+    #expect(result.toolCalls.map(\.id) == ["buffered"])
+}
+
 // MARK: - ADR-0089 Stage E: repetition guard
 
 @Test func repetitionGuardStopsAfterThreeIdenticalCalls() {
     var tracker = RepetitionGuard()
     #expect(tracker.observe(name: "srv__search", argumentsJSON: #"{"q":"x"}"#, result: "a") == nil)
-    #expect(tracker.observe(name: "srv__search", argumentsJSON: #"{"q":"x"}"#, result: "b") == nil)
+    #expect(tracker.observe(name: "srv__search", argumentsJSON: #"{"q":"x"}"#, result: "a") == nil)
     // Canonically identical arguments (reordered whitespace) still count as the same call.
-    #expect(tracker.observe(name: "srv__search", argumentsJSON: #"{ "q" : "x" }"#, result: "c") != nil)
+    #expect(tracker.observe(name: "srv__search", argumentsJSON: #"{ "q" : "x" }"#, result: "a") != nil)
+}
+
+@Test func repetitionGuardAllowsChangedReadResultsAndChecksAfterMutations() {
+    var tracker = RepetitionGuard()
+    for value in ["before", "during", "after", "verified"] {
+        #expect(tracker.observe(name: "read", argumentsJSON: "{}", result: value) == nil)
+    }
+    for revision in 1...5 {
+        #expect(tracker.observe(name: "check", argumentsJSON: "{}", result: "same error") == nil)
+        #expect(
+            tracker.observe(
+                name: "write", argumentsJSON: "{\"revision\":\(revision)}", result: "saved",
+                mutatedState: true) == nil)
+    }
+}
+
+@Test func repetitionGuardDoesNotTreatRepeatedSameWriteAsProgress() {
+    var tracker = RepetitionGuard()
+    #expect(tracker.observe(name: "write", argumentsJSON: "{}", result: "saved", mutatedState: true) == nil)
+    #expect(tracker.observe(name: "write", argumentsJSON: "{}", result: "saved", mutatedState: true) == nil)
+    #expect(tracker.observe(name: "write", argumentsJSON: "{}", result: "saved", mutatedState: true) != nil)
+}
+
+@Test @MainActor func repeatedThrownAndUnknownToolErrorsPauseTheTurn() async {
+    for unknown in [false, true] {
+        let tools = FakeToolSource()
+        if !unknown {
+            tools.mapping = ["srv__tool": fakeToolRoute()]
+            tools.invocationFailure = MCPError.invalidArguments
+        }
+        let (shepherd, engine, _, env) = makeShepherd(
+            script: [toolCallRound(), toolCallRound(), toolCallRound()], tools: tools)
+        defer { _ = env }
+        let session = ChatSession(effort: .trot, modelID: "test-model")
+        session.title = "Invalid repeated call"
+        let user = ChatMessage(role: .user)
+        user.text = "Run the tool"
+        user.complete = true
+        session.messages = [user]
+        #expect(shepherd.run(in: session))
+        await shepherd.streamTask?.value
+        #expect(await engine.requests.count == 3)
+        #expect(tools.invocations == (unknown ? 0 : 3))
+        #expect(session.messages.last?.error?.contains("without making progress") == true)
+    }
 }
 
 @Test func repetitionGuardStopsAfterThreeIdenticalResults() {
@@ -2633,6 +2780,49 @@ private actor HangingEngine: InferenceEngine {
     #expect(sameTools.invocations == 3)  // the third identical call trips the guard
     #expect(await engine.requests.count == 3)  // no fourth round after the pause
     #expect(session.messages.last?.error?.contains("without making progress") == true)
+}
+
+@Test @MainActor func repeatedBuildChecksAfterSuccessfulFileEditsContinue() async {
+    let tools = FakeToolSource()
+    tools.mapping = ["check": fakeToolRoute(tool: "check"), "edit": fakeToolRoute(tool: "edit")]
+    tools.resultOverride = { route, _ in
+        ToolResult(
+            content: route.tool == "edit" ? "edited" : "build succeeded",
+            diagnostic:
+                route.tool == "edit"
+                ? ToolExecutionDiagnostic(fileObservations: [
+                    FileOperationObservation(
+                        workspaceIdentity: "workspace", relativePath: "main.ts", kind: .edit,
+                        outcome: .succeeded, beforeDigest: "before", afterDigest: "after")
+                ]) : nil)
+    }
+    var script: [[GenerationEvent]] = []
+    for revision in 1...4 {
+        for name in ["check", "edit"] {
+            script.append([
+                .toolCalls([
+                    ToolCallEvent(
+                        id: "\(name)-\(revision)", name: name,
+                        argumentsJSON: name == "check" ? "{}" : "{\"revision\":\(revision)}")
+                ]),
+                .done(GenStats(ttft: nil, tokens: 1, duration: 0.01)),
+            ])
+        }
+    }
+    script.append([.token("Verified"), .done(GenStats(ttft: nil, tokens: 1, duration: 0.01))])
+    let (shepherd, engine, _, env) = makeShepherd(script: script, tools: tools)
+    defer { _ = env }
+    let session = ChatSession(effort: .trot, modelID: "test-model")
+    session.title = "Productive repair"
+    let user = ChatMessage(role: .user)
+    user.text = "Repair and verify"
+    user.complete = true
+    session.messages = [user]
+    #expect(shepherd.run(in: session))
+    await shepherd.streamTask?.value
+    #expect(await engine.requests.count == 9)
+    #expect(session.messages.last?.text == "Verified")
+    #expect(session.messages.last?.error == nil)
 }
 
 @Test @MainActor func compactionRowFoldsCoveredHistoryAndRidesAsAUserTurn() async throws {
@@ -2770,6 +2960,30 @@ private actor HangingEngine: InferenceEngine {
     #expect(!turns.contains { $0.text.contains("start the water shader work") })
     #expect(turns.contains { $0.text.contains("Goal: ship the water system.") })
     _ = sameEnv
+}
+
+@Test(arguments: [false, true]) @MainActor
+func compactionProgressIsVisibleOnlyWhileTheOperationOwnsIt(fails: Bool) async {
+    let env = FakeEnv()
+    env.compactAtPercent = 0
+    let session = ChatSession(effort: .trot, modelID: "test-model")
+    let prior = ChatMessage(role: .user)
+    prior.text = "Preserve the shader constraints."
+    prior.complete = true
+    let command = ChatMessage(role: .user)
+    command.text = "/compact"
+    command.complete = true
+    session.messages = [prior, command]
+    let engine = FakeEngine(
+        script: [[.token("Shader constraints retained."), .done(GenStats(ttft: nil, tokens: 4, duration: 0.01))]],
+        failingRequest: fails ? 1 : nil, failingError: EngineError.http(400),
+        onRequest: { _ in #expect(session.activeCompactionID != nil) })
+    let shepherd = ShepherdModel(engine: engine, tools: FakeToolSource(), activity: ActivityLog())
+    shepherd.env = env
+    #expect(shepherd.run(in: session))
+    await shepherd.streamTask?.value
+    #expect(session.activeCompactionID == nil)
+    #expect(!session.isStreaming)
 }
 
 @Test @MainActor func autoCompactionFoldsHistoryBeforeTheSendWhenOverThreshold() async throws {

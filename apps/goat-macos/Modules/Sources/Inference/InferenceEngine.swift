@@ -196,6 +196,7 @@ public struct GenerationRequest: Sendable {
     /// Zero-based index of this request within its turn's tool-call loop (ADR-0089). Makes fallback
     /// tool-call identifiers unique across rounds.
     public var round: Int
+    public var rejectedSamplingParameters: Set<String> = []
     public init(
         model: String, turns: [ChatTurn], effort: Effort, maxTokens: Int? = nil,
         tools: [ToolSpec] = [], modelCapabilities: ModelCapabilities = .unknown,

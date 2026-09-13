@@ -94,8 +94,10 @@ struct GenerationChartValue: Identifiable {
     let phase: Phase
     let message: ChatMessage?
     let stats: GenStats?
+    let isCompacting: Bool
 
     init(session: ChatSession) {
+        isCompacting = session.isStreaming && session.activeCompactionID != nil
         stats = session.messages.last(where: { $0.stats != nil })?.stats
         message = session.isStreaming ? session.messages.last(where: { $0.role == .assistant && !$0.complete }) : nil
         if !session.isStreaming {
@@ -108,6 +110,7 @@ struct GenerationChartValue: Identifiable {
     }
 
     var caption: String {
+        if isCompacting { return "Compacting context; response statistics resume with the next response" }
         switch phase {
         case .waiting:
             return "Waiting for engine" + (stats == nil ? "; no output yet" : "; dial shows the last measured response")
@@ -118,7 +121,14 @@ struct GenerationChartValue: Identifiable {
     }
 
     func throughput(at date: Date) -> String {
+        if isCompacting { return "Compacting context" }
         if phase == .generating {
+            if let lastOutput = message?.liveMetrics.lastOutputAt, date.timeIntervalSince(lastOutput) >= 5 {
+                guard let speed = message?.liveMetrics.tokensPerSecond(at: lastOutput), speed.isFinite else {
+                    return "Waiting for more output"
+                }
+                return "Waiting · last ~\(Int(speed)) tok/s"
+            }
             guard let speed = message?.liveMetrics.tokensPerSecond(at: date), speed.isFinite else { return "… tok/s" }
             return "~\(Int(speed)) tok/s"
         }

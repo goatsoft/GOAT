@@ -3,14 +3,20 @@ import Foundation
 /// Produces the stable request shape that both budgeting and engine encoding consume.
 enum CanonicalRequestPreparation {
     static func prepare(_ request: GenerationRequest) -> GenerationRequest {
-        GenerationRequest(
-            model: request.model,
-            turns: request.turns,
-            effort: request.effort,
-            maxTokens: request.maxTokens,
-            tools: preparedTools(request.tools),
-            modelCapabilities: request.modelCapabilities,
-            compatibility: request.compatibility)
+        var result = request
+        result.tools = preparedTools(request.tools)
+        let parameters = EffectiveGenerationParameters(request: request)
+        if let instruction = parameters.reasoningInstruction {
+            if let index = result.turns.firstIndex(where: { $0.role == .system }) {
+                let original = result.turns[index]
+                if original.text != instruction && !original.text.hasPrefix(instruction + "\n\n") {
+                    result.turns[index] = ChatTurn(role: .system, text: instruction + "\n\n" + original.text)
+                }
+            } else {
+                result.turns.insert(ChatTurn(role: .system, text: instruction), at: 0)
+            }
+        }
+        return result
     }
 
     static func canonicalParametersJSON(_ rawJSON: String) -> String {
@@ -204,7 +210,7 @@ public struct PromptBudgeter: Sendable {
         calibration: Double = 1.0
     ) throws -> PromptPlan {
         let request = CanonicalRequestPreparation.prepare(unpreparedRequest)
-        let replaysReasoning = request.modelCapabilities.replaysReasoningHistory
+        let replaysReasoning = EffectiveGenerationParameters(request: request).replayReasoningHistory
         let reportedWindow = model.contextLength.flatMap { $0 > 0 ? $0 : nil }
         let windowTokens = reportedWindow ?? Self.fallbackWindowTokens
         let windowSource: PromptContextWindowSource = reportedWindow == nil ? .fallback : .reported
@@ -415,11 +421,9 @@ public struct PromptBudgeter: Sendable {
             droppedExchangeCount: droppedExchangeCount, droppedTurnCount: droppedTurnCount,
             textTruncations: textTruncations, omittedImages: omittedImages,
             memory: preparedMemory, failure: nil)
-        let plannedRequest = GenerationRequest(
-            model: request.model, turns: plannedTurns, effort: request.effort,
-            maxTokens: outputReserve, tools: request.tools,
-            modelCapabilities: request.modelCapabilities,
-            compatibility: request.compatibility)
+        var plannedRequest = request
+        plannedRequest.turns = plannedTurns
+        plannedRequest.maxTokens = outputReserve
         return PromptPlan(request: plannedRequest, report: report)
     }
 

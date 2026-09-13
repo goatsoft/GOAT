@@ -48,6 +48,10 @@ public struct ResolvedModelCompatibility: Codable, Equatable, Sendable {
     public let adapterIdentifier: String?
     public let metadataAt: Date?
     public let capabilities: ModelCapabilities
+    public var generationPolicy: ModelGenerationPolicy?
+    public var familyRuleID: String?
+    public var familyEvidence: CapabilityEvidence?
+    public var samplingOverride: SamplingOverride?
 
     public init(
         identity: ModelIdentity,
@@ -56,7 +60,9 @@ public struct ResolvedModelCompatibility: Codable, Equatable, Sendable {
         adapterIdentifier: String? = nil,
         metadataAt: Date? = nil,
         capabilities: ModelCapabilities = .unknown,
-        schemaVersion: Int = Self.currentSchemaVersion
+        schemaVersion: Int = Self.currentSchemaVersion,
+        generationPolicy: ModelGenerationPolicy? = nil, familyRuleID: String? = nil,
+        familyEvidence: CapabilityEvidence? = nil, samplingOverride: SamplingOverride? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.identity = identity
@@ -65,6 +71,10 @@ public struct ResolvedModelCompatibility: Codable, Equatable, Sendable {
         self.adapterIdentifier = adapterIdentifier
         self.metadataAt = metadataAt
         self.capabilities = capabilities
+        self.generationPolicy = generationPolicy
+        self.familyRuleID = familyRuleID
+        self.familyEvidence = familyEvidence
+        self.samplingOverride = samplingOverride
     }
 }
 
@@ -91,7 +101,13 @@ public struct GenerationContext: Sendable, Equatable {
 }
 
 public struct EffectiveGenerationParameters: Codable, Equatable, Sendable {
-    public let temperature: Double
+    public var temperature: Double? { sampling.temperature }
+    public let sampling: SamplingOverride
+    public let samplingSource: SamplingSource
+    public let omittedSamplingParameters: [String]
+    public let familyRuleID: String?
+    public let reasoningInstruction: String?
+    public let historyPolicy: ModelGenerationPolicy.ReasoningHistory
     public let outputTokenCap: Int
     public let nativeReasoningEffort: String?
     public let replayReasoningHistory: Bool
@@ -100,31 +116,82 @@ public struct EffectiveGenerationParameters: Codable, Equatable, Sendable {
     public let qwenReasoningEffort: String?
 
     public init(request: GenerationRequest) {
-        let qwen = request.compatibility.effectiveStyle == .qwenChatTemplate
+        let policy = request.compatibility.generationPolicy
+        let qwen =
+            request.compatibility.effectiveStyle == .qwenChatTemplate
+            && (policy == nil || policy?.reasoningPrompt == .qwenSoftSwitch)
         switch request.effort {
         case .graze:
-            temperature = qwen ? 0.7 : request.effort.temperature
             qwenEnableThinking = qwen ? false : nil
             qwenReasoningEffort = nil
         case .trot:
-            temperature = qwen ? 1.0 : request.effort.temperature
             qwenEnableThinking = qwen ? true : nil
-            qwenReasoningEffort = qwen ? "low" : nil
+            qwenReasoningEffort = nil
         case .climb:
-            temperature = qwen ? 1.0 : request.effort.temperature
             qwenEnableThinking = qwen ? true : nil
-            qwenReasoningEffort = qwen ? "medium" : nil
+            qwenReasoningEffort = nil
         case .summit:
-            temperature = qwen ? 1.0 : request.effort.temperature
             qwenEnableThinking = qwen ? true : nil
-            qwenReasoningEffort = qwen ? "xhigh" : nil
+            qwenReasoningEffort = nil
         }
         outputTokenCap = request.maxTokens ?? request.effort.outputCeiling(for: request.modelCapabilities)
+        var reasoningCapabilities = request.modelCapabilities
+        if let allowed = policy?.nativeReasoningEffortValues {
+            reasoningCapabilities.reasoningEffortValues =
+                reasoningCapabilities.reasoningEffortValues.map { $0.intersection(allowed) } ?? allowed
+        }
         nativeReasoningEffort =
-            qwen
-            ? nil : request.modelCapabilities.nativeReasoningEffort(for: request.effort)
-        replayReasoningHistory = qwen
-        qwenPreserveThinking = qwen ? true : nil
+            qwen ? nil : reasoningCapabilities.nativeReasoningEffort(for: request.effort)
+        let reasoningAllowed =
+            request.modelCapabilities.reasoning.support != .unsupported
+            && !request.modelCapabilities.reasoning.isConflict
+        let nonThinking =
+            (qwen || policy?.reasoningPrompt == .qwenSoftSwitch)
+            && request.effort == .graze
+        let familySampling = nonThinking ? policy?.nonThinkingSampling : policy?.sampling
+        let configured = request.compatibility.samplingOverride
+        let candidate =
+            configured ?? familySampling
+            ?? (qwen
+                ? SamplingOverride(
+                    temperature: nonThinking ? 0.7 : 0.6,
+                    topP: nonThinking ? 0.8 : 0.95, topK: 20, minP: 0) : SamplingOverride())
+        samplingSource =
+            configured != nil
+            ? .userOverride
+            : familySampling != nil
+                ? (request.compatibility.familyEvidence == .userModelFamily ? .userModelFamily : .modelFamily)
+                : qwen ? .compatibilityOverride : .engineDefault
+        let vetoed =
+            request.modelCapabilities.supportedRequestParameters.map {
+                Set(candidate.fields.keys).subtracting($0)
+            } ?? []
+        let omitted = vetoed.union(request.rejectedSamplingParameters)
+        omittedSamplingParameters = omitted.sorted()
+        sampling = candidate.isValid ? candidate.removing(omitted) : SamplingOverride()
+        familyRuleID = request.compatibility.familyRuleID
+        if reasoningAllowed, nativeReasoningEffort == nil, let prompt = policy?.reasoningPrompt {
+            switch prompt {
+            case .museStrength:
+                let value =
+                    [Effort.graze: "low", .trot: "medium", .climb: "high", .summit: "xhigh"][request.effort] ?? "high"
+                reasoningInstruction = "Reasoning strength: \(value)."
+            case .qwenSoftSwitch:
+                reasoningInstruction = qwen ? nil : (nonThinking ? "/no_think" : "/think")
+            }
+        } else {
+            reasoningInstruction = nil
+        }
+        let historyClaim = request.modelCapabilities.reasoningHistory
+        if !reasoningAllowed || historyClaim.support == .unsupported || historyClaim.isConflict {
+            historyPolicy = .omit
+        } else if let declared = policy?.reasoningHistory {
+            historyPolicy = declared
+        } else {
+            historyPolicy = !qwen && historyClaim.support == .supported ? .all : .omit
+        }
+        replayReasoningHistory = historyPolicy != .omit
+        qwenPreserveThinking = nil
     }
 }
 
@@ -136,7 +203,25 @@ public enum ModelCompatibilityResolver {
         override: ModelCompatibilityOverride = .automatic,
         metadata: ModelCompatibilityMetadata? = nil,
         familyProfile: KnownModelProfile? = nil,
+        samplingOverride: SamplingOverride? = nil,
         now: Date = .now
+    ) -> ResolvedModelCompatibility {
+        var result = resolveBase(
+            identity: identity, override: override, metadata: metadata,
+            familyProfile: familyProfile, now: now)
+        result.generationPolicy = familyProfile?.generation
+        result.familyRuleID = familyProfile?.ruleID
+        result.familyEvidence = familyProfile?.evidence
+        result.samplingOverride = samplingOverride
+        return result
+    }
+
+    private static func resolveBase(
+        identity: ModelIdentity,
+        override: ModelCompatibilityOverride,
+        metadata: ModelCompatibilityMetadata?,
+        familyProfile: KnownModelProfile?,
+        now: Date
     ) -> ResolvedModelCompatibility {
         let metadataMatches = metadata?.identity == identity
         switch override {
@@ -167,9 +252,9 @@ public enum ModelCompatibilityResolver {
                 metadataAt: metadata.observedAt,
                 capabilities: metadata.capabilities)
         }
-        // Verified family knowledge (built-in JSON or the user file) fills the gap when the
+        // Source-backed family knowledge (built-in JSON or the user file) fills the gap when the
         // engine exposed no usable metadata. Dialect stays engine configuration (ADR-0024,
-        // ADR-0086); the family supplies capabilities only. A concrete engine window still wins
+        // ADR-0086); generation policy is attached by the resolver. A concrete engine window still wins
         // downstream when the catalog reports one.
         if let familyProfile {
             return ResolvedModelCompatibility(

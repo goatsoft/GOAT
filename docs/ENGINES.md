@@ -40,9 +40,9 @@ Model catalogs support both manual refresh and active-scene refresh. The app re-
 
 Compatibility is resolved per model at request time. The request snapshot records the selected engine and model plus the resolved capability set, while provenance and diagnostics retain sanitized information needed to explain a result. Typed load failures, unexecuted printed tool markup, and resumable file-repair progress are surfaced through recovery paths instead of being silently executed or discarded.
 
-GOAT includes a verified family profile for Meta Muse-Glimmer model IDs, including local 4-bit variants. When a compatible engine omits capability fields, that profile supplies vision, tool use, reasoning, and the documented 131,072-token context as `modelFamily` evidence. Explicit engine contradictions are retained as unknown rather than overridden. The profile does not invent a native `reasoning_effort` request field; that remains gated by engine metadata.
+GOAT includes a source-backed family profile for Meta Muse-Glimmer model IDs, including local 4-bit variants. When a compatible engine omits capability fields, that profile supplies vision, tool use, reasoning, and the documented 131,072-token context as `modelFamily` evidence. Explicit engine contradictions are retained as unknown rather than overridden. The profile does not invent a native `reasoning_effort` request field; that remains gated by engine metadata.
 
-GOAT ships verified family profiles for common local model families (Qwen3, GPT-OSS, GLM, DeepSeek, Llama, Gemma 3, Mistral Small, Kimi K2, MiniMax M2, Phi-4 and others) and supports optional user family rules at `~/.goat/config/model-families.json`. User rules add capability knowledge for new model families without a rebuild. They cannot select a request dialect or silently override explicit engine contradictions. See [Model capability configuration](MODEL-CAPABILITY-CONFIGURATION.md) for the schema and evidence precedence.
+GOAT ships source-backed family profiles for common local model families (Qwen3, GPT-OSS, GLM, DeepSeek, Llama, Gemma 3, Mistral Small, Kimi K2, MiniMax M2, Phi-4 and others) and supports optional user family rules at `~/.goat/config/model-families.json`. User rules add capability knowledge for new model families without a rebuild. They cannot select a request dialect or silently override explicit engine contradictions. See [Model capability configuration](MODEL-CAPABILITY-CONFIGURATION.md) for the schema and evidence precedence.
 
 ## Feature matrix
 
@@ -51,8 +51,8 @@ Optional metadata can fall back to generic chat behavior; required endpoint or p
 | Feature | How GOAT consumes it | Without it |
 |---|---|---|
 | Streaming | SSE `data:` chunks, `[DONE]` terminator | Required |
-| Thinking | `<think>...</think>` inline tags, `reasoning_content`, `reasoning`, or `thinking` deltas, and supported typed content parts, all normalized. An explicit local-Qwen engine profile also replays prior reasoning in its native field. | No thinking disclosure |
-| Effort dial | Every model gets temperature and budget-clamped max-token presets. A metadata handshake can add `reasoning_effort` only when the engine explicitly proves the field and allowed value | Generic presets only |
+| Thinking | `<think>...</think>` inline tags, `reasoning_content`, `reasoning`, or `thinking` deltas, and supported typed content parts, all normalized. Audited family policies select compatible reasoning-history scope; explicit engine denial wins. | No thinking disclosure |
+| Effort dial | Every model gets budget-clamped output presets; sampling comes from a source-backed family policy, a custom override, or engine defaults. A metadata handshake can add `reasoning_effort` only when the engine explicitly proves the field and allowed value | Generic presets only |
 | Tool calls | OpenAI `tool_calls` deltas, fragment reassembly by index; results sent as `role: "tool"` turns | No tools in that chat |
 | Vision | User-selected images encoded as content-array `image_url` parts with `data:image/png` payloads; model-name hints never block them | The selected model or server returns its own unsupported-input error |
 | Honest stats | `stream_options: {"include_usage": true}` is requested; `usage` on the final chunk gives exact token counts. oMLX generation timing and llama.cpp `timings` are preferred when present. | The client measures from the first real output to completion. Estimated speed or chunk-count tokens are marked `~` in the UI. |
@@ -81,13 +81,13 @@ Reasoning tokens count against `max_tokens` on every compatible engine, so a mod
 
 Native controls are capability-gated additions. Startup, engine changes, and model changes show a short checking state while GOAT reads fresh bounded metadata for the selected model. The hard wall-clock deadline is two seconds; unsupported, oversized, malformed, or absent metadata falls back to the generic path and does not make the engine unhealthy. These calls use an isolated non-caching session with no cookie or shared credential state. GOAT never sends a synthetic completion to test a capability.
 
-Capabilities are supported, unsupported, or unknown. Unknown preserves the generic request. Generic capability arrays provide positive evidence only; an omitted member is not a rejection. Explicitly unsupported tool-template metadata omits MCP schemas. Vision metadata improves the hint but does not strip attachments. `reasoning_effort` is emitted only when an explicit `supported_parameters` declaration or a documented preset adapter proves it and reasoning support is unambiguous. The Qwen name-derived `/think` and `/no_think` controls have been removed.
+Capabilities are supported, unsupported, or unknown. Unknown preserves the generic request. Generic capability arrays provide positive evidence only; an omitted member is not a rejection. Explicitly unsupported tool-template metadata omits MCP schemas. Vision metadata improves the hint but does not strip attachments. `reasoning_effort` is emitted only when an explicit `supported_parameters` declaration or a documented preset adapter proves it and reasoning support is unambiguous. Audited Qwen3 hybrid policies use the published `/think` and `/no_think` soft switches; unrelated models do not receive them.
 
-For a local server using Qwen's chat template, choose **Qwen local chat template** in that engine's editor. It is an explicit engine contract, never a model-name guess: GOAT sends `chat_template_kwargs.enable_thinking` and `preserve_thinking`, maps Graze/Trot/Climb/Summit to off/low/medium/xhigh, uses Qwen's recommended thinking temperature, and replays each prior assistant reasoning trace in `reasoning_content`. Use it only with a server that documents those fields; generic engines remain on the portable path.
+For a local server using Qwen’s chat template, the explicit per-model compatibility override sends `chat_template_kwargs.enable_thinking`. Audited Qwen3 defaults distinguish thinking/non-thinking sampling. Historical reasoning is omitted for audited older Qwen checkpoints; Qwen3.8 preserves it under its separate policy. The old preservation, template temperature and template effort fields are no longer emitted.
 
 LM Studio's native model list reports reasoning availability and options for its native chat API, but that alone does not prove the OpenAI Chat Completions field, so GOAT records the hint without sending a native control. Ollama's documented OpenAI compatibility plus a model's `thinking` capability enables `none`, `low`, `medium`, `high`, or `max`. llama.cpp enables `none`, `low`, `medium`, or `high` only when `supports_reasoning_effort` is true. Explicit generic metadata may advertise a different allowed set, which GOAT clamps to before encoding. Graze and Summit choose the advertised extremes.
 
-GOAT stores normalized reasoning locally for transcript disclosure. Generic engines never receive it again. The explicit local-Qwen profile is the narrow exception: it returns a prior assistant trace through `reasoning_content`, rather than concatenating it into visible message content. Ordinary chat and OpenAI-style tool calls remain available.
+GOAT stores normalized reasoning locally. Audited policies can replay it in `reasoning_content` with all-retained or current-turn scope; unknown protocols omit replay. Engine denial or conflicting history evidence wins. See [model generation policies](MODEL-GENERATION-POLICIES.md).
 
 ## Compatibility evidence
 
@@ -101,7 +101,7 @@ Compatibility evidence must be captured from the actual configured engine and mo
 
 ## Streaming timeouts and stall detection (ADR-0089)
 
-The streaming `POST /v1/chat/completions` request uses a **300 second idle timeout** (reset on each received byte), so a silent connection cannot hang indefinitely. Independently, once output has started, if no further event arrives for **120 seconds** the turn fails with a stall error rather than hanging. Before the first token, prefill silence is not failed here (the idle timeout bounds it); after **10 seconds** of prefill the composer shows "Waiting for the engine (prefill)" with the elapsed clock so a long prompt evaluation does not read as a freeze. A request that fails before any output, with a transient error (HTTP 408, 429, 502, 503, 504 or a connection reset), is retried up to three times with jittered exponential backoff, honouring `Retry-After`.
+The streaming `POST /v1/chat/completions` request uses a **300 second transport idle timeout**, reset by received bytes. After output begins, a separate content watchdog allows **120 seconds** without further output for plain responses and **300 seconds** for requests offering tools. Some engines, including [oMLX 0.6.4](https://github.com/jundot/omlx/blob/v0.6.4/README.md#tool-calling--structured-output), buffer structured calls until the turn is fully parsed. The tool allowance prevents the shorter prose timer from cutting off an otherwise valid edit; it remains bounded even if transport keepalives continue. Silence is shown as waiting, never as invented thinking or tool progress. Before initial output, the transport idle timeout applies. A request that fails before any output with a transient error (HTTP 408, 429, 502, 503, 504 or a connection reset) is retried up to three times with jittered exponential backoff, honouring `Retry-After`.
 
 ## Context overflow (ADR-0087)
 
@@ -110,3 +110,8 @@ Engines report a prompt that exceeds the model's context window inconsistently, 
 ## Remote engines
 
 Configured HTTP endpoints can be on this Mac, a local network or the internet, subject to JUDAS policy. A remote endpoint receives the context submitted for its work. Local servers can also make independent outbound connections. Do not treat generic API compatibility as a local-only network restriction; see [Privacy](PRIVACY.md) and [Connection policy](reference/CONNECTIONS.md).
+
+
+## Template and sampler qualification
+
+The [integration audit](INFERENCE-INTEGRATION-AUDIT.md) distinguishes client request correctness from server template/parser behaviour and executed sampler settings. Source-backed rules do not establish engine adapter support. An omitted field allows server defaults, which may be global rather than checkpoint-derived. A server can also force sampling values over explicit request values. Response provenance therefore records requested sampling.

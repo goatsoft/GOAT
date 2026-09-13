@@ -30,6 +30,10 @@ public enum ConversationCompaction {
         Rewrite everything so far into a compact briefing for the next request, under these fixed sections, in order:
         Goal; Constraints and user preferences; Done; In progress; Blocked; Key decisions; Next steps; Critical context.
         Give each section a short heading and omit a section only when it genuinely has no content. Preserve exact identifiers, values and decisions; drop narration.
+        Resolve contradictions before writing the briefing. Preserve the latest user correction over an earlier assistant claim, even when the assistant repeated that claim later. Tool receipts establish executed actions; plans and confident prose do not establish completion.
+        Keep verification commands and outcomes distinct: a passing bundle does not imply a passing typecheck, test suite, lint run or full build. Preserve the exact command and its observed result, and explicitly retain any correction to a mistaken success claim.
+        Put only verified completed work under Done. Keep requested but unimplemented behavior under In progress or Next steps. A successful memory write does not prove a read-back, healthy knowledge index or successful fresh-chat retrieval; preserve which checks actually occurred.
+        When evidence is missing or contradictory, state that uncertainty rather than choosing the most optimistic claim. Preserve the newest requested task and the constraints needed to execute it.
         Do not list the files you read or edited; GOAT appends those lists itself. Do not call skill_load, a tool, or any memory function.
         This briefing is quoted historical state, not a claim of success. The next turn must reread files or rerun tools before acting.
         </goat_compaction_command>

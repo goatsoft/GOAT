@@ -524,6 +524,7 @@ public final class ShepherdModel {
         var repairNextRound = false
         var repairProgress = FileRepairProgressTracker()
         var repetitionGuard = RepetitionGuard()
+        var rejectedSamplingParameters: Set<String> = []
         var toolRound = 0
         var forcedOverflowCompaction = false
         shepherd: while true {
@@ -578,8 +579,10 @@ public final class ShepherdModel {
                 )
             }
             let assistant = ChatMessage(role: .assistant)
+            var request = plan.request
+            request.rejectedSamplingParameters = rejectedSamplingParameters
             assistant.generationContext = context
-            assistant.generationParameters = EffectiveGenerationParameters(request: plan.request)
+            assistant.generationParameters = EffectiveGenerationParameters(request: request)
             assistant.generationSelectedEffort = session.effort.rawValue
             assistant.generationLifecycle = GenerationProvenanceRecord.Lifecycle.prepared.rawValue
             session.messages.append(assistant)
@@ -600,7 +603,6 @@ public final class ShepherdModel {
                 guard await env.persist(assistant, in: session) else { break shepherd }
                 continue shepherd
             }
-            var request = plan.request
             request.round = toolRound
             toolRound += 1
             assistant.generationLifecycle = GenerationProvenanceRecord.Lifecycle.started.rawValue
@@ -634,6 +636,15 @@ public final class ShepherdModel {
                 streamResult = try await worker.stream(request) { update in
                     guard self.owns(turnID: turnID, sessionID: session.id) else {
                         return false
+                    }
+                    if let parameters = update.effectiveParameters {
+                        rejectedSamplingParameters.formUnion(parameters.omittedSamplingParameters)
+                        assistant.generationParameters = parameters
+                        self.activity.log(
+                            .info,
+                            "engine: retrying without rejected sampling parameter: "
+                                + parameters.omittedSamplingParameters.joined(separator: ", "))
+                        guard await env.persist(assistant, in: session) else { return false }
                     }
                     self.apply(update, to: assistant)
                     if update.shouldCheckpoint, !Task.isCancelled {
@@ -833,6 +844,10 @@ public final class ShepherdModel {
                 guard let target = mapping[call.name] else {
                     assistant.toolEvents[index].result = "Unknown tool: \(call.name)"
                     assistant.toolEvents[index].isError = true
+                    let repetitionStop = repetitionGuard.observe(
+                        name: call.name, argumentsJSON: call.argumentsJSON,
+                        result: "Unknown tool: \(call.name)")
+                    assistant.error = repetitionStop
                     assistant.markRenderChanged()
                     guard await env.persist(assistant, in: session) else {
                         assistant.error = "Tool processing stopped because its transcript could not be saved."
@@ -840,6 +855,7 @@ public final class ShepherdModel {
                         activity.log(.warn, "persistence: unknown-tool result was not saved")
                         break shepherd
                     }
+                    if repetitionStop != nil { break shepherd }
                     continue
                 }
                 if Self.readOnlyPenTools.contains(call.name) {
@@ -920,7 +936,8 @@ public final class ShepherdModel {
                             repairStop = repairProgress.observe(diagnostic)
                         }
                         repetitionStop = repetitionGuard.observe(
-                            name: call.name, argumentsJSON: call.argumentsJSON, result: result.content)
+                            name: call.name, argumentsJSON: call.argumentsJSON, result: result.content,
+                            mutatedState: Self.mutatedState(result, route: target))
                         assistant.markRenderChanged()
                         tools.logCall(
                             server: target.server, tool: target.tool,
@@ -944,6 +961,8 @@ public final class ShepherdModel {
                     }
                     assistant.toolEvents[index].result = error.localizedDescription
                     assistant.toolEvents[index].isError = true
+                    repetitionStop = repetitionGuard.observe(
+                        name: call.name, argumentsJSON: call.argumentsJSON, result: error.localizedDescription)
                     assistant.markRenderChanged()
                     tools.logCall(
                         server: target.server, tool: target.tool, status: "error",
@@ -992,6 +1011,22 @@ public final class ShepherdModel {
         activeTurnID == turnID && activeSessionID == sessionID
     }
 
+    private static func mutatedState(_ result: ToolResult, route: ShepherdToolRoute) -> Bool {
+        guard !result.isError else { return false }
+        if result.diagnostic?.fileObservations.contains(where: {
+            $0.kind != .read && $0.outcome == .succeeded
+        }) == true {
+            return true
+        }
+        // Only native memory routes attest to a completed write. External tools cannot gain
+        // progress semantics by choosing one of these names.
+        if case .memory = route.origin {
+            return ["memory_write", "memory_delete", "wiki_ingest_source", "memory_capture_session"]
+                .contains(route.tool)
+        }
+        return false
+    }
+
     private static let readOnlyPenTools: Set<String> = [
         "pen_read_file", "pen_search", "pen_glob", "pen_list_files",
     ]
@@ -1029,6 +1064,7 @@ public final class ShepherdModel {
     }
 
     private func apply(_ update: ShepherdStreamUpdate, to assistant: ChatMessage) {
+        if let status = update.status { assistant.generationStatus = status }
         if !update.thinking.isEmpty, assistant.thinkingStartedAt == nil {
             assistant.thinkingStartedAt = .now
         }
@@ -1256,6 +1292,11 @@ public final class ShepherdModel {
         }
         guard owns(turnID: turnID, sessionID: session.id), !Task.isCancelled else { return }
 
+        let compactionID = UUID()
+        session.activeCompactionID = compactionID
+        defer {
+            if session.activeCompactionID == compactionID { session.activeCompactionID = nil }
+        }
         let plan: PromptPlan
         do {
             plan = try await worker.plan(
@@ -1363,6 +1404,11 @@ public final class ShepherdModel {
             })
         else { return }
 
+        let compactionID = UUID()
+        session.activeCompactionID = compactionID
+        defer {
+            if session.activeCompactionID == compactionID { session.activeCompactionID = nil }
+        }
         let plan: PromptPlan
         do {
             plan = try await worker.plan(

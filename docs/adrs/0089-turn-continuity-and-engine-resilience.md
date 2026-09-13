@@ -1,6 +1,11 @@
 # ADR-0089: Turn continuity and engine resilience
 
+**2026-09-13 amendment:** [ADR-0086](0086-sampling-parameters-are-model-facts.md) supersedes earlier effort-derived sampling and Qwen-only reasoning-history rules. Source-backed family generation policies, explicit engine veto, per-model overrides and bounded sampling rejection recovery now define those behaviours. Earlier descriptions below retain their historical rationale.
+
 Status: Proposed · 2026-09-11
+
+Presentation amendment · 2026-09-13: [ADR-0074](0074-grouped-transcript-tool-activity.md) supersedes the inferred prefill label with observed activity and visible reasoning. The recovery and execution decisions below are unchanged.
+
 
 Refines [ADR-0023](0023-single-active-turn-and-engine-lifecycle.md), [ADR-0065](0065-bounded-tool-format-recovery.md), [ADR-0066](0066-lead-and-continuous-tool-work.md) and the no-progress direction of [ADR-0084](0084-model-inspection-favourites-and-recovery.md).
 
@@ -18,7 +23,11 @@ Assistant rows whose failure category is `length`, `cancelled` or a tool error r
 
 ### Repetition guard
 
-Beside the file-repair tracker, a turn-scoped repetition tracker records each executed (tool name, canonical argument JSON) pair and a hash of each result. Three identical calls in one turn, or three consecutive identical results from the same tool, pause the turn with the existing no-progress presentation: the transcript explains what repeated, and the user can continue or stop. This is a no-progress check, not a round cap; productive repeated edits with different arguments are unaffected.
+Beside the file-repair tracker, a bounded repetition tracker records each executed (tool name, canonical argument JSON) pair and a hash of its result. Three identical arguments and results without an intervening mutation, or three consecutive identical results from the same tool, pause the turn with the existing no-progress presentation. Changed results restart that call's streak. Successful file mutations with native diagnostics and completed native memory writes invalidate earlier read/check observations, while retaining the mutation's own repetition history. This allows build-edit-build and write-lint-write-lint workflows without letting an identical write reset its own guard indefinitely. Returned failures, thrown tool errors and unknown tools all participate. The transcript explains what repeated, and the user can continue or stop. This remains a no-progress heuristic, not a round cap or proof that changing output means useful work.
+
+### File-content cycles
+
+The separate file-content cycle detector examines the latest five successful mutation digests after any number of preceding edits. Its bounded history must support continued progress beyond the first window without trapping on collection indices. Regression coverage includes long sequences of distinct revisions followed by a repeated content cycle.
 
 ### Retry before the first token
 
@@ -26,7 +35,7 @@ A request that fails with HTTP 408, 429, 502, 503, 504, a connection reset or a 
 
 ### Stall watchdog
 
-The stream request's idle timeout becomes 300 seconds. Independently, when no bytes have arrived for ten seconds the composer shows "Waiting for the engine (prefill)" with the elapsed clock; when none arrive for 120 seconds after the first token the turn fails with a stall error rather than hanging. Both thresholds are constants recorded in ENGINES.md.
+The stream request's transport idle timeout is 300 seconds. The 2026-09-14 amendment allows 300 seconds without content after output starts when the request offers tools, retaining 120 seconds for plain responses. [oMLX 0.6.4](https://github.com/jundot/omlx/blob/v0.6.4/README.md#tool-calling--structured-output) emits structured calls after parsing the completed turn, so lack of streamed arguments is not evidence that a tool-capable generation has stalled. This request-level allowance applies across model families and stays bounded even when transport keepalives arrive. It does not retry partial output or execute incomplete arguments. ADR-0074 defines the single waiting/activity row; elapsed silence never proves prefill, thinking or tool preparation. Both timeouts have fixture coverage, including a delayed completed call beyond the plain-response window and genuine stalls with and without tools.
 
 ### Identifiers
 

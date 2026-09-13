@@ -7,11 +7,13 @@ public struct LiveGenerationMetrics {
 
     public private(set) var bytes = 0
     public private(set) var startedAt: Date?
+    public private(set) var lastOutputAt: Date?
     public var estimatedTokens: Int { (bytes + 2) / 3 }
 
     public mutating func append(bytes count: Int, at date: Date) {
         guard count > 0 else { return }
         if startedAt == nil { startedAt = date }
+        lastOutputAt = date
         bytes += count
     }
 

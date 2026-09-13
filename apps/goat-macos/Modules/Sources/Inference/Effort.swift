@@ -1,7 +1,7 @@
 import Foundation
 
 /// The effort dial: Graze / Trot / Climb / Summit.
-/// Maps to model-agnostic sampling and response budgets (docs/ENGINES.md).
+/// Maps to response budgets and verified model reasoning controls (docs/ENGINES.md).
 public enum Effort: String, CaseIterable, Codable, Sendable, Identifiable {
     case graze, trot, climb, summit
 
@@ -31,15 +31,6 @@ public enum Effort: String, CaseIterable, Codable, Sendable, Identifiable {
         case .trot: "Sure-footed everyday pace"
         case .climb: "More room for hard problems"
         case .summit: "Maximum response budget"
-        }
-    }
-
-    public var temperature: Double {
-        switch self {
-        case .graze: 0.7
-        case .trot: 0.7
-        case .climb: 0.6
-        case .summit: 0.6
         }
     }
 

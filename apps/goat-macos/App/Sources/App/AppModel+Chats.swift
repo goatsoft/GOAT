@@ -292,14 +292,14 @@ extension AppModel {
     }
 
     private func provenanceJSON(for message: ChatMessage) -> String? {
-        if let existing = message.generationProvenance {
-            return try? String(data: JSONEncoder().encode(existing), encoding: .utf8)
-        }
         guard let context = message.generationContext,
             let parameters = message.generationParameters,
             let lifecycle = message.generationLifecycle,
             let state = GenerationProvenanceRecord.Lifecycle(rawValue: lifecycle)
-        else { return nil }
+        else {
+            guard let existing = message.generationProvenance else { return nil }
+            return try? String(data: JSONEncoder().encode(existing), encoding: .utf8)
+        }
         let contextWindow = effectiveContextWindow(forModelID: context.identity.modelID)
         let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown"
         let appBuild = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "Unknown"
@@ -315,6 +315,11 @@ extension AppModel {
             adapterIdentifier: context.compatibility.adapterIdentifier,
             selectedEffort: message.generationSelectedEffort ?? "Unknown",
             actualTemperature: parameters.temperature,
+            samplingValues: parameters.sampling.fields,
+            samplingSource: parameters.samplingSource.rawValue,
+            familyRuleID: parameters.familyRuleID,
+            reasoningInstruction: parameters.reasoningInstruction,
+            omittedSamplingParameters: parameters.omittedSamplingParameters,
             effectiveOutputTokenCap: parameters.outputTokenCap,
             nativeReasoningValue: parameters.nativeReasoningEffort,
             reasoningHistoryReplayed: parameters.replayReasoningHistory,
@@ -332,6 +337,9 @@ extension AppModel {
             failureCategory: message.generationFailureCategory.flatMap {
                 GenerationProvenanceRecord.FailureCategory(rawValue: $0)
             })
+        // Refresh the live inspection model as the lifecycle advances. A loaded historical
+        // record is the fallback above, never a reason to freeze an active response at prepared.
+        message.generationProvenance = record
         return try? String(data: JSONEncoder().encode(record), encoding: .utf8)
     }
 

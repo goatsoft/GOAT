@@ -385,8 +385,13 @@ enum EngineCapabilityMetadataParser {
                 vision: claim(vision, evidence: evidence),
                 tools: claim(tools, evidence: evidence),
                 reasoning: claim(reasoning, evidence: evidence),
+                reasoningHistory: claim(
+                    capabilityObject?.bool(for: ["reasoning_history"])
+                        ?? object.bool(for: ["supports_reasoning_history", "reasoning_history"]), evidence: evidence),
                 advertisedRequestParameters: parameters,
-                reasoningEffortValues: effortValues),
+                reasoningEffortValues: effortValues,
+                supportedRequestParameters: (object["supported_parameters"]?.stringArrayValue
+                    ?? object["supported_request_parameters"]?.stringArrayValue).map { Set($0) }),
             inspection: inspectionMetadata(from: object))
     }
 

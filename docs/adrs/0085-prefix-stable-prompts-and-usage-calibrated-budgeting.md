@@ -2,6 +2,9 @@
 
 Status: Accepted · 2026-09-11
 
+2026-09-13 amendment: canonical ordering must survive the final HTTP encoding, including nested tool schemas. The production request encoder uses sorted keys. Sorting an intermediate JSON string and then decoding it into an unordered object was insufficient: Transformers templates may preserve dictionary insertion order in `tojson`. Rendered-prefix fixtures confirm this affects prompt text; measured cache improvements still require live qualification.
+
+
 Revises [ADR-0024](0024-deterministic-prompt-budgeting.md) (prompt budget policy version 4) and the title timing in [ADR-0066](0066-lead-and-continuous-tool-work.md). Informed by a 2026-09-11 review of established local-inference and coding-agent practice.
 
 ## Context

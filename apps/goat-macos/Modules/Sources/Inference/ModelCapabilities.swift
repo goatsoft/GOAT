@@ -103,6 +103,8 @@ public struct ModelCapabilities: Codable, Hashable, Sendable {
 
     /// Wire parameter names explicitly advertised by the engine.
     public private(set) var advertisedRequestParameters: Set<String>
+    /// Nil means absent metadata. An explicit empty list vetoes every optional parameter.
+    public var supportedRequestParameters: Set<String>?
 
     /// Explicitly advertised values. Nil means the engine advertised the parameter
     /// without listing values. An empty set means it explicitly listed no usable values.
@@ -119,7 +121,8 @@ public struct ModelCapabilities: Codable, Hashable, Sendable {
         reasoning: CapabilityClaim = .unknown,
         reasoningHistory: CapabilityClaim = .unknown,
         advertisedRequestParameters: Set<String> = [],
-        reasoningEffortValues: Set<ReasoningEffortValue>? = nil
+        reasoningEffortValues: Set<ReasoningEffortValue>? = nil,
+        supportedRequestParameters: Set<String>? = nil
     ) {
         self.vision = vision
         self.tools = tools
@@ -128,6 +131,9 @@ public struct ModelCapabilities: Codable, Hashable, Sendable {
         self.advertisedRequestParameters = Set(
             advertisedRequestParameters.compactMap(Self.normalizedParameterName))
         self.reasoningEffortValues = reasoningEffortValues
+        self.supportedRequestParameters = supportedRequestParameters.map {
+            Set($0.compactMap(Self.normalizedParameterName))
+        }
     }
 
     public static let unknown = ModelCapabilities()
@@ -149,7 +155,18 @@ public struct ModelCapabilities: Codable, Hashable, Sendable {
             advertisedRequestParameters: advertisedRequestParameters.union(
                 other.advertisedRequestParameters),
             reasoningEffortValues: Self.mergeAllowedValues(
-                reasoningEffortValues, other.reasoningEffortValues))
+                reasoningEffortValues, other.reasoningEffortValues),
+            supportedRequestParameters: Self.mergeParameterLists(
+                supportedRequestParameters, other.supportedRequestParameters))
+    }
+
+    private static func mergeParameterLists(_ left: Set<String>?, _ right: Set<String>?) -> Set<String>? {
+        switch (left, right) {
+        case let (.some(a), .some(b)): a.intersection(b)
+        case let (.some(a), nil): a
+        case let (nil, .some(b)): b
+        case (nil, nil): nil
+        }
     }
 
     /// Maps GOAT's portable effort dial to advertised values. Graze/Summit use
@@ -157,6 +174,7 @@ public struct ModelCapabilities: Codable, Hashable, Sendable {
     /// The native field stays disabled unless `reasoning_effort` was advertised.
     public func reasoningEffort(for effort: Effort) -> ReasoningEffortValue? {
         guard advertisesRequestParameter("reasoning_effort") else { return nil }
+        guard supportedRequestParameters?.contains("reasoning_effort") != false else { return nil }
         // Unknown includes conflicting explicit claims. Native fields require positive,
         // unambiguous evidence rather than merely the absence of a rejection.
         guard reasoning.support == .supported else { return nil }
@@ -191,13 +209,10 @@ public struct ModelCapabilities: Codable, Hashable, Sendable {
         reasoningHistory.support == .supported
     }
 
-    /// An engine profile is explicit user configuration, so it can safely enable a
-    /// non-standard history field without treating a model name as protocol evidence.
+    /// A template selection does not itself establish a reasoning-history contract.
+    /// Replay is resolved from audited family policy and explicit engine evidence.
     public func applying(requestStyle: EngineRequestStyle) -> ModelCapabilities {
-        guard requestStyle == .qwenChatTemplate else { return self }
-        return merged(
-            with: ModelCapabilities(
-                reasoningHistory: .supported(by: .engineConfiguration)))
+        self
     }
 
     private static func normalizedParameterName(_ value: String) -> String? {

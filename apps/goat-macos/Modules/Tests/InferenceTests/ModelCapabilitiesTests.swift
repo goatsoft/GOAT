@@ -50,14 +50,14 @@ import Testing
     }
 }
 
-@Test func qwenReasoningReplayRequiresTheExplicitEngineRequestStyle() {
+@Test func qwenTemplateSelectionDoesNotInventReasoningHistorySupport() {
     #expect(!ModelCapabilities.unknown.replaysReasoningHistory)
     #expect(
         !ModelCapabilities.unknown
             .applying(requestStyle: .automatic)
             .replaysReasoningHistory)
     #expect(
-        ModelCapabilities.unknown
+        !ModelCapabilities.unknown
             .applying(requestStyle: .qwenChatTemplate)
             .replaysReasoningHistory)
 }

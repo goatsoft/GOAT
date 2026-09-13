@@ -167,13 +167,22 @@ public actor OpenAICompatEngine: InferenceEngine {
         return data
     }
 
+    /// Stable nested JSON ordering matters when a server renders schemas with a chat
+    /// template whose tojson filter preserves dictionary insertion order (ADR-0085).
+    static func encodedBody(for request: GenerationRequest) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return try encoder.encode(makeBody(for: request))
+    }
+
     static func makeBody(for r: GenerationRequest) -> CompletionBody {
         let prepared = CanonicalRequestPreparation.prepare(r)
         let parameters = EffectiveGenerationParameters(request: prepared)
         let qwenControls = QwenChatTemplateControls(parameters: parameters)
+        let lastUser = prepared.turns.lastIndex(where: { $0.role == .user }) ?? 0
         return CompletionBody(
             model: prepared.model,
-            messages: prepared.turns.map { turn in
+            messages: prepared.turns.enumerated().map { index, turn in
                 CompletionBody.Message(
                     role: turn.role.rawValue,
                     text: turn.text,
@@ -182,11 +191,13 @@ public actor OpenAICompatEngine: InferenceEngine {
                     toolCalls: turn.toolCalls,
                     toolCallID: turn.toolCallID,
                     replayReasoning: parameters.replayReasoningHistory
+                        && (parameters.historyPolicy != .currentTurn || index > lastUser)
                 )
             },
             stream: true,
             temperature: parameters.temperature,
             maxTokens: parameters.outputTokenCap,
+            sampling: parameters.sampling,
             tools: prepared.tools,
             reasoningEffort: parameters.nativeReasoningEffort,
             qwenChatTemplate: qwenControls
@@ -236,8 +247,7 @@ public actor OpenAICompatEngine: InferenceEngine {
                     if let key = config.apiKey, !key.isEmpty {
                         req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
                     }
-                    req.httpBody = try JSONEncoder().encode(
-                        Self.makeBody(for: r))
+                    req.httpBody = try Self.encodedBody(for: r)
 
                     let client = JudasHTTPClient(origin: config.baseURL, source: .engine, name: config.name)
                     defer { client.invalidateAndCancel() }
@@ -292,25 +302,14 @@ public actor OpenAICompatEngine: InferenceEngine {
 /// OpenAI-compatible requests never receive these non-standard fields.
 struct QwenChatTemplateControls: Encodable {
     let enableThinking: Bool
-    let preserveThinking: Bool
-    let reasoningEffort: String?
-    let temperature: Double
 
     init?(parameters: EffectiveGenerationParameters) {
-        guard let enableThinking = parameters.qwenEnableThinking,
-            let preserveThinking = parameters.qwenPreserveThinking
-        else { return nil }
+        guard let enableThinking = parameters.qwenEnableThinking else { return nil }
         self.enableThinking = enableThinking
-        self.preserveThinking = preserveThinking
-        self.reasoningEffort = parameters.qwenReasoningEffort
-        self.temperature = parameters.temperature
     }
 
     private enum CodingKeys: String, CodingKey {
         case enableThinking = "enable_thinking"
-        case preserveThinking = "preserve_thinking"
-        case reasoningEffort = "reasoning_effort"
-        case temperature
     }
 }
 
@@ -453,8 +452,9 @@ struct CompletionBody: Encodable {
     let model: String
     let messages: [Message]
     let stream: Bool
-    let temperature: Double
+    let temperature: Double?
     let maxTokens: Int
+    var sampling: SamplingOverride = SamplingOverride()
     var tools: [ToolSpec] = []
     var reasoningEffort: String? = nil
     var qwenChatTemplate: QwenChatTemplateControls? = nil
@@ -465,6 +465,8 @@ struct CompletionBody: Encodable {
         case streamOptions = "stream_options"
         case reasoningEffort = "reasoning_effort"
         case qwenChatTemplate = "chat_template_kwargs"
+        case topP = "top_p", topK = "top_k", minP = "min_p", repetitionPenalty = "repetition_penalty"
+        case presencePenalty = "presence_penalty"
     }
 
     func encode(to encoder: Encoder) throws {
@@ -476,7 +478,12 @@ struct CompletionBody: Encodable {
             // Request final usage statistics so token counts can use the server's measurements.
             try c.encode(["include_usage": true], forKey: .streamOptions)
         }
-        try c.encode(temperature, forKey: .temperature)
+        try c.encodeIfPresent(temperature, forKey: .temperature)
+        try c.encodeIfPresent(sampling.topP, forKey: .topP)
+        try c.encodeIfPresent(sampling.topK, forKey: .topK)
+        try c.encodeIfPresent(sampling.minP, forKey: .minP)
+        try c.encodeIfPresent(sampling.repetitionPenalty, forKey: .repetitionPenalty)
+        try c.encodeIfPresent(sampling.presencePenalty, forKey: .presencePenalty)
         try c.encode(maxTokens, forKey: .maxTokens)
         try c.encodeIfPresent(reasoningEffort, forKey: .reasoningEffort)
         try c.encodeIfPresent(qwenChatTemplate, forKey: .qwenChatTemplate)

@@ -1,62 +1,80 @@
-# ADR-0086: Sampling parameters are model facts, not effort
+# ADR-0086: Model-family generation policies and engine defaults
 
-Status: Proposed · 2026-09-11
+Status: Accepted design · 2026-09-13. Implementation and live qualification are distinct.
 
-Refines [ADR-0024](0024-deterministic-prompt-budgeting.md) and [ADR-0084](0084-model-inspection-favourites-and-recovery.md); revises the effort table in [docs/ENGINES.md](../ENGINES.md).
+Refines [ADR-0024](0024-deterministic-prompt-budgeting.md), [ADR-0084](0084-model-inspection-favourites-and-recovery.md), [ADR-0085](0085-prefix-stable-prompts-and-usage-calibrated-budgeting.md) and [ADR-0089](0089-turn-continuity-and-engine-resilience.md).
 
 ## Context
 
-The wire encoder always sends `temperature` (0.7 for Graze and Trot, 0.6 for Climb and Summit) and never sends `top_p`, `top_k` or `min_p`. Local engines load each checkpoint's `generation_config.json` and apply its sampling defaults only when the request omits the field, so GOAT silently overrides tuned defaults for every model. Published recommendations disagree widely: Qwen3 documents 0.6 for thinking and 0.7 for non-thinking with specific top_p and top_k, DeepSeek-R1 documents 0.6 and warns against greedy decoding, GPT-OSS and Gemma 3 document 1.0, MiniMax M2 documents 1.0 with top_p 0.95 and top_k 40. Some OpenAI-compatible endpoints reject the field entirely with HTTP 400 "Unsupported parameter: temperature"; pinned server-side sampling also exists on vLLM and llama.cpp deployments. Effort has no principled relationship to any of these numbers.
+Capability recognition is not a complete generation integration. The original registry supplied capabilities and context limits while generic requests still used effort-derived temperature and omitted reasoning history. A local Muse-Glimmer conversation exposed this gap: requests used temperature 0.6 instead of the published 1.0, and the effort control did not select Muse reasoning strength. Successful discovery calls repeatedly consumed long waits without task progress. These observations establish an integration mismatch, not proof that sampling alone caused repetition or latency.
 
-Established practice is to omit temperature unless a provider rule or the user sets it, and to drop it while thinking is enabled. GOAT's own rule that a model name never selects a wire field applies here too.
+The audit also found different defaults within broad rules: DeepSeek V3.1/V3.2, Qwen text/thinking/VL checkpoints, and GLM vision releases need distinct policies. Family recognition must not imply live qualification.
 
 ## Decision
 
-### Default: omit sampling fields
+### Source-backed generation facts
 
-`CompletionBody` omits `temperature`, `top_p`, `top_k` and `min_p` unless a resolved sampling override supplies them. The engine's model defaults apply. Effort no longer contributes any sampling value on the generic path.
+The bundled and owner JSON registries share a validated `ModelGenerationPolicy` schema. Each rule can declare optional sampling values, a documented plain-text reasoning instruction, a reasoning-history scope, primary-source links and limitations. [The family audit](../MODEL-GENERATION-POLICIES.md) records every bundled policy.
 
-### Overrides are resolved like capabilities
+Supported sampling values are temperature, top-p, top-k, min-p, repetition penalty and presence penalty. Missing fields are omitted, allowing the server to resolve its own defaults. Effort controls output budget and verified reasoning controls; it does not supply generic temperature. Parameter meaning follows [Transformers generation configuration](https://huggingface.co/docs/transformers/en/main_classes/text_generation), while concrete recommendations come from each checkpoint. Transformers library defaults are not assumed to equal a server's defaults.
 
-A `SamplingOverride` (any subset of temperature, top_p, top_k, min_p) is resolved per request in this precedence, and the winning source is recorded in provenance:
+Validate finite temperature 0–2, top-p greater than 0 through 1, nonnegative integral top-k, min-p 0–1, and positive repetition penalty up to 2, and presence penalty from -2 to 2. These are GOAT's supported override ranges. Invalid policies are not applied. Unknown, unverified or access-gated variants use engine defaults. Example code and benchmark-specific settings are not automatically universal recommendations.
 
-1. An explicit per-model user override stored by engine profile identity plus exact model ID in Models settings, alongside the compatibility override. Evidence `userModelFamily`.
-2. A model-family rule's optional `sampling` block. Recommended sampling is a published model-card fact, so `ModelFamilyRule` (built-in or user `model-families.json`) may declare it; it still cannot select a dialect or any other request field. Evidence `modelFamily` or `userModelFamily`. A family block may declare separate `thinking` and `nonThinking` values; the thinking set applies when the request enables native reasoning, otherwise the non-thinking set.
-3. None. Fields are omitted.
+Rules match complete components at the right boundary: `qwen3` does not claim Qwen3.5, `glm-4.5` does not claim GLM-4.5V, and `minimax-m2` does not claim M2.1. Audited versions have separate rules. Drafter, MTP, assistant-checkpoint and base-model markers are excluded. Matching owner rules replace built-ins outright.
 
-Engine metadata can veto but never supply: when `supported_parameters` is present and does not list a field, that field is not sent regardless of override, and the Models tab shows the conflict.
+### Immutable resolution
 
-The explicit Qwen local chat-template profile keeps its documented values, but its constants are re-verified against the current Qwen model card before this ADR is accepted; the present 1.0 for thinking modes does not match the 0.6 that Qwen3 documents.
+Capture the matched rule and generation policy with the existing engine-profile/exact-model request snapshot. Sampling precedence is:
 
-### One registry for model facts, loaded from JSON
+1. Per-model custom sampling, replacing the whole family recommendation. Blank custom fields use engine defaults.
+2. Matched owner or bundled family policy. Non-thinking values apply only when GOAT requests that documented mode.
+3. The explicit legacy Qwen-template override without a matched policy uses documented Qwen3 mode defaults.
+4. Engine defaults, represented by omitted values.
 
-The model-family registry is the single source of family knowledge for both sampling and
-capabilities. Built-in families ship as `model-families.builtin.json` bundled with the Inference
-module, in the same `ModelFamilyRegistryDocument` schema as the user file and decoded by the same
-validator; correcting or adding a shipped family is a JSON edit rather than a Swift one, and a
-user file in GOAT Home (`~/.goat/config/model-families.json`, ADR-0009) adds or overrides
-families without a rebuild. A user rule wins over a built-in it matches — the user file is consulted first and its rule replaces the built-in outright rather than merging — so an owner can patch or correct a family ahead of a release; the built-ins are the fallback. The former hard-coded Swift rule table and the `KnownModelProfiles`
-shim that wrapped it are removed; every call site resolves through `ModelFamilyRegistry`.
+An explicit `supported_parameters` or `supported_request_parameters` list vetoes fields outside the list. Missing metadata differs from an empty list. Independent explicit lists intersect; capability-only records do not erase a list. Engine restrictions win over both family and custom sampling.
 
-Automatic compatibility resolution consults the registry. `ModelCompatibilityResolver.resolve`
-takes the matched family profile and, when there is no explicit user override and no usable
-engine metadata, resolves to source `modelFamily` with the family's capabilities instead of
-`genericFallback`. Dialect stays engine configuration (ADR-0024); the family supplies
-capabilities and, where published, a context window only. An engine-reported context window
-always wins over the family's declared one on merge.
+### Reasoning instructions and history
 
-### Rejection recovery
+Muse uses `Reasoning strength`: Graze low, Trot medium, Climb high, Summit xhigh. Advertised native reasoning effort takes precedence to prevent duplicate controls. Qwen3 hybrid models use their published `/think` and `/no_think` soft switch; fixed-mode checkpoints retain their mode. The explicit Qwen template option sends only verified `enable_thinking`, removing unverified template temperature, preservation and effort fields.
 
-An HTTP 400 whose body names a request parameter is classified `unsupportedParameter(name)`. The parameter is recorded on that model's compatibility metadata as unsupported with `observedResponse` evidence, the request is retried once without it, and the activity log records the change. This happens only before any token has been received.
+Canonical preparation adds instructions before budgeting and is idempotent. Stable inputs yield a stable prefix. Family-specific allowed native effort values intersect engine-advertised values. Qwen3.8, for example, accepts low, medium and xhigh but rejects high. Native wire fields still require an advertised engine contract or explicit compatibility selection. A family name does not invent an engine adapter.
 
-### Presentation
+History scopes follow audited templates: Muse receives all retained reasoning; selected Kimi, MiniMax and GLM releases receive reasoning after the latest user message; older Qwen checkpoints omit historical reasoning, while Qwen3.8 preserves it. Engine denial or conflicting history evidence wins. Unknown protocols omit replay. GPT-OSS Harmony and DeepSeek custom encoding remain engine-adapter responsibilities; their native history representation is not assumed interchangeable with `reasoning_content`.
 
-Model details show Sampling: Engine default, Family recommendation (with the rule ID) or Custom, with the effective values. Response details show the values actually sent and their source, or "engine default". The effort submenu descriptions drop any mention of temperature.
+The planner conservatively accounts for replayed reasoning. The encoder retains structured tool-call/result pairs independently of reasoning scope. Transcript storage is unchanged.
 
-## Consequences
+### Bounded rejection recovery
 
-Models run at the settings their authors tuned, endpoints that reject sampling fields work without configuration, and a user can still pin values per model. Existing chats keep their persisted provenance; new responses record the new source field. Provenance also stops under-reporting model resolution: `resolutionSource` shows `modelFamily` for a recognized model instead of a blanket `genericFallback`, `capabilities` records the resolved claims, and `effectiveContextLimit`/`contextLimitSource` report the window actually in force (user override, engine- or family-reported, or the estimated fallback) so a slow prefill or an overflow can be attributed. The effort table in docs/ENGINES.md loses its temperature column. Fixture tests cover omission by default, each precedence level, the metadata veto, thinking versus non-thinking selection and the one-shot rejection retry.
+An HTTP 400 explicitly rejecting one named sampling field can trigger one retry before any text, reasoning or tool fragment arrives. Remove only that field, preserve messages and tools, persist revised effective parameters before retry, and log the omission. Unrelated 400s, invalid values and failures after output begins do not qualify.
+
+Omissions carry into later rounds of the current turn. They are not permanent claims about the engine or checkpoint; later turns can re-evaluate changed configuration. A second sampling rejection on the same request surfaces normally. Transient retry and context-overflow handling keep separate bounds.
+
+### Settings and provenance
+
+Models settings show effective sampling, source, matched rule, reasoning instruction/history scope, omitted parameters, source links and limitations. Owners can apply custom values or reset to family defaults. Changes are disabled during generation and engine transitions.
+
+Response provenance stores requested optional sampling values, source, rule, reasoning instruction and omissions, including recovery. Missing temperature displays as engine default. Legacy records retain their numeric temperature with unknown newly introduced fields. Diagnostics remain local. Server-side forced sampling can override a valid request; these records are not proof of executed sampler values.
+
+## Qualification
+
+Request fixtures verify exact JSON for representative families and every effort level, unknown-model omission, version boundaries, owner overrides, explicit empty parameter lists, metadata restrictions, stable canonical preparation, history scopes and unchanged tool pairing/round identity. Persistence checks cover legacy decoding and custom preferences. Fake-engine checks cover one-shot sampling recovery and no retry after output starts.
+
+Run `make verify` and applicable documentation checks on the final implementation. Fixture success is not live-model qualification. Engine/runtime/checkpoint claims require actual evidence; cache effectiveness, latency and task completion are measured separately. This ADR claims no benchmark improvement.
 
 ## Alternatives considered
 
-Keep sending an effort-derived temperature (rejected: overrides tuned defaults and fails on strict endpoints). Infer sampling from the model name (rejected by ADR-0024's standing rule; family rules carry evidence and are user-visible, names are not). A global temperature setting (rejected: the right value is per model, and a global value would silently apply to every future model). Sending the family recommendation always (rejected: engine defaults are usually the same recommendation and omission is the only choice that cannot be wrong for an unknown model).
+- Effort-derived sampling overrides checkpoint tuning without model evidence.
+- One policy for similarly named versions ignores known differences.
+- Unconditionally sending provider fields confuses model facts with the server API.
+- Always omitting or always replaying reasoning contradicts different published templates.
+- Persisting every rejection indefinitely risks retaining stale engine observations.
+
+## Broader audit
+
+The [inference integration audit](../INFERENCE-INTEGRATION-AUDIT.md) checks template rendering, server conversion, sampling resolution, cache stability and current catalog coverage. It separates source-level tests from deployed-engine qualification.
+
+Converted checkpoints can bundle older templates than their upstream model. Muse provides a concrete example: an older conversion template appends a default reasoning-strength instruction even when GOAT supplied one. Qualification therefore covers the installed template and rendered prompt, not just the family rule and requested sampling. The audit records the source comparison and a progressive read/edit/command/recovery/handover protocol. Unknown deployed template behavior remains an explicit qualification limit.
+
+## Implementation status
+
+The branch implements source-linked policies, optional sampling, per-model settings, metadata veto, reasoning instructions/history scopes, bounded rejection recovery and provenance. Final verification is recorded with the implementation; design acceptance does not imply live qualification of every pairing.

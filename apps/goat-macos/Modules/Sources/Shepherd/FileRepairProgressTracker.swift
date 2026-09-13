@@ -124,7 +124,8 @@ public struct FileRepairProgressTracker: Sendable, Equatable {
 
     private func cycleDetected(_ digests: [String]) -> Bool {
         guard digests.count >= 5 else { return false }
-        let end = digests.suffix(5)
-        return end.count == 5 && end[0] == end[2] && end[0] == end[4] && end[1] == end[3] && end[0] != end[1]
+        // ArraySlice retains its source indices once earlier edits precede this window.
+        let end = Array(digests.suffix(5))
+        return end[0] == end[2] && end[0] == end[4] && end[1] == end[3] && end[0] != end[1]
     }
 }

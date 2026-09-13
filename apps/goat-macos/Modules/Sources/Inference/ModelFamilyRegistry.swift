@@ -2,25 +2,33 @@ import Foundation
 import Herd
 import Synchronization
 
-/// Verified metadata for a model family whose compatible engine may not expose
+/// Source-backed metadata for a model family whose compatible engine may not expose
 /// capability fields through its model catalog.
 public struct KnownModelProfile: Equatable, Sendable {
+    public let ruleID: String?
+    public let generation: ModelGenerationPolicy?
+    public let evidence: CapabilityEvidence
     public let contextLength: Int?
     public let capabilities: ModelCapabilities
     public let inspection: EngineModelInspectionMetadata?
 
     public init(
         contextLength: Int?, capabilities: ModelCapabilities,
-        inspection: EngineModelInspectionMetadata? = nil
+        inspection: EngineModelInspectionMetadata? = nil,
+        ruleID: String? = nil, generation: ModelGenerationPolicy? = nil,
+        evidence: CapabilityEvidence = .modelFamily
     ) {
         self.contextLength = contextLength
         self.capabilities = capabilities
         self.inspection = inspection
+        self.ruleID = ruleID
+        self.generation = generation
+        self.evidence = evidence
     }
 }
 
 /// A capability rule for one model family. Rules describe published model facts only:
-/// capabilities, context length and static inspection facts. Request dialects and
+/// capabilities, context length, inspection and generation policy. Request dialects and
 /// provider-specific parameters remain engine configuration (ADR-0024, ADR-0086).
 ///
 /// Matching: a normalized model ID must contain at least one `matchAny` entry and every
@@ -37,6 +45,7 @@ public struct ModelFamilyRule: Codable, Equatable, Hashable, Sendable {
     public let modelType: String?
     public let format: String?
     public let parameterCount: Int64?
+    public let generation: ModelGenerationPolicy?
 
     public init(
         id: String,
@@ -48,7 +57,8 @@ public struct ModelFamilyRule: Codable, Equatable, Hashable, Sendable {
         architecture: String? = nil,
         modelType: String? = nil,
         format: String? = nil,
-        parameterCount: Int64? = nil
+        parameterCount: Int64? = nil,
+        generation: ModelGenerationPolicy? = nil
     ) {
         self.id = id
         self.matchAny = matchAny
@@ -60,11 +70,12 @@ public struct ModelFamilyRule: Codable, Equatable, Hashable, Sendable {
         self.modelType = modelType
         self.format = format
         self.parameterCount = parameterCount
+        self.generation = generation
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, matchAny, matchAll, exclude, contextLength, capabilities
-        case architecture, modelType, format, parameterCount
+        case architecture, modelType, format, parameterCount, generation
     }
 
     public init(from decoder: Decoder) throws {
@@ -79,13 +90,14 @@ public struct ModelFamilyRule: Codable, Equatable, Hashable, Sendable {
             architecture: try container.decodeIfPresent(String.self, forKey: .architecture),
             modelType: try container.decodeIfPresent(String.self, forKey: .modelType),
             format: try container.decodeIfPresent(String.self, forKey: .format),
-            parameterCount: try container.decodeIfPresent(Int64.self, forKey: .parameterCount))
+            parameterCount: try container.decodeIfPresent(Int64.self, forKey: .parameterCount),
+            generation: try container.decodeIfPresent(ModelGenerationPolicy.self, forKey: .generation))
     }
 
     func matches(_ modelID: String) -> Bool {
         let normalizedID = Self.normalized(modelID)
         guard !normalizedID.isEmpty,
-            matchAny.contains(where: { normalizedID.contains(Self.normalized($0)) }),
+            matchAny.contains(where: { Self.containsModelComponent(normalizedID, Self.normalized($0)) }),
             matchAll.allSatisfy({ normalizedID.contains(Self.normalized($0)) })
         else { return false }
 
@@ -115,7 +127,7 @@ public struct ModelFamilyRule: Codable, Equatable, Hashable, Sendable {
                 reasoning: Self.claim("reasoning", in: supports, evidence: evidence),
                 reasoningHistory: Self.claim(
                     "reasoning_history", in: supports, evidence: evidence)),
-            inspection: inspection)
+            inspection: inspection, ruleID: id, generation: generation, evidence: evidence)
     }
 
     private static func claim(
@@ -130,6 +142,13 @@ public struct ModelFamilyRule: Codable, Equatable, Hashable, Sendable {
         value.trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
             .replacingOccurrences(of: "_", with: "-")
+    }
+
+    private static func containsModelComponent(_ model: String, _ pattern: String) -> Bool {
+        guard !pattern.isEmpty else { return false }
+        // Do not let qwen3 match qwen3.5, glm-4.5 match glm-4.5v, or minimax-m2 match m2.1.
+        let escaped = NSRegularExpression.escapedPattern(for: pattern)
+        return model.range(of: "(?<![a-z0-9])" + escaped + "(?=$|[-/:])", options: .regularExpression) != nil
     }
 }
 
@@ -191,7 +210,10 @@ public enum ModelFamilyRegistry {
         guard let document = try? JSONDecoder().decode(ModelFamilyRegistryDocument.self, from: data),
             document.schema == 1
         else { return [] }
-        return document.families.filter { !$0.id.isEmpty && !$0.matchAny.isEmpty }
+        return document.families.filter {
+            !$0.id.isEmpty && !$0.matchAny.isEmpty && $0.matchAny.allSatisfy { !$0.isEmpty }
+                && ($0.generation?.isValid ?? true)
+        }
     }
 
     private static func cachedUserRules(from url: URL?) -> [ModelFamilyRule] {

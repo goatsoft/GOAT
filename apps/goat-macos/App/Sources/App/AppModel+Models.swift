@@ -4,6 +4,20 @@ import Herd
 import Inference
 
 extension AppModel {
+    func setSamplingOverride(_ sampling: SamplingOverride?, for identity: ModelIdentity) async -> Bool {
+        guard validModelIdentity(identity), !shepherd.hasActiveTurn, !engineTransitioning,
+            sampling?.isValid ?? true
+        else { return false }
+        var next = modelPreferences
+        if let index = next.firstIndex(where: { $0.identity == identity }) {
+            next[index].samplingOverride = sampling
+            next[index].updatedAt = .now
+        } else {
+            next.append(ModelPreference(identity: identity, samplingOverride: sampling))
+        }
+        return await commitModelPreferences(models: next, reviews: legacyCompatibilityReviews)
+    }
+
     func selectEffort(_ effort: Effort, in session: ChatSession? = nil) {
         guard !shepherd.hasActiveTurn, !engineTransitioning else { return }
         guard let target = session ?? currentSession else { return }

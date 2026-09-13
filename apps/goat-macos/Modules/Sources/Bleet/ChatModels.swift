@@ -23,6 +23,10 @@ public final class ChatMessage: Identifiable {
     public private(set) var thinkingTail = ""
     public var stats: GenStats?
     public private(set) var liveMetrics = LiveGenerationMetrics()
+    public enum StreamActivity: Sendable { case reasoning, answer, toolArguments }
+    public private(set) var lastStreamActivity: StreamActivity?
+    /// Session-local worker status; never added to the model prompt.
+    public var generationStatus: String?
     public var error: String?
     public var complete = false
     public var attachmentPaths: [String] = []
@@ -61,6 +65,14 @@ public final class ChatMessage: Identifiable {
 
     public func appendStream(text textDelta: String, thinking thinkingDelta: String, toolInputBytes: Int = 0) {
         liveMetrics.append(bytes: textDelta.utf8.count + thinkingDelta.utf8.count + max(0, toolInputBytes), at: .now)
+        if !textDelta.isEmpty || !thinkingDelta.isEmpty || toolInputBytes > 0 { generationStatus = nil }
+        if toolInputBytes > 0 {
+            lastStreamActivity = .toolArguments
+        } else if !textDelta.isEmpty {
+            lastStreamActivity = .answer
+        } else if !thinkingDelta.isEmpty {
+            lastStreamActivity = .reasoning
+        }
         guard !textDelta.isEmpty || !thinkingDelta.isEmpty else { return }
         if !thinkingDelta.isEmpty {
             thinking.append(contentsOf: thinkingDelta)
@@ -116,6 +128,8 @@ public final class ChatSession: Identifiable {
     public var toolsEnabled = true
     public var disabledMCPServers: Set<String> = []
     public var isStreaming = false
+    /// Transient ownership for visible compaction progress; never part of saved chat history.
+    public var activeCompactionID: UUID?
     public var isLoadingMessages = false
     public var messagesLoaded = false
     public var messageLoadError: String?

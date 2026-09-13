@@ -26,6 +26,7 @@ public struct ModelPreference: Codable, Equatable, Sendable {
     /// A user-asserted context window for prompt budgeting (ADR-0085). It fills a missing
     /// engine window or lowers a reported one; it never raises an engine-reported window.
     public var contextWindowOverride: Int?
+    public var samplingOverride: SamplingOverride?
     public var updatedAt: Date
 
     public init(
@@ -33,17 +34,19 @@ public struct ModelPreference: Codable, Equatable, Sendable {
         isFavourite: Bool = false,
         compatibilityOverride: ModelCompatibilityOverride = .automatic,
         contextWindowOverride: Int? = nil,
+        samplingOverride: SamplingOverride? = nil,
         updatedAt: Date = .now
     ) {
         self.identity = identity
         self.isFavourite = isFavourite
         self.compatibilityOverride = compatibilityOverride
         self.contextWindowOverride = contextWindowOverride
+        self.samplingOverride = samplingOverride
         self.updatedAt = updatedAt
     }
 
     private enum CodingKeys: String, CodingKey {
-        case identity, isFavourite, compatibilityOverride, contextWindowOverride, updatedAt
+        case identity, isFavourite, compatibilityOverride, contextWindowOverride, samplingOverride, updatedAt
     }
 
     public init(from decoder: Decoder) throws {
@@ -54,6 +57,7 @@ public struct ModelPreference: Codable, Equatable, Sendable {
             compatibilityOverride: try container.decodeIfPresent(
                 ModelCompatibilityOverride.self, forKey: .compatibilityOverride) ?? .automatic,
             contextWindowOverride: try container.decodeIfPresent(Int.self, forKey: .contextWindowOverride),
+            samplingOverride: try container.decodeIfPresent(SamplingOverride.self, forKey: .samplingOverride),
             updatedAt: try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? .now)
     }
 
@@ -166,6 +170,9 @@ public enum ModelPreferencesStore {
     }
 
     private static func validate(_ file: ModelPreferencesFile, at url: URL) throws {
+        guard file.models.allSatisfy({ $0.samplingOverride?.isValid ?? true }) else {
+            throw LocalStoreError.invalidData(path: url.path, reason: "sampling values are outside their valid ranges")
+        }
         guard file.schemaVersion == ModelPreferencesFile.currentSchemaVersion else {
             throw LocalStoreError.invalidData(
                 path: url.path,

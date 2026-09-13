@@ -1,5 +1,7 @@
 # ADR-0084: Model inspection, favourites and recovery
 
+**2026-09-13 amendment:** [ADR-0086](0086-sampling-parameters-are-model-facts.md) supersedes earlier effort-derived sampling and Qwen-only reasoning-history rules. Source-backed family generation policies, explicit engine veto, per-model overrides and bounded sampling rejection recovery now define those behaviours. Earlier descriptions below retain their historical rationale.
+
 **Status:** Proposed · 2026-09-11 · extends [ADR-0021](0021-engines-as-managed-list.md), [ADR-0024](0024-deterministic-prompt-budgeting.md), [ADR-0065](0065-bounded-tool-format-recovery.md) and [ADR-0066](0066-lead-and-continuous-tool-work.md)
 
 ## Implementation status

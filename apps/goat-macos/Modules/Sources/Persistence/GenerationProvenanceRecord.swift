@@ -65,7 +65,12 @@ public struct GenerationProvenanceRecord: Codable, Equatable, Sendable {
     public let resolutionSource: String
     public let adapterIdentifier: String?
     public let selectedEffort: String
-    public let actualTemperature: Double
+    public let actualTemperature: Double?
+    public let samplingValues: [String: Double]?
+    public let samplingSource: String?
+    public let familyRuleID: String?
+    public let reasoningInstruction: String?
+    public let omittedSamplingParameters: [String]?
     public let effectiveOutputTokenCap: Int
     public let nativeReasoningValue: String?
     public let reasoningHistoryReplayed: Bool
@@ -95,7 +100,10 @@ public struct GenerationProvenanceRecord: Codable, Equatable, Sendable {
         resolutionSource: String,
         adapterIdentifier: String? = nil,
         selectedEffort: String,
-        actualTemperature: Double,
+        actualTemperature: Double?,
+        samplingValues: [String: Double]? = nil, samplingSource: String? = nil,
+        familyRuleID: String? = nil, reasoningInstruction: String? = nil,
+        omittedSamplingParameters: [String]? = nil,
         effectiveOutputTokenCap: Int,
         nativeReasoningValue: String? = nil,
         reasoningHistoryReplayed: Bool,
@@ -125,6 +133,11 @@ public struct GenerationProvenanceRecord: Codable, Equatable, Sendable {
         self.adapterIdentifier = adapterIdentifier
         self.selectedEffort = selectedEffort
         self.actualTemperature = actualTemperature
+        self.samplingValues = samplingValues
+        self.samplingSource = samplingSource
+        self.familyRuleID = familyRuleID
+        self.reasoningInstruction = reasoningInstruction
+        self.omittedSamplingParameters = omittedSamplingParameters
         self.effectiveOutputTokenCap = effectiveOutputTokenCap
         self.nativeReasoningValue = nativeReasoningValue
         self.reasoningHistoryReplayed = reasoningHistoryReplayed
