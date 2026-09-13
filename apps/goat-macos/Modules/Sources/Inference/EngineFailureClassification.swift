@@ -6,6 +6,7 @@ public enum EngineFailureClassification: String, Codable, Equatable, Sendable {
     case authentication
     case connection
     case malformedResponse
+    case contextOverflow
     case unknown
 }
 
@@ -47,6 +48,14 @@ public extension EngineError {
             lower.contains("not supported")
         {
             return .unsupportedModelArchitecture
+        }
+        if statusCode == 400 || statusCode == 413 {
+            let overflowMarkers = [
+                "context length", "context window", "maximum context", "context_length_exceeded",
+                "too many tokens", "exceeds the maximum", "reduce the length",
+                "maximum number of tokens", "prompt is too long", "input is too long",
+            ]
+            if overflowMarkers.contains(where: lower.contains) { return .contextOverflow }
         }
         switch statusCode {
         case 401, 403: return .authentication

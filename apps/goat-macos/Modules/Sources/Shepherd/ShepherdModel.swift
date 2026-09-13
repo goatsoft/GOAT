@@ -525,6 +525,7 @@ public final class ShepherdModel {
         var repairProgress = FileRepairProgressTracker()
         var repetitionGuard = RepetitionGuard()
         var toolRound = 0
+        var forcedOverflowCompaction = false
         shepherd: while true {
             guard owns(turnID: turnID, sessionID: session.id), !Task.isCancelled else { break }
             await drainLeadSave()
@@ -653,6 +654,29 @@ public final class ShepherdModel {
                     assistant.markRenderChanged()
                     await env.persist(assistant, in: session)
                     break shepherd
+                }
+                if !forcedOverflowCompaction,
+                    (error as? EngineError)?.classification == .contextOverflow
+                {
+                    forcedOverflowCompaction = true
+                    assistant.generationLifecycle = GenerationProvenanceRecord.Lifecycle.failed.rawValue
+                    assistant.generationFailureCategory =
+                        GenerationProvenanceRecord.FailureCategory.contextOverflow.rawValue
+                    assistant.error =
+                        "The engine reported the prompt exceeded its context window. Compacting and retrying once."
+                    assistant.complete = true
+                    assistant.markRenderChanged()
+                    _ = await env.persist(assistant, in: session)
+                    activity.log(.warn, "engine: context overflow, forcing compaction and one retry")
+                    await runAutoCompaction(
+                        in: session, turnID: turnID, model: model, context: context, env: env,
+                        memory: memory)
+                    guard owns(turnID: turnID, sessionID: session.id), !Task.isCancelled else {
+                        break shepherd
+                    }
+                    // The failed row shifted when the compaction row was inserted before the send.
+                    _ = await env.persist(assistant, in: session)
+                    continue shepherd
                 }
                 assistant.generationLifecycle = GenerationProvenanceRecord.Lifecycle.failed.rawValue
                 assistant.generationFailureCategory = Self.failureCategory(for: error).rawValue
@@ -985,6 +1009,7 @@ public final class ShepherdModel {
         guard let engineError = error as? EngineError else { return .unknown }
         switch engineError.classification {
         case .modelUnavailable, .unsupportedModelArchitecture: return .unavailableModel
+        case .contextOverflow: return .contextOverflow
         case .authentication, .connection, .malformedResponse, .unknown, .none: return .engine
         }
     }
@@ -1464,6 +1489,8 @@ public final class ShepherdModel {
                 },
                 excludeFromPrompt: message.generationFailureCategory
                     == GenerationProvenanceRecord.FailureCategory.toolFormatRecovery.rawValue
+                    || message.generationFailureCategory
+                        == GenerationProvenanceRecord.FailureCategory.contextOverflow.rawValue
                     || (lastCompactionIndex.map { index < $0 } ?? false),
                 failureSuffix: Self.promptFailureSuffix(for: message))
         }

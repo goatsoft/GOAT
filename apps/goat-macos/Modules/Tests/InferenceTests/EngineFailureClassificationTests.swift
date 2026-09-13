@@ -18,4 +18,19 @@ struct EngineFailureClassificationTests {
         #expect(EngineError.http(401).classification == .authentication)
         #expect(EngineError.http(404).classification == .modelUnavailable)
     }
+
+    @Test func classifiesContextOverflowFromTheEngineMessage() {
+        #expect(
+            EngineError.httpDetail(
+                400, "This model's maximum context length is 8192 tokens", retryAfter: nil
+            )
+            .classification == .contextOverflow)
+        #expect(
+            EngineError.httpDetail(413, "The prompt is too long for this model", retryAfter: nil)
+                .classification == .contextOverflow)
+        // A different 400 stays a malformed-request classification, not an overflow.
+        #expect(
+            EngineError.httpDetail(400, "invalid 'messages': missing role", retryAfter: nil)
+                .classification == .malformedResponse)
+    }
 }

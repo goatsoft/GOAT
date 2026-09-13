@@ -26,6 +26,7 @@ public struct GenerationProvenanceRecord: Codable, Equatable, Sendable {
         case cancelled
         case unavailableModel
         case toolFormatRecovery
+        case contextOverflow
         case unknown
     }
 

@@ -23,13 +23,16 @@ private actor FakeEngine: InferenceEngine {
     private(set) var requests: [GenerationRequest] = []
     private let onRequest: (@MainActor @Sendable (Int) -> Void)?
     private let failingRequest: Int?
+    private let failingError: any Error
 
     init(
         script: [[GenerationEvent]], failingRequest: Int? = nil,
+        failingError: any Error = EngineError.http(503),
         onRequest: (@MainActor @Sendable (Int) -> Void)? = nil
     ) {
         self.script = script
         self.failingRequest = failingRequest
+        self.failingError = failingError
         self.onRequest = onRequest
     }
 
@@ -39,7 +42,7 @@ private actor FakeEngine: InferenceEngine {
         requests.append(request)
         if let onRequest { await onRequest(requests.count) }
         if requests.count == failingRequest {
-            return AsyncThrowingStream { $0.finish(throwing: EngineError.http(503)) }
+            return AsyncThrowingStream { $0.finish(throwing: failingError) }
         }
         let events =
             script.isEmpty
@@ -2841,4 +2844,38 @@ private actor HangingEngine: InferenceEngine {
     #expect(session.messages.count == 4)
     #expect(session.messages.last?.text == "REPLY")
     _ = sameEnv
+}
+
+@Test @MainActor func contextOverflowForcesOneCompactionAndRetriesTheSend() async throws {
+    let env = FakeEnv()
+    env.autoCompactEnabled = false  // overflow forces compaction regardless of the setting
+    let engine = FakeEngine(
+        script: [
+            [.token("SUMMARY"), .done(GenStats(ttft: nil, tokens: 1, duration: 0.01))],
+            [.token("REPLY"), .done(GenStats(ttft: nil, tokens: 1, duration: 0.01))],
+        ],
+        failingRequest: 1,
+        failingError: EngineError.httpDetail(400, "maximum context length exceeded", retryAfter: nil))
+    let shepherd = ShepherdModel(engine: engine, tools: FakeToolSource(), activity: ActivityLog())
+    shepherd.env = env
+    let session = ChatSession(effort: .trot, modelID: "test-model")
+    let oldUser = ChatMessage(role: .user)
+    oldUser.text = "old work"
+    oldUser.complete = true
+    let oldAnswer = ChatMessage(role: .assistant)
+    oldAnswer.text = "old done"
+    oldAnswer.complete = true
+    let newUser = ChatMessage(role: .user)
+    newUser.text = "new question"
+    newUser.complete = true
+    session.messages = [oldUser, oldAnswer, newUser]
+
+    #expect(shepherd.run(in: session))
+    await shepherd.streamTask?.value
+
+    // The overflow forced a compaction, and the retry produced a normal reply.
+    #expect(session.messages.contains { $0.kind == .compaction && $0.text == "SUMMARY" })
+    #expect(session.messages.last?.role == .assistant)
+    #expect(session.messages.last?.text == "REPLY")
+    _ = env
 }
