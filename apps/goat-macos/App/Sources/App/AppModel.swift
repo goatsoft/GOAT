@@ -339,6 +339,23 @@ final class AppModel {
     var automaticChatTitles: Bool {
         didSet { UserDefaults.standard.set(automaticChatTitles, forKey: "chat.automaticTitles") }
     }
+    /// ADR-0087. Whether auto-compaction runs at the threshold before a send. Overrides the
+    /// ShepherdEnvironment default (true).
+    var autoCompactEnabled: Bool {
+        didSet { UserDefaults.standard.set(autoCompactEnabled, forKey: "chat.autoCompact") }
+    }
+    /// ADR-0087. Compaction threshold as a percent of the input budget, clamped to 50...95.
+    /// The shared manual/automatic gate; overrides the ShepherdEnvironment default (80).
+    var compactAtPercent: Int {
+        didSet {
+            let clamped = min(95, max(50, compactAtPercent))
+            if compactAtPercent != clamped {
+                compactAtPercent = clamped
+                return
+            }
+            UserDefaults.standard.set(compactAtPercent, forKey: "chat.compactAtPercent")
+        }
+    }
     var defaultEffort: Effort {
         didSet { UserDefaults.standard.set(defaultEffort.rawValue, forKey: "chat.defaultEffort") }
     }
@@ -366,6 +383,8 @@ final class AppModel {
         windowTransparency = CaprineBackground.defaultTransparency
         animationsEnabled = true
         automaticChatTitles = true
+        autoCompactEnabled = true
+        compactAtPercent = 80
         defaultEffort = .trot
         settingsAlwaysOnTop = true
         UserDefaults.standard.set("grid", forKey: "pens.overview.layout")
@@ -422,6 +441,8 @@ final class AppModel {
         windowTransparency =
             d.object(forKey: "appearance.transparency") as? Double ?? CaprineBackground.defaultTransparency
         automaticChatTitles = d.object(forKey: "chat.automaticTitles") as? Bool ?? true
+        autoCompactEnabled = d.object(forKey: "chat.autoCompact") as? Bool ?? true
+        compactAtPercent = min(95, max(50, (d.object(forKey: "chat.compactAtPercent") as? Int) ?? 80))
         defaultEffort = Effort(rawValue: d.string(forKey: "chat.defaultEffort") ?? "") ?? .trot
         animationsEnabled = d.object(forKey: "appearance.animations") as? Bool ?? true
         previewsOffGrid = d.object(forKey: "paddock.offGrid") as? Bool ?? false

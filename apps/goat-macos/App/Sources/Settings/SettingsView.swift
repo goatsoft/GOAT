@@ -230,6 +230,37 @@ struct GeneralSettings: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
+            Section("Conversation context") {
+                Toggle(isOn: $model.autoCompactEnabled) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Auto-compact")
+                        Text("Summarise older exchanges before the next send when the context fills up.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    LabeledContent("Compact at") {
+                        Text("\(model.compactAtPercent)%").monospacedDigit()
+                    }
+                    Slider(
+                        value: Binding(
+                            get: { Double(model.compactAtPercent) },
+                            set: { model.compactAtPercent = Int($0.rounded()) }
+                        ),
+                        in: 50...95, step: 5
+                    ) {
+                        Text("Compact at")
+                    } minimumValueLabel: {
+                        Text("50%").font(.caption2).foregroundStyle(.secondary)
+                    } maximumValueLabel: {
+                        Text("95%").font(.caption2).foregroundStyle(.secondary)
+                    }
+                    Text(
+                        "Percentage of the available input budget. The manual /compact command uses this threshold too."
+                    )
+                    .font(.caption).foregroundStyle(.secondary)
+                }
+            }
             Section("Data and installation") {
                 HStack(alignment: .center, spacing: 20) {
                     VStack(alignment: .leading, spacing: 4) {
