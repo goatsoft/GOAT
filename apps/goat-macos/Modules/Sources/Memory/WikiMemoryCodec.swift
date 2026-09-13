@@ -15,7 +15,7 @@ enum WikiMemoryCodec {
         let scalars = Array(name.unicodeScalars)
         guard scalars.first.map(isLowercaseLetterOrDigit) == true,
             scalars.last.map(isLowercaseLetterOrDigit) == true,
-            scalars.allSatisfy({ isLowercaseLetterOrDigit($0) || $0.value == 45 })
+            scalars.allSatisfy({ isLowercaseLetterOrDigit($0) || $0.value == 45 || $0.value == 95 })
         else {
             throw MemoryStoreError.invalidName(name)
         }

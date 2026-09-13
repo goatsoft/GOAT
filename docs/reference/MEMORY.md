@@ -23,6 +23,11 @@ Select a Pen and use the tabs below the chat composer:
 Markdown and LLM Wiki memories remain on your Mac. Open Memory Folder opens the Pen's files.
 LLM Wiki also provides Map and Connections views of its linked pages and sources.
 
+Local note names accept 1 to 64 lowercase ASCII letters, digits, hyphens and underscores,
+starting and ending with a letter or digit. Both `aurora-product` and `aurora_product` are valid
+and remain distinct names. `memory` is reserved. Paths, spaces and traversal are rejected.
+Use the exact saved name in wiki links, such as `[[aurora_product]]`.
+
 ## Hindsight
 
 The Memory tab identifies the Pen's bank and offers **Records** and **Map**. Hindsight records are

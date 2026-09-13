@@ -179,7 +179,7 @@ public enum MemoryStoreError: LocalizedError, Sendable, Equatable {
     public var errorDescription: String? {
         switch self {
         case .invalidName(let name):
-            "Invalid memory note name \"\(name)\". Use 1 to 64 lowercase letters, numbers, or hyphens."
+            "Invalid memory note name \"\(name)\". Use 1 to 64 lowercase letters, numbers, hyphens, or underscores; start and end with a letter or number. The name memory is reserved."
         case .invalidEntryID(let id):
             "Invalid memory entry identifier \"\(id)\"."
         case .invalidNote(let path, let reason):
