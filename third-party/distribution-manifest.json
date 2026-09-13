@@ -1903,7 +1903,7 @@
     },
     {
       "path": "apps/goat-macos/Modules/Package.swift",
-      "sha256": "23d5707d2480725a806ac89e87f623fe2c4693e57e0438c07b0f96093d559b9e"
+      "sha256": "a7eb8bd82a91fc5e9510690382fc75e918949dac9cd65f811fdbd1d0fb62c0f0"
     },
     {
       "path": "apps/goat-macos/project.yml",
