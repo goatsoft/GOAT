@@ -255,6 +255,7 @@ struct GeneralSettings: View {
                     } maximumValueLabel: {
                         Text("95%").font(.caption2).foregroundStyle(.secondary)
                     }
+                    .labelsHidden()
                     Text(
                         "Percentage of the available input budget. The manual /compact command uses this threshold too."
                     )
