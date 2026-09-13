@@ -229,6 +229,7 @@ struct MessageView: View {
                 showingResponseDetails = true
             }
             .buttonStyle(.plain)
+            .labelStyle(.iconOnly)
             .font(.caption)
             .foregroundStyle(.secondary)
             .help("Response Details")
