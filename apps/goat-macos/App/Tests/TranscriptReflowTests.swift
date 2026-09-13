@@ -123,22 +123,20 @@ import Testing
     window.isReleasedWhenClosed = false
     let host = NSHostingView(rootView: ChatTranscriptView(session: session).environment(model))
     window.contentView = host
+    // Exercise a displayed window: native scroll settling and display-cycle layout
+    // are suspended differently for a hidden hosting view.
+    window.orderFront(nil)
     defer {
         window.contentView = nil
         window.close()
     }
     try await Task.sleep(for: .milliseconds(500))
     let scroll = try #require(reflowScroll(host))
-    for (phase, delta) in [(NSEvent.Phase.began, 450), (.ended, 0)] {
-        let cgEvent = try #require(
-            CGEvent(
-                scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: Int32(delta), wheel2: 0, wheel3: 0))
-        cgEvent.flags = []
-        cgEvent.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(phase.rawValue))
-        let event = try #require(NSEvent(cgEvent: cgEvent))
-        scroll.scrollWheel(with: event)
-        try await Task.sleep(for: .milliseconds(150))
-    }
+    // Establish a reader who has scrolled up, then wait for native scroll to settle rather than a
+    // fixed delay -- the began->ended wheel phase can land past an estimated end and bounce back
+    // under load (matches transcriptRetainsVisibleContentAcrossFontAndWidthReflow).
+    try await scrollWheel(scroll, delta: 450)
+    try await waitForScrollToSettle(scroll)
     let document = try #require(scroll.documentView)
     #expect(document.bounds.maxY - document.visibleRect.maxY > 150)
     active.text += String(repeating: "New streamed content.\n", count: 30)
@@ -161,6 +159,7 @@ import Testing
     model.chatFontSize = 24
     window.setContentSize(NSSize(width: 500, height: 450))
     try await Task.sleep(for: .milliseconds(300))
+    try await waitForScrollToSettle(scroll)
     #expect(
         document.bounds.maxY - document.visibleRect.maxY > 150,
         "Font and width reflow must preserve reading away from the bottom")
