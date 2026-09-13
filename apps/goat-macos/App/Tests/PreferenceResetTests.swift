@@ -69,7 +69,7 @@ import Testing
         "appearance.theme", "appearance.chatFont", "appearance.codeFont", "appearance.fontSize",
         "appearance.codeFontSize", "appearance.transparency", "appearance.animations",
         "chat.automaticTitles", "chat.defaultEffort", "settings.alwaysOnTop", "pens.overview.layout",
-        "experience.1337.enabled", "appIcon",
+        "chat.autoCompact", "chat.compactAtPercent", "experience.1337.enabled", "appIcon",
     ]
     let after = defaults.persistentDomain(forName: domain) ?? [:]
     #expect(
