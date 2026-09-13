@@ -1,5 +1,6 @@
 import AppKit
 import Bleet
+import Caprine
 import CoreGraphics
 import Herd
 import Inference
@@ -12,6 +13,8 @@ struct MessageView: View {
     let isLast: Bool
     let projectID: UUID?
     var compactActivity = false
+    var joinsPreviousTools = false
+    var joinsNextTools = false
     var activeToolID: String? = nil
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
@@ -28,12 +31,24 @@ struct MessageView: View {
             .sheet(isPresented: $showingResponseDetails) {
                 ResponseDetailsView(message: message)
             }
+            .contextMenu {
+                if message.role == .assistant && ResponseDetailsView.hasUsefulDetails(message) {
+                    Button("Response Details…", systemImage: "info.circle") {
+                        showingResponseDetails = true
+                    }
+                }
+            }
     }
 
     @ViewBuilder private var content: some View {
         switch message.role {
         case .user: userBubble
-        case .assistant: assistantBlock
+        case .assistant:
+            assistantBlock
+                .frame(
+                    height: TranscriptActivity.isEmpty(message) ? 0 : nil
+                )
+                .clipped()
         case .system, .tool: EmptyView()
         }
     }
@@ -110,21 +125,22 @@ struct MessageView: View {
     /// The speech bubble (wave dots inside) rides the avatar until visible words arrive -
     /// through the whole thinking phase. The avatar wears the thinking pose meanwhile.
     private var showThinkingBubble: Bool {
-        model.presentation.isEnabled && !message.complete && message.text.isEmpty
+        model.presentation.isEnabled && !message.complete && message.lastStreamActivity == .reasoning
     }
 
     private var assistantBlock: some View {
         HStack(alignment: .top, spacing: 10) {
             if !compactActivity {
                 Group {
-                    if model.presentation.isEnabled {
+                    if model.presentation.isEnabled && !TranscriptActivity.isToolOnly(message) {
                         GoatieView(pose: avatarPose, size: 60)
                     } else {
                         // Keep the smaller mark centred beside the label and duration without
                         // shrinking either line or retaining the previous wide avatar column.
                         FigureheadView(size: 28, fillsFrame: true)
+                            .frame(width: model.presentation.isEnabled ? 60 : 28)
                             .frame(height: 17)
-                            .frame(height: message.complete ? 17 : 34)
+                            .frame(height: message.complete || TranscriptActivity.isToolOnly(message) ? 17 : 34)
                     }
                 }
                 .padding(.top, 1)
@@ -143,22 +159,14 @@ struct MessageView: View {
                     }
                 }
             }
-            VStack(alignment: .leading, spacing: 4) {
-                if !message.complete || !message.thinking.isEmpty {
-                    Group {
-                        if !message.thinking.isEmpty {
-                            ThinkingDisclosure(message: message)
-                        } else {
-                            AssistantStatusRow(startedAt: message.complete ? nil : message.createdAt) {
-                                if message.text.isEmpty {
-                                    PrefillStatusLabel(startedAt: message.createdAt)
-                                }
-                            }
-                        }
-                    }
-                    .padding(.top, model.presentation.isEnabled ? 12 : 0)
+            if compactActivity {
+                Color.clear.frame(width: model.presentation.isEnabled ? 60 : 28, height: 1)
+            }
+            VStack(alignment: .leading, spacing: Caprine.Activity.spacing) {
+                if TranscriptText.hasContent(message.thinking) {
+                    ThinkingDisclosure(message: message)
                 }
-                if message.complete && !message.text.isEmpty {
+                if message.complete && TranscriptText.hasContent(message.text) {
                     PreparedMarkdownView(
                         id: message.id,
                         source: message.text,
@@ -174,26 +182,28 @@ struct MessageView: View {
                             }
                             .textSelection(.enabled)
                     }
-                } else if !message.text.isEmpty {
+                } else if TranscriptText.hasContent(message.text) {
                     StreamingMarkdownView(message: message)
                 }
-                ForEach(message.toolEvents) { event in
-                    ToolCallCard(
-                        event: event, live: event.id == activeToolID || (!message.complete && !isSettled(event)))
+                if !message.toolEvents.isEmpty {
+                    ToolActivityGroup(
+                        messages: [message], activeAssistantID: activeToolID == nil ? nil : message.id,
+                        projectID: projectID,
+                        connectsAbove: joinsPreviousTools, connectsBelow: joinsNextTools)
                 }
                 if let error = message.error {
                     Text(error)
                         .font(.callout)
                         .foregroundStyle(.orange)
                 }
-                if message.complete {
+                if message.complete && message.toolEvents.isEmpty && !TranscriptActivity.isEmpty(message) {
                     footer
                         .opacity(hovering || memorySaveState == .saving ? 1 : 0)
                         .allowsHitTesting(hovering)
                 }
             }
             .alignmentGuide(.top) { _ in 0 }
-            if !compactActivity { Spacer(minLength: 40) }
+            Spacer(minLength: 40)
         }
     }
 
@@ -225,14 +235,16 @@ struct MessageView: View {
             CopyButton(text: message.text.isEmpty ? (message.error ?? "") : message.text)
                 .labelStyle(.iconOnly)
                 .font(.caption)
-            Button("Response Details…", systemImage: "info.circle") {
-                showingResponseDetails = true
+            if ResponseDetailsView.hasUsefulDetails(message) {
+                Button("Response Details…", systemImage: "info.circle") {
+                    showingResponseDetails = true
+                }
+                .buttonStyle(.plain)
+                .labelStyle(.iconOnly)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .help("Response Details")
             }
-            .buttonStyle(.plain)
-            .labelStyle(.iconOnly)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .help("Response Details")
             rememberButton
             FeedbackButtons(message: message)
         }
@@ -399,6 +411,7 @@ struct ToolCallCard: View {
 /// MCP tools retain a compact technical transcript. Their disclosure keeps the raw request and
 /// response reachable without turning every completed call into a large card in the conversation.
 private struct ExternalToolCallCard: View {
+    @Environment(\.transcriptInspection) private var inspection
     let event: ToolEventSnapshot
     let live: Bool
     @State private var expanded = false
@@ -406,6 +419,7 @@ private struct ExternalToolCallCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Button {
+                inspection.perform()
                 expanded.toggle()
             } label: {
                 HStack(spacing: 7) {
@@ -418,6 +432,13 @@ private struct ExternalToolCallCard: View {
                     Image(systemName: expanded ? "chevron.up" : "chevron.down")
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(.tertiary)
+                    if event.denied {
+                        Text("Denied").foregroundStyle(.secondary)
+                    } else if event.isError {
+                        Text("Failed").foregroundStyle(.secondary)
+                    } else if !live && event.result == nil {
+                        Text("No result").foregroundStyle(.secondary)
+                    }
                     Spacer(minLength: 0)
                 }
                 .contentShape(Rectangle())
@@ -425,6 +446,7 @@ private struct ExternalToolCallCard: View {
             }
             .buttonStyle(.plain)
             .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+            .accessibilityIdentifier("tool-event-" + event.id)
             .help("\(event.server) · \(event.tool)")
             if expanded {
                 ToolCallDetails(event: event)
@@ -442,73 +464,58 @@ private struct MemoryToolCallCard: View {
     @Environment(AppModel.self) private var model
     @State private var detailsPresented = false
 
-    private var action: String {
-        switch event.tool {
-        case "memory_list": "Browse saved memories"
-        case "memory_read": "Read a saved memory"
-        case "memory_write": "Save a memory"
-        case "memory_capture_session": "Save this session"
-        case "memory_handoff": event.result ?? "Save the handover"
-        case "memory_delete": "Remove a memory"
-        case "wiki_ingest_source": "Capture a source"
-        case "wiki_list_sources": "Browse source captures"
-        case "wiki_read_source": "Read a source capture"
-        case "wiki_query": "Search the knowledge pages"
-        case "wiki_lint": "Check the knowledge pages"
-        default: event.tool.replacingOccurrences(of: "_", with: " ").capitalized
-        }
-    }
+    @Environment(\.transcriptInspection) private var inspection
 
+    private var action: String { ToolActivityLabel.memoryAction(event) }
     private var hasDetails: Bool {
         ToolCallPayload.containsValue(event.arguments) || ToolCallPayload.containsValue(event.result)
     }
 
     var body: some View {
-        if hasDetails {
-            Button {
-                detailsPresented.toggle()
-            } label: {
-                header
-            }
-            .buttonStyle(.plain)
-            .contentShape(Rectangle())
-            // The button fills the transcript width for easy clicking; pin the popover to its
-            // leading edge so it opens under Memory instead of in the middle of the chat.
-            .popover(
-                isPresented: $detailsPresented,
-                attachmentAnchor: .point(.bottomLeading),
-                arrowEdge: .bottom
-            ) {
-                MemoryOperationDetails(event: event, action: action)
-            }
-        } else {
-            header
-        }
-    }
-
-    private var header: some View {
-        HStack(spacing: 9) {
+        HStack(spacing: Caprine.Activity.spacing) {
             Image(systemName: "brain.head.profile")
-                .font(.system(size: 13, weight: .semibold))
+                .font(Caprine.Activity.font)
                 .foregroundStyle(model.theme.tokens.tint)
-            Text("Memory")
-                .font(.caption.weight(.semibold))
-            Text(action)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            if hasDetails {
+                Button {
+                    inspection.perform()
+                    detailsPresented.toggle()
+                } label: {
+                    label
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Memory · " + action)
+                .help("Show memory operation details")
+                .popover(
+                    isPresented: $detailsPresented,
+                    attachmentAnchor: .point(.bottomLeading), arrowEdge: .bottom
+                ) {
+                    MemoryOperationDetails(event: event, action: action)
+                }
+            } else {
+                label
+            }
             if live {
                 GoatLoadingIndicator().controlSize(.mini)
             } else if event.isError || event.denied {
                 Image(systemName: event.denied ? "hand.raised.fill" : "exclamationmark.triangle.fill")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(Caprine.Activity.font)
                     .foregroundStyle(event.isError ? .orange : .secondary)
+                    .accessibilityLabel(event.denied ? "Denied" : "Failed")
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 3)
-        .padding(.vertical, 5)
-        .contentShape(Rectangle())
+        .padding(.vertical, Caprine.Activity.rowPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var label: some View {
+        HStack(spacing: Caprine.Activity.spacing) {
+            Text("Memory").font(Caprine.Activity.font.weight(.semibold))
+            Text(action).font(Caprine.Activity.font).foregroundStyle(.secondary)
+                .lineLimit(1).truncationMode(.middle)
+        }
+        .contentShape(Rectangle())
     }
 }
 
@@ -517,11 +524,17 @@ private struct MemoryToolCallCard: View {
 private struct MemoryOperationDetails: View {
     let event: ToolEventSnapshot
     let action: String
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label(action, systemImage: "brain.head.profile")
-                .font(.headline)
+            HStack(spacing: Caprine.Activity.spacing) {
+                Label(action, systemImage: "brain.head.profile").font(.headline)
+                Spacer(minLength: 0)
+                Button("Close", systemImage: "xmark") { dismiss() }
+                    .labelStyle(.iconOnly).buttonStyle(.plain)
+                    .keyboardShortcut(.cancelAction)
+            }
             ToolCallDetails(event: event)
         }
         .padding(16)
@@ -608,74 +621,72 @@ private enum ToolCallPayload {
     }
 }
 
-/// The rumination disclosure: while thinking streams it shows a live tail of the
-/// latest thought (collapsed) with rippling dots; once words arrive it settles into
-/// "Thought 12s ▸". Timing is session-local - reloaded chats show a plain "Thought".
+/// Reasoning stays visible when calls arrive. User choices survive stream updates.
 struct ThinkingDisclosure: View {
+    @Environment(\.transcriptInspection) private var inspection
     let message: ChatMessage
-    @State private var expanded = false
+    @State private var visible = true
+    @State private var showAll = false
     @Environment(AppModel.self) private var model
 
-    private var live: Bool { !message.complete && message.text.isEmpty }
-
-    private var title: String {
-        if live { return "Thinking…" }
-        if let s = message.thinkingSeconds { return "Thought \(s)s" }
-        return "Thought"
-    }
-
-    /// The freshest slice of rumination, one line, newest end kept.
-    private var tail: String {
-        ThinkingFenceParser.isFenceLine(message.thinkingTail) ? "" : message.thinkingTail
-    }
-
     var body: some View {
-        DisclosureGroup(isExpanded: $expanded) {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Model reasoning").font(.caption).foregroundStyle(model.theme.tokens.muted)
-                    Spacer()
-                    CopyButton(text: message.thinking)
-                }
-                ScrollView {
-                    if expanded {
-                        ThinkingContentView(source: message.thinking)
+        let preview = ReasoningPreview(message.thinking)
+        VStack(alignment: .leading, spacing: Caprine.Activity.spacing) {
+            HStack {
+                Button {
+                    inspection.perform()
+                    visible.toggle()
+                } label: {
+                    HStack(spacing: Caprine.Activity.spacing) {
+                        Image(systemName: visible ? "chevron.down" : "chevron.right")
+                        Text("Reasoning")
                     }
+                    .contentShape(Rectangle())
                 }
-                .frame(maxHeight: 280)
+                .buttonStyle(.plain)
+                .accessibilityValue(visible ? "Expanded" : "Collapsed")
+                if let seconds = message.thinkingSeconds {
+                    Text(AssistantStatusRow<EmptyView>.elapsedLabel(TimeInterval(seconds)))
+                        .monospacedDigit()
+                }
+                Spacer(minLength: 0)
+                CopyButton(text: message.thinking)
             }
-            .padding(12)
-            .background(model.theme.tokens.surface, in: RoundedRectangle(cornerRadius: 10))
-        } label: {
-            AssistantStatusRow(startedAt: message.complete ? nil : message.createdAt) {
-                HStack(spacing: 7) {
-                    ThinkingLabel(title: title, live: live)
-                        .layoutPriority(1)
-                    if live, !expanded, !tail.isEmpty {
-                        Text(tail)
-                            .font(.caption)
-                            .italic()
-                            .foregroundStyle(model.theme.tokens.muted)
-                            .lineLimit(1)
-                            .truncationMode(.head)
-                            .frame(maxWidth: 440, alignment: .leading)
+            .font(Caprine.Activity.font)
+            .foregroundStyle(model.theme.tokens.muted)
+            if visible {
+                ThinkingContentView(
+                    source: TranscriptText.removingBoundaryBlankLines(
+                        showAll ? message.thinking : preview.text)
+                )
+                .padding(.leading, Caprine.Activity.inset)
+                .overlay(alignment: .leading) {
+                    Rectangle().fill(model.theme.tokens.muted.opacity(0.35))
+                        .frame(width: Caprine.Activity.ruleWidth)
+                }
+                if preview.hasEarlierText {
+                    Button(showAll ? "Show recent reasoning" : "Show all reasoning") {
+                        inspection.perform()
+                        showAll.toggle()
                     }
+                    .buttonStyle(.plain)
+                    .font(Caprine.Activity.font)
+                    .foregroundStyle(model.theme.tokens.tint)
                 }
             }
         }
     }
 }
 
-/// Prefill status shown before the first token. Reads "Thinking…" briefly, then switches to
-/// "Waiting for the engine (prefill)" once prompt evaluation passes a short threshold, so a long
-/// prefill does not read as a freeze (ADR-0089). The elapsed clock comes from AssistantStatusRow.
-struct PrefillStatusLabel: View {
-    let startedAt: Date
-    static let prefillNoticeThreshold: TimeInterval = 10
-    var body: some View {
-        TimelineView(.periodic(from: startedAt, by: 1)) { context in
-            let waiting = context.date.timeIntervalSince(startedAt) >= Self.prefillNoticeThreshold
-            ThinkingLabel(title: waiting ? "Waiting for the engine (prefill)" : "Thinking…", live: true)
-        }
+/// A bounded live excerpt, with full content available without a nested scroll view.
+struct ReasoningPreview {
+    static let characterLimit = 1_400
+    let text: String
+    let hasEarlierText: Bool
+
+    init(_ source: String) {
+        let tail = source.suffix(Self.characterLimit + 1)
+        hasEarlierText = tail.count > Self.characterLimit
+        text = hasEarlierText ? String(tail.suffix(Self.characterLimit)) : source
     }
 }

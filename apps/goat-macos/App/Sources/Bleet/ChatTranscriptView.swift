@@ -1,6 +1,22 @@
 import Bleet
+import Caprine
 import Hoofprint
 import SwiftUI
+
+struct TranscriptInspectionAction: Sendable {
+    var perform: @MainActor @Sendable () -> Void = {}
+}
+
+private struct TranscriptInspectionKey: EnvironmentKey {
+    static let defaultValue = TranscriptInspectionAction()
+}
+
+extension EnvironmentValues {
+    var transcriptInspection: TranscriptInspectionAction {
+        get { self[TranscriptInspectionKey.self] }
+        set { self[TranscriptInspectionKey.self] = newValue }
+    }
+}
 
 /// Its owner keys this view by chat ID. A new chat gets fresh native scroll geometry,
 /// measured row layout and follow tasks instead of inheriting another transcript's viewport.
@@ -40,7 +56,7 @@ struct ChatTranscriptView: View {
         } else {
             ScrollViewReader { proxy in
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 20) {
+                    VStack(alignment: .leading, spacing: 0) {
                         if messageRange.lowerBound > 0 {
                             Button("Earlier messages", systemImage: "chevron.up") {
                                 autoFollow = false
@@ -49,23 +65,27 @@ struct ChatTranscriptView: View {
                             .buttonStyle(SecondaryChipButtonStyle())
                         }
                         ForEach(TranscriptActivity.rows(session.messages[messageRange])) { row in
-                            // Group identity is the first message, stable as further tool rounds arrive.
+                            // Each message retains its identity and ancestry as tool events arrive.
                             // Keep projection inside the existing bounded, fully measured window.
                             VStack(alignment: .leading, spacing: 0) {
-                                if row.isActivity {
-                                    ToolActivityGroup(
-                                        messages: row.messages,
-                                        activeAssistantID: session.isStreaming
-                                            ? session.messages.last(where: { $0.role == .assistant })?.id : nil,
-                                        projectID: session.projectID
-                                    )
-                                } else if let message = row.messages.first {
+                                if let message = row.messages.first {
                                     MessageView(
                                         message: message, isLast: message.id == session.messages.last?.id,
-                                        projectID: session.projectID)
+                                        projectID: session.projectID, compactActivity: row.isContinuation,
+                                        joinsPreviousTools: row.joinsPreviousTools,
+                                        joinsNextTools: row.joinsNextTools,
+                                        activeToolID: session.isStreaming
+                                            && message.id == session.messages.last(where: { $0.role == .assistant })?.id
+                                            ? TranscriptActivity.summary([message], activeAssistantID: message.id)
+                                                .current?.id : nil)
                                 }
                             }
                             .fixedSize(horizontal: false, vertical: true)
+                            .padding(
+                                .top,
+                                row.joinsPreviousTools || row.messages.allSatisfy(TranscriptActivity.isEmpty)
+                                    ? 0 : Caprine.Activity.messageSpacing
+                            )
                             .id(row.id)
                         }
                         if messageRange.upperBound < session.messages.count {
@@ -83,6 +103,10 @@ struct ChatTranscriptView: View {
                             }
                             .buttonStyle(SecondaryChipButtonStyle())
                         }
+                        if session.isStreaming && messageRange.upperBound == session.messages.count {
+                            AgentProgressView(session: session)
+                                .padding(.top, Caprine.Activity.spacing)
+                        }
                         // End sentinel the follower scrolls to as the transcript grows.
                         Color.clear
                             .frame(height: 1)
@@ -95,6 +119,13 @@ struct ChatTranscriptView: View {
                     .padding(.vertical, 16)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .environment(
+                    \.transcriptInspection,
+                    TranscriptInspectionAction {
+                        autoFollow = false
+                        cancelPendingFollowScroll()
+                    }
+                )
                 .scrollPosition(id: $visibleMessageID)
                 .defaultScrollAnchor(.bottom, for: .initialOffset)
                 .defaultScrollAnchor(.bottom, for: .alignment)

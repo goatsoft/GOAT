@@ -5,7 +5,12 @@ import SwiftUI
 /// pasture. See docs/DESIGN.md. Views take colors from here, never hardcoded.
 public struct Caprine: Sendable {
     public enum Activity {
+        public static let ruleWidth: CGFloat = 2
         public static let spacing: CGFloat = 8
+        public static let rowPadding: CGFloat = 4
+        public static let messageSpacing: CGFloat = 20
+        public static let treeInset: CGFloat = 16
+        public static let branchHeight: CGFloat = 13
         public static let inset: CGFloat = 12
         public static let radius: CGFloat = 10
         public static let font: Font = .caption

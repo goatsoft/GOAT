@@ -45,6 +45,7 @@ struct ModelDetailView: View {
                     if let modelRef {
                         capabilitiesSection(modelRef)
                         metadataSection(snapshot: snapshot, model: modelRef)
+                        ModelSamplingSection(identity: identity, modelRef: modelRef)
                     }
                     diagnosticsSection
                 }
@@ -340,7 +341,7 @@ struct DetailRow<Value: View>: View {
     }
 }
 
-private struct SectionCard<Content: View>: View {
+struct SectionCard<Content: View>: View {
     let title: String
     let systemImage: String
     @ViewBuilder let content: Content

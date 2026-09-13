@@ -11,7 +11,12 @@ enum ModelDiagnosticReportBuilder {
             "Request style: \(provenance.resolvedRequestStyle)",
             "Resolution source: \(provenance.resolutionSource)",
             "Effort: \(provenance.selectedEffort)",
-            String(format: "Temperature: %.3f", provenance.actualTemperature),
+            "Temperature: \(provenance.actualTemperature.map { String(format: "%.3f", $0) } ?? "Engine default")",
+            "Sampling source: \(provenance.samplingSource ?? "Unknown")",
+            "Family rule: \(provenance.familyRuleID ?? "None")",
+            "Requested sampling values: \(provenance.samplingValues?.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: ", ") ?? "Unknown")",
+            "Omitted parameters: \(provenance.omittedSamplingParameters?.joined(separator: ", ") ?? "None recorded")",
+            "Reasoning instruction: \(provenance.reasoningInstruction ?? "Engine default or native field")",
             "Output token cap: \(provenance.effectiveOutputTokenCap)",
             "Native reasoning value: \(provenance.nativeReasoningValue ?? "Unknown")",
             "Reasoning history replayed: \(provenance.reasoningHistoryReplayed ? "Yes" : "No")",
@@ -22,6 +27,7 @@ enum ModelDiagnosticReportBuilder {
         if let category = provenance.failureCategory {
             lines.append("Failure category: \(category.rawValue)")
         }
+        lines.removeAll { $0.hasSuffix(": Unknown") || $0.hasSuffix(": None") }
         return lines.joined(separator: "\n")
     }
 }
