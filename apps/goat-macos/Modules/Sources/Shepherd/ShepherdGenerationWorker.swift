@@ -14,6 +14,12 @@ struct ShepherdPromptSnapshot: Sendable {
         let error: String?
         let attachmentPaths: [String]
         let toolEvents: [ToolEvent]
+        /// True only for tool-format-recovery rows, which stay excluded from prompt history
+        /// (ADR-0065, ADR-0089). Other failed or stopped rows are kept.
+        var excludeFromPrompt = false
+        /// A short model-visible suffix appended to a retained row's text for length and cancelled
+        /// terminations (ADR-0089), e.g. "[response truncated by the output limit]".
+        var failureSuffix: String?
     }
 
     struct ToolEvent: Sendable {
@@ -28,6 +34,10 @@ struct ShepherdPromptSnapshot: Sendable {
     let date: Date
     let project: ShepherdProjectContext?
     let extensionSections: [String]
+    /// Per-round steering (recovery hints, format repair). Never part of the system turn: it is
+    /// appended to the final turn of the newest exchange so the cached prefix stays byte-stable
+    /// (ADR-0085). Not persisted.
+    var hostNotes: [String] = []
     let messages: [Message]
 }
 
@@ -48,6 +58,29 @@ struct ShepherdStreamResult: Sendable, Equatable {
 /// Performs blocking prompt file reads, CPU-heavy prompt planning, and engine stream
 /// consumption away from the main actor. It publishes already-coalesced deltas at display
 /// cadence instead of making the UI executor process every token.
+/// The failure raised when the engine goes silent after output has started (ADR-0089).
+enum WorkerStall: LocalizedError {
+    case stalled
+    var errorDescription: String? {
+        "The engine stopped sending output, so the response was ended to avoid hanging. Send a message to continue."
+    }
+}
+
+/// Tracks the time since the last streamed event and whether any output has started, so the stall
+/// watchdog can distinguish a post-first-token stall from ordinary prefill silence (ADR-0089).
+private actor StallActivity {
+    private var last = Date()
+    private var contentSeen = false
+    func touch() { last = Date() }
+    func markContent() {
+        last = Date()
+        contentSeen = true
+    }
+    func status() -> (idleSeconds: TimeInterval, contentSeen: Bool) {
+        (Date().timeIntervalSince(last), contentSeen)
+    }
+}
+
 actor ShepherdGenerationWorker {
     typealias StreamPublisher =
         @MainActor @Sendable (ShepherdStreamUpdate) async -> Bool
@@ -55,15 +88,35 @@ actor ShepherdGenerationWorker {
     private let engine: any InferenceEngine
     private let promptBudgeter = PromptBudgeter()
     private let attachmentLoader: @Sendable (String) async -> Data?
+    /// Retry-before-first-token backoff (ADR-0089). Base doubles per attempt, jittered, then capped.
+    private let retryBaseDelaySeconds: Double
+    private let maxStreamRetries: Int
+    private let maxRetryDelaySeconds: Double = 30
+    /// Post-first-token stall threshold (ADR-0089): if no event arrives for this long after output
+    /// has started, the turn fails rather than hanging. Recorded in ENGINES.md. Injectable for tests.
+    private let postFirstTokenStallSeconds: TimeInterval
 
     init(
         engine: any InferenceEngine,
         attachmentLoader: @escaping @Sendable (String) async -> Data? = {
             AttachmentStore.load($0)
-        }
+        },
+        retryBaseDelaySeconds: Double = 1.0,
+        maxStreamRetries: Int = 3,
+        postFirstTokenStallSeconds: TimeInterval = 120
     ) {
         self.engine = engine
         self.attachmentLoader = attachmentLoader
+        self.retryBaseDelaySeconds = retryBaseDelaySeconds
+        self.maxStreamRetries = maxStreamRetries
+        self.postFirstTokenStallSeconds = postFirstTokenStallSeconds
+    }
+
+    /// Appends a model-visible failure suffix (length or cancelled) to a retained row's text
+    /// (ADR-0089). Empty text becomes the suffix alone, so a stop with no output still says so.
+    private static func appendingFailureSuffix(_ text: String, _ suffix: String?) -> String {
+        guard let suffix, !suffix.isEmpty else { return text }
+        return text.isEmpty ? suffix : text + "\n\n" + suffix
     }
 
     func turns(
@@ -95,7 +148,7 @@ actor ShepherdGenerationWorker {
                     For a creation request, inspect the relevant directory, then call pen_write_file for each needed file with its workspace-relative path and actual content, for example {"path":"src/main.ts","content":"export const ready = true;\\n"}. Missing parent directories are created automatically. Use pen_edit_file for existing files, then read back relevant changes. GOAT presents write approvals to the user; no shell, whitelist edit or advance setup file is needed.
                     For an existing file, read its current content and copy a small, exact, unique old_text fragment from that read. Never guess old_text or replace a whole file when a focused edit will do. new_text must differ from old_text; if the desired content is already present, skip the edit and report it as unchanged. An unchanged edit is not progress.
                     After a file-exists error, read and edit that file instead of retrying pen_write_file. After a missing or ambiguous match, reread and correct the fragment. Preserve completed work when a follow-up or Lead changes the request; do not recreate files that earlier tool results confirm were saved.
-                    Follow next_after when a directory listing is truncated. Read relevant line ranges with start_line and line_count, following next_start_line as needed. Read content preserves whitespace and newlines; line numbers and search snippets are not file content. Keep individual tool arguments below 64 KiB and prefer small edits to whole-file replacements.
+                    Follow next_after when a directory listing is truncated. pen_read_file returns a one-line header then the raw content; read relevant line ranges with start_line and line_count, following next_start_line as needed. line numbers (line_numbers true) and search snippets are not file content, so copy old_text from the content only. You may request several independent reads (pen_read_file, pen_list_files, pen_search, pen_glob) in one response; writes, edits and commands run one at a time. Keep individual tool arguments below 64 KiB and prefer small edits to whole-file replacements.
                     Keep planning brief and proceed with the requested file operations. Missing shell/build tools prevent running commands, not creating the scaffold. Report which files were actually saved and which checks could not run. Never claim an install or build succeeded without a tool result.
                     """
             }
@@ -107,14 +160,14 @@ actor ShepherdGenerationWorker {
                     Use the tool that matches the action. pen_write_file creates a NEW file; pen_edit_file changes an EXISTING file; pen_run_command runs an executable; pen_stop_command only cancels an already running job and never deletes a file. Writing empty content does not delete a file.
                     Command examples: install dependencies with {"command":"npm","args":["install"],"network":true}; build with {"command":"npm","args":["run","build"]}; remove a confirmed obsolete file with {"command":"rm","args":["--","path/to/obsolete-file.ts"]}. Use the actual path from the workspace listing, one literal argument per item, then verify the command result and list the directory. Do not use rm for a request to edit a file, and do not bypass a denied file action through a command.
                     Each command starts in the Pen root unless working_directory names a relative subdirectory. Do not run cd as a separate command. Pipes, redirects, variables and && are not expanded in args; an explicitly needed script uses {"command":"sh","args":["-c","npm run build && npm test"]}. Prefer separate direct commands so each exit code is visible.
-                    A returned job_id means the command started, not that it succeeded. Copy the exact returned job_id, never invent identifiers like job1. Poll pen_command_status with that job_id and a short wait until running is false and inspect exit_code and output. Fix actual failures, then rerun the relevant check. Stop unwanted jobs with pen_stop_command. Jobs belong to this turn and stop when you finish, so wait for required work before your final reply. Do not launch detached background services. Commands are non-interactive with isolated home/cache; account login and host configuration are outside the Pen's authority.
+                    pen_run_command runs to completion (or its timeout) and returns exit_code, timed_out and the combined output in one result; inspect exit_code and output directly and never claim success before exit_code 0. Output over 32 KiB keeps the head and tail with an omitted marker; for the full log, redirect to a workspace file (for example command > out.log 2>&1) and read it with pen_read_file. Set background true only for a long-running server or watcher: it returns a job_id you poll with pen_command_status (copy the exact id, never invent one) and stop with pen_stop_command. Jobs belong to this turn and stop when you finish, so wait for required work before your final reply. Do not launch detached background services. Commands are non-interactive with isolated home/cache; account login and host configuration are outside the Pen's authority.
                     """
             }
             if toolNames.contains("pen_search") {
                 system += """
 
 
-                    Use pen_search to find literal symbols or text across source files before opening many files. Narrow path, query or file_glob when results are truncated. Search omits generated and dependency directories; inspect a specific omitted directory directly when necessary. Read the matching file's relevant lines before editing.
+                    Use pen_search to find text across source files before opening many files (query is literal, or a regular expression with regex true); it returns a summary line then one path:line: snippet per match. Use pen_glob to list files by path pattern, newest first. Narrow path, query, pattern or file_glob when results are truncated. Both omit generated and dependency directories; inspect a specific omitted directory directly when necessary. Read the matching file's relevant lines before editing.
                     """
             }
             if !hasPenFiles || toolNames.contains(where: { $0.contains("__") }) {
@@ -132,7 +185,6 @@ actor ShepherdGenerationWorker {
                 No callable tools are available for this response. You can explain or draft code, but cannot inspect, create, edit, or execute project files. If the request requires those actions, explain that a connected file or shell tool must be enabled for this chat with a model and engine that support tool calling. Do not claim the work was executed.
                 """
         }
-        if toolsAvailable { system += Self.recoveryGuidance(snapshot: snapshot, toolNames: toolNames) }
         if let project = snapshot.project {
             system += """
 
@@ -174,7 +226,7 @@ actor ShepherdGenerationWorker {
         }
 
         var result = [ChatTurn(role: .system, text: system)]
-        for message in snapshot.messages where message.complete && message.error == nil {
+        for message in snapshot.messages where message.complete && !message.excludeFromPrompt {
             guard !Task.isCancelled else { return [] }
             switch message.role {
             case .user:
@@ -200,6 +252,7 @@ actor ShepherdGenerationWorker {
                 guard !text.isEmpty || !images.isEmpty else { continue }
                 result.append(ChatTurn(role: .user, text: text, images: images))
             case .assistant:
+                let assistantText = Self.appendingFailureSuffix(message.text, message.failureSuffix)
                 if !message.toolEvents.isEmpty {
                     let calls = message.toolEvents.map {
                         ToolCallEvent(
@@ -210,7 +263,7 @@ actor ShepherdGenerationWorker {
                     result.append(
                         ChatTurn(
                             role: .assistant,
-                            text: message.text,
+                            text: assistantText,
                             thinking: message.thinking,
                             toolCalls: calls))
                     for event in message.toolEvents {
@@ -220,15 +273,37 @@ actor ShepherdGenerationWorker {
                                 text: event.result ?? "(no result)",
                                 toolCallID: event.id))
                     }
-                } else if !message.text.isEmpty {
+                } else if !assistantText.isEmpty {
                     result.append(
-                        ChatTurn(role: .assistant, text: message.text, thinking: message.thinking))
+                        ChatTurn(role: .assistant, text: assistantText, thinking: message.thinking))
                 }
             default:
                 continue
             }
         }
+        var notes = snapshot.hostNotes
+        if toolsAvailable {
+            let recovery = Self.recoveryGuidance(snapshot: snapshot, toolNames: toolNames)
+            if !recovery.isEmpty { notes.append(recovery) }
+        }
+        Self.attachHostNotes(notes, to: &result)
         return result
+    }
+
+    /// Steering text rides on the last turn of the newest exchange: a tool result when the round
+    /// ended in tools, otherwise the newest user message. It never becomes its own turn, so the
+    /// exchange structure, role alternation and the cached prefix are unchanged (ADR-0085).
+    static func attachHostNotes(_ notes: [String], to turns: inout [ChatTurn]) {
+        let notes = notes.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        guard !notes.isEmpty, let index = turns.lastIndex(where: { $0.role != .system }) else { return }
+        let last = turns[index]
+        guard last.role == .user || last.role == .tool else { return }
+        let block = "[GOAT note]\n" + notes.joined(separator: "\n\n")
+        turns[index] = ChatTurn(
+            role: last.role,
+            text: last.text.isEmpty ? block : last.text + "\n\n" + block,
+            thinking: last.thinking, images: last.images,
+            toolCalls: last.toolCalls, toolCallID: last.toolCallID)
     }
 
     static func recoveryGuidance(snapshot: ShepherdPromptSnapshot, toolNames: Set<String>) -> String {
@@ -258,7 +333,7 @@ actor ShepherdGenerationWorker {
             default: break
             }
         }
-        return hints.isEmpty ? "" : "\n\nNext-action correction from GOAT:\n" + hints.joined(separator: "\n")
+        return hints.isEmpty ? "" : "Next-action correction from GOAT:\n" + hints.joined(separator: "\n")
     }
 
     func plan(
@@ -266,7 +341,9 @@ actor ShepherdGenerationWorker {
         model: ModelRef,
         effort: Effort,
         tools: [ToolSpec],
-        memory: [PromptMemoryEntry] = []
+        memory: [PromptMemoryEntry] = [],
+        compatibility: ResolvedModelCompatibility? = nil,
+        calibration: Double = 1.0
     ) async throws -> PromptPlan {
         try Task.checkCancellation()
         let request = GenerationRequest(
@@ -274,8 +351,9 @@ actor ShepherdGenerationWorker {
             turns: await turns(for: snapshot, toolsAvailable: !tools.isEmpty, toolNames: Set(tools.map(\.name))),
             effort: effort,
             tools: tools,
-            modelCapabilities: model.capabilities)
-        let plan = try promptBudgeter.plan(request, model: model, memory: memory)
+            modelCapabilities: model.capabilities,
+            compatibility: compatibility)
+        let plan = try promptBudgeter.plan(request, model: model, memory: memory, calibration: calibration)
         try Task.checkCancellation()
         return plan
     }
@@ -293,67 +371,183 @@ actor ShepherdGenerationWorker {
         _ request: GenerationRequest,
         publish: @escaping StreamPublisher
     ) async throws -> ShepherdStreamResult {
-        var textBuffer = ""
-        var thinkingBuffer = ""
-        var toolInputBytes = 0
-        var toolCalls: [ToolCallEvent] = []
-        var stats: GenStats?
-        var lastFlush = ContinuousClock.now
-        var lastCheckpoint = ContinuousClock.now
+        var attempt = 0
+        var emptyRetried = false
+        while true {
+            var textBuffer = ""
+            var thinkingBuffer = ""
+            var toolInputBytes = 0
+            var toolCalls: [ToolCallEvent] = []
+            var stats: GenStats?
+            var lastFlush = ContinuousClock.now
+            var lastCheckpoint = ContinuousClock.now
+            var receivedContentEvent = false
 
-        do {
-            for try await event in await engine.stream(request) {
-                try Task.checkCancellation()
-                switch event {
-                case .token(let text):
-                    textBuffer += text
-                case .thinking(let thinking):
-                    thinkingBuffer += thinking
-                case .toolInput(let bytes):
-                    toolInputBytes += max(0, bytes)
-                case .toolCalls(let calls):
-                    toolCalls = calls
-                case .done(let finalStats):
-                    stats = finalStats
+            do {
+                for try await event in stallGuardedStream(request) {
+                    try Task.checkCancellation()
+                    switch event {
+                    case .token(let text):
+                        textBuffer += text
+                        receivedContentEvent = true
+                    case .thinking(let thinking):
+                        thinkingBuffer += thinking
+                        receivedContentEvent = true
+                    case .toolInput(let bytes):
+                        toolInputBytes += max(0, bytes)
+                        receivedContentEvent = true
+                    case .toolCalls(let calls):
+                        toolCalls = calls
+                        receivedContentEvent = true
+                    case .done(let finalStats):
+                        stats = finalStats
+                    }
+
+                    let now = ContinuousClock.now
+                    let shouldCheckpoint = lastCheckpoint.duration(to: now) > .seconds(1)
+                    guard lastFlush.duration(to: now) > .milliseconds(33) || shouldCheckpoint else {
+                        continue
+                    }
+                    let update = ShepherdStreamUpdate(
+                        text: textBuffer,
+                        thinking: thinkingBuffer,
+                        shouldCheckpoint: shouldCheckpoint, toolInputBytes: toolInputBytes)
+                    textBuffer = ""
+                    thinkingBuffer = ""
+                    toolInputBytes = 0
+                    lastFlush = now
+                    if shouldCheckpoint { lastCheckpoint = now }
+                    guard await publish(update) else { throw CancellationError() }
                 }
-
-                let now = ContinuousClock.now
-                let shouldCheckpoint = lastCheckpoint.duration(to: now) > .seconds(1)
-                guard lastFlush.duration(to: now) > .milliseconds(33) || shouldCheckpoint else {
+            } catch {
+                // Retry a transient failure only while nothing has been shown yet (ADR-0089).
+                if !receivedContentEvent, Self.isRetryableBeforeFirstToken(error),
+                    attempt < maxStreamRetries
+                {
+                    attempt += 1
+                    try await Task.sleep(for: retryDelay(attempt: attempt, error: error))
+                    try Task.checkCancellation()
                     continue
                 }
-                let update = ShepherdStreamUpdate(
-                    text: textBuffer,
-                    thinking: thinkingBuffer,
-                    shouldCheckpoint: shouldCheckpoint, toolInputBytes: toolInputBytes)
-                textBuffer = ""
-                thinkingBuffer = ""
-                toolInputBytes = 0
-                lastFlush = now
-                if shouldCheckpoint { lastCheckpoint = now }
-                guard await publish(update) else { throw CancellationError() }
+                if !textBuffer.isEmpty || !thinkingBuffer.isEmpty || toolInputBytes > 0 {
+                    _ = await publish(
+                        ShepherdStreamUpdate(
+                            text: textBuffer,
+                            thinking: thinkingBuffer,
+                            shouldCheckpoint: false, toolInputBytes: toolInputBytes))
+                }
+                throw error
             }
-        } catch {
+
+            // A wholly empty initial response is retried once, silently (ADR-0089). Only round 0
+            // qualifies: retrying a tool-loop continuation could re-run tools with side effects, and
+            // an empty final after tool work is a legitimate end-of-turn, not a failure to recover.
+            if !receivedContentEvent, request.round == 0, !emptyRetried, !Task.isCancelled {
+                emptyRetried = true
+                continue
+            }
+
             if !textBuffer.isEmpty || !thinkingBuffer.isEmpty || toolInputBytes > 0 {
-                _ = await publish(
+                let accepted = await publish(
                     ShepherdStreamUpdate(
                         text: textBuffer,
                         thinking: thinkingBuffer,
                         shouldCheckpoint: false, toolInputBytes: toolInputBytes))
+                guard accepted else { throw CancellationError() }
             }
-            throw error
+            try Task.checkCancellation()
+            return ShepherdStreamResult(toolCalls: toolCalls, stats: stats)
         }
+    }
 
-        if !textBuffer.isEmpty || !thinkingBuffer.isEmpty || toolInputBytes > 0 {
-            let accepted = await publish(
-                ShepherdStreamUpdate(
-                    text: textBuffer,
-                    thinking: thinkingBuffer,
-                    shouldCheckpoint: false, toolInputBytes: toolInputBytes))
-            guard accepted else { throw CancellationError() }
+    /// Transient failures worth retrying before any output has been shown (ADR-0089): HTTP 408, 429,
+    /// 502, 503, 504 and connection-level resets. Context-overflow and other 4xx/5xx are not retried.
+    static func isRetryableBeforeFirstToken(_ error: Error) -> Bool {
+        if let engine = error as? EngineError {
+            switch engine {
+            case .http(let code), .httpDetail(let code, _, _):
+                return retryableStatusCodes.contains(code)
+            case .notConfigured:
+                return false
+            }
         }
-        try Task.checkCancellation()
-        return ShepherdStreamResult(toolCalls: toolCalls, stats: stats)
+        if let url = error as? URLError {
+            return retryableURLErrorCodes.contains(url.code)
+        }
+        return false
+    }
+
+    static let retryableStatusCodes: Set<Int> = [408, 429, 502, 503, 504]
+    static let retryableURLErrorCodes: Set<URLError.Code> = [
+        .networkConnectionLost, .timedOut, .cannotConnectToHost,
+    ]
+
+    /// A server-supplied `Retry-After`, when the engine surfaced one (ADR-0089).
+    static func retryAfter(from error: Error) -> TimeInterval? {
+        guard let engine = error as? EngineError else { return nil }
+        if case .httpDetail(_, _, let retryAfter) = engine { return retryAfter }
+        return nil
+    }
+
+    /// Exponential backoff with equal jitter, honouring `Retry-After` when present (ADR-0089).
+    private func retryDelay(attempt: Int, error: Error) -> Duration {
+        if let retryAfter = Self.retryAfter(from: error) {
+            return .seconds(min(max(retryAfter, 0), maxRetryDelaySeconds))
+        }
+        let exponential = retryBaseDelaySeconds * pow(2.0, Double(attempt - 1))
+        let capped = min(exponential, maxRetryDelaySeconds)
+        let jittered = capped / 2 + Double.random(in: 0...(capped / 2))
+        return .seconds(jittered)
+    }
+
+    /// Wraps the engine stream with a post-first-token stall watchdog (ADR-0089). Once output has
+    /// started, if no event arrives within `postFirstTokenStallSeconds` the wrapped stream finishes
+    /// with `WorkerStall.stalled` and the underlying request is cancelled, so the turn fails instead
+    /// of hanging. Prefill silence is not failed here; the engine idle timeout bounds that.
+    private func stallGuardedStream(_ request: GenerationRequest)
+        -> AsyncThrowingStream<GenerationEvent, Error>
+    {
+        let timeout = postFirstTokenStallSeconds
+        let engine = self.engine
+        return AsyncThrowingStream { continuation in
+            let activity = StallActivity()
+            let forwarder = Task {
+                do {
+                    for try await event in await engine.stream(request) {
+                        if case .done = event {
+                            await activity.touch()
+                        } else {
+                            await activity.markContent()
+                        }
+                        continuation.yield(event)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            let watchdog = Task {
+                let poll = Self.stallPollInterval(for: timeout)
+                while true {
+                    do { try await Task.sleep(for: poll) } catch { return }
+                    let status = await activity.status()
+                    if status.contentSeen, status.idleSeconds > timeout {
+                        continuation.finish(throwing: WorkerStall.stalled)
+                        return
+                    }
+                }
+            }
+            continuation.onTermination = { _ in
+                forwarder.cancel()
+                watchdog.cancel()
+            }
+        }
+    }
+
+    /// Poll cadence for the stall watchdog: once per second in production, and a fraction of a short
+    /// injected timeout so fixtures detect a stall quickly without busy-looping.
+    private static func stallPollInterval(for timeout: TimeInterval) -> Duration {
+        .seconds(min(1.0, max(0.01, timeout / 4)))
     }
 
     /// Auto-title generation has no live UI consumer, so collect its small response entirely on

@@ -6,6 +6,29 @@ private func penFileArguments(_ args: [String: String]) throws -> String {
     String(decoding: try JSONEncoder().encode(args), as: UTF8.self)
 }
 
+private func penReadHeader(_ result: String) -> String {
+    String(result[result.startIndex..<(result.firstIndex(of: "\n") ?? result.endIndex)])
+}
+
+private func penReadBody(_ result: String) -> String {
+    guard let newline = result.firstIndex(of: "\n") else { return "" }
+    return String(result[result.index(after: newline)...])
+}
+
+private func penNextStartLine(_ result: String) -> Int? {
+    let header = penReadHeader(result)
+    guard let range = header.range(of: "next_start_line ") else { return nil }
+    return Int(header[range.upperBound...].prefix { $0.isNumber })
+}
+
+private func penSearchHeader(_ result: String) -> String {
+    String(result.split(separator: "\n", omittingEmptySubsequences: false).first ?? "")
+}
+
+private func penSearchMatches(_ result: String) -> [String] {
+    Array(result.split(separator: "\n", omittingEmptySubsequences: false).dropFirst().map(String.init))
+}
+
 private func temporaryPen() throws -> URL {
     let root = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
         .appendingPathComponent("pen-files-\(UUID())")
@@ -32,8 +55,8 @@ private func temporaryPen() throws -> URL {
         #expect(listed.content.contains("src/"))
     }
     let read = try await files.read(tool: "pen_read_file", argumentsJSON: #"{"path":"src/App.vue"}"#)
-    let object = try #require(JSONSerialization.jsonObject(with: Data(read.content.utf8)) as? [String: Any])
-    #expect(object["content"] as? String == content)
+    #expect(read.content.hasPrefix("src/App.vue, lines 1-"))
+    #expect(penReadBody(read.content) == content)
     let edit = try await files.prepare(
         tool: "pen_edit_file",
         argumentsJSON: penFileArguments([
@@ -226,19 +249,23 @@ private func navigationObject(_ content: String) throws -> [String: Any] {
     let files = try PenFileTools(workspace: root)
     var start = 1
     var recovered = ""
-    for _ in 0..<3 {
+    var pages = 0
+    while true {
         let result = try await files.read(
-            tool: "pen_read_file", argumentsJSON: "{\"path\":\"text\",\"start_line\":\(start)}")
-        let object = try navigationObject(result.content)
-        recovered += try #require(object["content"] as? String)
-        #expect(object["total_lines"] as? Int == 451)
-        start = object["next_start_line"] as? Int ?? 0
+            tool: "pen_read_file", argumentsJSON: "{\"path\":\"text\",\"start_line\":\(start),\"line_count\":200}")
+        #expect(result.content.hasPrefix("text, lines "))
+        #expect(result.content.contains("of 451"))
+        recovered += penReadBody(result.content)
+        pages += 1
+        guard let next = penNextStartLine(result.content) else { break }
+        start = next
     }
-    #expect(start == 0)
+    #expect(pages == 3)
     #expect(Array(recovered.utf8) == Array(content.utf8))
     for args in [
         #"{"path":"text","start_line":true}"#, #"{"path":"text","line_count":1.5}"#,
-        #"{"path":"text","start_line":452}"#, #"{"path":"text","line_count":201}"#,
+        #"{"path":"text","start_line":452}"#, #"{"path":"text","line_count":2001}"#,
+        #"{"path":"text","line_numbers":1}"#,
     ] {
         await #expect(throws: (any Error).self) { _ = try await files.read(tool: "pen_read_file", argumentsJSON: args) }
     }
@@ -250,13 +277,12 @@ private func navigationObject(_ content: String) throws -> [String: Any] {
     let line = String(repeating: "a", count: 1_023) + "\n"
     try (String(repeating: line, count: 500) + "unique tail\n").write(
         to: root.appendingPathComponent("source"), atomically: true, encoding: .utf8)
-    try String(repeating: "a", count: 33 * 1_024).write(
+    try String(repeating: "a", count: 49 * 1_024).write(
         to: root.appendingPathComponent("minified"), atomically: true, encoding: .utf8)
     let files = try PenFileTools(workspace: root)
-    let object = try navigationObject(
-        await files.read(tool: "pen_read_file", argumentsJSON: #"{"path":"source"}"#).content)
-    #expect((object["content"] as? String)?.utf8.count == 32 * 1_024)
-    #expect(object["next_start_line"] as? Int == 33)
+    let source = try await files.read(tool: "pen_read_file", argumentsJSON: #"{"path":"source"}"#).content
+    #expect(penReadBody(source).utf8.count == 48 * 1_024)
+    #expect(penNextStartLine(source) == 49)
     let edit = try await files.prepare(
         tool: "pen_edit_file",
         argumentsJSON: penFileArguments([
@@ -290,25 +316,25 @@ private func navigationObject(_ content: String) throws -> [String: Any] {
         at: root.appendingPathComponent("escape.vue"), withDestinationURL: secret)
     try FileManager.default.linkItem(at: secret, to: root.appendingPathComponent("hard.vue"))
     let files = try PenFileTools(workspace: root)
-    let object = try navigationObject(
-        await files.read(tool: "pen_search", argumentsJSON: #"{"path":".","query":"Needle[a]","file_glob":"*.vue"}"#)
-            .content)
-    let matches = try #require(object["matches"] as? [[String: Any]])
-    #expect(matches.count == 1)
-    #expect(matches.first?["path"] as? String == "src/App.vue")
-    #expect(matches.first?["line"] as? Int == 2)
-    #expect(object["truncated"] as? Bool == false)
-    let limited = try navigationObject(
-        await files.read(
+    let literal =
+        try await files.read(
+            tool: "pen_search", argumentsJSON: #"{"path":".","query":"Needle[a]","file_glob":"*.vue"}"#
+        ).content
+    let matchLines = penSearchMatches(literal)
+    #expect(matchLines.count == 1)
+    #expect(matchLines.first?.hasPrefix("src/App.vue:2: ") == true)
+    #expect(!penSearchHeader(literal).contains("truncated"))
+    let limited =
+        try await files.read(
             tool: "pen_search",
             argumentsJSON: #"{"path":".","query":"Needle[a]","case_sensitive":false,"max_results":1}"#
-        ).content)
-    #expect(limited["truncated"] as? Bool == true)
-    let insensitive = try navigationObject(
-        await files.read(
+        ).content
+    #expect(penSearchHeader(limited).contains("truncated"))
+    let insensitive =
+        try await files.read(
             tool: "pen_search", argumentsJSON: #"{"path":"src","query":"Needle[a]","case_sensitive":false}"#
-        ).content)
-    #expect((insensitive["matches"] as? [[String: Any]])?.count == 2)
+        ).content
+    #expect(penSearchMatches(insensitive).count == 2)
     for args in [
         #"{"path":"../","query":"Needle"}"#, #"{"path":".","query":""}"#,
         #"{"path":".","query":"Needle","case_sensitive":1}"#, #"{"path":".","query":"Needle","max_results":true}"#,
@@ -324,7 +350,72 @@ private func navigationObject(_ content: String) throws -> [String: Any] {
     try line.write(to: root.appendingPathComponent("text"), atomically: true, encoding: .utf8)
     let files = try PenFileTools(workspace: root)
     let result = try await files.read(tool: "pen_search", argumentsJSON: #"{"path":".","query":"a"}"#)
-    let matches = try #require(navigationObject(result.content)["matches"] as? [[String: Any]])
-    #expect(matches.count == 1)
+    #expect(penSearchMatches(result.content).count == 1)
     #expect(result.content.utf8.count < 2_000)
+}
+
+@Test func numberedPenReadsPrefixLinesAndFlagNumbersAsNonContent() async throws {
+    let root = try temporaryPen()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let content = "alpha\nbeta\ngamma\n"
+    try content.write(to: root.appendingPathComponent("text"), atomically: true, encoding: .utf8)
+    let files = try PenFileTools(workspace: root)
+    let plain = try await files.read(tool: "pen_read_file", argumentsJSON: #"{"path":"text"}"#).content
+    #expect(penReadBody(plain) == content)
+    #expect(!penReadHeader(plain).contains("line numbers"))
+    let numbered = try await files.read(
+        tool: "pen_read_file", argumentsJSON: #"{"path":"text","line_numbers":true}"#
+    ).content
+    #expect(penReadHeader(numbered).contains("line numbers are not file content"))
+    #expect(penReadBody(numbered) == "1\talpha\n2\tbeta\n3\tgamma\n")
+}
+
+@Test func penGlobListsMatchingPathsNewestFirstAndSkipsDependencies() async throws {
+    let root = try temporaryPen()
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(
+        at: root.appendingPathComponent("src"), withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(
+        at: root.appendingPathComponent("node_modules"), withIntermediateDirectories: true)
+    for (name, offset) in [("src/old.swift", -300.0), ("src/mid.swift", -200.0), ("src/new.swift", -100.0)] {
+        let url = root.appendingPathComponent(name)
+        try "x".write(to: url, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date().addingTimeInterval(offset)], ofItemAtPath: url.path)
+    }
+    try "y".write(to: root.appendingPathComponent("node_modules/dep.swift"), atomically: true, encoding: .utf8)
+    let files = try PenFileTools(workspace: root)
+    let result = try await files.read(tool: "pen_glob", argumentsJSON: #"{"path":".","pattern":"*.swift"}"#).content
+    #expect(penSearchMatches(result) == ["src/new.swift", "src/mid.swift", "src/old.swift"])
+    let limited = try await files.read(
+        tool: "pen_glob", argumentsJSON: #"{"path":".","pattern":"*.swift","max_results":2}"#
+    ).content
+    #expect(penSearchMatches(limited).count == 2)
+    #expect(penSearchHeader(limited).contains("truncated"))
+    for args in [
+        #"{"pattern":""}"#, #"{"path":".","pattern":"*.swift","max_results":0}"#,
+        #"{"path":".","pattern":"*.swift","max_results":501}"#,
+    ] {
+        await #expect(throws: (any Error).self) { _ = try await files.read(tool: "pen_glob", argumentsJSON: args) }
+    }
+}
+
+@Test func penSearchRegexMatchesLinesAndRejectsInvalidPatterns() async throws {
+    let root = try temporaryPen()
+    defer { try? FileManager.default.removeItem(at: root) }
+    try "let count = 42\nlet name = \"goat\"\n".write(
+        to: root.appendingPathComponent("code.swift"), atomically: true, encoding: .utf8)
+    let files = try PenFileTools(workspace: root)
+    let matched = try await files.read(
+        tool: "pen_search", argumentsJSON: #"{"path":".","query":"count = [0-9]+","regex":true}"#
+    ).content
+    #expect(penSearchMatches(matched).count == 1)
+    #expect(penSearchMatches(matched).first?.hasPrefix("code.swift:1: ") == true)
+    let literal = try await files.read(
+        tool: "pen_search", argumentsJSON: #"{"path":".","query":"count = [0-9]+","regex":false}"#
+    ).content
+    #expect(penSearchMatches(literal).isEmpty)
+    await #expect(throws: (any Error).self) {
+        _ = try await files.read(tool: "pen_search", argumentsJSON: #"{"path":".","query":"count = [","regex":true}"#)
+    }
 }

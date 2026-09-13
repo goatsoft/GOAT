@@ -27,6 +27,23 @@ Downloads and release notes are on [GitHub Releases](https://github.com/goatsoft
 
 The maintainer accepted the tested maintenance candidate. The official release was rebuilt from the same source content and passed signing, notarization and mounted-package checks. See [Release readiness](RELEASE-CHECKLIST.md) for the acceptance requirements. These maintenance changes do not complete M7 or require a 0.2 release.
 
+## Model selection, capabilities and recovery
+
+The model-management implementation is present on the current development branch and is pending final build/test qualification and ADR acceptance:
+
+- **Models settings:** browse the active engine's catalog, inspect model capabilities and their evidence, review compatibility and load failures, maintain favourites, and receive setup guidance when no engine or model is configured.
+- **Compact model menu:** show favourites at the top level and the remaining catalog in **Other models**, while retaining the selected model and the engine's management and refresh actions.
+- **Effort submenu:** show the selected preset on the trailing side of the **Effort** row. Graze, Trot, Climb and Summit retain their existing meanings and shortcuts.
+- **Per-model compatibility:** resolve request behaviour automatically when selecting a model, with an advanced override stored for that engine/model pairing in Models settings.
+- **Catalog refresh:** support manual refresh and active-scene polling so newly available engine models can appear without an app restart.
+- **Recovery and reporting:** recognise malformed tool attempts without executing printed markup, break unproductive file-repair cycles, and record the actual model, engine and effective settings per response.
+
+Fake-engine qualification covers fragmented structured calls, mixed printed markup, exactly-once execution, continuation, and output-cap behavior. Live model qualification remains a separate activity and no candidate is treated as qualified from discovery alone. The [proposed model-management design](adrs/0084-model-inspection-favourites-and-recovery.md) records the scope and acceptance boundaries.
+
+## Inference efficiency (proposed)
+
+An inference-efficiency review on 11 September 2026 assessed GOAT's inference loop against established local-agent practice. The architecture held; the gaps are prefix-cache stability, budget accuracy, round-trip count and loop resilience. Five proposed ADRs record the fixes: [prefix-stable prompts and calibrated budgeting](adrs/0085-prefix-stable-prompts-and-usage-calibrated-budgeting.md), [sampling parameters as model facts](adrs/0086-sampling-parameters-are-model-facts.md), [conversation compaction with `/compact` and an auto-compact threshold](adrs/0087-conversation-compaction.md), [single-round tool results](adrs/0088-single-round-tool-results.md) and [turn continuity and engine resilience](adrs/0089-turn-continuity-and-engine-resilience.md). They are ordered so each phase is independently shippable. [ADR-0085](adrs/0085-prefix-stable-prompts-and-usage-calibrated-budgeting.md) is accepted and implemented on the model-management branch (prefix-stable prompts, policy-version-4 budgeting with usage calibration, and the built-in model-family registry with a user `model-families.json`); its build and live-model qualification are pending. The remaining four (0086 through 0089) are proposed and not implemented.
+
 ## M7: The polish pass
 
 Yearling (0.2.0) is the planned release line for broader polish. The remaining checklist below separates implemented foundations from acceptance work; unchecked items are not promised features or completed qualification.

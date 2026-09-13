@@ -1,6 +1,68 @@
 import Foundation
 import JUDAS
 
+public struct EngineModelInspectionMetadata: Sendable, Equatable {
+    public let format: String?
+    public let quantization: String?
+    public let architecture: String?
+    public let modelType: String?
+    public let parameterCount: Int64?
+    public let weightBytes: Int64?
+    public let engineVersion: String?
+    public let checkpointRole: String?
+    public let templateIdentifier: String?
+    public let parserIdentifier: String?
+
+    public init(
+        format: String? = nil,
+        quantization: String? = nil,
+        architecture: String? = nil,
+        modelType: String? = nil,
+        parameterCount: Int64? = nil,
+        weightBytes: Int64? = nil,
+        engineVersion: String? = nil,
+        checkpointRole: String? = nil,
+        templateIdentifier: String? = nil,
+        parserIdentifier: String? = nil
+    ) {
+        self.format = format
+        self.quantization = quantization
+        self.architecture = architecture
+        self.modelType = modelType
+        self.parameterCount = parameterCount
+        self.weightBytes = weightBytes
+        self.engineVersion = engineVersion
+        self.checkpointRole = checkpointRole
+        self.templateIdentifier = templateIdentifier
+        self.parserIdentifier = parserIdentifier
+    }
+
+    func merged(with other: Self?) -> Self {
+        guard let other else { return self }
+        return Self(
+            format: other.format ?? format,
+            quantization: other.quantization ?? quantization,
+            architecture: other.architecture ?? architecture,
+            modelType: other.modelType ?? modelType,
+            parameterCount: other.parameterCount ?? parameterCount,
+            weightBytes: other.weightBytes ?? weightBytes,
+            engineVersion: other.engineVersion ?? engineVersion,
+            checkpointRole: other.checkpointRole ?? checkpointRole,
+            templateIdentifier: other.templateIdentifier ?? templateIdentifier,
+            parserIdentifier: other.parserIdentifier ?? parserIdentifier)
+    }
+}
+
+public struct EngineModelInspection: Sendable, Equatable {
+    public let model: ModelRef
+    public let metadata: EngineModelInspectionMetadata?
+
+    public init(model: ModelRef, metadata: EngineModelInspectionMetadata? = nil) {
+        self.model = model
+        self.metadata = metadata
+    }
+}
+
 /// The security boundary shared by metadata URLs, redirects, and endpoint validation.
 struct EngineHTTPOrigin: Equatable, Sendable {
     let scheme: String
@@ -26,13 +88,31 @@ struct EngineHTTPOrigin: Equatable, Sendable {
 struct ProbedModelMetadata: Equatable, Sendable {
     var contextLength: Int?
     var capabilities: ModelCapabilities
+    var observedAt: Date?
+    var sourceDescriptors: Set<String>
+    var inspection: EngineModelInspectionMetadata?
+
+    init(
+        contextLength: Int?, capabilities: ModelCapabilities,
+        observedAt: Date? = nil, sourceDescriptors: Set<String> = [],
+        inspection: EngineModelInspectionMetadata? = nil
+    ) {
+        self.contextLength = contextLength
+        self.capabilities = capabilities
+        self.observedAt = observedAt
+        self.sourceDescriptors = sourceDescriptors
+        self.inspection = inspection
+    }
 
     static let unknown = ProbedModelMetadata(contextLength: nil, capabilities: .unknown)
 
     func merged(with other: ProbedModelMetadata) -> ProbedModelMetadata {
         ProbedModelMetadata(
             contextLength: other.contextLength ?? contextLength,
-            capabilities: capabilities.merged(with: other.capabilities))
+            capabilities: capabilities.merged(with: other.capabilities),
+            observedAt: other.observedAt ?? observedAt,
+            sourceDescriptors: sourceDescriptors.union(other.sourceDescriptors),
+            inspection: inspection?.merged(with: other.inspection) ?? other.inspection)
     }
 
     func applying(to model: ModelRef) -> ModelRef {
@@ -40,6 +120,13 @@ struct ProbedModelMetadata: Equatable, Sendable {
             id: model.id,
             contextLength: contextLength ?? model.contextLength,
             capabilities: model.capabilities.merged(with: capabilities))
+    }
+
+    func observed(at date: Date, source: String? = nil) -> ProbedModelMetadata {
+        var result = self
+        result.observedAt = date
+        if let source, !source.isEmpty { result.sourceDescriptors.insert(source) }
+        return result
     }
 }
 
@@ -107,17 +194,20 @@ enum EngineCapabilityMetadataParser {
                 let id = object.string(for: ["id"]), validModelID(id),
                 seen.insert(id).inserted
             else { return nil }
-            let metadata = genericMetadata(object, evidence: .modelList)
+            let metadata = applyingKnownProfile(
+                genericMetadata(object, evidence: .modelList), for: id)
             return ModelRef(
                 id: id, contextLength: metadata.contextLength,
                 capabilities: metadata.capabilities)
         }
     }
 
-    static func openAIModelDetail(_ data: Data) throws -> ProbedModelMetadata {
+    static func openAIModelDetail(_ data: Data, modelID: String? = nil) throws -> ProbedModelMetadata {
         let root = try JSONDecoder().decode(JSONValue.self, from: data)
         guard let object = root.objectValue else { throw MetadataProbeError.malformed }
-        return genericMetadata(object, evidence: .modelDetail)
+        let reported = genericMetadata(object, evidence: .modelDetail)
+        return applyingKnownProfile(
+            reported, for: modelID ?? object.string(for: ["id", "model"]))
     }
 
     static func lmStudioModel(_ data: Data, modelID: String) throws -> ProbedModelMetadata {
@@ -296,7 +386,80 @@ enum EngineCapabilityMetadataParser {
                 tools: claim(tools, evidence: evidence),
                 reasoning: claim(reasoning, evidence: evidence),
                 advertisedRequestParameters: parameters,
-                reasoningEffortValues: effortValues))
+                reasoningEffortValues: effortValues),
+            inspection: inspectionMetadata(from: object))
+    }
+
+    private static func inspectionMetadata(
+        from object: [String: JSONValue]
+    ) -> EngineModelInspectionMetadata? {
+        let architecture =
+            object.string(for: ["architecture", "arch", "model_architecture"])
+            ?? object["architectures"]?.stringArrayValue?.first
+        let metadata = EngineModelInspectionMetadata(
+            format: object.string(for: ["format", "model_format", "file_format"]),
+            quantization: object.string(for: [
+                "quantization", "quantization_format", "quantization_type",
+            ]),
+            architecture: architecture,
+            modelType: object.string(for: ["model_type", "type"]),
+            parameterCount: object.int(for: ["parameter_count", "num_parameters", "parameters"])
+                .map(Int64.init),
+            weightBytes: object.int(for: ["weight_bytes", "size_bytes", "file_size"])
+                .map(Int64.init),
+            engineVersion: object.string(for: ["engine_version", "version"]),
+            checkpointRole: object.string(for: ["checkpoint_role", "role"]),
+            templateIdentifier: object.string(for: [
+                "template_identifier", "chat_template", "chat_template_name",
+            ]),
+            parserIdentifier: object.string(for: [
+                "parser_identifier", "tool_parser", "tool_call_parser",
+            ]))
+        return [
+            metadata.format, metadata.quantization, metadata.architecture, metadata.modelType,
+            metadata.parameterCount.map(String.init), metadata.weightBytes.map(String.init),
+            metadata.engineVersion, metadata.checkpointRole, metadata.templateIdentifier,
+            metadata.parserIdentifier,
+        ].contains(where: { $0 != nil }) ? metadata : nil
+    }
+
+    static func applyingKnownProfile(
+        _ reported: ProbedModelMetadata, for modelID: String?
+    ) -> ProbedModelMetadata {
+        guard let modelID else { return reported }
+        let profile = ModelFamilyRegistry.profile(for: modelID)
+        let nameHints = Self.inspectionHints(fromModelID: modelID)
+        guard profile != nil || nameHints != nil else { return reported }
+        let known = ProbedModelMetadata(
+            contextLength: profile?.contextLength,
+            capabilities: profile?.capabilities ?? .unknown,
+            inspection: nameHints?.merged(with: profile?.inspection) ?? profile?.inspection)
+        return known.merged(with: reported)
+    }
+
+    /// Presentation-only facts a catalog ID commonly carries: an MLX or GGUF packaging
+    /// marker and a quantization suffix. Never capability evidence.
+    static func inspectionHints(fromModelID modelID: String) -> EngineModelInspectionMetadata? {
+        let lower = modelID.lowercased()
+        var format: String?
+        if lower.hasPrefix("mlx-community/") || lower.contains("-mlx") || lower.contains("mlx-") {
+            format = "MLX"
+        } else if lower.hasSuffix(".gguf") || lower.contains("-gguf") || lower.contains("gguf-") {
+            format = "GGUF"
+        }
+        var quantization: String?
+        let tokens = lower.split { !$0.isLetter && !$0.isNumber && $0 != "_" }.map(String.init)
+        if let bits = tokens.first(where: { $0.hasSuffix("bit") && Int($0.dropLast(3)) != nil }) {
+            quantization = "\(bits.dropLast(3))-bit"
+        } else if let ggufTag = tokens.first(where: { token in
+            token.wholeMatch(of: /q[2-8](?:_[01k](?:_[sml])?)?|iq[1-4]_[a-z]{1,3}/) != nil
+        }) {
+            quantization = ggufTag.uppercased()
+        } else if let precision = tokens.first(where: { ["bf16", "fp16", "fp8", "f16", "f32"].contains($0) }) {
+            quantization = precision.uppercased()
+        }
+        guard format != nil || quantization != nil else { return nil }
+        return EngineModelInspectionMetadata(format: format, quantization: quantization)
     }
 
     private static func reasoningValues(_ strings: [String]) -> Set<ReasoningEffortValue> {

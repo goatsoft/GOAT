@@ -1,6 +1,6 @@
 # ADR-0024: Deterministic prompt budgeting and capability-gated model setup
 
-**Status:** Accepted · 2026-08-31 · Extends [ADR-0005](0005-memory-architecture.md), [ADR-0006](0006-mcp-integration.md), [ADR-0016](0016-chat-content-pipeline.md), [ADR-0017](0017-engine-agnostic-openai-dialect.md), and [ADR-0023](0023-single-active-turn-and-engine-lifecycle.md)
+**Status:** Accepted · 2026-08-31 · Extends [ADR-0005](0005-memory-architecture.md), [ADR-0006](0006-mcp-integration.md), [ADR-0016](0016-chat-content-pipeline.md), [ADR-0017](0017-engine-agnostic-openai-dialect.md), and [ADR-0023](0023-single-active-turn-and-engine-lifecycle.md) · Policy version 3 revised to version 4 by [ADR-0085](0085-prefix-stable-prompts-and-usage-calibrated-budgeting.md) (prefix-stable prompts, usage calibration, protocol estimate, 16,384 fallback, reasoning-aware output reserve); the parked rolling-summary decision is superseded by [ADR-0087](0087-conversation-compaction.md)
 
 ## Context
 

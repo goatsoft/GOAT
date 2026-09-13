@@ -1,0 +1,196 @@
+{
+  "schema": 1,
+  "families": [
+    {
+      "id": "muse-glimmer",
+      "matchAny": ["muse-glimmer-30b", "meta-models/muse-glimmer-30b"],
+      "exclude": ["text"],
+      "contextLength": 131072,
+      "capabilities": ["vision", "tools", "reasoning"],
+      "architecture": "Muse-Glimmer",
+      "modelType": "multimodal",
+      "parameterCount": 30000000000
+    },
+
+    {
+      "id": "deepseek-r1",
+      "matchAny": ["deepseek-r1"],
+      "capabilities": ["reasoning"]
+    },
+    {
+      "id": "deepseek-v3-hybrid",
+      "matchAny": ["deepseek-v3.1", "deepseek-v3.2"],
+      "capabilities": ["tools", "reasoning"]
+    },
+    {
+      "id": "deepseek-v3",
+      "matchAny": ["deepseek-v3"],
+      "capabilities": ["tools"]
+    },
+
+    {
+      "id": "qwen3-coder",
+      "matchAny": ["qwen3-coder"],
+      "capabilities": ["tools"]
+    },
+    {
+      "id": "qwen3-vl-thinking",
+      "matchAny": ["qwen3-vl"],
+      "matchAll": ["thinking"],
+      "capabilities": ["vision", "tools", "reasoning"]
+    },
+    {
+      "id": "qwen3-vl",
+      "matchAny": ["qwen3-vl"],
+      "capabilities": ["vision", "tools"]
+    },
+    {
+      "id": "qwen3-thinking",
+      "matchAny": ["qwen3"],
+      "matchAll": ["thinking"],
+      "exclude": ["vl", "embedding", "reranker", "guard"],
+      "capabilities": ["tools", "reasoning"]
+    },
+    {
+      "id": "qwen3-instruct",
+      "matchAny": ["qwen3"],
+      "matchAll": ["instruct"],
+      "exclude": ["vl", "coder", "embedding", "reranker", "guard"],
+      "capabilities": ["tools"]
+    },
+    {
+      "id": "qwen3",
+      "matchAny": ["qwen3"],
+      "exclude": ["vl", "coder", "embedding", "reranker", "omni", "guard", "tts", "asr"],
+      "capabilities": ["tools", "reasoning"]
+    },
+    {
+      "id": "qwen2.5-vl",
+      "matchAny": ["qwen2.5-vl", "qwen2-vl"],
+      "capabilities": ["vision", "tools"]
+    },
+    {
+      "id": "qwen2.5",
+      "matchAny": ["qwen2.5"],
+      "exclude": ["vl", "omni", "math", "embedding", "reranker", "audio"],
+      "capabilities": ["tools"]
+    },
+
+    {
+      "id": "gpt-oss",
+      "matchAny": ["gpt-oss"],
+      "contextLength": 131072,
+      "capabilities": ["tools", "reasoning"]
+    },
+
+    {
+      "id": "glm-vision",
+      "matchAny": ["glm-4.1v", "glm-4.5v", "glm-4.6v", "glm-4.7v", "glm-5v"],
+      "capabilities": ["vision", "tools", "reasoning"]
+    },
+    {
+      "id": "glm",
+      "matchAny": ["glm-4.5", "glm-4.6", "glm-4.7", "glm-5"],
+      "capabilities": ["tools", "reasoning"]
+    },
+
+    {
+      "id": "llama-4",
+      "matchAny": ["llama-4"],
+      "capabilities": ["vision", "tools"]
+    },
+    {
+      "id": "llama-3.2-vision",
+      "matchAny": ["llama-3.2"],
+      "matchAll": ["vision"],
+      "contextLength": 131072,
+      "capabilities": ["vision"]
+    },
+    {
+      "id": "llama-3",
+      "matchAny": ["llama-3.1", "llama-3.2", "llama-3.3"],
+      "exclude": ["guard"],
+      "contextLength": 131072,
+      "capabilities": ["tools"]
+    },
+
+    {
+      "id": "gemma-3-multimodal",
+      "matchAny": ["gemma-3-4b", "gemma-3-12b", "gemma-3-27b"],
+      "contextLength": 131072,
+      "capabilities": ["vision"]
+    },
+    {
+      "id": "gemma-3n",
+      "matchAny": ["gemma-3n"],
+      "capabilities": ["vision"]
+    },
+
+    {
+      "id": "mistral-small-3",
+      "matchAny": ["mistral-small-3.1", "mistral-small-3.2", "mistral-small-2503", "mistral-small-2506"],
+      "contextLength": 131072,
+      "capabilities": ["vision", "tools"]
+    },
+    {
+      "id": "magistral",
+      "matchAny": ["magistral"],
+      "capabilities": ["tools", "reasoning"]
+    },
+    {
+      "id": "devstral",
+      "matchAny": ["devstral"],
+      "capabilities": ["tools"]
+    },
+
+    {
+      "id": "kimi-k2.5",
+      "matchAny": ["kimi-k2.5"],
+      "capabilities": ["vision", "tools", "reasoning"]
+    },
+    {
+      "id": "kimi-k2-thinking",
+      "matchAny": ["kimi-k2"],
+      "matchAll": ["thinking"],
+      "capabilities": ["tools", "reasoning"]
+    },
+    {
+      "id": "kimi-k2",
+      "matchAny": ["kimi-k2"],
+      "capabilities": ["tools"]
+    },
+
+    {
+      "id": "minimax-m2",
+      "matchAny": ["minimax-m2"],
+      "capabilities": ["tools", "reasoning"]
+    },
+
+    {
+      "id": "phi-4-multimodal",
+      "matchAny": ["phi-4-multimodal"],
+      "capabilities": ["vision"]
+    },
+    {
+      "id": "phi-4-reasoning",
+      "matchAny": ["phi-4-reasoning", "phi-4-mini-reasoning"],
+      "capabilities": ["reasoning"]
+    },
+    {
+      "id": "phi-4-mini",
+      "matchAny": ["phi-4-mini"],
+      "capabilities": ["tools"]
+    },
+
+    {
+      "id": "seed-oss",
+      "matchAny": ["seed-oss"],
+      "capabilities": ["tools", "reasoning"]
+    },
+    {
+      "id": "granite-4",
+      "matchAny": ["granite-4"],
+      "capabilities": ["tools"]
+    }
+  ]
+}

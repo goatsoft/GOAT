@@ -12,18 +12,45 @@ struct ModelMenuItems: View {
     private var model: AppModel { .shared }
 
     var body: some View {
-        if model.models.isEmpty {
-            Button("No Models - Wake the Engine") { Task { await model.discover() } }
+        let projection = ModelMenuProjection(
+            models: model.models, preferences: model.modelPreferences,
+            engineProfileID: model.activeEngineProfile?.id, selectedModelID: activeID)
+        if model.models.isEmpty && projection.unavailableFavourites.isEmpty {
+            if model.activeEngineProfile == nil {
+                Button("Set Up an Engine to Inspect Models") { model.settingsTab = .engine }
+            } else {
+                Button("No Models - Refresh Engine") { Task { await model.refreshModelCatalog() } }
+            }
         } else {
-            ForEach(model.models) { ref in
-                Toggle(isOn: binding(for: ref.id)) {
-                    Label {
-                        Text("\(ref.displayName) - \(subtitle(for: ref))")
-                    } icon: {
-                        Image(systemName: ref.looksVisionCapable ? "eye" : "cpu")
+            let selected = projection.selectedModel
+            let favourites = projection.favourites.filter { $0.id != selected?.id }
+            let others = projection.otherModels.filter { $0.id != selected?.id }
+            if let selected {
+                modelRow(selected, favourite: projection.favourites.contains { $0.id == selected.id })
+                    .disabled(model.shepherd.hasActiveTurn || model.engineTransitioning)
+            }
+            ForEach(favourites) { ref in
+                modelRow(ref, favourite: true)
+                    .disabled(model.shepherd.hasActiveTurn || model.engineTransitioning)
+            }
+            ForEach(projection.unavailableFavourites, id: \.identity) { preference in
+                Label {
+                    Text("\(ModelRef(id: preference.identity.modelID).displayName) - Unavailable")
+                } icon: {
+                    Image(systemName: "star.fill").foregroundStyle(.yellow)
+                }
+            }
+            Menu("Other models") {
+                if others.isEmpty {
+                    Text("No other models")
+                } else {
+                    ForEach(others) { ref in
+                        modelRow(ref, favourite: false)
+                            .disabled(model.shepherd.hasActiveTurn || model.engineTransitioning)
                     }
                 }
             }
+            .disabled(others.isEmpty)
         }
     }
 
@@ -44,13 +71,23 @@ struct ModelMenuItems: View {
         return traits.joined(separator: " · ")
     }
 
-    private func binding(for id: String) -> Binding<Bool> {
-        Binding(
-            get: { activeID == id },
-            set: { isOn in
-                guard isOn else { return }
-                model.selectModel(id, in: model.currentSession)
-            })
+    private func modelRow(_ ref: ModelRef, favourite: Bool) -> some View {
+        Button {
+            model.selectModel(ref.id, in: model.currentSession)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: ref.menuTypeSymbol)
+                    .foregroundStyle(.white)
+                Text("\(ref.displayName) - \(subtitle(for: ref))")
+                Spacer(minLength: 12)
+                if favourite {
+                    Image(systemName: "star.fill").foregroundStyle(.yellow)
+                }
+                if activeID == ref.id {
+                    Image(systemName: "checkmark").foregroundStyle(.white)
+                }
+            }
+        }
     }
 }
 
@@ -63,6 +100,7 @@ struct EffortMenuItems: View {
             Toggle(isOn: binding(for: effort)) {
                 Label {
                     Text("\(effort.label) - \(effort.blurb)")
+                        .foregroundStyle(effort.presentationColor(in: model.theme))
                 } icon: {
                     if model.presentation.isEnabled { effort.goatie.image.resizable().frame(width: 16, height: 16) }
                 }
@@ -76,8 +114,7 @@ struct EffortMenuItems: View {
             get: { model.currentSession?.effort == effort },
             set: { isOn in
                 guard isOn, let session = model.currentSession else { return }
-                session.effort = effort
-                model.persistMeta(session)
+                model.selectEffort(effort, in: session)
             })
     }
 }

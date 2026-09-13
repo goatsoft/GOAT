@@ -45,7 +45,7 @@ public actor OpenAICompatEngine: InferenceEngine {
                 ModelRef(
                     id: model.id,
                     contextLength: model.contextLength,
-                    capabilities: model.capabilities.applying(requestStyle: config.requestStyle))
+                    capabilities: model.capabilities)
             }
             return .ok(models)
         } catch {
@@ -55,9 +55,9 @@ public actor OpenAICompatEngine: InferenceEngine {
 
     /// Best-effort metadata handshake for the selected model. Failure returns the catalog
     /// snapshot unchanged so a healthy generic Chat Completions path remains usable.
-    public func probeCapabilities(for model: ModelRef) async -> ModelRef {
+    public func inspectModel(_ model: ModelRef) async -> EngineModelInspection {
         let config = self.config
-        guard config.isValidEndpoint else { return model }
+        guard config.isValidEndpoint else { return EngineModelInspection(model: model) }
         let revision = configRevision
 
         let metadata: ProbedModelMetadata?
@@ -73,14 +73,18 @@ public actor OpenAICompatEngine: InferenceEngine {
         }
 
         guard revision == configRevision, config == self.config, !Task.isCancelled else {
-            return model
+            return EngineModelInspection(model: model)
         }
-        let enriched = (metadata ?? .unknown).applying(to: model)
-        let configured = ModelRef(
-            id: enriched.id,
-            contextLength: enriched.contextLength,
-            capabilities: enriched.capabilities.applying(requestStyle: config.requestStyle))
-        return configured
+        let reported = metadata?.observed(at: .now) ?? .unknown
+        let enriched =
+            EngineCapabilityMetadataParser
+            .applyingKnownProfile(reported, for: model.id)
+        return EngineModelInspection(
+            model: enriched.applying(to: model), metadata: enriched.inspection)
+    }
+
+    public func probeCapabilities(for model: ModelRef) async -> ModelRef {
+        await inspectModel(model).model
     }
 
     private static func probeGenericDetail(
@@ -91,7 +95,7 @@ public actor OpenAICompatEngine: InferenceEngine {
                 baseURL: config.baseURL, modelID: modelID)
         else { return nil }
         guard let data = await metadataData(url: url, config: config) else { return nil }
-        return try? EngineCapabilityMetadataParser.openAIModelDetail(data)
+        return try? EngineCapabilityMetadataParser.openAIModelDetail(data, modelID: modelID)
     }
 
     private static func probeLMStudio(
@@ -163,13 +167,10 @@ public actor OpenAICompatEngine: InferenceEngine {
         return data
     }
 
-    static func makeBody(
-        for r: GenerationRequest, requestStyle: EngineRequestStyle = .automatic
-    ) -> CompletionBody {
+    static func makeBody(for r: GenerationRequest) -> CompletionBody {
         let prepared = CanonicalRequestPreparation.prepare(r)
-        let qwenControls =
-            requestStyle == .qwenChatTemplate
-            ? QwenChatTemplateControls(for: prepared.effort) : nil
+        let parameters = EffectiveGenerationParameters(request: prepared)
+        let qwenControls = QwenChatTemplateControls(parameters: parameters)
         return CompletionBody(
             model: prepared.model,
             messages: prepared.turns.map { turn in
@@ -180,37 +181,63 @@ public actor OpenAICompatEngine: InferenceEngine {
                     imagesBase64: turn.images.map { $0.base64EncodedString() },
                     toolCalls: turn.toolCalls,
                     toolCallID: turn.toolCallID,
-                    replayReasoning: qwenControls != nil
+                    replayReasoning: parameters.replayReasoningHistory
                 )
             },
             stream: true,
-            temperature: qwenControls?.temperature ?? prepared.effort.temperature,
-            maxTokens: prepared.maxTokens ?? prepared.effort.maxTokens,
+            temperature: parameters.temperature,
+            maxTokens: parameters.outputTokenCap,
             tools: prepared.tools,
-            reasoningEffort: qwenControls?.reasoningEffort
-                ?? prepared.modelCapabilities.nativeReasoningEffort(for: prepared.effort),
+            reasoningEffort: parameters.nativeReasoningEffort,
             qwenChatTemplate: qwenControls
         )
     }
 
+    /// Compatibility overload for focused request-body fixtures. Production requests carry the
+    /// resolved style on `GenerationRequest` and do not read mutable engine configuration.
+    static func makeBody(
+        for r: GenerationRequest, requestStyle: EngineRequestStyle
+    ) -> CompletionBody {
+        var request = r
+        request.compatibility = ResolvedModelCompatibility(
+            identity: r.compatibility.identity,
+            effectiveStyle: requestStyle == .qwenChatTemplate ? .qwenChatTemplate : .genericOpenAI,
+            source: .explicitOverride,
+            capabilities: r.modelCapabilities)
+        return makeBody(for: request)
+    }
+
     // MARK: Generation
+
+    /// Parses a `Retry-After` header. Handles the numeric-seconds form; the HTTP-date form is
+    /// treated as absent (ADR-0089). Returns nil when the header is missing or unparseable.
+    /// Idle timeout for the streaming request (ADR-0089). URLRequest.timeoutInterval resets on each
+    /// received byte, so this bounds how long a silent connection can hang. Recorded in ENGINES.md.
+    static let streamIdleTimeoutSeconds: TimeInterval = 300
+
+    static func parseRetryAfter(_ value: String?) -> TimeInterval? {
+        guard let value = value?.trimmingCharacters(in: .whitespaces), !value.isEmpty else { return nil }
+        if let seconds = TimeInterval(value) { return max(0, seconds) }
+        return nil
+    }
 
     public func stream(_ r: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
         let config = self.config
         return AsyncThrowingStream { continuation in
             let task = Task {
-                var assembler = StreamAssembler()
+                var assembler = StreamAssembler(round: r.round)
 
                 do {
                     guard config.isValidEndpoint else { throw EngineError.notConfigured }
                     var req = URLRequest(url: config.baseURL.appending(path: "v1/chat/completions"))
+                    req.timeoutInterval = Self.streamIdleTimeoutSeconds
                     req.httpMethod = "POST"
                     req.setValue("application/json", forHTTPHeaderField: "Content-Type")
                     if let key = config.apiKey, !key.isEmpty {
                         req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
                     }
                     req.httpBody = try JSONEncoder().encode(
-                        Self.makeBody(for: r, requestStyle: config.requestStyle))
+                        Self.makeBody(for: r))
 
                     let client = JudasHTTPClient(origin: config.baseURL, source: .engine, name: config.name)
                     defer { client.invalidateAndCancel() }
@@ -233,7 +260,9 @@ public actor OpenAICompatEngine: InferenceEngine {
                             parsed
                             ?? (String(data: errorBody, encoding: .utf8)?
                                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
-                        throw EngineError.httpDetail(http.statusCode, String(detail.prefix(300)))
+                        throw EngineError.httpDetail(
+                            http.statusCode, String(detail.prefix(300)),
+                            retryAfter: Self.parseRetryAfter(http.value(forHTTPHeaderField: "Retry-After")))
                     }
 
                     for try await line in bytes.lines {
@@ -263,34 +292,25 @@ public actor OpenAICompatEngine: InferenceEngine {
 /// OpenAI-compatible requests never receive these non-standard fields.
 struct QwenChatTemplateControls: Encodable {
     let enableThinking: Bool
-    let preserveThinking = true
+    let preserveThinking: Bool
     let reasoningEffort: String?
     let temperature: Double
 
-    init(for effort: Effort) {
-        switch effort {
-        case .graze:
-            enableThinking = false
-            reasoningEffort = nil
-            temperature = 0.7
-        case .trot:
-            enableThinking = true
-            reasoningEffort = "low"
-            temperature = 1.0
-        case .climb:
-            enableThinking = true
-            reasoningEffort = "medium"
-            temperature = 1.0
-        case .summit:
-            enableThinking = true
-            reasoningEffort = "xhigh"
-            temperature = 1.0
-        }
+    init?(parameters: EffectiveGenerationParameters) {
+        guard let enableThinking = parameters.qwenEnableThinking,
+            let preserveThinking = parameters.qwenPreserveThinking
+        else { return nil }
+        self.enableThinking = enableThinking
+        self.preserveThinking = preserveThinking
+        self.reasoningEffort = parameters.qwenReasoningEffort
+        self.temperature = parameters.temperature
     }
 
     private enum CodingKeys: String, CodingKey {
         case enableThinking = "enable_thinking"
         case preserveThinking = "preserve_thinking"
+        case reasoningEffort = "reasoning_effort"
+        case temperature
     }
 }
 
@@ -300,6 +320,42 @@ private struct OllamaShowRequest: Encodable {
 }
 
 // MARK: - Wire types (OpenAI dialect)
+
+/// Deterministic helpers for tool-call identifiers on the request wire (ADR-0089).
+enum ToolCallIdentifier {
+    /// Upper bound many OpenAI-dialect engines enforce on `tool_call_id` length.
+    static let maxRequestByteLength = 40
+
+    /// Returns an identifier no longer than `maxRequestByteLength` UTF-8 bytes. Ids within the limit
+    /// are returned unchanged, so an assistant tool call and its matching tool result collapse to the
+    /// same value and stay linked. A longer id is cut on a character boundary and given a stable hash
+    /// suffix, so distinct long ids do not collide after truncation.
+    static func requestSafe(_ id: String) -> String {
+        guard id.utf8.count > maxRequestByteLength else { return id }
+        let suffix = "_" + String(format: "%08x", fnv1a32(id))
+        let prefixByteBudget = maxRequestByteLength - suffix.utf8.count
+        var prefix = ""
+        var used = 0
+        for character in id {
+            let width = String(character).utf8.count
+            if used + width > prefixByteBudget { break }
+            prefix.append(character)
+            used += width
+        }
+        return prefix + suffix
+    }
+
+    /// FNV-1a 32-bit over the UTF-8 bytes. Deterministic across processes, unlike `Hasher`, so the
+    /// truncated id is stable for tests and for matching a call to its result.
+    private static func fnv1a32(_ value: String) -> UInt32 {
+        var hash: UInt32 = 0x811c_9dc5
+        for byte in value.utf8 {
+            hash ^= UInt32(byte)
+            hash = hash &* 0x0100_0193
+        }
+        return hash
+    }
+}
 
 struct CompletionBody: Encodable {
     struct Message: Encodable {
@@ -352,12 +408,14 @@ struct CompletionBody: Encodable {
                 try c.encode(thinking, forKey: .reasoningContent)
             }
             if let toolCallID {
-                try c.encode(toolCallID, forKey: .toolCallID)
+                try c.encode(ToolCallIdentifier.requestSafe(toolCallID), forKey: .toolCallID)
             }
             if !toolCalls.isEmpty {
                 try c.encode(
                     toolCalls.map {
-                        ToolCallOut(id: $0.id, function: .init(name: $0.name, arguments: $0.argumentsJSON))
+                        ToolCallOut(
+                            id: ToolCallIdentifier.requestSafe($0.id),
+                            function: .init(name: $0.name, arguments: $0.argumentsJSON))
                     }, forKey: .toolCalls)
             }
             if imagesBase64.isEmpty {
@@ -448,9 +506,12 @@ struct StreamAssembler {
     private var parser = ThinkTagParser()
     private var toolAccumulator = ToolCallAccumulator()
     private let start: Date
+    /// The tool-loop round this stream belongs to, forwarded to fallback id generation (ADR-0089).
+    private let round: Int
 
-    init(start: Date = Date()) {
+    init(start: Date = Date(), round: Int = 0) {
         self.start = start
+        self.round = round
     }
 
     mutating func feed(_ chunk: StreamChunk) -> [GenerationEvent] {
@@ -498,7 +559,7 @@ struct StreamAssembler {
     mutating func finish() -> [GenerationEvent] {
         var events = parser.flush().map(Self.event(for:))
         if !toolAccumulator.isEmpty {
-            events.append(.toolCalls(toolAccumulator.events))
+            events.append(.toolCalls(toolAccumulator.events(round: round)))
         }
         let tokenCount = usage?.completion_tokens ?? chunkCount
         let serverTTFT = usage?.time_to_first_token.flatMap { value in
@@ -524,7 +585,8 @@ struct StreamAssembler {
                     promptTokens: usage?.prompt_tokens,
                     tokensAreExact: usage?.completion_tokens != nil,
                     generationTokensPerSecond: serverGenerationRate,
-                    finishReason: finishReason
+                    finishReason: finishReason,
+                    cachedPromptTokens: usage?.cachedPromptTokens
                 )))
         return events
     }
@@ -557,10 +619,12 @@ struct ToolCallAccumulator {
 
     var isEmpty: Bool { items.isEmpty }
 
-    var events: [ToolCallEvent] {
+    /// Assembled calls in index order. Fallback identifiers are `call_<round>_<index>` so they stay
+    /// unique across the tool-loop rounds of one turn (ADR-0089).
+    func events(round: Int) -> [ToolCallEvent] {
         items.sorted { $0.key < $1.key }.map { index, item in
             ToolCallEvent(
-                id: item.id.isEmpty ? "call_\(index)" : item.id,
+                id: item.id.isEmpty ? "call_\(round)_\(index)" : item.id,
                 name: item.name,
                 argumentsJSON: item.args.isEmpty ? "{}" : item.args
             )
@@ -651,11 +715,24 @@ struct StreamChunk: Decodable {
         let finish_reason: String?
     }
     struct Usage: Decodable {
+        struct PromptTokensDetails: Decodable {
+            let cached_tokens: Int?
+        }
         let prompt_tokens: Int?
         let completion_tokens: Int?
         let time_to_first_token: Double?
         let generation_duration: Double?
         let generation_tokens_per_second: Double?
+        /// OpenAI-style prefix-cache accounting; several local servers report it too.
+        let prompt_tokens_details: PromptTokensDetails?
+        /// llama.cpp and some MLX servers report the cached prefix at the top level.
+        let cached_tokens: Int?
+        let prompt_cache_hit_tokens: Int?
+
+        var cachedPromptTokens: Int? {
+            [prompt_tokens_details?.cached_tokens, cached_tokens, prompt_cache_hit_tokens]
+                .compactMap { $0 }.first(where: { $0 >= 0 })
+        }
     }
     struct Timings: Decodable {
         let predicted_ms: Double?

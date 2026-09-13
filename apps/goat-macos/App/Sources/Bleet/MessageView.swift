@@ -17,12 +17,16 @@ struct MessageView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovering = false
+    @State private var showingResponseDetails = false
 
     var body: some View {
         content
             .contentShape(Rectangle())  // whole row (incl. the area below the text) is hoverable
             .onHover { h in
                 withAnimation(.easeOut(duration: 0.12)) { hovering = h }
+            }
+            .sheet(isPresented: $showingResponseDetails) {
+                ResponseDetailsView(message: message)
             }
     }
 
@@ -147,7 +151,7 @@ struct MessageView: View {
                         } else {
                             AssistantStatusRow(startedAt: message.complete ? nil : message.createdAt) {
                                 if message.text.isEmpty {
-                                    ThinkingLabel(title: "Thinking…", live: true)
+                                    PrefillStatusLabel(startedAt: message.createdAt)
                                 }
                             }
                         }
@@ -221,6 +225,13 @@ struct MessageView: View {
             CopyButton(text: message.text.isEmpty ? (message.error ?? "") : message.text)
                 .labelStyle(.iconOnly)
                 .font(.caption)
+            Button("Response Details…", systemImage: "info.circle") {
+                showingResponseDetails = true
+            }
+            .buttonStyle(.plain)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .help("Response Details")
             rememberButton
             FeedbackButtons(message: message)
         }
@@ -650,6 +661,20 @@ struct ThinkingDisclosure: View {
                     }
                 }
             }
+        }
+    }
+}
+
+/// Prefill status shown before the first token. Reads "Thinking…" briefly, then switches to
+/// "Waiting for the engine (prefill)" once prompt evaluation passes a short threshold, so a long
+/// prefill does not read as a freeze (ADR-0089). The elapsed clock comes from AssistantStatusRow.
+struct PrefillStatusLabel: View {
+    let startedAt: Date
+    static let prefillNoticeThreshold: TimeInterval = 10
+    var body: some View {
+        TimelineView(.periodic(from: startedAt, by: 1)) { context in
+            let waiting = context.date.timeIntervalSince(startedAt) >= Self.prefillNoticeThreshold
+            ThinkingLabel(title: waiting ? "Waiting for the engine (prefill)" : "Thinking…", live: true)
         }
     }
 }

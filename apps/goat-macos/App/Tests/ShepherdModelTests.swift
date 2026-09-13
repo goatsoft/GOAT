@@ -23,13 +23,16 @@ private actor FakeEngine: InferenceEngine {
     private(set) var requests: [GenerationRequest] = []
     private let onRequest: (@MainActor @Sendable (Int) -> Void)?
     private let failingRequest: Int?
+    private let failingError: any Error
 
     init(
         script: [[GenerationEvent]], failingRequest: Int? = nil,
+        failingError: any Error = EngineError.http(503),
         onRequest: (@MainActor @Sendable (Int) -> Void)? = nil
     ) {
         self.script = script
         self.failingRequest = failingRequest
+        self.failingError = failingError
         self.onRequest = onRequest
     }
 
@@ -39,7 +42,7 @@ private actor FakeEngine: InferenceEngine {
         requests.append(request)
         if let onRequest { await onRequest(requests.count) }
         if requests.count == failingRequest {
-            return AsyncThrowingStream { $0.finish(throwing: EngineError.http(503)) }
+            return AsyncThrowingStream { $0.finish(throwing: failingError) }
         }
         let events =
             script.isEmpty
@@ -113,6 +116,7 @@ private final class FakeToolSource: ShepherdToolSource {
     var allow = true
     var blockPermission = false
     var blockExecution = false
+    var resultContent: (@Sendable (String) -> String)?
     var pendingWorkNotice: String?
     func finishPendingWork() async -> String? { pendingWorkNotice }
     private var executionContinuation: CheckedContinuation<Void, Never>?
@@ -182,7 +186,7 @@ private final class FakeToolSource: ShepherdToolSource {
         guard allowed, !Task.isCancelled else { return nil }
         invocations += 1
         if blockExecution { await withCheckedContinuation { executionContinuation = $0 } }
-        return ToolResult(content: "ok", isError: false)
+        return ToolResult(content: resultContent?(argumentsJSON) ?? "ok", isError: false)
     }
 
     func finishExecution() {
@@ -219,6 +223,8 @@ private func fakeToolRoute(server: String = "srv", tool: String = "tool") -> She
 @MainActor
 private final class FakeEnv: ShepherdEnvironment {
     var automaticChatTitles = true
+    var autoCompactEnabled = true
+    var compactAtPercent = 80
     var availableModels: [ModelRef] = [ModelRef(id: "test-model")]
     var fallbackModelID: String? = "test-model"
     var project: ShepherdProjectContext?
@@ -233,13 +239,31 @@ private final class FakeEnv: ShepherdEnvironment {
     private(set) var metaChanges = 0
     private(set) var activeSessionID: UUID?
     private var persistenceContinuation: CheckedContinuation<Bool, Never>?
+    private var pendingPersistenceResult: Bool?
+
+    func generationContext(for modelID: String) -> GenerationContext? {
+        guard availableModels.contains(where: { $0.id == modelID }) else { return nil }
+        let identity = ModelIdentity(engineProfileID: "test", modelID: modelID)
+        let compatibility = ModelCompatibilityResolver.resolve(identity: identity)
+        return GenerationContext(
+            engineProfileID: "test", engineName: "Test", engineConfigurationRevision: 1,
+            identity: identity, compatibility: compatibility)
+    }
 
     func projectContext(forProject id: UUID) async -> ShepherdProjectContext? { project }
     func persist(_ message: ChatMessage, in session: ChatSession) async -> Bool {
         persistenceAttempts += 1
         if failingPersistenceAttempts.contains(persistenceAttempts) { return false }
-        if (blockInitialPersistence && !message.complete) || (blockLeadPersistence && message.role == .user) {
+        // Block only the first incomplete row: the lifecycle path saves the same row again as
+        // `started` before streaming, and that second save must not wait on a resolver.
+        if (blockInitialPersistence && !message.complete && !initialPersistenceRequested)
+            || (blockLeadPersistence && message.role == .user)
+        {
             initialPersistenceRequested = true
+            if let pendingPersistenceResult {
+                self.pendingPersistenceResult = nil
+                return pendingPersistenceResult
+            }
             let saved = await withCheckedContinuation { continuation in
                 persistenceContinuation = continuation
             }
@@ -250,12 +274,19 @@ private final class FakeEnv: ShepherdEnvironment {
     }
 
     func waitUntilInitialPersistenceRequested() async {
-        while !initialPersistenceRequested { await Task.yield() }
+        for _ in 0..<5_000 {
+            if initialPersistenceRequested { return }
+            try? await Task.sleep(for: .milliseconds(1))
+        }
     }
 
     func resolveInitialPersistence(_ saved: Bool) {
-        persistenceContinuation?.resume(returning: saved)
-        persistenceContinuation = nil
+        if let persistenceContinuation {
+            persistenceContinuation.resume(returning: saved)
+            self.persistenceContinuation = nil
+        } else {
+            pendingPersistenceResult = saved
+        }
     }
     func checkpoint(messageID: String, text: String, thinking: String) async { checkpoints += 1 }
     func sessionTouched(_ session: ChatSession) { touched += 1 }
@@ -407,7 +438,7 @@ private func workerSnapshot(
 @Test @MainActor func failedFinalPersistenceDoesNotWriteLifecycleMemory() async {
     let tools = FakeToolSource()
     let env = FakeEnv()
-    env.failingPersistenceAttempts = [2]
+    env.failingPersistenceAttempts = [3]
     let (shepherd, _, sameTools, sameEnv) = makeShepherd(
         script: [[.token("handover"), .done(GenStats(ttft: nil, tokens: 1, duration: 0.01))]],
         tools: tools,
@@ -519,7 +550,7 @@ private func workerRequest() -> GenerationRequest {
     let tools = FakeToolSource()
     tools.mapping = ["srv__tool": fakeToolRoute()]
     let env = FakeEnv()
-    env.failingPersistenceAttempts = [2]
+    env.failingPersistenceAttempts = [3]  // 1 prepared, 2 started, 3 tool-call transcript
     let (shepherd, engine, sameTools, sameEnv) = makeShepherd(
         script: [toolCallRound()], tools: tools, env: env)
     defer { _ = sameEnv }
@@ -542,7 +573,7 @@ private func workerRequest() -> GenerationRequest {
     let tools = FakeToolSource()
     tools.mapping = ["srv__tool": fakeToolRoute()]
     let env = FakeEnv()
-    env.failingPersistenceAttempts = [3]
+    env.failingPersistenceAttempts = [4]  // 1 prepared, 2 started, 3 transcript, 4 result
     let (shepherd, engine, sameTools, sameEnv) = makeShepherd(
         script: [toolCallRound(), toolCallRound()], tools: tools, env: env)
     defer { _ = sameEnv }
@@ -686,24 +717,59 @@ func missingPenFileCapabilitiesAreNeverAdvertised(readOnly: Bool) async throws {
     await shepherd.streamTask?.value
     #expect(await engine.requests.first?.tools.count == 1)
     #expect(tools.invocations == 0)
+    // Fenced syntax is ordinary content (ADR-0065): no tool runs and no approval is requested.
     #expect(!tools.permissionRequested)
 }
 
-@Test @MainActor func incompleteAndErroredMessagesStayOutOfThePrompt() async {
+@Test @MainActor func incompleteAndToolFormatRecoveryRowsStayOutOfThePrompt() async {
     let (shepherd, _, _, _) = makeShepherd(script: [])
     let session = ChatSession(effort: .trot, modelID: "test-model")
     let good = ChatMessage(role: .user)
     good.text = "hello"
     good.complete = true
     let streaming = ChatMessage(role: .assistant)
-    streaming.text = "half a rep"
+    streaming.text = "half a rep"  // still streaming: excluded
+    let recovered = ChatMessage(role: .assistant)
+    recovered.text = "printed a tool call as text"
+    recovered.complete = true
+    recovered.error = "tool-call markup returned as text"
+    recovered.generationFailureCategory =
+        GenerationProvenanceRecord.FailureCategory.toolFormatRecovery.rawValue  // excluded (ADR-0065)
     let errored = ChatMessage(role: .assistant)
     errored.text = "boom"
     errored.complete = true
-    errored.error = "engine exploded"
-    session.messages = [good, streaming, errored]
+    errored.error = "engine exploded"  // ADR-0089: a failed row with partial output is kept
+    session.messages = [good, streaming, recovered, errored]
     let turns = await shepherd.turns(for: session)
-    #expect(turns.count == 2)  // system + the one good user turn
+    let assistantTexts = turns.filter { $0.role == .assistant }.map(\.text)
+    #expect(assistantTexts == ["boom"])
+}
+
+@Test @MainActor func lengthLimitedAndStoppedRowsStayWithAModelVisibleSuffix() async {
+    let (shepherd, _, _, _) = makeShepherd(script: [])
+    let session = ChatSession(effort: .trot, modelID: "test-model")
+    let user = ChatMessage(role: .user)
+    user.text = "write an essay"
+    user.complete = true
+    let truncated = ChatMessage(role: .assistant)
+    truncated.text = "Here is the start"
+    truncated.complete = true
+    truncated.stats = GenStats(ttft: nil, tokens: 10, duration: 0.1, finishReason: "length")
+    truncated.error = "reached its output limit"
+    let follow = ChatMessage(role: .user)
+    follow.text = "continue"
+    follow.complete = true
+    let stopped = ChatMessage(role: .assistant)
+    stopped.text = ""
+    stopped.complete = true
+    stopped.generationFailureCategory =
+        GenerationProvenanceRecord.FailureCategory.cancelled.rawValue
+    stopped.error = "stopped by you"
+    session.messages = [user, truncated, follow, stopped]
+    let turns = await shepherd.turns(for: session)
+    let assistantTexts = turns.filter { $0.role == .assistant }.map(\.text)
+    #expect(assistantTexts.contains("Here is the start\n\n[response truncated by the output limit]"))
+    #expect(assistantTexts.contains("[stopped by the user before the response finished]"))
 }
 
 @Test @MainActor func unknownModelNeverSilentlyDropsUserImages() async throws {
@@ -746,9 +812,19 @@ func missingPenFileCapabilitiesAreNeverAdvertised(readOnly: Bool) async throws {
 @Test @MainActor func toolWorkContinuesPastEightRoundsUntilTheModelFinishes() async {
     let tools = FakeToolSource()
     tools.mapping = ["srv__tool": fakeToolRoute()]
-    // A longer coding workflow must reach its final response without a round cutoff.
+    tools.resultContent = { $0 }  // distinct results per argument, so the no-progress guard is not tripped
+    // A longer coding workflow must reach its final response without a round cutoff. Each round does
+    // distinct work (different arguments and results), which the repetition guard leaves alone.
+    let rounds = (0..<12).map { i -> [GenerationEvent] in
+        [
+            .toolCalls([
+                ToolCallEvent(id: "c" + String(i), name: "srv__tool", argumentsJSON: "arg" + String(i))
+            ]),
+            .done(GenStats(ttft: nil, tokens: 1, duration: 0.01)),
+        ]
+    }
     let (shepherd, _, sameTools, env) = makeShepherd(
-        script: Array(repeating: toolCallRound(), count: 12) + [[.token("All twelve actions are complete.")]],
+        script: rounds + [[.token("All twelve actions are complete.")]],
         tools: tools, env: FakeEnv()
     )
     let session = ChatSession(effort: .trot, modelID: "test-model")
@@ -1437,11 +1513,12 @@ func automaticTitlesNameToolWorkflowsWithAnEmptyFinalMessage(narrated: Bool) asy
     tools.mapping = ["srv__tool": fakeToolRoute()]
     let firstRound: [GenerationEvent] =
         (narrated ? [.token("Let me create the Vite configuration file.")] : []) + toolCallRound()
+    // The title request follows the whole turn (ADR-0085), so it is the last scripted response.
     let (shepherd, engine, _, env) = makeShepherd(
         script: [
             firstRound,
-            [.token("Vue TypeScript Project Setup")],
             [.done(GenStats(ttft: nil, tokens: 0, duration: 0.01))],
+            [.token("Vue TypeScript Project Setup")],
         ], tools: tools)
     defer { _ = env }
     let session = ChatSession(effort: .graze, modelID: "test-model")
@@ -1601,7 +1678,7 @@ func automaticTitlesNameToolWorkflowsWithAnEmptyFinalMessage(narrated: Bool) asy
     tools.specs = [ToolSpec(name: "srv__tool", description: "Write file", parametersJSON: "{}")]
     tools.mapping = ["srv__tool": fakeToolRoute()]
     tools.allow = false
-    let broken = "<function=srv__tool>\n<parameter=path>. </parameter>\n</function>\n</tool_call>"
+    let broken = "<tool_call>\n<function=srv__tool>\n<parameter=path>. </parameter>\n</function>\n</tool_call>"
     let (shepherd, engine, _, env) = makeShepherd(
         script: [[.token(broken)], toolCallRound(), [.token("The requested action was denied.")]], tools: tools)
     defer { _ = env }
@@ -1619,28 +1696,102 @@ func automaticTitlesNameToolWorkflowsWithAnEmptyFinalMessage(narrated: Bool) asy
     #expect(session.messages[2].toolEvents.first?.denied == true)
     let requests = await engine.requests
     #expect(requests.count == 3)
-    #expect(requests[1].turns.first?.text.contains("No tool from that response was executed") == true)
+    // The failed markup row is excluded from history; the retry round carries the recovery note
+    // on the newest exchange rather than in the system turn (ADR-0085).
     #expect(!requests[1].turns.contains { $0.text == broken })
+    #expect(requests[1].turns.contains { $0.text.contains("structured tool interface") })
     #expect(requests[2].turns.contains { $0.role == .tool && $0.text.contains("denied") })
 }
 
-@Test @MainActor func toolMarkupDetectionAcceptsMissingOpenersButIgnoresFencedExamples() {
-    let body = "<function=pen_list_files>\n<parameter=path>. </parameter>\n</function>\n</tool_call>"
+@Test @MainActor func mixedPrintedMarkupExecutesOnlyStructuredToolAndContinues() async {
+    let tools = FakeToolSource()
+    tools.specs = [ToolSpec(name: "srv__tool", description: "Fixture tool", parametersJSON: "{}")]
+    tools.mapping = ["srv__tool": fakeToolRoute()]
+    let (shepherd, engine, _, env) = makeShepherd(
+        script: [
+            [
+                .token("Narrative before the printed <tool_call> markup."),
+                .toolCalls([
+                    ToolCallEvent(id: "structured-1", name: "srv__tool", argumentsJSON: "{}")
+                ]),
+                .token("Narrative after the printed markup."),
+                .done(GenStats(ttft: nil, tokens: 12, duration: 0.01)),
+            ],
+            [
+                .token("The structured tool result was received."),
+                .done(GenStats(ttft: nil, tokens: 8, duration: 0.01)),
+            ],
+        ], tools: tools)
+    defer { _ = env }
+    let session = ChatSession(effort: .trot, modelID: "test-model")
+    session.title = "Tool fixture"
+    let user = ChatMessage(role: .user)
+    user.text = "Run the fixture tool"
+    user.complete = true
+    session.messages = [user]
+
+    #expect(shepherd.run(in: session))
+    await shepherd.streamTask?.value
+    #expect(tools.invocations == 1)
+    #expect(tools.permissionRequested)
+    #expect(await engine.requests.count == 2)
+    #expect(session.messages.contains { $0.text.contains("structured tool result") })
+}
+
+@Test @MainActor func toolMarkupDetectionRequiresStandaloneKnownEnvelopes() {
+    let body = "<tool_call>\n<function=pen_list_files>\n<parameter=path>. </parameter>\n</function>\n</tool_call>"
     let names: Set<String> = ["pen_list_files"]
     #expect(ShepherdModel.hasUnexecutedToolMarkup(body, toolNames: names))
-    #expect(ShepherdModel.hasUnexecutedToolMarkup("<tool_call>\n" + body, toolNames: names))
+    #expect(!ShepherdModel.hasUnexecutedToolMarkup("Example: " + body, toolNames: names))
     #expect(!ShepherdModel.hasUnexecutedToolMarkup("Example:\n```xml\n" + body + "\n```", toolNames: names))
     #expect(!ShepherdModel.hasUnexecutedToolMarkup("Example:\n~~~xml\n" + body + "\n~~~", toolNames: names))
     #expect(!ShepherdModel.hasUnexecutedToolMarkup(body, toolNames: []))
+    #expect(!ShepherdModel.hasUnexecutedToolMarkup("</tool_call>", toolNames: names))
+    #expect(
+        !ShepherdModel.hasUnexecutedToolMarkup(
+            "<tool_call>\nunknown\n<arg_key>x</arg_key><arg_value>y</arg_value>\n</tool_call>", toolNames: names))
+    let glm = "<tool_call>\npen_list_files\n<arg_key>path</arg_key><arg_value>.</arg_value>\n</tool_call>"
+    #expect(UnexecutedToolMarkupDetector.detect(glm, toolNames: names)?.style == .glm)
+    #expect(UnexecutedToolMarkupDetector.detect("</tool_call>", toolNames: names)?.confidence == .low)
+    #expect(!ShepherdModel.hasUnexecutedToolMarkup("vec4<f32>(1.0) < T", toolNames: names))
+}
+
+@Test func fileRepairTrackerBlocksDeleteAfterCreateConflictAndStopsCycles() {
+    var tracker = FileRepairProgressTracker()
+    let key = FileRepairProgressTracker.Key(workspaceIdentity: "workspace", relativePath: "src/main.swift")
+    let conflict = ToolExecutionDiagnostic(fileObservations: [
+        FileOperationObservation(
+            workspaceIdentity: key.workspaceIdentity, relativePath: key.relativePath,
+            kind: .create, outcome: .alreadyExists)
+    ])
+    #expect(tracker.observe(conflict) == nil)
+    let removal = ToolExecutionDiagnostic(fileObservations: [
+        FileOperationObservation(
+            workspaceIdentity: key.workspaceIdentity, relativePath: key.relativePath,
+            kind: .remove, outcome: .succeeded)
+    ])
+    #expect(tracker.preflight(removal) == FileRepairProgressTracker.blockedRemovalMessage)
+
+    var cycleTracker = FileRepairProgressTracker()
+    var stop: String?
+    for digest in ["B", "A", "B", "A", "B"] {
+        stop = cycleTracker.observe(
+            ToolExecutionDiagnostic(fileObservations: [
+                FileOperationObservation(
+                    workspaceIdentity: key.workspaceIdentity, relativePath: key.relativePath,
+                    kind: .edit, outcome: .succeeded, beforeDigest: "previous", afterDigest: digest)
+            ]))
+    }
+    #expect(stop?.contains("content cycle") == true)
 }
 
 @Test @MainActor func toolFormatRecoveryStopsIfItsFailedResponseCannotBeSaved() async {
     let tools = FakeToolSource()
     tools.specs = [ToolSpec(name: "srv__tool", description: "Tool", parametersJSON: "{}")]
     let env = FakeEnv()
-    env.failingPersistenceAttempts = [2]
+    env.failingPersistenceAttempts = [3]  // 1 prepared, 2 started, 3 failed row
     let (shepherd, engine, _, _) = makeShepherd(
-        script: [[.token("<function=srv__tool></function></tool_call>")], toolCallRound()],
+        script: [[.token("<tool_call>\n<function=srv__tool></function>\n</tool_call>")], toolCallRound()],
         tools: tools, env: env)
     defer { _ = env }
     let session = ChatSession(effort: .trot, modelID: "test-model")
@@ -1661,7 +1812,9 @@ func automaticTitlesNameToolWorkflowsWithAnEmptyFinalMessage(narrated: Bool) asy
     tools.specs = [ToolSpec(name: "srv__tool", description: "Tool", parametersJSON: "{}")]
     tools.mapping = ["srv__tool": fakeToolRoute()]
     let (shepherd, engine, _, env) = makeShepherd(
-        script: [toolCallRound(), [.token("<function=srv__tool></function></tool_call>")], [.token("Done.")]],
+        script: [
+            toolCallRound(), [.token("<tool_call>\n<function=srv__tool></function>\n</tool_call>")], [.token("Done.")],
+        ],
         tools: tools)
     defer { _ = env }
     let session = ChatSession(effort: .trot, modelID: "test-model")
@@ -1675,7 +1828,9 @@ func automaticTitlesNameToolWorkflowsWithAnEmptyFinalMessage(narrated: Bool) asy
     #expect(tools.invocations == 1)
     let requests = await engine.requests
     #expect(requests.count == 3)
-    #expect(requests[2].turns.contains { $0.role == .tool && $0.text == "ok" })
+    // The completed tool result is retained on the retry. The recovery note rides that last
+    // turn of the newest exchange (ADR-0085), so match its prefix rather than the whole text.
+    #expect(requests[2].turns.contains { $0.role == .tool && $0.toolCallID == "c1" && $0.text.hasPrefix("ok") })
     #expect(requests[2].turns.filter { !$0.toolCalls.isEmpty }.count == 1)
 }
 
@@ -1691,7 +1846,10 @@ private actor LiveRecoveryProbeEngine: InferenceEngine {
         if injectMalformedResponse {
             injectMalformedResponse = false
             return AsyncThrowingStream {
-                $0.yield(.token("<function=pen_list_files>\n<parameter=path>. </parameter>\n</function>\n</tool_call>"))
+                $0.yield(
+                    .token(
+                        "<tool_call>\n<function=pen_list_files>\n<parameter=path>. </parameter>\n</function>\n</tool_call>"
+                    ))
                 $0.finish()
             }
         }
@@ -1823,11 +1981,12 @@ func leadWaitsForTheCurrentApprovalAndPreservesItsOutcome(approved: Bool) async 
     let tools = FakeToolSource()
     tools.mapping = ["srv__tool": fakeToolRoute()]
     tools.blockPermission = true
+    // The title request follows the whole turn (ADR-0085), so it is the last scripted response.
     let (shepherd, engine, _, env) = makeShepherd(
         script: [
             [.token("I will create the files.")] + toolCallRound(),
-            [.token("Create Vue Project")],
             [.token("I will explain the next step.")],
+            [.token("Create Vue Project")],
         ], tools: tools)
     defer { _ = env }
     let session = ChatSession(effort: .graze, modelID: "test-model")
@@ -1837,13 +1996,13 @@ func leadWaitsForTheCurrentApprovalAndPreservesItsOutcome(approved: Bool) async 
     session.messages = [user]
     shepherd.run(in: session)
     await tools.waitUntilPermissionRequested()
-    #expect(session.title == "Create Vue Project")
+    #expect(session.hasDefaultTitle)
     #expect(session.isStreaming)
     #expect(await shepherd.lead("Explain the next step after this action", in: session))
     #expect(tools.cancellationRequests == 0)
     #expect(shepherd.pendingLeadCount == 1)
     #expect(session.messages.flatMap(\.toolEvents).first?.result == nil)
-    #expect(await engine.requests.count == 2)
+    #expect(await engine.requests.count == 1)
     tools.resolvePermission(approved)
     await shepherd.streamTask?.value
     #expect(tools.invocations == (approved ? 1 : 0))
@@ -1851,8 +2010,11 @@ func leadWaitsForTheCurrentApprovalAndPreservesItsOutcome(approved: Bool) async 
     #expect(call?.denied == !approved)
     #expect(call?.result == (approved ? "ok" : "User denied this tool call."))
     let requests = await engine.requests
-    #expect(requests.last?.turns.last?.text == "Explain the next step after this action")
+    #expect(requests.count == 3)
+    #expect(requests[1].turns.last?.text == "Explain the next step after this action")
+    #expect(requests.last?.turns.first?.text.contains("Write a 3-5 word title") == true)
     #expect(session.messages.last?.text == "I will explain the next step.")
+    #expect(session.title == "Create Vue Project")
 }
 
 @Test @MainActor func failedLeadSaveKeepsItOutOfTheConversationAndStopDoesNotRestart() async {
@@ -2157,4 +2319,563 @@ func leadWaitsForTheCurrentApprovalAndPreservesItsOutcome(approved: Bool) async 
     #expect(turns.last?.text.contains("goats.swift") == true)
     #expect(turns.last?.text.contains("let goats = 7") == true)
     #expect(turns.last?.images == [image])
+}
+
+// MARK: - Prefix stability (ADR-0085)
+
+private func failedEditSnapshot(hostNotes: [String] = [], trailingUser: Bool = false) -> ShepherdPromptSnapshot {
+    var messages = [
+        ShepherdPromptSnapshot.Message(
+            role: .user, text: "Fix the import.", thinking: "", complete: true, error: nil,
+            attachmentPaths: [], toolEvents: []),
+        ShepherdPromptSnapshot.Message(
+            role: .assistant, text: "", thinking: "", complete: true, error: nil,
+            attachmentPaths: [],
+            toolEvents: [
+                ShepherdPromptSnapshot.ToolEvent(
+                    id: "edit-1", requestName: "pen_edit_file",
+                    arguments: #"{"path":"a.ts","old_text":"x","new_text":"y"}"#,
+                    result: "old_text was not found.", isError: true)
+            ]),
+    ]
+    if trailingUser {
+        messages.append(
+            ShepherdPromptSnapshot.Message(
+                role: .user, text: "Try again.", thinking: "", complete: true, error: nil,
+                attachmentPaths: [], toolEvents: []))
+    }
+    var snapshot = ShepherdPromptSnapshot(
+        date: Date(timeIntervalSince1970: 0), project: nil, extensionSections: [], messages: messages)
+    snapshot.hostNotes = hostNotes
+    return snapshot
+}
+
+@Test func recoveryHintsRideOnTheNewestToolResultAndLeaveTheSystemTurnUnchanged() async {
+    let worker = ShepherdGenerationWorker(engine: FakeEngine(script: []))
+    let toolNames: Set<String> = ["pen_edit_file", "pen_read_file"]
+    let withFailure = await worker.turns(for: failedEditSnapshot(), toolsAvailable: true, toolNames: toolNames)
+    let clean = await worker.turns(
+        for: ShepherdPromptSnapshot(
+            date: Date(timeIntervalSince1970: 0), project: nil, extensionSections: [],
+            messages: [failedEditSnapshot().messages[0]]),
+        toolsAvailable: true, toolNames: toolNames)
+
+    // Byte-identical system turn whether or not the last round failed.
+    #expect(withFailure.first?.role == .system)
+    #expect(withFailure.first?.text == clean.first?.text)
+    #expect(withFailure.first?.text.contains("Next-action correction") == false)
+
+    let last = withFailure.last
+    #expect(last?.role == .tool)
+    #expect(last?.toolCallID == "edit-1")
+    #expect(last?.text.hasPrefix("old_text was not found.") == true)
+    #expect(last?.text.contains("[GOAT note]") == true)
+    #expect(last?.text.contains("Next-action correction") == true)
+    #expect(last?.text.contains("pen_edit_file failed") == true)
+}
+
+@Test func hostNotesAttachToTheNewestUserTurnWhenNoToolResultEndsTheExchange() async {
+    let worker = ShepherdGenerationWorker(engine: FakeEngine(script: []))
+    let turns = await worker.turns(
+        for: failedEditSnapshot(hostNotes: ["Use the structured tool interface."], trailingUser: true),
+        toolsAvailable: true, toolNames: ["pen_edit_file"])
+
+    #expect(turns.last?.role == .user)
+    #expect(turns.last?.text.hasPrefix("Try again.") == true)
+    #expect(turns.last?.text.contains("[GOAT note]\nUse the structured tool interface.") == true)
+    #expect(turns.filter { $0.role == .user }.count == 2)
+    #expect(turns.first?.text.contains("structured tool interface") == false)
+}
+
+@Test @MainActor func automaticTitleWaitsUntilTheToolTurnEnds() async throws {
+    let tools = FakeToolSource()
+    tools.specs = [ToolSpec(name: "srv__tool", description: "Fixture tool", parametersJSON: "{}")]
+    tools.mapping = ["srv__tool": fakeToolRoute()]
+    let (shepherd, engine, _, env) = makeShepherd(
+        script: [
+            toolCallRound(),
+            [.token("Done."), .done(GenStats(ttft: nil, tokens: 1, duration: 0.01))],
+            [.token("Fixture Tool Run"), .done(GenStats(ttft: nil, tokens: 3, duration: 0.01))],
+        ], tools: tools)
+    defer { _ = env }
+    let session = ChatSession(effort: .trot, modelID: "test-model")
+    let user = ChatMessage(role: .user)
+    user.text = "Run the fixture tool"
+    user.complete = true
+    session.messages = [user]
+
+    #expect(shepherd.run(in: session))
+    await shepherd.streamTask?.value
+
+    let requests = await engine.requests
+    #expect(requests.count == 3)
+    // Rounds one and two share the prefix; only the final request is the title prompt.
+    #expect(requests[0].turns.first?.text == requests[1].turns.first?.text)
+    #expect(requests[1].turns.contains { $0.role == .tool })
+    #expect(requests[2].turns.first?.role == .user)
+    #expect(requests[2].turns.first?.text.contains("Write a 3-5 word title") == true)
+    #expect(session.title == "Fixture Tool Run")
+    #expect(tools.invocations == 1)
+}
+
+@Test @MainActor func exactUsageCalibratesTheNextPlanForTheChat() async throws {
+    let env = FakeEnv()
+    env.availableModels = [ModelRef(id: "test-model", contextLength: 32_000)]
+    let (shepherd, engine, _, sameEnv) = makeShepherd(
+        script: [
+            [
+                .token("First."),
+                .done(GenStats(ttft: nil, tokens: 1, duration: 0.01, promptTokens: 40, tokensAreExact: true)),
+            ],
+            [
+                .token("Second."),
+                .done(GenStats(ttft: nil, tokens: 1, duration: 0.01, promptTokens: 60, tokensAreExact: true)),
+            ],
+        ], env: env)
+    defer { _ = sameEnv }
+    let session = ChatSession(effort: .trot, modelID: "test-model")
+    session.title = "Calibrated"
+    let user = ChatMessage(role: .user)
+    user.text = "hello"
+    user.complete = true
+    session.messages = [user]
+
+    #expect(session.contextCalibrationRatio == 1.0)
+    #expect(shepherd.run(in: session))
+    await shepherd.streamTask?.value
+    let first = session.contextCalibrationRatio
+    #expect(first != 1.0)
+    #expect(first >= PromptBudgeter.minimumCalibration && first <= PromptBudgeter.maximumCalibration)
+    #expect(session.contextCalibrationSamples == 1)
+    #expect(session.lastContextTokens == 41)
+    #expect(session.contextIsExact)
+
+    let follow = ChatMessage(role: .user)
+    follow.text = "again"
+    follow.complete = true
+    session.messages.append(follow)
+    #expect(shepherd.run(in: session))
+    await shepherd.streamTask?.value
+    #expect(session.contextCalibrationSamples == 2)
+    #expect(await engine.requests.count == 2)
+}
+
+// MARK: - ADR-0089 Stage B: retry before the first token
+
+/// Yields a fixed prefix of events, then fails the stream. Proves output-started disables retry.
+private actor MidStreamFailEngine: InferenceEngine {
+    private(set) var requests: [GenerationRequest] = []
+    private let events: [GenerationEvent]
+    private let failure: Error
+    init(yield events: [GenerationEvent], thenThrow failure: Error) {
+        self.events = events
+        self.failure = failure
+    }
+    func health() async -> EngineHealth { .ok([]) }
+    func stream(_ request: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
+        requests.append(request)
+        let events = self.events
+        let failure = self.failure
+        return AsyncThrowingStream { continuation in
+            for event in events { continuation.yield(event) }
+            continuation.finish(throwing: failure)
+        }
+    }
+}
+
+@Test @MainActor func streamRetriesATransientFailureBeforeAnyOutput() async throws {
+    let engine = FakeEngine(
+        script: [[.token("recovered"), .done(GenStats(ttft: nil, tokens: 1, duration: 0.01))]],
+        failingRequest: 1)
+    let worker = ShepherdGenerationWorker(engine: engine, retryBaseDelaySeconds: 0)
+    var updates: [ShepherdStreamUpdate] = []
+    let result = try await worker.stream(workerRequest()) { update in
+        updates.append(update)
+        return true
+    }
+    #expect(await engine.requests.count == 2)  // one 503, then success
+    #expect(updates.map(\.text).joined() == "recovered")
+    #expect(result.stats?.tokens == 1)
+}
+
+@Test @MainActor func streamDoesNotRetryOnceOutputHasStarted() async throws {
+    let engine = MidStreamFailEngine(yield: [.token("partial")], thenThrow: EngineError.http(503))
+    let worker = ShepherdGenerationWorker(engine: engine, retryBaseDelaySeconds: 0)
+    var updates: [ShepherdStreamUpdate] = []
+    var threw = false
+    do {
+        _ = try await worker.stream(workerRequest()) { update in
+            updates.append(update)
+            return true
+        }
+    } catch {
+        threw = true
+    }
+    #expect(threw)
+    #expect(await engine.requests.count == 1)  // a shown token disables retry
+    #expect(updates.map(\.text).joined() == "partial")
+}
+
+@Test @MainActor func streamRetriesAWhollyEmptyResponseOnce() async throws {
+    let engine = FakeEngine(script: [
+        [.done(GenStats(ttft: nil, tokens: 0, duration: 0.01))],
+        [.token("recovered"), .done(GenStats(ttft: nil, tokens: 1, duration: 0.01))],
+    ])
+    let worker = ShepherdGenerationWorker(engine: engine, retryBaseDelaySeconds: 0)
+    var updates: [ShepherdStreamUpdate] = []
+    let result = try await worker.stream(workerRequest()) { update in
+        updates.append(update)
+        return true
+    }
+    #expect(await engine.requests.count == 2)
+    #expect(updates.map(\.text).joined() == "recovered")
+    #expect(result.stats?.tokens == 1)
+}
+
+@Test @MainActor func streamStopsAfterASecondEmptyResponse() async throws {
+    let engine = FakeEngine(script: [
+        [.done(GenStats(ttft: nil, tokens: 0, duration: 0.01))],
+        [.done(GenStats(ttft: nil, tokens: 0, duration: 0.01))],
+    ])
+    let worker = ShepherdGenerationWorker(engine: engine, retryBaseDelaySeconds: 0)
+    let result = try await worker.stream(workerRequest()) { _ in true }
+    #expect(await engine.requests.count == 2)  // one silent retry only
+    #expect(result.toolCalls.isEmpty)
+    #expect(result.stats?.tokens == 0)
+}
+
+@Test func retryPredicateMatchesTransientStatusesAndResetsOnly() {
+    #expect(ShepherdGenerationWorker.isRetryableBeforeFirstToken(EngineError.http(503)))
+    #expect(
+        ShepherdGenerationWorker.isRetryableBeforeFirstToken(
+            EngineError.httpDetail(429, "slow down", retryAfter: 2)))
+    #expect(ShepherdGenerationWorker.isRetryableBeforeFirstToken(URLError(.networkConnectionLost)))
+    #expect(!ShepherdGenerationWorker.isRetryableBeforeFirstToken(EngineError.http(400)))
+    #expect(!ShepherdGenerationWorker.isRetryableBeforeFirstToken(EngineError.http(500)))
+    #expect(!ShepherdGenerationWorker.isRetryableBeforeFirstToken(EngineError.notConfigured))
+    #expect(
+        ShepherdGenerationWorker.retryAfter(
+            from: EngineError.httpDetail(429, "x", retryAfter: 5)) == 5)
+}
+
+// MARK: - ADR-0089 Stage C: stall watchdog
+
+/// Yields a prefix of events, then never finishes: simulates an engine that stalls after output.
+private actor HangingEngine: InferenceEngine {
+    private(set) var requests: [GenerationRequest] = []
+    private let prefix: [GenerationEvent]
+    init(yield prefix: [GenerationEvent]) { self.prefix = prefix }
+    func health() async -> EngineHealth { .ok([]) }
+    func stream(_ request: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
+        requests.append(request)
+        let prefix = self.prefix
+        return AsyncThrowingStream { continuation in
+            for event in prefix { continuation.yield(event) }
+            // Intentionally never finishes.
+        }
+    }
+}
+
+@Test @MainActor func streamFailsWhenTheEngineStallsAfterFirstOutput() async {
+    let engine = HangingEngine(yield: [.token("partial")])
+    let worker = ShepherdGenerationWorker(engine: engine, postFirstTokenStallSeconds: 0.05)
+    var caught: Error?
+    do {
+        _ = try await worker.stream(workerRequest()) { _ in true }
+    } catch {
+        caught = error
+    }
+    #expect(caught is WorkerStall)
+    #expect(await engine.requests.count == 1)  // a stall is not a before-first-token retry
+}
+
+// MARK: - ADR-0089 Stage E: repetition guard
+
+@Test func repetitionGuardStopsAfterThreeIdenticalCalls() {
+    var tracker = RepetitionGuard()
+    #expect(tracker.observe(name: "srv__search", argumentsJSON: #"{"q":"x"}"#, result: "a") == nil)
+    #expect(tracker.observe(name: "srv__search", argumentsJSON: #"{"q":"x"}"#, result: "b") == nil)
+    // Canonically identical arguments (reordered whitespace) still count as the same call.
+    #expect(tracker.observe(name: "srv__search", argumentsJSON: #"{ "q" : "x" }"#, result: "c") != nil)
+}
+
+@Test func repetitionGuardStopsAfterThreeIdenticalResults() {
+    var tracker = RepetitionGuard()
+    // Different arguments each time, so only the identical results trip the guard.
+    #expect(tracker.observe(name: "srv__ls", argumentsJSON: #"{"p":"a"}"#, result: "empty") == nil)
+    #expect(tracker.observe(name: "srv__ls", argumentsJSON: #"{"p":"b"}"#, result: "empty") == nil)
+    #expect(tracker.observe(name: "srv__ls", argumentsJSON: #"{"p":"c"}"#, result: "empty") != nil)
+}
+
+@Test func repetitionGuardLeavesProductiveVariedWorkAlone() {
+    var tracker = RepetitionGuard()
+    #expect(tracker.observe(name: "srv__edit", argumentsJSON: #"{"n":1}"#, result: "edited 1") == nil)
+    #expect(tracker.observe(name: "srv__edit", argumentsJSON: #"{"n":2}"#, result: "edited 2") == nil)
+    #expect(tracker.observe(name: "srv__edit", argumentsJSON: #"{"n":3}"#, result: "edited 3") == nil)
+    #expect(tracker.observe(name: "srv__edit", argumentsJSON: #"{"n":4}"#, result: "edited 4") == nil)
+}
+
+@Test @MainActor func repeatedIdenticalToolCallsPauseTheTurn() async {
+    let tools = FakeToolSource()
+    tools.mapping = ["srv__tool": fakeToolRoute()]
+    let (shepherd, engine, sameTools, env) = makeShepherd(
+        script: [toolCallRound(), toolCallRound(), toolCallRound()],
+        tools: tools)
+    defer { _ = env }
+    let session = ChatSession(effort: .trot, modelID: "test-model")
+    session.title = "Looping"  // named, so auto-title makes no extra engine request
+    let user = ChatMessage(role: .user)
+    user.text = "loop please"
+    user.complete = true
+    session.messages = [user]
+    #expect(shepherd.run(in: session))
+    await shepherd.streamTask?.value
+    #expect(sameTools.invocations == 3)  // the third identical call trips the guard
+    #expect(await engine.requests.count == 3)  // no fourth round after the pause
+    #expect(session.messages.last?.error?.contains("without making progress") == true)
+}
+
+@Test @MainActor func compactionRowFoldsCoveredHistoryAndRidesAsAUserTurn() async throws {
+    let (shepherd, _, _, env) = makeShepherd(script: [])
+    let session = ChatSession(effort: .trot, modelID: "test-model")
+
+    let oldUser = ChatMessage(role: .user)
+    oldUser.text = "old question about the water shader"
+    oldUser.complete = true
+    let oldAnswer = ChatMessage(role: .assistant)
+    oldAnswer.text = "old answer about the water shader"
+    oldAnswer.complete = true
+    let summary = ChatMessage(role: .user)
+    summary.text = "Goal: ship the water system."
+    summary.kind = .compaction
+    summary.compaction = CompactionInfo(
+        coversUpToMessageID: oldAnswer.id.uuidString, coveredExchangeCount: 1,
+        filesRead: ["src/a.ts"], filesEdited: ["src/b.ts"])
+    summary.complete = true
+    let newUser = ChatMessage(role: .user)
+    newUser.text = "new question about lakes"
+    newUser.complete = true
+    session.messages = [oldUser, oldAnswer, summary, newUser]
+
+    let turns = await shepherd.turns(for: session)
+
+    // Covered rows are gone; the summary rides as a user turn carrying the appended file lists.
+    #expect(!turns.contains { $0.text.contains("old question about the water shader") })
+    #expect(!turns.contains { $0.text.contains("old answer about the water shader") })
+    let summaryTurn = try #require(
+        turns.first { $0.role == .user && $0.text.contains("Goal: ship the water system.") })
+    #expect(summaryTurn.text.contains("Files edited:"))
+    #expect(summaryTurn.text.contains("- src/b.ts"))
+    #expect(summaryTurn.text.contains("Files read:"))
+    #expect(summaryTurn.text.contains("- src/a.ts"))
+    #expect(turns.contains { $0.text.contains("new question about lakes") })
+
+    // The summary turn precedes the newest user turn in the prompt.
+    let summaryPos = try #require(turns.firstIndex { $0.text.contains("Goal: ship the water system.") })
+    let newPos = try #require(turns.firstIndex { $0.text.contains("new question about lakes") })
+    #expect(summaryPos < newPos)
+    _ = env
+}
+
+@Test @MainActor func manualCompactWithNothingToFoldNotifies() async throws {
+    let env = FakeEnv()
+    env.compactAtPercent = 0
+    let (shepherd, _, _, sameEnv) = makeShepherd(script: [], env: env)
+    let session = ChatSession(effort: .trot, modelID: "test-model")
+    let compact = ChatMessage(role: .user)
+    compact.text = "/compact"
+    compact.complete = true
+    session.messages = [compact]
+
+    #expect(shepherd.run(in: session))
+    await shepherd.streamTask?.value
+
+    #expect(session.messages.count == 1)
+    #expect(compact.kind == .regular)
+    #expect(compact.contextNotice == "Nothing to compact yet.")
+    _ = sameEnv
+}
+
+@Test @MainActor func manualCompactBelowThresholdIsANoOpWithANotice() async throws {
+    let env = FakeEnv()
+    env.compactAtPercent = 95
+    let (shepherd, _, _, sameEnv) = makeShepherd(script: [], env: env)
+    let session = ChatSession(effort: .trot, modelID: "test-model")
+    let user = ChatMessage(role: .user)
+    user.text = "a short question"
+    user.complete = true
+    let assistant = ChatMessage(role: .assistant)
+    assistant.text = "a short answer"
+    assistant.complete = true
+    let compact = ChatMessage(role: .user)
+    compact.text = "/compact"
+    compact.complete = true
+    session.messages = [user, assistant, compact]
+
+    #expect(shepherd.run(in: session))
+    await shepherd.streamTask?.value
+
+    #expect(session.messages.count == 3)
+    #expect(compact.kind == .regular)
+    #expect(compact.compaction == nil)
+    #expect(compact.contextNotice?.contains("under your 95% threshold") == true)
+    _ = sameEnv
+}
+
+@Test @MainActor func manualCompactFoldsHistoryIntoACompactionRow() async throws {
+    let env = FakeEnv()
+    env.compactAtPercent = 0  // always over threshold, so the gate never blocks this test
+    let (shepherd, engine, _, sameEnv) = makeShepherd(
+        script: [
+            [
+                .token("Goal: ship the water system."),
+                .done(GenStats(ttft: nil, tokens: 5, duration: 0.01)),
+            ]
+        ],
+        env: env)
+    defer { _ = engine }
+    let session = ChatSession(effort: .trot, modelID: "test-model")
+
+    let user = ChatMessage(role: .user)
+    user.text = "start the water shader work"
+    user.complete = true
+    let assistant = ChatMessage(role: .assistant)
+    assistant.text = "done"
+    assistant.complete = true
+    assistant.toolEvents = [
+        ToolEventSnapshot(
+            id: "w1", server: "GOATed", tool: "pen_write_file",
+            arguments: #"{"path":"src/water.ts"}"#, result: "saved")
+    ]
+    let compact = ChatMessage(role: .user)
+    compact.text = "/compact keep the shader constraints"
+    compact.complete = true
+    session.messages = [user, assistant, compact]
+
+    #expect(shepherd.run(in: session))
+    await shepherd.streamTask?.value
+
+    // The /compact message became the compaction row; no assistant response was added.
+    #expect(session.messages.count == 3)
+    let row = try #require(session.messages.last)
+    #expect(row.id == compact.id)
+    #expect(row.kind == .compaction)
+    #expect(row.text == "Goal: ship the water system.")
+    #expect(row.compaction?.filesEdited == ["src/water.ts"])
+    #expect(row.compaction?.coveredExchangeCount == 1)
+    #expect(row.contextNotice == nil)
+
+    // The prompt now folds the covered rows behind the summary turn.
+    let turns = await shepherd.turns(for: session)
+    #expect(!turns.contains { $0.text.contains("start the water shader work") })
+    #expect(turns.contains { $0.text.contains("Goal: ship the water system.") })
+    _ = sameEnv
+}
+
+@Test @MainActor func autoCompactionFoldsHistoryBeforeTheSendWhenOverThreshold() async throws {
+    let env = FakeEnv()
+    env.autoCompactEnabled = true
+    env.compactAtPercent = 80
+    let (shepherd, engine, _, sameEnv) = makeShepherd(
+        script: [
+            [.token("SUMMARY"), .done(GenStats(ttft: nil, tokens: 1, duration: 0.01))],
+            [.token("REPLY"), .done(GenStats(ttft: nil, tokens: 1, duration: 0.01))],
+        ],
+        env: env)
+    defer { _ = engine }
+    let session = ChatSession(effort: .trot, modelID: "test-model")
+    // The previous response left the context 90% full, over the 80% threshold.
+    session.lastContextTokens = 900
+    session.lastContextWindow = 1_000
+
+    let oldUser = ChatMessage(role: .user)
+    oldUser.text = "old work"
+    oldUser.complete = true
+    let oldAnswer = ChatMessage(role: .assistant)
+    oldAnswer.text = "old done"
+    oldAnswer.complete = true
+    let newUser = ChatMessage(role: .user)
+    newUser.text = "new question"
+    newUser.complete = true
+    session.messages = [oldUser, oldAnswer, newUser]
+
+    #expect(shepherd.run(in: session))
+    await shepherd.streamTask?.value
+
+    let row = try #require(session.messages.first { $0.kind == .compaction })
+    #expect(row.text == "SUMMARY")
+    #expect(row.compaction?.coveredExchangeCount == 1)
+    let rowIndex = try #require(session.messages.firstIndex { $0.id == row.id })
+    let newUserIndex = try #require(session.messages.firstIndex { $0.id == newUser.id })
+    #expect(rowIndex < newUserIndex)
+    #expect(session.messages.last?.role == .assistant)
+    #expect(session.messages.last?.text == "REPLY")
+    _ = sameEnv
+}
+
+@Test @MainActor func autoCompactionSkippedWhenUnderThreshold() async throws {
+    let env = FakeEnv()
+    env.autoCompactEnabled = true
+    env.compactAtPercent = 80
+    let (shepherd, engine, _, sameEnv) = makeShepherd(
+        script: [[.token("REPLY"), .done(GenStats(ttft: nil, tokens: 1, duration: 0.01))]],
+        env: env)
+    defer { _ = engine }
+    let session = ChatSession(effort: .trot, modelID: "test-model")
+    // Only 10% full, well under the threshold.
+    session.lastContextTokens = 100
+    session.lastContextWindow = 1_000
+
+    let oldUser = ChatMessage(role: .user)
+    oldUser.text = "old work"
+    oldUser.complete = true
+    let oldAnswer = ChatMessage(role: .assistant)
+    oldAnswer.text = "old done"
+    oldAnswer.complete = true
+    let newUser = ChatMessage(role: .user)
+    newUser.text = "new question"
+    newUser.complete = true
+    session.messages = [oldUser, oldAnswer, newUser]
+
+    #expect(shepherd.run(in: session))
+    await shepherd.streamTask?.value
+
+    #expect(!session.messages.contains { $0.kind == .compaction })
+    #expect(session.messages.count == 4)
+    #expect(session.messages.last?.text == "REPLY")
+    _ = sameEnv
+}
+
+@Test @MainActor func contextOverflowForcesOneCompactionAndRetriesTheSend() async throws {
+    let env = FakeEnv()
+    env.autoCompactEnabled = false  // overflow forces compaction regardless of the setting
+    let engine = FakeEngine(
+        script: [
+            [.token("SUMMARY"), .done(GenStats(ttft: nil, tokens: 1, duration: 0.01))],
+            [.token("REPLY"), .done(GenStats(ttft: nil, tokens: 1, duration: 0.01))],
+        ],
+        failingRequest: 1,
+        failingError: EngineError.httpDetail(400, "maximum context length exceeded", retryAfter: nil))
+    let shepherd = ShepherdModel(engine: engine, tools: FakeToolSource(), activity: ActivityLog())
+    shepherd.env = env
+    let session = ChatSession(effort: .trot, modelID: "test-model")
+    let oldUser = ChatMessage(role: .user)
+    oldUser.text = "old work"
+    oldUser.complete = true
+    let oldAnswer = ChatMessage(role: .assistant)
+    oldAnswer.text = "old done"
+    oldAnswer.complete = true
+    let newUser = ChatMessage(role: .user)
+    newUser.text = "new question"
+    newUser.complete = true
+    session.messages = [oldUser, oldAnswer, newUser]
+
+    #expect(shepherd.run(in: session))
+    await shepherd.streamTask?.value
+
+    // The overflow forced a compaction, and the retry produced a normal reply.
+    #expect(session.messages.contains { $0.kind == .compaction && $0.text == "SUMMARY" })
+    #expect(session.messages.last?.role == .assistant)
+    #expect(session.messages.last?.text == "REPLY")
+    _ = env
 }

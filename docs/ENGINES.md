@@ -32,6 +32,18 @@ Fresh installations start with no configured engines and open Engine settings wi
 
 Choosing a preset in the editor fills the URL; use Test to check the connection. You can still edit the port by hand. Ports are conventional defaults. Change the URL if your server listens elsewhere.
 
+## Model management and recovery
+
+The Models settings tab is the place to inspect discovered models, mark favourites, and choose a preferred model. If no engine or model is configured, it provides setup guidance rather than showing an empty capability screen.
+
+Model catalogs support both manual refresh and active-scene refresh. The app re-queries configured engines while the active scene is open, allowing models added or made available by an engine to appear without requiring an app restart. Discovery is not qualification: a discovered model is not treated as live-tested or compatible until the relevant engine evidence exists.
+
+Compatibility is resolved per model at request time. The request snapshot records the selected engine and model plus the resolved capability set, while provenance and diagnostics retain sanitized information needed to explain a result. Typed load failures, unexecuted printed tool markup, and resumable file-repair progress are surfaced through recovery paths instead of being silently executed or discarded.
+
+GOAT includes a verified family profile for Meta Muse-Glimmer model IDs, including local 4-bit variants. When a compatible engine omits capability fields, that profile supplies vision, tool use, reasoning, and the documented 131,072-token context as `modelFamily` evidence. Explicit engine contradictions are retained as unknown rather than overridden. The profile does not invent a native `reasoning_effort` request field; that remains gated by engine metadata.
+
+GOAT ships verified family profiles for common local model families (Qwen3, GPT-OSS, GLM, DeepSeek, Llama, Gemma 3, Mistral Small, Kimi K2, MiniMax M2, Phi-4 and others) and supports optional user family rules at `~/.goat/config/model-families.json`. User rules add capability knowledge for new model families without a rebuild. They cannot select a request dialect or silently override explicit engine contradictions. See [Model capability configuration](MODEL-CAPABILITY-CONFIGURATION.md) for the schema and evidence precedence.
+
 ## Feature matrix
 
 Optional metadata can fall back to generic chat behavior; required endpoint or protocol failures still surface as errors. Normalization happens in one place (`StreamAssembler`, ADR-0016).
@@ -44,7 +56,7 @@ Optional metadata can fall back to generic chat behavior; required endpoint or p
 | Tool calls | OpenAI `tool_calls` deltas, fragment reassembly by index; results sent as `role: "tool"` turns | No tools in that chat |
 | Vision | User-selected images encoded as content-array `image_url` parts with `data:image/png` payloads; model-name hints never block them | The selected model or server returns its own unsupported-input error |
 | Honest stats | `stream_options: {"include_usage": true}` is requested; `usage` on the final chunk gives exact token counts. oMLX generation timing and llama.cpp `timings` are preferred when present. | The client measures from the first real output to completion. Estimated speed or chunk-count tokens are marked `~` in the UI. |
-| Context meter | The deterministic request plan feeds the preflight meter; complete server `usage` replaces the used-token estimate after generation. `context_length` / `max_context_length` / `max_model_len` supplies the window | Conservative 8,192-token fallback. Exact usage and estimated window are marked independently |
+| Context meter | The deterministic request plan feeds the preflight meter; complete server `usage` replaces the used-token estimate after generation and calibrates the next plan's estimate for this chat. `prompt_tokens_details.cached_tokens` (or a top-level `cached_tokens`) is shown when reported. `context_length` / `max_context_length` / `max_model_len` supplies the window | Conservative 16,384-token fallback. Exact usage and estimated window are marked independently |
 
 ## Model families
 
@@ -60,10 +72,12 @@ The Effort dial always works at that generic layer:
 
 | Effort | Temperature | Requested output ceiling before context clamp |
 |---|---:|---:|
-| Graze | 0.7 | 1,024 |
-| Trot | 0.7 | 2,048 |
-| Climb | 0.6 | 4,096 |
-| Summit | 0.6 | 8,192 |
+| Graze | 0.7 | 2,048 (1,024 when the model explicitly cannot reason) |
+| Trot | 0.7 | 4,096 (2,048) |
+| Climb | 0.6 | 8,192 (4,096) |
+| Summit | 0.6 | 16,384 (8,192) |
+
+Reasoning tokens count against `max_tokens` on every compatible engine, so a model whose reasoning support is supported or unknown receives the larger ceiling (ADR-0085). The prompt budget still clamps the ceiling to half the context window.
 
 Native controls are capability-gated additions. Startup, engine changes, and model changes show a short checking state while GOAT reads fresh bounded metadata for the selected model. The hard wall-clock deadline is two seconds; unsupported, oversized, malformed, or absent metadata falls back to the generic path and does not make the engine unhealthy. These calls use an isolated non-caching session with no cookie or shared credential state. GOAT never sends a synthetic completion to test a capability.
 
@@ -77,11 +91,21 @@ GOAT stores normalized reasoning locally for transcript disclosure. Generic engi
 
 ## Compatibility evidence
 
+Compatibility evidence must be captured from the actual configured engine and model. Catalog discovery alone is not sufficient evidence for a capability claim, and live candidate qualification remains a separate release activity. Verified family profiles are a bounded exception for published model facts, not a substitute for testing the configured server's wire behavior.
+
 | Server | Status |
 |---|---|
 | oMLX | Local development has exercised authentication and discovery. Versioned release qualification for chat, tools, vision and reasoning remains separate. |
 | vMLX | Earlier development exercised its wire format; requalify the selected version for a release. |
 | Ollama · LM Studio · llama.cpp server · vLLM · mlx-lm | Preset-provided (Ollama/LM Studio/llama.cpp) or same-dialect: expected compatible, unverified; versioned compatibility reports and PRs welcome |
+
+## Streaming timeouts and stall detection (ADR-0089)
+
+The streaming `POST /v1/chat/completions` request uses a **300 second idle timeout** (reset on each received byte), so a silent connection cannot hang indefinitely. Independently, once output has started, if no further event arrives for **120 seconds** the turn fails with a stall error rather than hanging. Before the first token, prefill silence is not failed here (the idle timeout bounds it); after **10 seconds** of prefill the composer shows "Waiting for the engine (prefill)" with the elapsed clock so a long prompt evaluation does not read as a freeze. A request that fails before any output, with a transient error (HTTP 408, 429, 502, 503, 504 or a connection reset), is retried up to three times with jittered exponential backoff, honouring `Retry-After`.
+
+## Context overflow (ADR-0087)
+
+Engines report a prompt that exceeds the model's context window inconsistently, usually as an HTTP 400 (some as 413) whose body names a context-length or too-long-prompt condition. GOAT classifies such a response as `contextOverflow` when the status is 400 or 413 and the detail contains one of: `context length`, `context window`, `maximum context`, `context_length_exceeded`, `too many tokens`, `exceeds the maximum`, `reduce the length`, `maximum number of tokens`, `prompt is too long`, `input is too long`. A plain 400 without those markers stays a malformed-request classification. On a `contextOverflow` during a turn, GOAT forces one conversation compaction and retries the request once (see ADR-0087); a second overflow fails normally. If an engine phrases overflow differently, add its wording to the marker list in `EngineFailureClassification.swift`.
 
 ## Remote engines
 

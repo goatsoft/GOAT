@@ -34,6 +34,28 @@ public struct ShepherdToolRoute: Sendable, Equatable {
     public let origin: ShepherdToolOrigin
 }
 
+public struct ConcurrentToolCall: Sendable {
+    public let index: Int
+    public let route: ShepherdToolRoute
+    public let argumentsJSON: String
+    public init(index: Int, route: ShepherdToolRoute, argumentsJSON: String) {
+        self.index = index
+        self.route = route
+        self.argumentsJSON = argumentsJSON
+    }
+}
+
+public struct ConcurrentToolOutcome: Sendable {
+    public let index: Int
+    public let result: ToolResult?
+    public let duration: TimeInterval
+    public init(index: Int, result: ToolResult?, duration: TimeInterval) {
+        self.index = index
+        self.result = result
+        self.duration = duration
+    }
+}
+
 public enum ShepherdPersistedTurnKind: Sendable, Equatable {
     case regular
     case handoff
@@ -110,6 +132,12 @@ public protocol ShepherdToolSource: AnyObject {
     func authorizeAndInvoke(
         route: ShepherdToolRoute, argumentsJSON: String
     ) async throws -> ToolResult?
+    /// Runs a batch of independent read-only tool calls and returns an outcome per call. The
+    /// default runs them sequentially; a source that can parallelize (AppToolRouter) overrides it.
+    func invokeConcurrently(_ calls: [ConcurrentToolCall]) async -> [ConcurrentToolOutcome]
+    func previewToolEffect(
+        route: ShepherdToolRoute, argumentsJSON: String
+    ) async -> ToolExecutionDiagnostic?
     func logCall(server: String, tool: String, status: String, duration: TimeInterval)
     func cancelPendingPermission()
 }
@@ -118,6 +146,21 @@ extension ShepherdToolSource {
     public func turnWillPrepare(chatID: UUID, projectID: UUID?, turnID: UUID) async throws {}
     public func turnDidEnd(turnID: UUID, cancelled: Bool) async {}
     public func finishPendingWork() async -> String? { nil }
+    public func previewToolEffect(
+        route: ShepherdToolRoute, argumentsJSON: String
+    ) async -> ToolExecutionDiagnostic? { nil }
+
+    public func invokeConcurrently(_ calls: [ConcurrentToolCall]) async -> [ConcurrentToolOutcome] {
+        var outcomes: [ConcurrentToolOutcome] = []
+        for call in calls {
+            let started = Date()
+            let result = try? await authorizeAndInvoke(route: call.route, argumentsJSON: call.argumentsJSON)
+            outcomes.append(
+                ConcurrentToolOutcome(
+                    index: call.index, result: result, duration: Date().timeIntervalSince(started)))
+        }
+        return outcomes
+    }
 }
 
 /// The selected Pen's prompt context. A workspace path describes the intended project;
@@ -142,7 +185,12 @@ public struct ShepherdProjectContext: Sendable {
 public protocol ShepherdEnvironment: AnyObject {
     var availableModels: [ModelRef] { get }
     var fallbackModelID: String? { get }
+    func generationContext(for modelID: String) -> GenerationContext?
     var automaticChatTitles: Bool { get }
+    /// ADR-0087. Whether auto-compaction runs at the threshold (default on).
+    var autoCompactEnabled: Bool { get }
+    /// ADR-0087. Compaction threshold as a percent of the input budget (default 80).
+    var compactAtPercent: Int { get }
     func projectContext(forProject id: UUID) async -> ShepherdProjectContext?
     @discardableResult
     func persist(_ message: ChatMessage, in session: ChatSession) async -> Bool
@@ -150,6 +198,12 @@ public protocol ShepherdEnvironment: AnyObject {
     func sessionTouched(_ session: ChatSession)
     func sessionMetaChanged(_ session: ChatSession)
     func turnOwnershipChanged(activeSessionID: UUID?)
+}
+
+extension ShepherdEnvironment {
+    /// ADR-0087 defaults. AppModel overrides these from the General settings values.
+    public var autoCompactEnabled: Bool { true }
+    public var compactAtPercent: Int { 80 }
 }
 
 /// The Shepherd: orchestrates one turn - streams a round, executes tool calls behind
@@ -251,6 +305,13 @@ public final class ShepherdModel {
             let fence = String(repeating: "`", count: max(3, longestRun + 1))
             return "\(fence)markdown\n\(document)\n\(fence)"
         }
+    }
+
+    private struct CompactionCommand {
+        let messageID: UUID
+        let focus: String
+        static let promptSection = ConversationCompaction.promptSection
+        func modelRequest() -> String { ConversationCompaction.modelRequest(focus: focus) }
     }
 
     private let tools: ShepherdToolSource
@@ -369,29 +430,36 @@ public final class ShepherdModel {
             releaseReservation(turnID: turnID, sessionID: session.id)
             return
         }
-        // A chat can outlive its model (engine switched or restarted). Never send a
-        // model the engine doesn't currently serve - that's a guaranteed 400.
-        let available = env.availableModels
-        let model: ModelRef
-        if let exact = available.first(where: { $0.id == requestedModelID }) {
-            model = exact
-        } else if !available.isEmpty {
-            model =
-                env.fallbackModelID.flatMap { fallback in
-                    available.first(where: { $0.id == fallback })
-                } ?? available[0]
+        // Heal a chat whose model left the live catalogue, for example when the engine unloads it
+        // mid session. Fall back to the engine default, then the first available model, so the turn
+        // still runs. Selection made through the app already resolves at chat open; this is the
+        // in-turn safety net, and it persists the healed choice for an explicitly set model.
+        let effectiveModelID: String
+        if env.availableModels.contains(where: { $0.id == requestedModelID }) {
+            effectiveModelID = requestedModelID
+        } else if let fallback = env.fallbackModelID,
+            env.availableModels.contains(where: { $0.id == fallback })
+        {
+            effectiveModelID = fallback
         } else {
-            model = ModelRef(id: requestedModelID)
+            effectiveModelID = env.availableModels.first?.id ?? requestedModelID
         }
-        if model.id != requestedModelID {
-            session.modelID = model.id
+        guard let model = env.availableModels.first(where: { $0.id == effectiveModelID }),
+            let context = env.generationContext(for: effectiveModelID)
+        else {
+            activity.log(.warn, "Model \(requestedModelID) is unavailable or needs compatibility review")
+            releaseReservation(turnID: turnID, sessionID: session.id)
+            return
+        }
+        if let explicit = session.modelID, explicit != effectiveModelID {
+            session.modelID = effectiveModelID
             env.sessionMetaChanged(session)
         }
         activity.log(.engine, "→ \(model.displayName) · \(session.effort.label)")
 
         acceptsLead = true
         streamTask = Task {
-            await executeTurn(in: session, turnID: turnID, model: model, env: env)
+            await executeTurn(in: session, turnID: turnID, model: model, context: context, env: env)
             acceptsLead = false
             await drainLeadSave()
             if leadRevision != appliedLeadRevision {
@@ -407,7 +475,10 @@ public final class ShepherdModel {
         }
     }
 
-    private func executeTurn(in session: ChatSession, turnID: UUID, model: ModelRef, env: ShepherdEnvironment) async {
+    private func executeTurn(
+        in session: ChatSession, turnID: UUID, model: ModelRef,
+        context: GenerationContext, env: ShepherdEnvironment
+    ) async {
         do {
             try await tools.turnWillPrepare(chatID: session.id, projectID: session.projectID, turnID: turnID)
         } catch is CancellationError { return } catch {
@@ -428,6 +499,18 @@ public final class ShepherdModel {
             return
         }
         guard owns(turnID: turnID, sessionID: session.id), !Task.isCancelled else { return }
+        if let compactionCommand = Self.compactionCommand(in: session) {
+            await runManualCompaction(
+                command: compactionCommand, in: session, turnID: turnID, model: model,
+                context: context, env: env, memory: memory)
+            return
+        }
+        if env.autoCompactEnabled, shouldAutoCompact(session, compactAtPercent: env.compactAtPercent) {
+            await runAutoCompaction(
+                in: session, turnID: turnID, model: model, context: context, env: env,
+                memory: memory)
+            guard owns(turnID: turnID, sessionID: session.id), !Task.isCancelled else { return }
+        }
         let handoffCommand = Self.handoffCommand(in: session)
         let requestedSkillName = handoffCommand == nil ? Self.requestedSkillName(in: session) : nil
         let extensionSections =
@@ -439,6 +522,10 @@ public final class ShepherdModel {
             + (handoffCommand == nil ? [] : [HandoffCommand.promptSection])
         var repairedToolFormat = false
         var repairNextRound = false
+        var repairProgress = FileRepairProgressTracker()
+        var repetitionGuard = RepetitionGuard()
+        var toolRound = 0
+        var forcedOverflowCompaction = false
         shepherd: while true {
             guard owns(turnID: turnID, sessionID: session.id), !Task.isCancelled else { break }
             await drainLeadSave()
@@ -452,11 +539,12 @@ public final class ShepherdModel {
                     excludedMCPServers: session.disabledMCPServers)
                 : ([], [:])
             guard owns(turnID: turnID, sessionID: session.id), !Task.isCancelled else { break }
-            let snapshot = await promptSnapshot(
+            var snapshot = await promptSnapshot(
                 for: session,
-                extensionSections: extensionSections + (repairNextRound ? [Self.toolFormatRecoveryPrompt] : []),
+                extensionSections: extensionSections,
                 requestedSkillName: requestedSkillName,
                 handoffCommand: handoffCommand)
+            if repairNextRound { snapshot.hostNotes.append(Self.toolFormatRecoveryPrompt) }
             guard owns(turnID: turnID, sessionID: session.id), !Task.isCancelled else { break }
             let plan: PromptPlan
             do {
@@ -465,7 +553,9 @@ public final class ShepherdModel {
                     model: model,
                     effort: session.effort,
                     tools: specs,
-                    memory: memory)
+                    memory: memory,
+                    compatibility: context.compatibility,
+                    calibration: session.contextCalibrationRatio)
             } catch {
                 guard owns(turnID: turnID, sessionID: session.id), !Task.isCancelled else {
                     break shepherd
@@ -488,6 +578,10 @@ public final class ShepherdModel {
                 )
             }
             let assistant = ChatMessage(role: .assistant)
+            assistant.generationContext = context
+            assistant.generationParameters = EffectiveGenerationParameters(request: plan.request)
+            assistant.generationSelectedEffort = session.effort.rawValue
+            assistant.generationLifecycle = GenerationProvenanceRecord.Lifecycle.prepared.rawValue
             session.messages.append(assistant)
             // The first incomplete row is a durability barrier. A checkpoint can only run
             // after this insert succeeds, so a fast stream never checkpoints a missing row.
@@ -506,7 +600,17 @@ public final class ShepherdModel {
                 guard await env.persist(assistant, in: session) else { break shepherd }
                 continue shepherd
             }
-            let request = plan.request
+            var request = plan.request
+            request.round = toolRound
+            toolRound += 1
+            assistant.generationLifecycle = GenerationProvenanceRecord.Lifecycle.started.rawValue
+            guard await env.persist(assistant, in: session) else {
+                assistant.generationLifecycle = GenerationProvenanceRecord.Lifecycle.failed.rawValue
+                assistant.error = "The response could not start because persistence is unavailable."
+                assistant.complete = true
+                assistant.markRenderChanged()
+                break shepherd
+            }
 
             @MainActor func finishPendingToolsAsStopped(unknownIndex: Int? = nil) async {
                 for index in assistant.toolEvents.indices
@@ -543,13 +647,40 @@ public final class ShepherdModel {
                 }
             } catch {
                 if Task.isCancelled || !owns(turnID: turnID, sessionID: session.id) {
+                    assistant.generationLifecycle = GenerationProvenanceRecord.Lifecycle.cancelled.rawValue
+                    assistant.generationFailureCategory = GenerationProvenanceRecord.FailureCategory.cancelled.rawValue
                     assistant.error = "Stopped by you before the response finished."
                     assistant.complete = true
                     assistant.markRenderChanged()
                     await env.persist(assistant, in: session)
                     break shepherd
                 }
-                assistant.error = error.localizedDescription
+                if !forcedOverflowCompaction,
+                    (error as? EngineError)?.classification == .contextOverflow
+                {
+                    forcedOverflowCompaction = true
+                    assistant.generationLifecycle = GenerationProvenanceRecord.Lifecycle.failed.rawValue
+                    assistant.generationFailureCategory =
+                        GenerationProvenanceRecord.FailureCategory.contextOverflow.rawValue
+                    assistant.error =
+                        "The engine reported the prompt exceeded its context window. Compacting and retrying once."
+                    assistant.complete = true
+                    assistant.markRenderChanged()
+                    _ = await env.persist(assistant, in: session)
+                    activity.log(.warn, "engine: context overflow, forcing compaction and one retry")
+                    await runAutoCompaction(
+                        in: session, turnID: turnID, model: model, context: context, env: env,
+                        memory: memory)
+                    guard owns(turnID: turnID, sessionID: session.id), !Task.isCancelled else {
+                        break shepherd
+                    }
+                    // The failed row shifted when the compaction row was inserted before the send.
+                    _ = await env.persist(assistant, in: session)
+                    continue shepherd
+                }
+                assistant.generationLifecycle = GenerationProvenanceRecord.Lifecycle.failed.rawValue
+                assistant.generationFailureCategory = Self.failureCategory(for: error).rawValue
+                assistant.error = (error as? EngineError)?.userFacingFailureDescription ?? error.localizedDescription
                 assistant.complete = true
                 assistant.markRenderChanged()
                 await env.persist(assistant, in: session)
@@ -559,6 +690,7 @@ public final class ShepherdModel {
 
             let toolCalls = streamResult.toolCalls
             assistant.stats = streamResult.stats
+            assistant.generationLifecycle = GenerationProvenanceRecord.Lifecycle.completed.rawValue
             assistant.text = assistant.text.trimmingCharacters(in: .whitespacesAndNewlines)
             if handoffCommand != nil {
                 assistant.text = HandoffCommand.fencedMarkdown(assistant.text, date: .now)
@@ -571,11 +703,13 @@ public final class ShepherdModel {
             if let s = assistant.stats {
                 let tokenApprox = s.tokensAreExact ? "" : "~"
                 let speedApprox = s.speedIsServerReported ? "" : "~"
+                let cache = s.cachedPromptTokens.map { " · \($0) cached" } ?? ""
                 activity.log(
                     .engine,
-                    "\(tokenApprox)\(s.tokens) tok · \(speedApprox)\(Int(s.toksPerSec)) tok/s\(s.ttft.map { String(format: " · %.1fs ttft", $0) } ?? "")"
+                    "\(tokenApprox)\(s.tokens) tok · \(speedApprox)\(Int(s.toksPerSec)) tok/s\(s.ttft.map { String(format: " · %.1fs ttft", $0) } ?? "")\(cache)"
                 )
             }
+            calibrateContextEstimate(session, report: plan.report, stats: assistant.stats)
             updateContextGauge(
                 session, report: plan.report, stats: assistant.stats,
                 reply: assistant.text + assistant.thinking)
@@ -591,6 +725,8 @@ public final class ShepherdModel {
             if toolCalls.isEmpty,
                 Self.hasUnexecutedToolMarkup(assistant.text, toolNames: Set(specs.map(\.name)))
             {
+                assistant.generationFailureCategory =
+                    GenerationProvenanceRecord.FailureCategory.toolFormatRecovery.rawValue
                 let canRetry = !repairedToolFormat && !Task.isCancelled
                 assistant.error =
                     canRetry
@@ -619,6 +755,8 @@ public final class ShepherdModel {
                 }
                 acceptsLead = false
                 if Task.isCancelled {
+                    assistant.generationLifecycle = GenerationProvenanceRecord.Lifecycle.cancelled.rawValue
+                    assistant.generationFailureCategory = GenerationProvenanceRecord.FailureCategory.cancelled.rawValue
                     assistant.error = "Stopped by you before the turn finished."
                 } else if assistant.text.isEmpty {
                     assistant.error =
@@ -672,8 +810,9 @@ public final class ShepherdModel {
                 break shepherd
             }
 
-            if !Task.isCancelled { await autoTitle(session, model: model) }
+            var batchedThrough = -1
             for (index, call) in toolCalls.enumerated() {
+                if index <= batchedThrough { continue }
                 await drainLeadSave()
                 // Finish the current response's first tool step, including its approval.
                 // Lead takes effect between actions; Stop owns cancellation.
@@ -703,7 +842,72 @@ public final class ShepherdModel {
                     }
                     continue
                 }
+                if Self.readOnlyPenTools.contains(call.name) {
+                    // Read-only tools take no approval and touch no shared write state, so a run of
+                    // consecutive reads runs concurrently (off the file actor); results are applied in
+                    // call order. Writes, edits and commands stay on the sequential path below.
+                    var end = index
+                    while end + 1 < toolCalls.count,
+                        Self.readOnlyPenTools.contains(toolCalls[end + 1].name),
+                        mapping[toolCalls[end + 1].name] != nil
+                    {
+                        end += 1
+                    }
+                    let jobs: [ConcurrentToolCall] = (index...end).compactMap { i in
+                        guard let route = mapping[toolCalls[i].name] else { return nil }
+                        return ConcurrentToolCall(index: i, route: route, argumentsJSON: toolCalls[i].argumentsJSON)
+                    }
+                    var repetitionStop: String?
+                    for outcome in await tools.invokeConcurrently(jobs) {
+                        let route = mapping[toolCalls[outcome.index].name]
+                        if let result = outcome.result {
+                            assistant.toolEvents[outcome.index].result = result.content
+                            assistant.toolEvents[outcome.index].isError = result.isError
+                            if let route {
+                                tools.logCall(
+                                    server: route.server, tool: route.tool,
+                                    status: result.isError ? "error" : "ok", duration: outcome.duration)
+                            }
+                            if repetitionStop == nil {
+                                repetitionStop = repetitionGuard.observe(
+                                    name: toolCalls[outcome.index].name,
+                                    argumentsJSON: toolCalls[outcome.index].argumentsJSON,
+                                    result: result.content)
+                            }
+                        } else {
+                            assistant.toolEvents[outcome.index].result = "Not executed."
+                            assistant.toolEvents[outcome.index].isError = true
+                        }
+                    }
+                    assistant.markRenderChanged()
+                    batchedThrough = end
+                    guard await env.persist(assistant, in: session) else { break shepherd }
+                    if let repetitionStop {
+                        assistant.error = repetitionStop
+                        assistant.markRenderChanged()
+                        _ = await env.persist(assistant, in: session)
+                        break shepherd
+                    }
+                    if Task.isCancelled || !owns(turnID: turnID, sessionID: session.id) {
+                        await finishPendingToolsAsStopped()
+                        break shepherd
+                    }
+                    continue
+                }
+                if let preview = await tools.previewToolEffect(
+                    route: target, argumentsJSON: call.argumentsJSON),
+                    let blocked = repairProgress.preflight(preview)
+                {
+                    assistant.toolEvents[index].result = blocked
+                    assistant.toolEvents[index].isError = true
+                    assistant.error = blocked
+                    assistant.markRenderChanged()
+                    guard await env.persist(assistant, in: session) else { break shepherd }
+                    break shepherd
+                }
                 let started = Date()
+                var repairStop: String?
+                var repetitionStop: String?
                 do {
                     let result = try await tools.authorizeAndInvoke(
                         route: target, argumentsJSON: call.argumentsJSON)
@@ -712,6 +916,11 @@ public final class ShepherdModel {
                     if let result {
                         assistant.toolEvents[index].result = result.content
                         assistant.toolEvents[index].isError = result.isError
+                        if let diagnostic = result.diagnostic {
+                            repairStop = repairProgress.observe(diagnostic)
+                        }
+                        repetitionStop = repetitionGuard.observe(
+                            name: call.name, argumentsJSON: call.argumentsJSON, result: result.content)
                         assistant.markRenderChanged()
                         tools.logCall(
                             server: target.server, tool: target.tool,
@@ -746,13 +955,20 @@ public final class ShepherdModel {
                     activity.log(.warn, "persistence: tool result was not saved")
                     break shepherd
                 }
+                if let stop = repairStop ?? repetitionStop {
+                    assistant.error = stop
+                    assistant.markRenderChanged()
+                    _ = await env.persist(assistant, in: session)
+                    break shepherd
+                }
                 if Task.isCancelled || !owns(turnID: turnID, sessionID: session.id) {
                     await finishPendingToolsAsStopped()
                     break shepherd
                 }
             }
-            if !Task.isCancelled { await autoTitle(session, model: model) }
             // Loop: next round streams a fresh assistant message with the results in context.
+            // Titles wait until the turn ends so no foreign prompt evicts the cached prefix
+            // between rounds (ADR-0085).
         }
         acceptsLead = false
         if let warning = await tools.finishPendingWork() {
@@ -768,7 +984,7 @@ public final class ShepherdModel {
         {
             // Tool workflows may finish with an empty assistant message. autoTitle selects
             // the first usable reply from the exchange instead of requiring final-round text.
-            await autoTitle(session, model: model)
+            await autoTitle(session, model: model, context: context)
         }
     }
 
@@ -776,29 +992,26 @@ public final class ShepherdModel {
         activeTurnID == turnID && activeSessionID == sessionID
     }
 
+    private static let readOnlyPenTools: Set<String> = [
+        "pen_read_file", "pen_search", "pen_glob", "pen_list_files",
+    ]
+
     private static let toolFormatRecoveryPrompt = """
-        Your previous response printed a malformed tool call as ordinary text. No tool from that response was executed.
-        Continue the user's request using the supplied structured tool interface and its exact function names and argument schemas. For the Qwen XML tool format, include the complete <tool_call> envelope around the function and parameters; do not omit its opening tag. Do not repeat tool actions that already have completed results in the conversation.
-        If the user only asked for an explanation, answer normally and put any illustrative tool syntax inside a fenced code block. Do not claim that an action happened without a successful tool result.
+        The last response printed a tool invocation as text. Use the supplied structured tool interface with its exact function names and JSON schemas. Do not print tool envelopes. Do not repeat actions with completed results.
+        If the user only asked for an explanation, answer normally and put illustrative syntax inside a fenced code block. Do not claim that an action happened without a successful tool result.
         """
 
     static func hasUnexecutedToolMarkup(_ text: String, toolNames: Set<String>) -> Bool {
-        // Examples inside Markdown fences are content, not failed attempts to invoke tools.
-        var fence: String?
-        var lines: [String] = []
-        for line in text.components(separatedBy: .newlines) {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if let current = fence {
-                if trimmed.hasPrefix(current) { fence = nil }
-            } else if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
-                fence = String(trimmed.prefix(3))
-            } else {
-                lines.append(line)
-            }
+        UnexecutedToolMarkupDetector.detect(text, toolNames: toolNames)?.confidence == .high
+    }
+
+    private static func failureCategory(for error: Error) -> GenerationProvenanceRecord.FailureCategory {
+        guard let engineError = error as? EngineError else { return .unknown }
+        switch engineError.classification {
+        case .modelUnavailable, .unsupportedModelArchitecture: return .unavailableModel
+        case .contextOverflow: return .contextOverflow
+        case .authentication, .connection, .malformedResponse, .unknown, .none: return .engine
         }
-        let candidate = lines.joined(separator: "\n")
-        return (candidate.contains("<tool_call>") || candidate.contains("</tool_call>"))
-            && toolNames.contains { candidate.contains("<function=\($0)>") }
     }
 
     private func releaseReservation(turnID: UUID, sessionID: UUID) {
@@ -829,8 +1042,30 @@ public final class ShepherdModel {
         }
     }
 
+    /// Exact server usage for the request just planned teaches the next plan how far the
+    /// estimator sits from this engine's tokenizer (ADR-0085). Clamped and smoothed so one
+    /// unusual response cannot swing the budget.
+    private func calibrateContextEstimate(
+        _ session: ChatSession, report: PromptBudgetReport, stats: GenStats?
+    ) {
+        guard let stats, stats.tokensAreExact, let prompt = stats.promptTokens, prompt > 0,
+            report.estimatedInputTokensAfter > 0
+        else { return }
+        let observed = Double(prompt) / Double(report.estimatedInputTokensAfter)
+        let clamped = min(PromptBudgeter.maximumCalibration, max(PromptBudgeter.minimumCalibration, observed))
+        let previous = session.contextCalibrationRatio
+        session.contextCalibrationRatio =
+            previous == 1.0 && session.contextCalibrationSamples == 0
+            ? clamped : (previous + clamped) / 2
+        session.contextCalibrationSamples += 1
+        activity.log(
+            .info,
+            "context: estimate ~\(report.estimatedInputTokensAfter) vs usage \(prompt) tok (ratio \(String(format: "%.2f", observed)), calibration \(String(format: "%.2f", session.contextCalibrationRatio)))"
+        )
+    }
+
     private func applyPreflight(_ report: PromptBudgetReport, to session: ChatSession) {
-        session.lastContextTokens = report.estimatedInputTokensAfter
+        session.lastContextTokens = report.calibratedInputTokensAfter
         session.contextIsExact = false
         session.lastContextWindow = report.windowTokens
         session.contextWindowIsExact = report.windowSource == .reported
@@ -857,7 +1092,7 @@ public final class ShepherdModel {
         }
         activity.log(
             .info,
-            "context: ~\(report.estimatedInputTokensBefore) → ~\(report.estimatedInputTokensAfter) input tok, \(report.droppedExchangeCount) exchanges dropped, \(report.textTruncations.count) fields truncated, \(report.omittedImages.count) images omitted, \(report.omittedMemoryEntries.count) memory summaries omitted"
+            "context: ~\(report.estimatedInputTokensBefore) → ~\(report.estimatedInputTokensAfter) input tok (calibrated ~\(report.calibratedInputTokensAfter)), \(report.droppedExchangeCount) exchanges dropped, \(report.textTruncations.count) fields truncated, \(report.omittedImages.count) images omitted, \(report.omittedMemoryEntries.count) memory summaries omitted"
         )
     }
 
@@ -875,7 +1110,7 @@ public final class ShepherdModel {
             session.lastContextWindow = failure.report.windowTokens
             session.contextWindowIsExact = failure.report.windowSource == .reported
             session.lastContextPressureLimit = max(1, failure.report.inputBudget)
-            session.lastContextTokens = failure.report.estimatedInputTokensAfter
+            session.lastContextTokens = failure.report.calibratedInputTokensAfter
             session.contextIsExact = false
             session.messages.last(where: { $0.role == .user })?.contextNotice =
                 "This prompt could not fit the model's context window."
@@ -899,7 +1134,7 @@ public final class ShepherdModel {
             session.lastContextTokens = sum.overflow ? Int.max : sum.partialValue
             session.contextIsExact = true
         } else {
-            let prompt = stats?.promptTokens ?? report.estimatedInputTokensAfter
+            let prompt = stats?.promptTokens ?? report.calibratedInputTokensAfter
             let completion = stats?.tokens ?? ((reply.utf8.count + 2) / 3)
             let sum = prompt.addingReportingOverflow(completion)
             session.lastContextTokens = sum.overflow ? Int.max : sum.partialValue
@@ -927,6 +1162,13 @@ public final class ShepherdModel {
         return HandoffCommand(messageID: message.id, additionalRequest: additionalRequest)
     }
 
+    private static func compactionCommand(in session: ChatSession) -> CompactionCommand? {
+        guard let message = session.messages.last(where: { $0.role == .user }),
+            let parsed = ConversationCompaction.command(from: message.text)
+        else { return nil }
+        return CompactionCommand(messageID: message.id, focus: parsed.focus)
+    }
+
     private static func persistedTurn(
         from session: ChatSession,
         handoffCommand: HandoffCommand?
@@ -950,29 +1192,285 @@ public final class ShepherdModel {
             messages: messages)
     }
 
+    /// The model-visible suffix for a retained failed or stopped row (ADR-0089): length truncation
+    /// and user cancellation each get a short marker; other terminations get none.
+    private static func promptFailureSuffix(for message: ChatMessage) -> String? {
+        if message.stats?.finishReason == "length" {
+            return "[response truncated by the output limit]"
+        }
+        if message.generationFailureCategory
+            == GenerationProvenanceRecord.FailureCategory.cancelled.rawValue
+        {
+            return "[stopped by the user before the response finished]"
+        }
+        return nil
+    }
+
+    /// ADR-0087 Tier-2 manual compaction. Gate on the configured threshold, generate a summary with
+    /// the handoff-shaped compaction prompt, then transform the /compact message in place into the
+    /// compaction row that folds the history before it. A gated or failed run leaves the chat
+    /// unchanged and reports through the message's contextNotice.
+    private func runManualCompaction(
+        command: CompactionCommand, in session: ChatSession, turnID: UUID,
+        model: ModelRef, context: GenerationContext, env: ShepherdEnvironment,
+        memory: [PromptMemoryEntry]
+    ) async {
+        guard let compactIndex = session.messages.firstIndex(where: { $0.id == command.messageID })
+        else { return }
+        let commandMessage = session.messages[compactIndex]
+        let priorCompactionIndex = session.messages[..<compactIndex].lastIndex { $0.kind == .compaction }
+        let coveredRange = (priorCompactionIndex.map { $0 + 1 } ?? 0)..<compactIndex
+        let coveredMessages = Array(session.messages[coveredRange])
+        let hasFoldableContent = coveredMessages.contains {
+            $0.complete && $0.error == nil
+                && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+
+        func finish(notice: String) async {
+            commandMessage.contextNotice = notice
+            commandMessage.markRenderChanged()
+            _ = await env.persist(commandMessage, in: session)
+        }
+
+        guard hasFoldableContent else {
+            await finish(notice: "Nothing to compact yet.")
+            return
+        }
+
+        // Gate on the threshold, the single user-settable lever. Below it, do nothing.
+        if let gatePlan = try? await worker.plan(
+            snapshot: await promptSnapshot(for: session), model: model, effort: session.effort,
+            tools: [], memory: memory, compatibility: context.compatibility,
+            calibration: session.contextCalibrationRatio)
+        {
+            let budget = max(1, gatePlan.report.inputBudget)
+            let used = gatePlan.report.calibratedInputTokensAfter
+            if used * 100 < env.compactAtPercent * budget {
+                let pct = min(100, used * 100 / budget)
+                await finish(
+                    notice:
+                        "Not compacting: about \(pct)% of the input budget, under your "
+                        + "\(env.compactAtPercent)% threshold. Lower Compact at in Settings to compact sooner.")
+                return
+            }
+        }
+        guard owns(turnID: turnID, sessionID: session.id), !Task.isCancelled else { return }
+
+        let plan: PromptPlan
+        do {
+            plan = try await worker.plan(
+                snapshot: await promptSnapshot(
+                    for: session, extensionSections: [CompactionCommand.promptSection],
+                    truncateAfterIndex: compactIndex, appendedUserRequest: command.modelRequest()),
+                model: model, effort: session.effort, tools: [], memory: memory,
+                compatibility: context.compatibility, calibration: session.contextCalibrationRatio)
+        } catch {
+            guard owns(turnID: turnID, sessionID: session.id), !Task.isCancelled else { return }
+            await finish(notice: "Compaction could not be prepared. The chat is unchanged.")
+            return
+        }
+        var request = plan.request
+        request.round = 0
+        let scratch = ChatMessage(role: .assistant)
+        do {
+            _ = try await worker.stream(request) { update in
+                guard self.owns(turnID: turnID, sessionID: session.id) else { return false }
+                self.apply(update, to: scratch)
+                return self.owns(turnID: turnID, sessionID: session.id) && !Task.isCancelled
+            }
+        } catch {
+            guard owns(turnID: turnID, sessionID: session.id), !Task.isCancelled else { return }
+            await finish(notice: "Compaction did not complete. The chat is unchanged.")
+            return
+        }
+        guard owns(turnID: turnID, sessionID: session.id), !Task.isCancelled else { return }
+
+        let summary = scratch.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !summary.isEmpty else {
+            await finish(notice: "Compaction produced no summary. The chat is unchanged.")
+            return
+        }
+
+        // Files read/edited: carry a prior summary forward, then add the newly covered tool calls.
+        let coveredTurns = coveredMessages.map { message in
+            ChatTurn(
+                role: message.role, text: message.text,
+                toolCalls: message.toolEvents.map {
+                    ToolCallEvent(id: $0.id, name: $0.tool, argumentsJSON: $0.arguments)
+                })
+        }
+        var lists = ConversationCompaction.fileLists(from: coveredTurns)
+        if let priorCompactionIndex, let prior = session.messages[priorCompactionIndex].compaction {
+            lists = Self.mergeFileLists(prior: prior, adding: lists)
+        }
+        let priorExchanges =
+            priorCompactionIndex.flatMap { session.messages[$0].compaction?.coveredExchangeCount } ?? 0
+        let newExchanges = coveredMessages.filter { $0.role == .user && $0.kind == .regular }.count
+
+        commandMessage.kind = .compaction
+        commandMessage.text = summary
+        commandMessage.contextNotice = nil
+        commandMessage.compaction = CompactionInfo(
+            coversUpToMessageID: session.messages[compactIndex - 1].id.uuidString,
+            coveredExchangeCount: priorExchanges + newExchanges,
+            filesRead: lists.read, filesEdited: lists.edited)
+        commandMessage.complete = true
+        commandMessage.markRenderChanged()
+        guard await env.persist(commandMessage, in: session) else {
+            activity.log(.warn, "persistence: compaction row was not saved")
+            return
+        }
+        activity.log(.info, "context: compacted \(newExchanges) exchange(s) into a summary")
+
+        // Reflect the reduced usage on the pasture meter.
+        if let postPlan = try? await worker.plan(
+            snapshot: await promptSnapshot(for: session), model: model, effort: session.effort,
+            tools: [], memory: memory, compatibility: context.compatibility,
+            calibration: session.contextCalibrationRatio)
+        {
+            applyPreflight(postPlan.report, to: session)
+        }
+    }
+
+    /// ADR-0087 cheap trigger: after the last response left the context at or above the threshold,
+    /// compaction runs at the start of the next send. Uses the recorded usage so no extra plan runs
+    /// on an ordinary under-threshold send.
+    private func shouldAutoCompact(_ session: ChatSession, compactAtPercent: Int) -> Bool {
+        guard let used = session.lastContextTokens, let window = session.lastContextWindow,
+            window > 0
+        else { return false }
+        return used * 100 >= compactAtPercent * window
+    }
+
+    /// ADR-0087 Tier-2 automatic compaction, run before planning the current send. Best effort: a
+    /// failed or cancelled summary leaves the chat unchanged and the send proceeds with Tier-1 only.
+    /// Folds everything before the newest user message into a compaction row inserted before it.
+    private func runAutoCompaction(
+        in session: ChatSession, turnID: UUID, model: ModelRef, context: GenerationContext,
+        env: ShepherdEnvironment, memory: [PromptMemoryEntry]
+    ) async {
+        guard let newUserIndex = session.messages.lastIndex(where: { $0.role == .user })
+        else { return }
+        let priorCompactionIndex = session.messages[..<newUserIndex].lastIndex {
+            $0.kind == .compaction
+        }
+        let coveredRange = (priorCompactionIndex.map { $0 + 1 } ?? 0)..<newUserIndex
+        let coveredMessages = Array(session.messages[coveredRange])
+        guard
+            coveredMessages.contains(where: {
+                $0.complete && $0.error == nil
+                    && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            })
+        else { return }
+
+        let plan: PromptPlan
+        do {
+            plan = try await worker.plan(
+                snapshot: await promptSnapshot(
+                    for: session, extensionSections: [CompactionCommand.promptSection],
+                    truncateAfterIndex: newUserIndex,
+                    appendedUserRequest: ConversationCompaction.modelRequest()),
+                model: model, effort: session.effort, tools: [], memory: memory,
+                compatibility: context.compatibility, calibration: session.contextCalibrationRatio)
+        } catch {
+            return
+        }
+        var request = plan.request
+        request.round = 0
+        let scratch = ChatMessage(role: .assistant)
+        do {
+            _ = try await worker.stream(request) { update in
+                guard self.owns(turnID: turnID, sessionID: session.id) else { return false }
+                self.apply(update, to: scratch)
+                return self.owns(turnID: turnID, sessionID: session.id) && !Task.isCancelled
+            }
+        } catch {
+            return
+        }
+        guard owns(turnID: turnID, sessionID: session.id), !Task.isCancelled else { return }
+        let summary = scratch.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !summary.isEmpty else { return }
+
+        let coveredTurns = coveredMessages.map { message in
+            ChatTurn(
+                role: message.role, text: message.text,
+                toolCalls: message.toolEvents.map {
+                    ToolCallEvent(id: $0.id, name: $0.tool, argumentsJSON: $0.arguments)
+                })
+        }
+        var lists = ConversationCompaction.fileLists(from: coveredTurns)
+        if let priorCompactionIndex, let prior = session.messages[priorCompactionIndex].compaction {
+            lists = Self.mergeFileLists(prior: prior, adding: lists)
+        }
+        let priorExchanges =
+            priorCompactionIndex.flatMap { session.messages[$0].compaction?.coveredExchangeCount }
+            ?? 0
+        let newExchanges = coveredMessages.filter { $0.role == .user && $0.kind == .regular }.count
+
+        let newUser = session.messages[newUserIndex]
+        let row = ChatMessage(role: .user)
+        row.kind = .compaction
+        row.text = summary
+        row.complete = true
+        row.compaction = CompactionInfo(
+            coversUpToMessageID: session.messages[newUserIndex - 1].id.uuidString,
+            coveredExchangeCount: priorExchanges + newExchanges,
+            filesRead: lists.read, filesEdited: lists.edited)
+        session.messages.insert(row, at: newUserIndex)
+        row.markRenderChanged()
+        guard await env.persist(row, in: session) else {
+            activity.log(.warn, "persistence: auto-compaction row was not saved")
+            return
+        }
+        // The new user message shifted by one; re-persist it so its stored position is correct.
+        _ = await env.persist(newUser, in: session)
+        activity.log(.info, "context: auto-compacted \(newExchanges) exchange(s) into a summary")
+    }
+
+    private static func mergeFileLists(
+        prior: CompactionInfo, adding new: (read: [String], edited: [String])
+    ) -> (read: [String], edited: [String]) {
+        var edited = prior.filesEdited
+        for path in new.edited where !edited.contains(path) { edited.append(path) }
+        var read = prior.filesRead
+        for path in new.read where !read.contains(path) { read.append(path) }
+        read.removeAll { edited.contains($0) }
+        return (read, edited)
+    }
+
     private func promptSnapshot(
         for session: ChatSession,
         extensionSections: [String] = [],
         requestedSkillName: String? = nil,
-        handoffCommand: HandoffCommand? = nil
+        handoffCommand: HandoffCommand? = nil,
+        truncateAfterIndex: Int? = nil,
+        appendedUserRequest: String? = nil
     ) async -> ShepherdPromptSnapshot {
         var project: ShepherdProjectContext?
         if let projectID = session.projectID {
             project = await env?.projectContext(forProject: projectID)
         }
 
-        let latestUserIndex = session.messages.lastIndex(where: { $0.role == .user })
-        let messages = session.messages.enumerated().map { index, message in
-            let text =
-                if let handoffCommand, message.id == handoffCommand.messageID {
-                    handoffCommand.modelRequest()
-                } else if index == latestUserIndex, let requestedSkillName {
-                    SkillCommand.modelRequest(
-                        in: message.text,
-                        invokedSkill: requestedSkillName)
-                } else {
-                    message.text
-                }
+        let workingMessages =
+            truncateAfterIndex.map { Array(session.messages.prefix($0)) } ?? session.messages
+        let latestUserIndex = workingMessages.lastIndex(where: { $0.role == .user })
+        let lastCompactionIndex = workingMessages.lastIndex { $0.kind == .compaction }
+        var messages = workingMessages.enumerated().map { index, message in
+            let text: String
+            if message.kind == .compaction, let info = message.compaction {
+                // ADR-0087: the folded summary rides as a user turn; GOAT appends the file lists.
+                let lists = ConversationCompaction.fileListsSection(
+                    read: info.filesRead, edited: info.filesEdited)
+                text = lists.isEmpty ? message.text : message.text + "\n\n" + lists
+            } else if let handoffCommand, message.id == handoffCommand.messageID {
+                text = handoffCommand.modelRequest()
+            } else if index == latestUserIndex, let requestedSkillName {
+                text = SkillCommand.modelRequest(
+                    in: message.text,
+                    invokedSkill: requestedSkillName)
+            } else {
+                text = message.text
+            }
             return ShepherdPromptSnapshot.Message(
                 role: message.role,
                 text: text,
@@ -988,7 +1486,19 @@ public final class ShepherdModel {
                             tool: event.tool),
                         arguments: event.arguments,
                         result: event.result, isError: event.isError, denied: event.denied)
-                })
+                },
+                excludeFromPrompt: message.generationFailureCategory
+                    == GenerationProvenanceRecord.FailureCategory.toolFormatRecovery.rawValue
+                    || message.generationFailureCategory
+                        == GenerationProvenanceRecord.FailureCategory.contextOverflow.rawValue
+                    || (lastCompactionIndex.map { index < $0 } ?? false),
+                failureSuffix: Self.promptFailureSuffix(for: message))
+        }
+        if let appendedUserRequest {
+            messages.append(
+                ShepherdPromptSnapshot.Message(
+                    role: .user, text: appendedUserRequest, thinking: "", complete: true,
+                    error: nil, attachmentPaths: [], toolEvents: []))
         }
         return ShepherdPromptSnapshot(
             date: .now,
@@ -1007,7 +1517,9 @@ public final class ShepherdModel {
         return await worker.turns(for: snapshot)
     }
 
-    private func autoTitle(_ session: ChatSession, model: ModelRef) async {
+    private func autoTitle(
+        _ session: ChatSession, model: ModelRef, context: GenerationContext
+    ) async {
         guard env?.automaticChatTitles == true, session.hasDefaultTitle,
             let firstUser = session.messages.first(where: { $0.role == .user })?.text
         else { return }
@@ -1028,7 +1540,8 @@ public final class ShepherdModel {
             effort: .graze,
             // Some configured models spend their output budget on reasoning before the title.
             maxTokens: 1024,
-            modelCapabilities: model.capabilities
+            modelCapabilities: model.capabilities,
+            compatibility: context.compatibility
         )
         var generated = ""
         do {

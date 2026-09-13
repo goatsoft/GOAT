@@ -3,6 +3,12 @@ import Inference
 import Observation
 import Persistence
 
+/// ADR-0087 transcript entry kind: ordinary messages and folded compaction summaries.
+public enum ChatMessageKind: String, Sendable, Equatable {
+    case regular
+    case compaction
+}
+
 /// One transcript entry. Mutable while streaming; `complete` seals it.
 @MainActor
 @Observable
@@ -21,8 +27,19 @@ public final class ChatMessage: Identifiable {
     public var complete = false
     public var attachmentPaths: [String] = []
     public var toolEvents: [ToolEventSnapshot] = []
+    /// ADR-0087 message kind. A compaction row carries the folded summary in `text` and its
+    /// metadata in `compaction`; the transcript shows it as a collapsible "Compacted N exchanges" row.
+    public var kind: ChatMessageKind = .regular
+    public var compaction: CompactionInfo?
     /// User feedback is persisted separately from the streamed message body.
     public var rating: Int?
+    public var generationContext: GenerationContext?
+    public var generationParameters: EffectiveGenerationParameters?
+    public var generationLifecycle: String?
+    public var generationSelectedEffort: String?
+    public var generationFailureCategory: String?
+    public var generationProvenance: GenerationProvenanceRecord?
+    public var generationProvenanceUnavailable = false
     /// Session-local prompt-budget notice. It is UI metadata, never model-visible content.
     public var contextNotice: String?
     public let createdAt: Date
@@ -113,6 +130,11 @@ public final class ChatSession: Identifiable {
     /// Capacity used for warning pressure. Preflight uses the input budget; completion uses the window.
     public var lastContextPressureLimit: Int?
     public var lastPromptWasTrimmed = false
+    /// Ratio of the engine's exact `usage.prompt_tokens` to GOAT's raw estimate for this chat,
+    /// learned per response and applied to the next plan (ADR-0085). Session-scoped; a fresh
+    /// launch starts at 1.0 until the first exact usage arrives.
+    public var contextCalibrationRatio: Double = 1.0
+    public var contextCalibrationSamples = 0
     public let createdAt: Date
     public var updatedAt: Date
 

@@ -301,8 +301,11 @@ final class AppToolRouter: ShepherdToolSource {
                         server: handle.registration.extensionID.rawValue, tool: handle.name, isExtension: true)
                     return allowed
                 }
-                return ToolResult(content: result.content, isError: result.isError)
-            } catch is OwnerDeniedTool { return nil }
+                return ToolResult(
+                    content: result.content, isError: result.isError, diagnostic: result.diagnostic)
+            } catch is OwnerDeniedTool { return nil } catch let error as PenFileTools.Failure {
+                return ToolResult(content: error.localizedDescription, isError: true, diagnostic: error.diagnostic)
+            }
         case .mcp:
             return try await mcp.authorizeAndInvoke(route: route, argumentsJSON: argumentsJSON)
         case .memory(let context):
@@ -313,8 +316,42 @@ final class AppToolRouter: ShepherdToolSource {
             }
             let result = try await provider.invoke(
                 ToolCallRequest(tool: route.tool, argumentsJSON: argumentsJSON))
-            return ToolResult(content: result.content, isError: result.isError)
+            return ToolResult(
+                content: result.content, isError: result.isError, diagnostic: result.diagnostic)
         }
+    }
+
+    func invokeConcurrently(_ calls: [ConcurrentToolCall]) async -> [ConcurrentToolOutcome] {
+        // Read-only calls are auto-allowed and their file I/O runs off the PenFileTools actor, so
+        // this router (a Sendable @MainActor type) fans them out concurrently and gathers the
+        // outcomes; the caller applies them in call order.
+        await withTaskGroup(of: ConcurrentToolOutcome.self) { group in
+            for call in calls {
+                group.addTask { [self] in
+                    let started = Date()
+                    let result = try? await self.authorizeAndInvoke(
+                        route: call.route, argumentsJSON: call.argumentsJSON)
+                    return ConcurrentToolOutcome(
+                        index: call.index, result: result, duration: Date().timeIntervalSince(started))
+                }
+            }
+            var outcomes: [ConcurrentToolOutcome] = []
+            for await outcome in group { outcomes.append(outcome) }
+            return outcomes
+        }
+    }
+
+    func previewToolEffect(
+        route: ShepherdToolRoute, argumentsJSON: String
+    ) async -> ToolExecutionDiagnostic? {
+        guard case .extensionTool(let handle) = route.origin,
+            handle.registration.extensionID.rawValue == "goat.herder",
+            handle.name == "pen_run_command",
+            let session = penFileSession,
+            session.turnID == handle.turnID
+        else { return nil }
+        return await session.provider.previewToolEffect(
+            ToolCallRequest(tool: route.tool, argumentsJSON: argumentsJSON))
     }
 
     private func authorizeExtension(_ handle: ToolHandle, arguments: String) async throws -> Bool {

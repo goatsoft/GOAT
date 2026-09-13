@@ -56,7 +56,7 @@ import Testing
         includeMCP: true, excludedMCPServers: [])
     #expect(
         Set(specs.filter { $0.name.hasPrefix("pen_") }.map(\.name))
-            == Set(["pen_list_files", "pen_read_file", "pen_search"]))
+            == Set(["pen_list_files", "pen_read_file", "pen_search", "pen_glob"]))
     let read = try #require(routes["pen_read_file"])
     let result = try await router.authorizeAndInvoke(route: read, argumentsJSON: #"{"path":"example.txt"}"#)
     #expect(result?.content.contains("hello") == true)

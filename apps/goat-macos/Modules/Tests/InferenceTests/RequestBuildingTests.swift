@@ -56,7 +56,7 @@ private func encodeToJSON(_ r: GenerationRequest) throws -> [String: Any] {
             #expect(json["chat_template_kwargs"] == nil)
             #expect(json["reasoning_effort"] == nil)
             #expect(json["temperature"] as? Double == effort.temperature)
-            #expect(json["max_tokens"] as? Int == effort.maxTokens)
+            #expect(json["max_tokens"] as? Int == effort.reasoningOutputCeiling)
         }
     }
 }
@@ -93,10 +93,11 @@ private func encodeToJSON(_ r: GenerationRequest) throws -> [String: Any] {
     let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
 
     #expect(json["temperature"] as? Double == 1.0)
-    #expect(json["reasoning_effort"] as? String == "xhigh")
-    let kwargs = json["chat_template_kwargs"] as? [String: Bool]
-    #expect(kwargs?["enable_thinking"] == true)
-    #expect(kwargs?["preserve_thinking"] == true)
+    #expect(json["reasoning_effort"] == nil)
+    let kwargs = json["chat_template_kwargs"] as? [String: Any]
+    #expect(kwargs?["enable_thinking"] as? Bool == true)
+    #expect(kwargs?["preserve_thinking"] as? Bool == true)
+    #expect(kwargs?["reasoning_effort"] as? String == "xhigh")
     let messages = json["messages"] as! [[String: Any]]
     #expect(messages[1]["content"] as? String == "the answer")
     #expect(messages[1]["reasoning_content"] as? String == "first, inspect it")
@@ -111,9 +112,10 @@ private func encodeToJSON(_ r: GenerationRequest) throws -> [String: Any] {
 
     #expect(json["temperature"] as? Double == 0.7)
     #expect(json["reasoning_effort"] == nil)
-    let kwargs = json["chat_template_kwargs"] as! [String: Bool]
-    #expect(kwargs["enable_thinking"] == false)
-    #expect(kwargs["preserve_thinking"] == true)
+    let kwargs = json["chat_template_kwargs"] as! [String: Any]
+    #expect(kwargs["enable_thinking"] as? Bool == false)
+    #expect(kwargs["preserve_thinking"] as? Bool == true)
+    #expect(kwargs["reasoning_effort"] == nil)
 }
 
 @Test func genericRequestsNeverReplayThinkingOrUseQwenFields() throws {
@@ -170,6 +172,7 @@ private func encodeToJSON(_ r: GenerationRequest) throws -> [String: Any] {
         "mistralai/Ministral-3-8B-Instruct-2512",
         "microsoft/Phi-4-multimodal-instruct",
         "moonshotai/Kimi-K2.5",
+        "Muse-Glimmer-30B-4bit",
         "zai-org/GLM-4.5V",
         "mlx-community/llava-1.5-7b-4bit",
     ]

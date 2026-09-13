@@ -89,5 +89,11 @@ Older records retain the package and type names used when accepted. [ADR-0054](0
 | [0081](0081-owner-prepared-automatic-uninstall.md) | Owner-prepared automatic uninstall | Accepted |
 | [0082](0082-direct-preference-reset.md) | Direct preference reset | Accepted · refines 0081 |
 | [0083](0083-selective-app-ci.md) | Selective app verification for content changes | Accepted · refines 0018 |
+| [0084](0084-model-inspection-favourites-and-recovery.md) | Models settings, favourites, effort submenu and diagnostic recovery | Proposed |
+| [0085](0085-prefix-stable-prompts-and-usage-calibrated-budgeting.md) | Prefix-stable prompts and usage-calibrated budgeting (policy v4) | Accepted · revises 0024 and 0066 |
+| [0086](0086-sampling-parameters-are-model-facts.md) | Sampling parameters are model facts, not effort | Proposed · refines 0024 and 0084 |
+| [0087](0087-conversation-compaction.md) | Conversation compaction: pruning tier, `/compact`, auto-compact threshold | Proposed · supersedes the parked summary decision in 0024 |
+| [0088](0088-single-round-tool-results.md) | Single-round tool results: synchronous commands, plain-text reads, glob, concurrent reads | Proposed · refines 0069 and 0070 |
+| [0089](0089-turn-continuity-and-engine-resilience.md) | Turn continuity and engine resilience: failed turns kept, repetition guard, retry, stall watchdog | Proposed · refines 0023, 0065, 0066 and 0084 |
 
 New session? Start with **[../../AGENT.md](../../AGENT.md)**, then [the roadmap](../ROADMAP.md).

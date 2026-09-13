@@ -1,4 +1,5 @@
 import CoreFoundation
+import CryptoKit
 import Darwin
 import Foundation
 import Tools
@@ -6,7 +7,7 @@ import Tools
 /// One turn's authority over one user-configured workspace. Blocking file work stays on this actor.
 public actor PenFileTools {
     public static let maximumFileBytes = 1_024 * 1_024
-    private static let maximumReadBytes = 32 * 1_024
+    private static let maximumReadBytes = 48 * 1_024
     public static let schemas: [ToolSchema] = [
         ToolSchema(
             name: "pen_list_files",
@@ -18,16 +19,23 @@ public actor PenFileTools {
         ToolSchema(
             name: "pen_read_file",
             description:
-                "Read a UTF-8 Pen file up to 1 MiB. Returns exact content for up to 200 lines and 32 KiB. Use next_start_line to continue a truncated read. Line numbers are 1-based; old_text for edits must come from content, not metadata.",
+                "Read a UTF-8 Pen file up to 1 MiB as plain text: a one-line header (path, the line range and total, and next_start_line when more remains) followed by the raw file content. Up to 2000 lines and 48 KiB per call; pass next_start_line back as start_line to continue. Set line_numbers true to prefix each line with its 1-based number and a tab; those numbers are not part of the file, so never copy them into old_text for edits.",
             inputSchemaJSON:
-                #"{"type":"object","properties":{"path":{"type":"string"},"start_line":{"type":"integer","minimum":1},"line_count":{"type":"integer","minimum":1,"maximum":200}},"required":["path"],"additionalProperties":false}"#
+                #"{"type":"object","properties":{"path":{"type":"string"},"start_line":{"type":"integer","minimum":1},"line_count":{"type":"integer","minimum":1,"maximum":2000},"line_numbers":{"type":"boolean"}},"required":["path"],"additionalProperties":false}"#
         ),
         ToolSchema(
             name: "pen_search",
             description:
-                "Search literal text in UTF-8 Pen files. Returns matching paths, 1-based line numbers and snippets. file_glob matches filenames (for example '*.vue'); case_sensitive defaults to true. Skips symlinks, .git and generated/dependency directories. Results and scanning are bounded; narrow path or query when truncated. Use pen_read_file before editing a match.",
+                "Search UTF-8 Pen files and return plain text: a summary line, then one 'path:line: snippet' per match. query is literal text unless regex is true, when it is a regular expression matched per line. file_glob matches filenames (for example '*.vue'); case_sensitive defaults to true. Skips symlinks, .git and generated/dependency directories. Results and scanning are bounded (regex is time-capped per file); narrow path or query when truncated. Use pen_read_file before editing a match.",
             inputSchemaJSON:
-                #"{"type":"object","properties":{"path":{"type":"string"},"query":{"type":"string","minLength":1,"maxLength":512},"file_glob":{"type":"string","maxLength":256},"case_sensitive":{"type":"boolean"},"max_results":{"type":"integer","minimum":1,"maximum":100}},"required":["path","query"],"additionalProperties":false}"#
+                #"{"type":"object","properties":{"path":{"type":"string"},"query":{"type":"string","minLength":1,"maxLength":512},"file_glob":{"type":"string","maxLength":256},"case_sensitive":{"type":"boolean"},"regex":{"type":"boolean"},"max_results":{"type":"integer","minimum":1,"maximum":100}},"required":["path","query"],"additionalProperties":false}"#
+        ),
+        ToolSchema(
+            name: "pen_glob",
+            description:
+                "List Pen files under path whose workspace-relative path matches a glob pattern (for example '*.swift' or 'src/*.vue'), newest first by modification time, up to 500 paths as plain text (a summary line then one path per line). Use '.' for the whole workspace. Honours the same ignore rules and scan bounds as pen_search and skips symlinks, .git and generated/dependency directories. Narrow the pattern or path when truncated.",
+            inputSchemaJSON:
+                #"{"type":"object","properties":{"path":{"type":"string"},"pattern":{"type":"string","minLength":1,"maxLength":1024},"max_results":{"type":"integer","minimum":1,"maximum":500}},"required":["path","pattern"],"additionalProperties":false}"#
         ),
         ToolSchema(
             name: "pen_write_file",
@@ -76,7 +84,7 @@ public actor PenFileTools {
 
     public func validateWorkspace() throws { try validateRoot() }
 
-    public func read(tool: String, argumentsJSON: String) throws -> ToolResult {
+    public nonisolated func read(tool: String, argumentsJSON: String) async throws -> ToolResult {
         try Task.checkCancellation()
         try validateRoot()
         guard argumentsJSON.utf8.count <= 65_536,
@@ -104,56 +112,68 @@ public actor PenFileTools {
             if remaining.count > page.count { result["next_after"] = page.last }
             return ToolResult(content: try json(result))
         case "pen_read_file":
-            try validateKeys(args, allowed: ["path", "start_line", "line_count"])
+            try validateKeys(args, allowed: ["path", "start_line", "line_count", "line_numbers"])
             let start = try integer(args, key: "start_line", fallback: 1, range: 1...Int.max)
-            let count = try integer(args, key: "line_count", fallback: 200, range: 1...200)
+            let count = try integer(args, key: "line_count", fallback: 2_000, range: 1...2_000)
+            let numbered = try boolean(args, key: "line_numbers", fallback: false)
             let (data, _) = try readFile(components(path))
             guard let content = String(data: data, encoding: .utf8) else { throw Failure("File is not UTF-8 text.") }
             let lines = Self.lines(content)
             guard start <= max(1, lines.count) else {
                 throw Failure("start_line exceeds this file's \(lines.count) lines.")
             }
-            var excerpt = ""
+            // Plain text keeps a small model's old_text fragments byte-exact: a one-line header,
+            // then the raw file bytes (optionally line-number prefixed) with no JSON escaping.
+            var body = ""
             var end = start - 1
             for line in lines.dropFirst(start - 1).prefix(count) {
                 guard line.utf8.count <= Self.maximumReadBytes else {
-                    if excerpt.isEmpty {
+                    if body.isEmpty {
                         throw Failure(
-                            "Line \(start) exceeds the 32 KiB read limit. Use pen_search to locate a smaller source file; this may be generated or minified content."
+                            "Line \(end + 1) exceeds the 48 KiB read limit. Use pen_search to locate a smaller source file; this may be generated or minified content."
                         )
                     }
                     break
                 }
-                guard excerpt.utf8.count + line.utf8.count <= Self.maximumReadBytes else { break }
-                excerpt += line
+                let rendered = numbered ? "\(end + 1)\t\(line)" : line
+                guard body.utf8.count + rendered.utf8.count <= Self.maximumReadBytes else { break }
+                body += rendered
                 end += 1
             }
-            var result: [String: Any] = [
-                "path": path, "content": excerpt, "start_line": start,
-                "end_line": end, "total_lines": lines.count, "truncated": end < lines.count,
-            ]
-            if end < lines.count { result["next_start_line"] = end + 1 }
-            return ToolResult(content: try json(result))
+            let truncated = end < lines.count
+            var header = "\(path), lines \(start)-\(end) of \(lines.count)"
+            if numbered { header += " (line numbers are not file content)" }
+            if truncated { header += ", next_start_line \(end + 1)" }
+            return ToolResult(
+                content: header + "\n" + body,
+                diagnostic: ToolExecutionDiagnostic(fileObservations: [
+                    FileOperationObservation(
+                        workspaceIdentity: workspaceIdentity, relativePath: path, kind: .read,
+                        outcome: .succeeded, afterDigest: Self.digest(data))
+                ]))
         case "pen_search":
-            try validateKeys(args, allowed: ["path", "query", "file_glob", "case_sensitive", "max_results"])
+            try validateKeys(args, allowed: ["path", "query", "file_glob", "case_sensitive", "regex", "max_results"])
             guard let query = args["query"] as? String, !query.isEmpty, query.unicodeScalars.count <= 512 else {
-                throw Failure("query must be literal text between 1 and 512 characters.")
+                throw Failure("query must be text between 1 and 512 characters.")
             }
             let glob = args["file_glob"] as? String ?? "*"
             guard args["file_glob"] == nil || args["file_glob"] is String, glob.utf8.count <= 1024, !glob.contains("\0")
             else {
                 throw Failure("file_glob must be a filename pattern such as '*.swift'.")
             }
-            var sensitive = true
-            if let value = args["case_sensitive"] {
-                guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else {
-                    throw Failure("case_sensitive must be true or false.")
-                }
-                sensitive = number.boolValue
-            }
+            let sensitive = try boolean(args, key: "case_sensitive", fallback: true)
+            let useRegex = try boolean(args, key: "regex", fallback: false)
             return try search(
-                path: path, query: query, glob: glob, sensitive: sensitive,
+                path: path, query: query, glob: glob, sensitive: sensitive, regex: useRegex,
                 limit: integer(args, key: "max_results", fallback: 50, range: 1...100))
+        case "pen_glob":
+            try validateKeys(args, allowed: ["path", "pattern", "max_results"])
+            guard let pattern = args["pattern"] as? String, !pattern.isEmpty, pattern.utf8.count <= 1024,
+                !pattern.contains("\0")
+            else { throw Failure("pattern must be a glob such as '*.swift' or 'src/*.vue'.") }
+            return try glob(
+                path: path, pattern: pattern,
+                limit: integer(args, key: "max_results", fallback: 500, range: 1...500))
         default: throw Failure("Unknown Pen read tool.")
         }
     }
@@ -162,10 +182,11 @@ public actor PenFileTools {
         let name: String
         let directory: Bool
         let regular: Bool
+        let modified: timespec
         var displayName: String { name + (directory ? "/" : "") }
     }
 
-    private func directoryEntries(_ parts: [String]) throws -> [DirectoryEntry] {
+    private nonisolated func directoryEntries(_ parts: [String]) throws -> [DirectoryEntry] {
         let directory = try traverse(parts)
         let duplicate = openat(directory.raw, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
         guard duplicate >= 0 else { throw failure("Open directory") }
@@ -194,22 +215,35 @@ public actor PenFileTools {
             entries.append(
                 DirectoryEntry(
                     name: name, directory: known && (info.st_mode & S_IFMT) == S_IFDIR,
-                    regular: known && (info.st_mode & S_IFMT) == S_IFREG && info.st_nlink == 1))
+                    regular: known && (info.st_mode & S_IFMT) == S_IFREG && info.st_nlink == 1,
+                    modified: known ? info.st_mtimespec : timespec()))
         }
         return entries.sorted { $0.displayName < $1.displayName }
     }
 
-    private func search(path: String, query: String, glob: String, sensitive: Bool, limit: Int) throws -> ToolResult {
+    private nonisolated func search(
+        path: String, query: String, glob: String, sensitive: Bool, regex useRegex: Bool, limit: Int
+    ) throws -> ToolResult {
+        let compiled: NSRegularExpression?
+        if useRegex {
+            do {
+                compiled = try NSRegularExpression(pattern: query, options: sensitive ? [] : [.caseInsensitive])
+            } catch {
+                throw Failure(
+                    "regex is not a valid pattern. Fix the expression or search literal text with regex false.")
+            }
+        } else {
+            compiled = nil
+        }
         let excluded: Set<String> = [
             ".git", "node_modules", ".build", "dist", "build", ".next", ".venv", "venv", "__pycache__",
         ]
         var directories = [try components(path, allowRoot: true)]
-        var matches: [[String: Any]] = []
+        var lines: [String] = []
         var matchBytes = 0
         var scannedFiles = 0
         var scannedEntries = 0
         var readBytes = 0
-        var skippedFiles = 0
         var truncated = false
         search: while let parts = directories.popLast() {
             try Task.checkCancellation()
@@ -217,7 +251,6 @@ public actor PenFileTools {
             do { entries = try directoryEntries(parts) } catch is CancellationError { throw CancellationError() } catch
             {
                 if parts == (try components(path, allowRoot: true)) { throw error }
-                skippedFiles += 1
                 continue
             }
             for entry in entries {
@@ -229,58 +262,111 @@ public actor PenFileTools {
                 }
                 guard entry.name.lowercased() != ".git" else { continue }
                 let child = parts + [entry.name]
-                guard child.joined(separator: "/").utf8.count <= 4_096 else {
-                    skippedFiles += 1
-                    continue
-                }
+                guard child.joined(separator: "/").utf8.count <= 4_096 else { continue }
                 if entry.directory {
-                    if !excluded.contains(entry.name), child.count <= 32 {
-                        directories.append(child)
-                    } else {
-                        skippedFiles += 1
-                    }
+                    if !excluded.contains(entry.name), child.count <= 32 { directories.append(child) }
                     continue
                 }
                 guard entry.regular, fnmatch(glob, entry.name, 0) == 0 else { continue }
                 scannedFiles += 1
                 let data: Data
                 do { data = try readFile(child).0 } catch is CancellationError { throw CancellationError() } catch {
-                    skippedFiles += 1
                     continue
                 }
                 readBytes += data.count
-                guard let content = String(data: data, encoding: .utf8) else {
-                    skippedFiles += 1
-                    continue
-                }
+                guard let content = String(data: data, encoding: .utf8) else { continue }
+                let relativePath = child.joined(separator: "/")
+                let fileDeadline = Date().addingTimeInterval(0.2)
                 for (index, line) in Self.lines(content).enumerated() {
-                    if line.range(of: query, options: sensitive ? [.literal] : [.literal, .caseInsensitive]) != nil {
-                        guard matches.count < limit else {
+                    let hit: Bool
+                    if let compiled {
+                        if Date() >= fileDeadline {
                             truncated = true
-                            break search
+                            break
                         }
-                        let match: [String: Any] = [
-                            "path": child.joined(separator: "/"), "line": index + 1,
-                            "snippet": String(line.unicodeScalars.prefix(240)).trimmingCharacters(in: .newlines),
-                        ]
-                        let size = try JSONSerialization.data(withJSONObject: match).count
-                        guard matchBytes + size <= 64 * 1_024 else {
-                            truncated = true
-                            break search
-                        }
-                        matches.append(match)
-                        matchBytes += size
+                        hit =
+                            compiled.firstMatch(
+                                in: line, options: [], range: NSRange(line.startIndex..<line.endIndex, in: line))
+                            != nil
+                    } else {
+                        hit =
+                            line.range(of: query, options: sensitive ? [.literal] : [.literal, .caseInsensitive]) != nil
                     }
+                    guard hit else { continue }
+                    guard lines.count < limit else {
+                        truncated = true
+                        break search
+                    }
+                    let snippet = String(line.unicodeScalars.prefix(240)).trimmingCharacters(in: .newlines)
+                    let rendered = "\(relativePath):\(index + 1): \(snippet)"
+                    guard matchBytes + rendered.utf8.count + 1 <= 64 * 1_024 else {
+                        truncated = true
+                        break search
+                    }
+                    lines.append(rendered)
+                    matchBytes += rendered.utf8.count + 1
                 }
             }
         }
-        return ToolResult(
-            content: try json([
-                "matches": matches, "truncated": truncated,
-                "scanned_files": scannedFiles, "skipped_entries": skippedFiles,
-                "guidance":
-                    "Search is literal and bounded. Read exact file content before editing; narrow path or query if truncated. Generated and dependency directories and .git are excluded.",
-            ]))
+        var header =
+            "\(lines.count) match\(lines.count == 1 ? "" : "es") for \(useRegex ? "regex" : "text") in \(scannedFiles) file\(scannedFiles == 1 ? "" : "s")"
+        if truncated { header += " (truncated: narrow path, query or file_glob)" }
+        return ToolResult(content: ([header] + lines).joined(separator: "\n"))
+    }
+
+    private nonisolated func glob(path: String, pattern: String, limit: Int) throws -> ToolResult {
+        let excluded: Set<String> = [
+            ".git", "node_modules", ".build", "dist", "build", ".next", ".venv", "venv", "__pycache__",
+        ]
+        var directories = [try components(path, allowRoot: true)]
+        var found: [(path: String, modified: timespec)] = []
+        var scannedEntries = 0
+        var truncated = false
+        walk: while let parts = directories.popLast() {
+            try Task.checkCancellation()
+            let entries: [DirectoryEntry]
+            do { entries = try directoryEntries(parts) } catch is CancellationError { throw CancellationError() } catch
+            {
+                if parts == (try components(path, allowRoot: true)) { throw error }
+                continue
+            }
+            for entry in entries {
+                try Task.checkCancellation()
+                scannedEntries += 1
+                guard scannedEntries <= 10_000, found.count < limit else {
+                    truncated = true
+                    break walk
+                }
+                guard entry.name.lowercased() != ".git" else { continue }
+                let child = parts + [entry.name]
+                let relativePath = child.joined(separator: "/")
+                guard relativePath.utf8.count <= 4_096 else { continue }
+                if entry.directory {
+                    if !excluded.contains(entry.name), child.count <= 32 { directories.append(child) }
+                    continue
+                }
+                guard entry.regular, fnmatch(pattern, relativePath, 0) == 0 else { continue }
+                found.append((relativePath, entry.modified))
+            }
+        }
+        found.sort { lhs, rhs in
+            if lhs.modified.tv_sec != rhs.modified.tv_sec { return lhs.modified.tv_sec > rhs.modified.tv_sec }
+            if lhs.modified.tv_nsec != rhs.modified.tv_nsec { return lhs.modified.tv_nsec > rhs.modified.tv_nsec }
+            return lhs.path < rhs.path
+        }
+        var paths: [String] = []
+        var bytes = 0
+        for candidate in found {
+            guard paths.count < limit, bytes + candidate.path.utf8.count + 1 <= 64 * 1_024 else {
+                truncated = true
+                break
+            }
+            paths.append(candidate.path)
+            bytes += candidate.path.utf8.count + 1
+        }
+        var header = "\(paths.count) path\(paths.count == 1 ? "" : "s") matching \(pattern)"
+        if truncated { header += " (truncated: narrow pattern or path)" }
+        return ToolResult(content: ([header] + paths).joined(separator: "\n"))
     }
 
     private static func lines(_ text: String) -> [String] {
@@ -292,11 +378,13 @@ public actor PenFileTools {
         }
     }
 
-    private func validateKeys(_ args: [String: Any], allowed: Set<String>) throws {
+    private nonisolated func validateKeys(_ args: [String: Any], allowed: Set<String>) throws {
         guard Set(args.keys).isSubset(of: allowed) else { throw Failure("Use only the documented tool fields.") }
     }
 
-    private func integer(_ args: [String: Any], key: String, fallback: Int, range: ClosedRange<Int>) throws -> Int {
+    private nonisolated func integer(_ args: [String: Any], key: String, fallback: Int, range: ClosedRange<Int>) throws
+        -> Int
+    {
         guard let value = args[key] else { return fallback }
         guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
             number.doubleValue.isFinite, number.doubleValue.rounded() == number.doubleValue,
@@ -304,6 +392,14 @@ public actor PenFileTools {
             range.contains(number.intValue)
         else { throw Failure("\(key) must be an integer in \(range).") }
         return number.intValue
+    }
+
+    private nonisolated func boolean(_ args: [String: Any], key: String, fallback: Bool) throws -> Bool {
+        guard let value = args[key] else { return fallback }
+        guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else {
+            throw Failure("\(key) must be true or false.")
+        }
+        return number.boolValue
     }
 
     public func prepare(tool: String, argumentsJSON: String) throws -> PreparedWrite {
@@ -325,17 +421,34 @@ public actor PenFileTools {
             let new = try required("new_text", args)
             guard !old.utf8.elementsEqual(new.utf8) else {
                 throw Failure(
-                    "No change: old_text and new_text are identical. Nothing was written. Skip this edit if the file is already correct, or supply a replacement that changes the requested content."
+                    "No change: old_text and new_text are identical. Nothing was written. Skip this edit if the file is already correct, or supply a replacement that changes the requested content.",
+                    diagnostic: ToolExecutionDiagnostic(
+                        fileObservations: [
+                            FileOperationObservation(
+                                workspaceIdentity: workspaceIdentity, relativePath: path,
+                                kind: .edit, outcome: .unchanged, beforeDigest: Self.digest(data))
+                        ],
+                        failureCategory: .fileUnchanged)
                 )
             }
             guard !old.isEmpty, let match = content.range(of: old) else {
                 throw Failure(
-                    "old_text was not found. Nothing was written. Call pen_read_file for this path and copy an exact, unique fragment from its content; do not guess the existing text."
+                    "old_text was not found. Nothing was written. Call pen_read_file for this path and copy an exact, unique fragment from its content; do not guess the existing text.",
+                    diagnostic: ToolExecutionDiagnostic(fileObservations: [
+                        FileOperationObservation(
+                            workspaceIdentity: workspaceIdentity, relativePath: path,
+                            kind: .edit, outcome: .failed, beforeDigest: Self.digest(data))
+                    ])
                 )
             }
             guard content.range(of: old, range: content.index(after: match.lowerBound)..<content.endIndex) == nil else {
                 throw Failure(
-                    "old_text matches more than once. Nothing was written. Read the file and include more surrounding text to select one location."
+                    "old_text matches more than once. Nothing was written. Read the file and include more surrounding text to select one location.",
+                    diagnostic: ToolExecutionDiagnostic(fileObservations: [
+                        FileOperationObservation(
+                            workspaceIdentity: workspaceIdentity, relativePath: path,
+                            kind: .edit, outcome: .failed, beforeDigest: Self.digest(data))
+                    ])
                 )
             }
             original = data
@@ -398,21 +511,40 @@ public actor PenFileTools {
         guard renameatx_np(parent.raw, temporary, parent.raw, name, flags) == 0 else {
             if write.original == nil, errno == EEXIST {
                 throw Failure(
-                    "File already exists. Nothing was overwritten. Call pen_read_file for this path, then pen_edit_file with an exact fragment from that read. If the content is already correct, skip it; do not recreate completed files. Empty content does not delete a file. When pen_run_command is available, remove a confirmed obsolete file with command rm and args [--, the relative file path], subject to separate command approval."
+                    "File already exists. Nothing was overwritten. Call pen_read_file for this path, then pen_edit_file with an exact fragment from that read. If the content is already correct, skip it; do not recreate completed files. Empty content does not delete a file.",
+                    diagnostic: ToolExecutionDiagnostic(
+                        fileObservations: [
+                            FileOperationObservation(
+                                workspaceIdentity: workspaceIdentity, relativePath: write.path,
+                                kind: .create, outcome: .alreadyExists)
+                        ],
+                        failureCategory: .fileAlreadyExists)
                 )
             }
             throw failure("Save file")
         }
-        return ToolResult(content: try json(["path": write.path, "bytes": write.replacement.count, "status": "saved"]))
+        return ToolResult(
+            content: try json(["path": write.path, "bytes": write.replacement.count, "status": "saved"]),
+            diagnostic: ToolExecutionDiagnostic(fileObservations: [
+                FileOperationObservation(
+                    workspaceIdentity: workspaceIdentity, relativePath: write.path,
+                    kind: write.original == nil ? .create : .edit, outcome: .succeeded,
+                    beforeDigest: Self.digest(write.original), afterDigest: Self.digest(write.replacement))
+            ]))
     }
 
-    private func validateRoot() throws {
+    private nonisolated func validateRoot() throws {
         let current = try Self.openDirectory(rootPath)
         var expected = stat()
         var actual = stat()
         guard fstat(root.raw, &expected) == 0, fstat(current.raw, &actual) == 0,
             expected.st_dev == actual.st_dev, expected.st_ino == actual.st_ino
         else { throw Failure("Pen folder changed. Start a new turn to refresh its file tools.") }
+    }
+
+    private static func digest(_ data: Data?) -> String? {
+        guard let data else { return nil }
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
     private static func openDirectory(_ path: String) throws -> Descriptor {
@@ -427,7 +559,7 @@ public actor PenFileTools {
         return directory
     }
 
-    private func traverse(_ parts: [String], create: Bool = false) throws -> Descriptor {
+    private nonisolated func traverse(_ parts: [String], create: Bool = false) throws -> Descriptor {
         var directory = root
         for part in parts {
             var next = openat(directory.raw, part, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
@@ -443,7 +575,7 @@ public actor PenFileTools {
         return directory
     }
 
-    private func readFile(_ parts: [String]) throws -> (Data, mode_t) {
+    private nonisolated func readFile(_ parts: [String]) throws -> (Data, mode_t) {
         guard let name = parts.last else { throw Failure("A file path is required.") }
         let parent = try traverse(Array(parts.dropLast()))
         let fd = openat(parent.raw, name, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
@@ -468,7 +600,7 @@ public actor PenFileTools {
         return (data, info.st_mode & 0o777)
     }
 
-    private func components(_ path: String, allowRoot: Bool = false) throws -> [String] {
+    private nonisolated func components(_ path: String, allowRoot: Bool = false) throws -> [String] {
         if allowRoot, path == "." { return [] }
         let parts = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
         guard !path.isEmpty, path.utf8.count <= 4096, !path.contains("\0"),
@@ -490,24 +622,28 @@ public actor PenFileTools {
         return value
     }
 
-    private func json(_ value: [String: Any]) throws -> String {
+    private nonisolated func json(_ value: [String: Any]) throws -> String {
         String(
             decoding: try JSONSerialization.data(
                 withJSONObject: value, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]),
             as: UTF8.self)
     }
 
-    private func failure(_ operation: String) -> Failure {
+    private nonisolated func failure(_ operation: String) -> Failure {
         Failure("\(operation): \(String(cString: strerror(errno))).")
     }
 
-    private struct Failure: LocalizedError {
-        let message: String
-        init(_ message: String) { self.message = message }
-        var errorDescription: String? { message }
+    public struct Failure: LocalizedError, Sendable {
+        public let message: String
+        public let diagnostic: ToolExecutionDiagnostic?
+        public init(_ message: String, diagnostic: ToolExecutionDiagnostic? = nil) {
+            self.message = message
+            self.diagnostic = diagnostic
+        }
+        public var errorDescription: String? { message }
     }
 
-    private final class Descriptor {
+    private final class Descriptor: Sendable {
         let raw: Int32
         init(_ raw: Int32) { self.raw = raw }
         deinit { Darwin.close(raw) }

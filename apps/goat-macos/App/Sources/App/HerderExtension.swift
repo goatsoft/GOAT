@@ -44,6 +44,14 @@ actor HerderFileProvider: ModelToolProvider {
 
     func stopCommands() async { await commands?.stopAll() }
 
+    func previewToolEffect(_ call: ToolCallRequest) async -> ToolExecutionDiagnostic? {
+        guard call.tool == "pen_run_command", let commands else { return nil }
+        guard let prepared = try? await commands.prepare(argumentsJSON: call.argumentsJSON),
+            let observation = prepared.directRemovalObservation
+        else { return nil }
+        return ToolExecutionDiagnostic(fileObservations: [observation])
+    }
+
     func prepare(_ call: ToolCallRequest) async throws -> String? {
         staged = nil
         guard call.tool == "pen_write_file" || call.tool == "pen_edit_file" else { return nil }
@@ -81,7 +89,9 @@ actor HerderFileProvider: ModelToolProvider {
                 return ToolResult(content: "Encoded file content exceeds the tool response limit.", isError: true)
             }
             return result
-        } catch is CancellationError { throw CancellationError() } catch {
+        } catch is CancellationError { throw CancellationError() } catch let error as PenFileTools.Failure {
+            return ToolResult(content: error.localizedDescription, isError: true, diagnostic: error.diagnostic)
+        } catch {
             return ToolResult(content: error.localizedDescription, isError: true)
         }
     }
