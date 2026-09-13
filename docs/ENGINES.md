@@ -103,6 +103,10 @@ Compatibility evidence must be captured from the actual configured engine and mo
 
 The streaming `POST /v1/chat/completions` request uses a **300 second idle timeout** (reset on each received byte), so a silent connection cannot hang indefinitely. Independently, once output has started, if no further event arrives for **120 seconds** the turn fails with a stall error rather than hanging. Before the first token, prefill silence is not failed here (the idle timeout bounds it); after **10 seconds** of prefill the composer shows "Waiting for the engine (prefill)" with the elapsed clock so a long prompt evaluation does not read as a freeze. A request that fails before any output, with a transient error (HTTP 408, 429, 502, 503, 504 or a connection reset), is retried up to three times with jittered exponential backoff, honouring `Retry-After`.
 
+## Context overflow (ADR-0087)
+
+Engines report a prompt that exceeds the model's context window inconsistently, usually as an HTTP 400 (some as 413) whose body names a context-length or too-long-prompt condition. GOAT classifies such a response as `contextOverflow` when the status is 400 or 413 and the detail contains one of: `context length`, `context window`, `maximum context`, `context_length_exceeded`, `too many tokens`, `exceeds the maximum`, `reduce the length`, `maximum number of tokens`, `prompt is too long`, `input is too long`. A plain 400 without those markers stays a malformed-request classification. On a `contextOverflow` during a turn, GOAT forces one conversation compaction and retries the request once (see ADR-0087); a second overflow fails normally. If an engine phrases overflow differently, add its wording to the marker list in `EngineFailureClassification.swift`.
+
 ## Remote engines
 
 Configured HTTP endpoints can be on this Mac, a local network or the internet, subject to JUDAS policy. A remote endpoint receives the context submitted for its work. Local servers can also make independent outbound connections. Do not treat generic API compatibility as a local-only network restriction; see [Privacy](PRIVACY.md) and [Connection policy](reference/CONNECTIONS.md).
