@@ -3,6 +3,7 @@ import SwiftUI
 
 enum ComposerCommand: String, CaseIterable, Hashable {
     case handoff
+    case compact
     case newChat
     case regenerate
     case remember
@@ -20,6 +21,7 @@ enum ComposerCommand: String, CaseIterable, Hashable {
     var title: String {
         switch self {
         case .handoff: "Handoff"
+        case .compact: "Compact"
         case .newChat: "New chat"
         case .regenerate: "Regenerate"
         case .remember: "Remember last answer"
@@ -32,6 +34,7 @@ enum ComposerCommand: String, CaseIterable, Hashable {
     var description: String {
         switch self {
         case .handoff: "Update memory and prepare a Markdown handover"
+        case .compact: "Summarise older exchanges now"
         case .newChat: "Start a fresh chat"
         case .regenerate: "Regenerate the latest assistant response"
         case .remember: "Save the latest assistant response to active memory"
@@ -44,6 +47,7 @@ enum ComposerCommand: String, CaseIterable, Hashable {
     var symbol: String {
         switch self {
         case .handoff: "arrowshape.turn.up.right.fill"
+        case .compact: "rectangle.compress.vertical"
         case .newChat: "square.and.pencil"
         case .regenerate: "arrow.clockwise"
         case .remember: "brain"

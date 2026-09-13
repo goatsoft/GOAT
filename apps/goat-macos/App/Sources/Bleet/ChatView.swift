@@ -769,7 +769,7 @@ struct Composer: View {
     }
 
     private var commandItems: [ComposerSlashItem] {
-        var commands: [ComposerCommand] = [.handoff, .newChat, .model, .effort, .activity]
+        var commands: [ComposerCommand] = [.handoff, .newChat, .model, .effort, .activity, .compact]
         if session.messages.contains(where: { $0.role == .assistant && $0.complete }) {
             commands.insert(.regenerate, at: 3)
             if model.memory.isEnabled(forProjectID: session.projectID) {
@@ -878,6 +878,9 @@ struct Composer: View {
         case .activity:
             withAnimation(.easeOut(duration: 0.18)) { model.showActivityLog.toggle() }
             draft = ""
+        case .compact:
+            draft = "/compact "
+            focused.wrappedValue = true
         }
     }
 }
