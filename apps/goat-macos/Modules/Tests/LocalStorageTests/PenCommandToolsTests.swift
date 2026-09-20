@@ -1,7 +1,8 @@
 import Foundation
 import JUDAS
-import Pens
 import Testing
+
+@testable import Pens
 
 private func commandFolder() throws -> URL {
     let root = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent(
@@ -252,9 +253,24 @@ func nativeNpmInstallsBuildsAndTestsWithAnIsolatedHome() async throws {
     let preview = try commandObject(command.previewJSON)
     #expect((preview["resolved_executable"] as? String)?.contains("/Developer/") == true)
     let result = try commandObject(await runner.start(command).content)
-    #expect(result["exit_code"] as? Int == 0)
-    #expect((result["output"] as? String)?.contains("Swift version") == true)
+    #expect(result["exit_code"] as? Int == 0, "Swift driver result: \(result)")
+    #expect((result["output"] as? String)?.contains("Swift version") == true, "Swift driver result: \(result)")
     await runner.stopAll()
+}
+
+@Test func selectedToolchainReadRootIncludesOnlyItsRuntimeBundle() {
+    #expect(
+        DeveloperToolchain(directory: "/Applications/Xcode_26.3.app/Contents/Developer").runtimeReadRoot
+            == "/Applications/Xcode_26.3.app")
+    #expect(
+        DeveloperToolchain(directory: "/Volumes/Tools/Custom Xcode.app/Contents/Developer").runtimeReadRoot
+            == "/Volumes/Tools/Custom Xcode.app")
+    #expect(
+        DeveloperToolchain(directory: "/Library/Developer/CommandLineTools").runtimeReadRoot
+            == "/Library/Developer/CommandLineTools")
+    #expect(
+        DeveloperToolchain(directory: "/opt/custom/Contents/Developer").runtimeReadRoot
+            == "/opt/custom/Contents/Developer")
 }
 
 @Test(.enabled(if: ProcessInfo.processInfo.environment["GOAT_PEN_TOOLCHAIN_QUALIFICATION"] == "1"))

@@ -5,6 +5,17 @@ import Foundation
 /// otherwise perform developer-tool discovery inside the sandbox and can fail before execution.
 struct DeveloperToolchain: Sendable {
     let directory: String
+    /// Xcode's command-line tools also load sibling Frameworks and SharedFrameworks.
+    /// Admit only the selected bundle, including versioned/custom Xcode installation names.
+    var runtimeReadRoot: String {
+        let developer = URL(fileURLWithPath: directory)
+        let contents = developer.deletingLastPathComponent()
+        let bundle = contents.deletingLastPathComponent()
+        guard developer.lastPathComponent == "Developer", contents.lastPathComponent == "Contents",
+            bundle.pathExtension == "app"
+        else { return directory }
+        return bundle.path
+    }
     var searchPaths: [String] {
         [directory + "/Toolchains/XcodeDefault.xctoolchain/usr/bin", directory + "/usr/bin"]
     }

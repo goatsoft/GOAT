@@ -152,7 +152,7 @@ public actor PenCommandTools {
         try judas.authorizePenCommand(network: network)
         let roots =
             Self.runtimeRoots(executable: executable, searchPaths: searchPaths)
-            + (toolchain.map { [$0.directory] } ?? [])
+            + (toolchain.map { [$0.runtimeReadRoot] } ?? [])
         let preview: [String: Any] = [
             "command": executable, "resolved_executable": try Self.canonicalPath(executable),
             "args": input.args, "working_directory": directory,
