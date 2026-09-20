@@ -56,6 +56,7 @@ public struct EnginePreset: Identifiable, Hashable, Sendable {
 
     /// Conventional endpoints are scoped by provider so discovery cannot attach a
     /// provider-specific metadata adapter to an unrelated service on another port.
+    /// Custom endpoints have no conventional alternative: the owner-entered URL is authoritative.
     public var conventionalDiscoveryURLs: [String] {
         switch id {
         case "omlx", "vmlx":
@@ -69,10 +70,7 @@ public struct EnginePreset: Identifiable, Hashable, Sendable {
         case "llamacpp":
             ["http://127.0.0.1:8080"]
         default:
-            [
-                "http://127.0.0.1:8000", "http://127.0.0.1:8001",
-                "http://127.0.0.1:11434",
-            ]
+            []
         }
     }
 }
