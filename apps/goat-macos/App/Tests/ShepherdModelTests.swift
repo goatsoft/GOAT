@@ -3131,3 +3131,16 @@ func compactionProgressIsVisibleOnlyWhileTheOperationOwnsIt(fails: Bool) async {
     #expect(session.messages.last?.text == "REPLY")
     _ = env
 }
+
+@Test @MainActor func delayedPublicationDoesNotChangeReportedDecodeSpeed() async throws {
+    var stats = GenStats(ttft: 2, tokens: 100, duration: 5, generationTokensPerSecond: 37)
+    stats.delivery = GenerationDeliveryMetrics()
+    let worker = ShepherdGenerationWorker(engine: FakeEngine(script: [[.token("hello"), .done(stats)]]))
+    let result = try await worker.stream(workerRequest()) { _ in
+        try? await Task.sleep(for: .milliseconds(80))
+        return true
+    }
+    #expect(result.stats?.toksPerSec == 37)
+    #expect(result.stats?.delivery?.publicationCount == 1)
+    #expect((result.stats?.delivery?.maximumPublicationSeconds ?? 0) >= 0.07)
+}

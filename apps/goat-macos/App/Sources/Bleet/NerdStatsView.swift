@@ -17,6 +17,7 @@ struct NerdStatsView: View {
     @State private var selectedResponse: String?
     @State private var meter = GenerationRateMeter()
     @State private var dialMaximum: Double = 100
+    @State private var sampleDate = Date.now
 
     private var tokens: Caprine { model.theme.tokens }
     private var activeMessage: ChatMessage? {
@@ -98,6 +99,7 @@ struct NerdStatsView: View {
                 guard scenePhase == .active, activeMessage?.id == message.id else { return }
                 guard message.liveMetrics.startedAt != nil else { continue }
                 let now = Date.now
+                sampleDate = now
                 let count = message.liveMetrics.estimatedTokens
                 meter.sample(tokens: count, at: now)
                 dialMaximum = max(dialMaximum, GenerationRateMeter.scale(containing: meter.rate))
@@ -220,14 +222,21 @@ struct NerdStatsView: View {
         let display = GenerationDisplayState(session: session)
         let stats = display.stats
         let generating = display.phase == .generating
-        let rate = generating ? meter.rate : stats.flatMap { $0.toksPerSec > 0 ? $0.toksPerSec : nil }
+        let waitingForOutput = display.isWaitingForOutput(at: sampleDate)
+        let rate =
+            generating
+            ? (waitingForOutput ? nil : meter.rate) : stats.flatMap { $0.toksPerSec > 0 ? $0.toksPerSec : nil }
         let estimated = generating || stats?.speedIsServerReported != true
         return VStack(alignment: .leading, spacing: 8) {
             ThroughputDial(
                 rate: rate, maximum: max(dialMaximum, GenerationRateMeter.scale(containing: rate)),
                 estimated: estimated, live: generating, tokens: tokens)
-            Text(display.caption)
-                .font(.caption2).foregroundStyle(tokens.muted)
+            Text(
+                waitingForOutput
+                    ? "No recent output received; the server may still be generating or buffering tool arguments"
+                    : display.caption
+            )
+            .font(.caption2).foregroundStyle(tokens.muted)
             if series.samples.count >= 2 {
                 Chart(series.samples) { sample in
                     AreaMark(x: .value("Time", sample.id), y: .value("Tokens per second", sample.rate))
@@ -242,7 +251,26 @@ struct NerdStatsView: View {
                 .chartXAxis(.hidden)
                 .chartYAxis { AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) }
                 .frame(height: 82)
-                .accessibilityLabel("Estimated throughput during this response, up to 60 samples")
+                .accessibilityLabel("Estimated received-output speed during this response, up to 60 samples")
+            }
+            if let delivery = stats?.delivery, !session.isStreaming {
+                VStack(alignment: .leading, spacing: Caprine.Activity.compactSpacing) {
+                    Text("Client delivery").font(Caprine.Activity.emphasizedFont)
+                    Text("First output received: " + secondsLabel(delivery.firstOutputSeconds))
+                    if let prompt = delivery.serverPromptSeconds {
+                        Text("Server prompt processing: " + secondsLabel(prompt))
+                    }
+                    if let loading = delivery.serverModelLoadSeconds {
+                        Text("Server model loading: " + secondsLabel(loading))
+                    }
+                    Text("Longest output gap: " + secondsLabel(delivery.maximumOutputGap))
+                    Text("Longest UI publication: " + secondsLabel(delivery.maximumPublicationSeconds))
+                    Text(
+                        "Received: \(delivery.outputBytes.formatted()) bytes in \(delivery.outputEvents) output events")
+                    Text("Delivery timings include waiting and buffering; they do not measure model decode speed.")
+                }
+                .font(Caprine.Activity.font)
+                .foregroundStyle(tokens.muted)
             }
             if let stats, !session.isStreaming {
                 HStack(alignment: .top) {
@@ -268,7 +296,7 @@ struct NerdStatsView: View {
         }
         .help(
             session.isStreaming
-                ? "The dial refreshes four times per second using a rolling one-second estimate. The graph samples once per second. Pauses appear as dips."
+                ? "Estimated from received output bytes, not server decode speed. Buffered tool arguments can arrive in a burst. A dip means no output arrived, not necessarily that the model stopped generating. The dial refreshes four times per second; the graph once per second."
                 : stats == nil
                     ? "This chat has no saved response measurements. A live trace appears while generating with the inspector open."
                     : "Latest measured response in this chat. "
@@ -314,6 +342,11 @@ struct NerdStatsView: View {
                 "Click or drag across the bars to inspect a response. Rates may use different models or output settings, and are not a controlled benchmark."
             )
         }
+    }
+
+    private func secondsLabel(_ seconds: TimeInterval?) -> String {
+        guard let seconds, seconds.isFinite, seconds >= 0 else { return "Unavailable" }
+        return String(format: "%.3fs", seconds)
     }
 
     private func metric(_ name: String, _ value: String) -> some View {

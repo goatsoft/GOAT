@@ -113,11 +113,18 @@ struct GenerationChartValue: Identifiable {
         if isCompacting { return "Compacting context; response statistics resume with the next response" }
         switch phase {
         case .waiting:
-            return "Waiting for engine" + (stats == nil ? "; no output yet" : "; dial shows the last measured response")
+            return "Waiting for output; the engine may be processing the prompt or buffering tool arguments"
         case .tools: return "Tool step; dial shows the last measured response"
-        case .generating: return "Live response, including tool arguments"
-        case .idle: return stats == nil ? "No response stats yet" : "Latest measured response"
+        case .generating: return "Received output estimate, including reasoning and tool arguments"
+        case .idle:
+            return stats == nil
+                ? "No response stats yet"
+                : stats?.speedIsServerReported == true ? "Server decode speed" : "Derived response speed"
         }
+    }
+
+    func isWaitingForOutput(at date: Date) -> Bool {
+        phase == .generating && message?.liveMetrics.lastOutputAt.map { date.timeIntervalSince($0) >= 5 } == true
     }
 
     func throughput(at date: Date) -> String {

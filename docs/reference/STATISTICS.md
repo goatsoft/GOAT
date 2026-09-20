@@ -13,18 +13,22 @@ that chat; it is not an average for the app session. Extra measurement explanati
 
 ## Throughput
 
-The native tachometer refreshes four times per second from a rolling one-second estimate. Its needle falls toward zero during pauses. The labelled scale grows when necessary and stays fixed for the rest of that response. The dial retains a numeric readout and an accessible speed value; **~** identifies estimates. Reduce Motion disables needle animation.
+The native tachometer refreshes four times per second from a rolling one-second estimate. Its needle reflects received output. After five seconds without output the dial shows a waiting state rather than presenting zero as model decode speed. The labelled scale grows when necessary and stays fixed for the rest of that response. The dial retains a numeric readout and an accessible speed value; **~** identifies estimates. Reduce Motion disables needle animation.
 
 During generation, the line and shaded area show estimated tokens per second in one-second
 intervals, using streamed text, reasoning and generated tool names/arguments. Initial engine waiting
 is labelled separately and does not fill the graph with artificial zero-speed samples. Dips during
-actual generation can include server/network stalls. This is a client estimate, not a hardware profiler.
+received output can reflect network delays, server buffering or generation pauses. A missing chunk does not establish that model decoding stopped. The estimate uses UTF-8 byte counts and can differ from the model tokenizer even during smooth delivery. The live caption identifies received output; completed server decode speed is labelled separately.
 
 The trace keeps at most 60 samples and starts fresh for each response. Sampling stops when the
 inspector closes or GOAT becomes inactive. Reopening during a response starts a fresh timing
 baseline. A finished response shows the engine's decode rate when supplied, otherwise a rate
 derived from output tokens and decode duration. First-token latency, output tokens, and total
 request duration appear below it.
+
+For responses completed in the current session, **Client delivery** separates first received output, the longest output gap and the longest UI publication. Publication time includes main-actor scheduling and applying the coalesced update and any due persistence checkpoint; it does not measure completed screen drawing. Counts and durations contain no prompt or response content, remain bounded, and are not persisted. Old saved responses do not invent these measurements.
+
+First received output can include connection, queueing, model loading, prompt processing and buffered generation. A server-reported first-token time may cover a narrower interval. GOAT cannot identify an ongoing server phase from silence alone. Tool execution has its own labelled phase and is excluded from response decode speed.
 
 While waiting for the engine or working through a tool step, the dial retains the last measured response
 and labels it accordingly. A long first-token wait can coexist with a healthy final decode rate.

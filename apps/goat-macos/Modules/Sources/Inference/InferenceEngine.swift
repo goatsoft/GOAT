@@ -233,6 +233,8 @@ public struct GenerationRequest: Sendable {
 public struct GenStats: Sendable, Equatable {
     private static let maximumPlausibleTokensPerSecond = 1_000_000.0
 
+    /// Session-local delivery measurements. Counts and durations only; not persisted.
+    public var delivery: GenerationDeliveryMetrics?
     public var ttft: TimeInterval?
     public var tokens: Int
     /// End-to-end request duration, including prompt evaluation and decode.
