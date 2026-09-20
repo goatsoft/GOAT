@@ -53,6 +53,24 @@ public actor OpenAICompatEngine: InferenceEngine {
         }
     }
 
+    /// Optional read-only telemetry from an explicitly configured oMLX profile.
+    /// Capturing and rechecking the revision prevents a reply from a replaced engine escaping.
+    public func runtimeStatus() async -> EngineRuntimeStatus? {
+        let config = self.config
+        let revision = configRevision
+        guard config.isValidEndpoint, config.metadataDialect == .omlx,
+            let serverURL = EngineMetadataEndpoint.url(
+                baseURL: config.baseURL, components: ["api", "status"]),
+            let modelsURL = EngineMetadataEndpoint.url(
+                baseURL: config.baseURL, components: ["v1", "models", "status"])
+        else { return nil }
+        async let server = Self.metadataData(url: serverURL, config: config)
+        async let models = Self.metadataData(url: modelsURL, config: config)
+        let result = await OMLXStatusDecoder.decode(server: server, models: models)
+        guard revision == configRevision, config == self.config, !Task.isCancelled else { return nil }
+        return result
+    }
+
     /// Best-effort metadata handshake for the selected model. Failure returns the catalog
     /// snapshot unchanged so a healthy generic Chat Completions path remains usable.
     public func inspectModel(_ model: ModelRef) async -> EngineModelInspection {
@@ -62,7 +80,7 @@ public actor OpenAICompatEngine: InferenceEngine {
 
         let metadata: ProbedModelMetadata?
         switch config.metadataDialect {
-        case .generic:
+        case .generic, .omlx:
             metadata = await Self.probeGenericDetail(config: config, modelID: model.id)
         case .lmStudio:
             metadata = await Self.probeLMStudio(config: config, modelID: model.id)

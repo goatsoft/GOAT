@@ -32,7 +32,7 @@ privately; public reports should contain synthetic findings only.
 
 The workload is an investigation aid, not complete acceptance. Also exercise
 composer typing, selection/copy, tool and reasoning disclosures, Earlier/Later
-navigation, keyboard and VoiceOver, narrow widths, font changes and reader
+navigation, keyboard, narrow widths, font changes and reader
 position. Use the existing transcript layout and reflow tests for regression
 coverage. Repeat runtime qualification on Tahoe 26 and Golden Gate 27. Passing
 tests or a faster scheduling proxy does not establish those interactive results.
@@ -51,3 +51,6 @@ older part holds that choice as output arrives. Copy retains the full original
 source, including Markdown fences and whitespace. These are presentation bounds;
 persistence and model context retain the complete content. Rich Markdown and
 embedded code-block actions remain available for smaller responses.
+
+VoiceOver qualification is outside this maintenance fix and is not an acceptance
+or release gate.

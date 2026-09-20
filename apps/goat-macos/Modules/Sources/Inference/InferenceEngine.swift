@@ -4,6 +4,7 @@ import Foundation
 
 public enum EngineMetadataDialect: String, Codable, Hashable, Sendable {
     case generic
+    case omlx
     case lmStudio
     case ollama
     case llamaCpp
@@ -304,12 +305,15 @@ public enum EngineError: LocalizedError, Sendable {
 /// The firewall: UI and Shepherd know only this. MLX, dialects, and ports live behind it.
 public protocol InferenceEngine: Actor {
     func health() async -> EngineHealth
+    func runtimeStatus() async -> EngineRuntimeStatus?
     func probeCapabilities(for model: ModelRef) async -> ModelRef
     func inspectModel(_ model: ModelRef) async -> EngineModelInspection
     func stream(_ request: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error>
 }
 
 public extension InferenceEngine {
+    func runtimeStatus() async -> EngineRuntimeStatus? { nil }
+
     /// Unknown is the portable fallback for engines without a metadata adapter.
     func probeCapabilities(for model: ModelRef) async -> ModelRef { model }
 

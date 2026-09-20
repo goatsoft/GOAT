@@ -4,7 +4,7 @@ Status: Proposed · 2026-09-20
 
 Refines [ADR-0008](0008-inference-via-omlx.md), [ADR-0017](0017-engine-agnostic-openai-dialect.md), [ADR-0021](0021-engines-as-managed-list.md), and [ADR-0086](0086-sampling-parameters-are-model-facts.md).
 
-Implementation is deferred to the 0.1.2 maintenance work in [issue #31](https://github.com/goatsoft/GOAT/issues/31). The live Qwen3.8 trial reinforced the need to show server memory facts and distinguish context usage from the effective output ceiling, but PR #27 does not implement this proposal.
+Implementation is deferred to the maintenance work in [issue #31](https://github.com/goatsoft/GOAT/issues/31). The live Qwen3.8 trial reinforced the need to show server memory facts and distinguish context usage from the effective output ceiling, but PR #27 does not implement this proposal.
 
 ## Context
 
@@ -47,7 +47,7 @@ One saved engine remains active at a time. GOAT surfaces an unavailable active p
 
 Owners can see the oMLX memory facts needed to distinguish a large loaded model from GOAT transcript cost. Engine recipes are no longer accidentally shadowed by an implicit client sampler policy. Diagnostics can state which layer supplied context, output, and sampling values.
 
-The adapter adds versioned vendor capability code, bounded fixtures, and stale-revision tests while leaving generation generic. Live qualification records the exact macOS, oMLX, checkpoint, quantization, template/profile, and ownership mode. Qwen3.8 27B 4-bit is qualified first, followed by Devstral Small 2 and DeepSeek R1 Distill. A later stable oMLX 0.7 release is requalified before becoming a release baseline.
+The adapter adds versioned vendor capability code, bounded fixtures, and stale-revision tests while leaving generation generic. Live qualification records the exact macOS, oMLX, checkpoint, quantization, template/profile, and ownership mode. Qwen3.8 27B 4-bit is qualified first, followed by Devstral Small 2, DeepSeek R1 Distill and GLM-4.7-Flash. A later stable oMLX 0.7 release is requalified before becoming a release baseline.
 
 This ADR does not claim that server memory equals total resident memory or that family sampling caused any observed model failure. It defines ownership so future evidence can be interpreted correctly.
 

@@ -46,6 +46,7 @@ public struct EnginePreset: Identifiable, Hashable, Sendable {
     /// Selects only documented, metadata-only provider probes. Custom endpoints stay generic.
     public var metadataDialect: EngineMetadataDialect {
         switch id {
+        case "omlx": .omlx
         case "lmstudio": .lmStudio
         case "ollama": .ollama
         case "llamacpp": .llamaCpp
