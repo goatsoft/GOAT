@@ -15,6 +15,7 @@ Use these pages for exact behavior, defaults, limits and interfaces. Start with 
 | [Package format](PACKAGES.md) | Declarative archive fields, permissions and validation. |
 | [Theme format](../THEMES.md) | Theme fields, local fonts and examples. |
 | [Module catalogue](../MODULES.md) | Internal responsibilities and dependency direction. |
+| [Transcript performance](transcript-performance.md) | Synthetic Release workload, metric limits and runtime qualification. |
 | [Glossary](../GLOSSARY.md) | Product and technical terms. |
 
 These documents describe Kid’s implemented contracts. [Release readiness](../RELEASE-CHECKLIST.md) records the acceptance required before a public build; [the roadmap](../ROADMAP.md) identifies planned work.

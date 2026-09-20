@@ -137,7 +137,7 @@ struct MessageView: View {
     }
 
     private var assistantBlock: some View {
-        HStack(alignment: .top, spacing: 10) {
+        AssistantRowLayout {
             if !compactActivity {
                 Group {
                     if model.presentation.isEnabled && !TranscriptActivity.isToolOnly(message) {
@@ -220,8 +220,6 @@ struct MessageView: View {
                         .allowsHitTesting(hovering)
                 }
             }
-            .alignmentGuide(.top) { _ in 0 }
-            Spacer(minLength: 40)
         }
     }
 

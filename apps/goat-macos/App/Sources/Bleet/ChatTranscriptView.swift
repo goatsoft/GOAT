@@ -23,7 +23,7 @@ extension EnvironmentValues {
 struct ChatTranscriptView: View {
     @Bindable var session: ChatSession
     @Environment(AppModel.self) private var model
-    @State private var windowEnd: Int?
+    @State private var heldRange: Range<Int>?
     @State private var autoFollow = true
     @State private var readerOwnsViewport = false
     @State private var reader = TranscriptReaderState()
@@ -45,6 +45,15 @@ struct ChatTranscriptView: View {
         _readerOwnsViewport = State(initialValue: !initiallyFollowing)
         _visibleMessageID = State(initialValue: initialVisibleMessageID)
         _readerAnchorID = State(initialValue: initialVisibleMessageID)
+        if !initiallyFollowing {
+            let end = initialVisibleMessageID.flatMap { id in
+                session.messages.firstIndex(where: { $0.id == id }).map { $0 + 1 }
+            }
+            _heldRange = State(
+                initialValue: TranscriptWindow.range(count: session.messages.count, end: end) {
+                    TranscriptWindow.displayCost(session.messages[$0])
+                })
+        }
     }
 
     var body: some View {
@@ -74,9 +83,12 @@ struct ChatTranscriptView: View {
                     VStack(alignment: .leading, spacing: 0) {
                         if messageRange.lowerBound > 0 {
                             Button("Earlier messages", systemImage: "chevron.up") {
-                                autoFollow = false
-                                readerOwnsViewport = true
-                                windowEnd = messageRange.lowerBound + TranscriptWindow.step
+                                let previous = TranscriptWindow.earlier(
+                                    messageRange, count: session.messages.count, cost: displayCost)
+                                let anchor =
+                                    previous.contains(messageRange.lowerBound)
+                                    ? messageRange.lowerBound : previous.upperBound - 1
+                                page(to: previous, anchor: anchor)
                             }
                             .buttonStyle(SecondaryChipButtonStyle())
                         }
@@ -100,6 +112,8 @@ struct ChatTranscriptView: View {
                                             : nil)
                                 }
                             }
+                            // Align the row boundary without traversing completed Markdown.
+                            .alignmentGuide(.leading) { _ in 0 }
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(
                                 .top,
@@ -111,12 +125,15 @@ struct ChatTranscriptView: View {
                         if messageRange.upperBound < session.messages.count {
                             HStack {
                                 Button("Later messages", systemImage: "chevron.down") {
-                                    let end = min(
-                                        session.messages.count, messageRange.upperBound + TranscriptWindow.step)
-                                    windowEnd = end == session.messages.count ? nil : end
+                                    let next = TranscriptWindow.later(
+                                        messageRange, count: session.messages.count, cost: displayCost)
+                                    let anchor =
+                                        next.contains(messageRange.upperBound - 1)
+                                        ? messageRange.upperBound - 1 : next.lowerBound
+                                    page(to: next, anchor: anchor)
                                 }
                                 Button("Latest", systemImage: "arrow.down.to.line") {
-                                    windowEnd = nil
+                                    heldRange = nil
                                     autoFollow = true
                                     readerOwnsViewport = false
                                     snapToBottom(using: proxy)
@@ -145,8 +162,7 @@ struct ChatTranscriptView: View {
                 .environment(
                     \.transcriptInspection,
                     TranscriptInspectionAction {
-                        autoFollow = false
-                        readerOwnsViewport = true
+                        claimViewport()
                         cancelPendingFollowScroll()
                         cancelPendingPreserveScroll()
                     }
@@ -164,8 +180,7 @@ struct ChatTranscriptView: View {
                 .onScrollPhaseChange { _, phase in
                     if phase == .tracking || phase == .interacting || phase == .decelerating {
                         reader.isScrolling = true
-                        autoFollow = false
-                        readerOwnsViewport = true
+                        claimViewport()
                         cancelPendingFollowScroll()
                         cancelPendingPreserveScroll()
                     } else if phase == .idle {
@@ -175,8 +190,11 @@ struct ChatTranscriptView: View {
                         // Only a reader gesture may hand the viewport back to bottom following.
                         // Regrouping can make the bottom sentinel transiently visible during
                         // native layout and must not change the ownership captured before it.
-                        if readerFinishedScrolling && windowEnd == nil && reader.isAtBottom {
+                        if readerFinishedScrolling && messageRange.upperBound == session.messages.count
+                            && reader.isAtBottom
+                        {
                             readerOwnsViewport = false
+                            heldRange = nil
                             autoFollow = true
                         } else if readerOwnsViewport {
                             autoFollow = false
@@ -194,9 +212,21 @@ struct ChatTranscriptView: View {
                     }
                 }
                 // A newly sent turn always re-arms follow and snaps to the bottom.
-                .onChange(of: session.messages.count) {
+                .onChange(of: session.messages.count) { previousCount, count in
+                    if let heldRange, count < previousCount {
+                        let anchor = readerAnchorID.flatMap { id in
+                            session.messages.firstIndex(where: { $0.id == id })
+                        }
+                        let surviving = TranscriptWindow.clamped(
+                            heldRange, count: count, anchor: anchor, cost: displayCost)
+                        self.heldRange = surviving
+                        if anchor == nil {
+                            self.readerAnchorID = surviving.first.map { session.messages[$0].id }
+                            visibleMessageID = self.readerAnchorID
+                        }
+                    }
                     if session.messages.last?.role == .user {
-                        windowEnd = nil
+                        heldRange = nil
                         autoFollow = true
                         readerOwnsViewport = false
                         snapToBottom(using: proxy)
@@ -217,7 +247,28 @@ struct ChatTranscriptView: View {
     }
 
     private var messageRange: Range<Int> {
-        TranscriptWindow.range(count: session.messages.count, end: windowEnd)
+        if let heldRange {
+            return TranscriptWindow.clamped(heldRange, count: session.messages.count, cost: displayCost)
+        }
+        return TranscriptWindow.range(count: session.messages.count, end: nil, cost: displayCost)
+    }
+
+    private func displayCost(_ index: Int) -> Int {
+        TranscriptWindow.displayCost(session.messages[index])
+    }
+
+    private func page(to range: Range<Int>, anchor: Int) {
+        claimViewport()
+        heldRange = range
+        guard session.messages.indices.contains(anchor) else { return }
+        readerAnchorID = session.messages[anchor].id
+        visibleMessageID = readerAnchorID
+    }
+
+    private func claimViewport() {
+        if heldRange == nil { heldRange = messageRange }
+        autoFollow = false
+        readerOwnsViewport = true
     }
 
     private func updateBottomVisibility(_ visible: Bool, using proxy: ScrollViewProxy) {
@@ -233,13 +284,13 @@ struct ChatTranscriptView: View {
             }
             return
         }
-        guard windowEnd == nil, visible, !reader.isScrolling, !readerOwnsViewport, !autoFollow,
+        guard heldRange == nil, visible, !reader.isScrolling, !readerOwnsViewport, !autoFollow,
             reader.resumeTask == nil
         else { return }
         reader.resumeTask = Task { @MainActor in
             do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
             reader.resumeTask = nil
-            if windowEnd == nil && reader.isAtBottom && !reader.isScrolling { autoFollow = true }
+            if heldRange == nil && reader.isAtBottom && !reader.isScrolling { autoFollow = true }
         }
     }
 

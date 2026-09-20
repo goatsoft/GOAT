@@ -126,19 +126,25 @@ struct ThinkingContentView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                if let language = block.language {
-                    ThinkingCodeText(code: block.text, language: language)
-                        .font(
-                            Font(ReadingFonts.nsFont(model.effectiveCodeFontID, size: model.codeFontSize, role: .code)))
-                } else {
-                    Text(block.text)
-                        .font(
-                            Font(
-                                ReadingFonts.nsFont(
-                                    model.effectiveChatFontID, size: model.chatFontSize - 1, role: .chat))
-                        )
-                        .lineSpacing(4)
+            if source.utf8.count > TranscriptTextParts.maximumBytes {
+                TranscriptTextPartsView(source: source, fontSize: model.chatFontSize - 1)
+            } else {
+                ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                    if let language = block.language {
+                        ThinkingCodeText(code: block.text, language: language)
+                            .font(
+                                Font(
+                                    ReadingFonts.nsFont(
+                                        model.effectiveCodeFontID, size: model.codeFontSize, role: .code)))
+                    } else {
+                        Text(block.text)
+                            .font(
+                                Font(
+                                    ReadingFonts.nsFont(
+                                        model.effectiveChatFontID, size: model.chatFontSize - 1, role: .chat))
+                            )
+                            .lineSpacing(4)
+                    }
                 }
             }
         }
@@ -146,6 +152,7 @@ struct ThinkingContentView: View {
         .textSelection(.enabled)
         .frame(maxWidth: .infinity, alignment: .leading)
         .task(id: source) {
+            guard source.utf8.count <= TranscriptTextParts.maximumBytes else { return }
             guard let prepared = try? await ThinkingPreparation.shared.blocks(source), !Task.isCancelled else { return }
             blocks = prepared
         }
