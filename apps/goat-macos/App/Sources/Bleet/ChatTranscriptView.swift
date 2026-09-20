@@ -28,6 +28,7 @@ struct ChatTranscriptView: View {
     @State private var readerOwnsViewport = false
     @State private var reader = TranscriptReaderState()
     @State private var visibleMessageID: UUID?
+    @State private var readerAnchorID: UUID?
     @State private var followThrottle = TranscriptFollowThrottle()
     @State private var pendingFollowScroll: Task<Void, Never>?
 
@@ -42,6 +43,7 @@ struct ChatTranscriptView: View {
         _autoFollow = State(initialValue: initiallyFollowing)
         _readerOwnsViewport = State(initialValue: !initiallyFollowing)
         _visibleMessageID = State(initialValue: initialVisibleMessageID)
+        _readerAnchorID = State(initialValue: initialVisibleMessageID)
     }
 
     var body: some View {
@@ -146,6 +148,9 @@ struct ChatTranscriptView: View {
                     }
                 )
                 .scrollPosition(id: $visibleMessageID, anchor: .top)
+                .onChange(of: visibleMessageID) {
+                    if let visibleMessageID { readerAnchorID = visibleMessageID }
+                }
                 .defaultScrollAnchor(.bottom, for: .initialOffset)
                 .defaultScrollAnchor(.bottom, for: .alignment)
                 // Preserve the reader's current content when rows regroup or reflow. Active
@@ -262,11 +267,11 @@ struct ChatTranscriptView: View {
     }
 
     private func preserveReaderPosition(using proxy: ScrollViewProxy) {
-        guard let visibleMessageID else { return }
+        guard let readerAnchorID else { return }
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) {
-            proxy.scrollTo(visibleMessageID, anchor: .top)
+            proxy.scrollTo(readerAnchorID, anchor: .top)
         }
     }
 
