@@ -377,6 +377,62 @@ import XCTest
         try attachSnapshot(expandedHost, name: "Compaction row expanded")
     }
 
+    func testCompactionLongSummaryLayoutMatrix() async throws {
+        let model = AppModel.shared
+        let originalTheme = model.themeID
+        defer { model.themeID = originalTheme }
+        let message = ChatMessage(role: .user)
+        message.kind = .compaction
+        message.text = """
+            ## Goal
+            Finish the synthetic editor task while preserving unsaved work.
+
+            ## Constraints
+            Keep the selected engine and workspace unchanged. Do not install dependencies.
+
+            ## Completed
+            Read the source, edited the value and independently checked the resulting bytes.
+
+            ## Next steps
+            Continue from the recorded command result, then report any remaining failures accurately.
+            """
+        let info = CompactionInfo(
+            coversUpToMessageID: UUID().uuidString, coveredExchangeCount: 24,
+            filesRead: ["Sources/Editor/Components/Inspector/SelectionDetails.swift"],
+            filesEdited: ["Tests/Editor/SelectionDetailsTests.swift"])
+        message.compaction = info
+        message.complete = true
+        for theme in ["light", "leet"] {
+            model.themeID = theme
+            for width in [360.0, 700.0] {
+                let host = NSHostingView(
+                    rootView: CompactionRow(
+                        message: message, info: info, delete: {}, initiallyExpanded: true
+                    )
+                    .frame(width: width).environment(model))
+                let window = NSWindow(
+                    contentRect: NSRect(x: 80, y: 80, width: width, height: 900),
+                    styleMask: [.titled], backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                window.appearance = NSAppearance(named: theme == "light" ? .aqua : .darkAqua)
+                window.contentView = host
+                window.orderFront(nil)
+                try await Task.sleep(for: .milliseconds(400))
+                host.layoutSubtreeIfNeeded()
+                let fitted = host.fittingSize
+                XCTAssertEqual(fitted.width, width, accuracy: 1)
+                XCTAssertGreaterThan(fitted.height, 200)
+                XCTAssertLessThan(fitted.height, 1600)
+                window.setContentSize(NSSize(width: width, height: fitted.height))
+                try await Task.sleep(for: .milliseconds(100))
+                try attachSnapshot(
+                    host, name: "Compaction \(theme) \(Int(width))")
+                window.contentView = nil
+                window.close()
+            }
+        }
+    }
+
     private func attachSnapshot(_ host: NSView, name: String) throws {
         host.layoutSubtreeIfNeeded()
         let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
