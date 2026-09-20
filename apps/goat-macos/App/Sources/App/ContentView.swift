@@ -67,6 +67,9 @@ struct ContentView: View {
         .task {
             await model.start()
         }
+        .task(id: model.modelCatalogPollingTrigger(sceneActive: scenePhase == .active)) {
+            await model.modelCatalogPollingLoop(sceneActive: scenePhase == .active)
+        }
         .onChange(of: model.shouldPresentEngineSetup, initial: true) {
             if model.consumeEngineSetupRequest() { openSettings() }
         }

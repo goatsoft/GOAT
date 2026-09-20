@@ -252,6 +252,7 @@ extension ExtensionRuntime {
 
     public func invoke(
         _ handle: ToolHandle, argumentsJSON: String,
+        executionBudget: ToolExecutionBudget = .standard,
         authorize: @Sendable (ToolHandle, String) async throws -> Bool
     ) async throws -> ToolResult {
         guard argumentsJSON.utf8.count <= 65_536 else { throw CapabilityError.argumentsTooLarge }
@@ -260,14 +261,14 @@ extension ExtensionRuntime {
             let entry = entries[handle.registration.id],
             entry.contributions.tools.indices.contains(handle.providerIndex)
         else { throw CapabilityError.revoked }
-        try Schema.validate(argumentsJSON, schema: resolved.schema.inputSchemaJSON)
+        try Schema.validateArguments(argumentsJSON, schema: resolved.schema.inputSchemaJSON)
         guard try await authorize(handle, argumentsJSON) else { throw CapabilityError.unauthorized }
         try Task.checkCancellation()
         guard entries[handle.registration.id] != nil, turns[handle.turnID] != nil else {
             throw CapabilityError.revoked
         }
         let provider = entry.contributions.tools[handle.providerIndex]
-        let result = try await bounded(owner: entry.token, turnID: handle.turnID, deadline: .seconds(120)) {
+        let result = try await bounded(owner: entry.token, turnID: handle.turnID, deadline: executionBudget.deadline) {
             try await provider.invoke(
                 ToolCallRequest(tool: handle.name, argumentsJSON: argumentsJSON), context: snapshot.context)
         }

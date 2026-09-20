@@ -41,6 +41,8 @@ The Wiki browser has List and Graph modes. Existing MarkdownUI remains the note-
 
 ## Consequences
 
+Local note names accept internal underscores as well as hyphens. Names remain 1 to 64 lowercase ASCII letters, digits, hyphens or underscores, with an alphanumeric first and last character; `memory` remains reserved. This additive codec change preserves existing names and IDs without normalization or migration. The tool schema states the same format. Round-trip, linked-page lookup and traversal rejection tests cover the contract.
+
 - Default memory honors pillar #1 with zero moving parts: no daemon, Docker, embeddings, or network.
 - Hindsight users get knowledge-page search and graph-backed reflection through the maintained coding-agent MCP contract. Service location and data handling remain their explicit configuration choice.
 - Disabling memory is reversible and non-destructive. Switching providers preserves old stores but does not merge, mirror, or migrate them automatically.

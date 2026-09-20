@@ -1,5 +1,6 @@
 import AppKit
 import Bleet
+import Caprine
 import CoreGraphics
 import Herd
 import Inference
@@ -12,11 +13,15 @@ struct MessageView: View {
     let isLast: Bool
     let projectID: UUID?
     var compactActivity = false
+    var joinsPreviousTools = false
+    var joinsNextTools = false
     var activeToolID: String? = nil
+    var deleteCompaction: (() -> Void)? = nil
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovering = false
+    @State private var showingResponseDetails = false
 
     var body: some View {
         content
@@ -24,13 +29,35 @@ struct MessageView: View {
             .onHover { h in
                 withAnimation(.easeOut(duration: 0.12)) { hovering = h }
             }
+            .sheet(isPresented: $showingResponseDetails) {
+                ResponseDetailsView(message: message)
+            }
+            .contextMenu {
+                if message.role == .assistant && ResponseDetailsView.hasUsefulDetails(message) {
+                    Button("Response Details…", systemImage: "info.circle") {
+                        showingResponseDetails = true
+                    }
+                }
+            }
     }
 
     @ViewBuilder private var content: some View {
-        switch message.role {
-        case .user: userBubble
-        case .assistant: assistantBlock
-        case .system, .tool: EmptyView()
+        if message.kind == .compaction, let info = message.compaction {
+            CompactionRow(
+                message: message,
+                info: info,
+                delete: deleteCompaction)
+        } else {
+            switch message.role {
+            case .user: userBubble
+            case .assistant:
+                assistantBlock
+                    .frame(
+                        height: TranscriptActivity.isEmpty(message) ? 0 : nil
+                    )
+                    .clipped()
+            case .system, .tool: EmptyView()
+            }
         }
     }
 
@@ -106,21 +133,28 @@ struct MessageView: View {
     /// The speech bubble (wave dots inside) rides the avatar until visible words arrive -
     /// through the whole thinking phase. The avatar wears the thinking pose meanwhile.
     private var showThinkingBubble: Bool {
-        model.presentation.isEnabled && !message.complete && message.text.isEmpty
+        model.presentation.isEnabled && !message.complete && message.lastStreamActivity == .reasoning
     }
 
     private var assistantBlock: some View {
         HStack(alignment: .top, spacing: 10) {
             if !compactActivity {
                 Group {
-                    if model.presentation.isEnabled {
+                    if model.presentation.isEnabled && !TranscriptActivity.isToolOnly(message) {
                         GoatieView(pose: avatarPose, size: 60)
                     } else {
                         // Keep the smaller mark centred beside the label and duration without
                         // shrinking either line or retaining the previous wide avatar column.
-                        FigureheadView(size: 28, fillsFrame: true)
-                            .frame(height: 17)
-                            .frame(height: message.complete ? 17 : 34)
+                        FigureheadView(size: Caprine.Activity.standardAvatarWidth, fillsFrame: true)
+                            .frame(
+                                width: model.presentation.isEnabled
+                                    ? Caprine.Activity.presentationAvatarWidth : Caprine.Activity.standardAvatarWidth
+                            )
+                            .frame(height: Caprine.Activity.singleLineHeight)
+                            .frame(
+                                height: message.complete || TranscriptActivity.isToolOnly(message)
+                                    ? Caprine.Activity.singleLineHeight : Caprine.Activity.doubleLineHeight
+                            )
                     }
                 }
                 .padding(.top, 1)
@@ -139,22 +173,18 @@ struct MessageView: View {
                     }
                 }
             }
-            VStack(alignment: .leading, spacing: 4) {
-                if !message.complete || !message.thinking.isEmpty {
-                    Group {
-                        if !message.thinking.isEmpty {
-                            ThinkingDisclosure(message: message)
-                        } else {
-                            AssistantStatusRow(startedAt: message.complete ? nil : message.createdAt) {
-                                if message.text.isEmpty {
-                                    ThinkingLabel(title: "Thinking…", live: true)
-                                }
-                            }
-                        }
-                    }
-                    .padding(.top, model.presentation.isEnabled ? 12 : 0)
+            if compactActivity {
+                Color.clear.frame(
+                    width: model.presentation.isEnabled
+                        ? Caprine.Activity.presentationAvatarWidth : Caprine.Activity.standardAvatarWidth,
+                    height: Caprine.Activity.ruleWidth / 2
+                )
+            }
+            VStack(alignment: .leading, spacing: Caprine.Activity.spacing) {
+                if TranscriptText.hasContent(message.thinking) {
+                    ThinkingDisclosure(message: message)
                 }
-                if message.complete && !message.text.isEmpty {
+                if message.complete && TranscriptText.hasContent(message.text) {
                     PreparedMarkdownView(
                         id: message.id,
                         source: message.text,
@@ -170,26 +200,28 @@ struct MessageView: View {
                             }
                             .textSelection(.enabled)
                     }
-                } else if !message.text.isEmpty {
+                } else if TranscriptText.hasContent(message.text) {
                     StreamingMarkdownView(message: message)
                 }
-                ForEach(message.toolEvents) { event in
-                    ToolCallCard(
-                        event: event, live: event.id == activeToolID || (!message.complete && !isSettled(event)))
+                if !message.toolEvents.isEmpty {
+                    ToolActivityGroup(
+                        messages: [message], activeAssistantID: activeToolID == nil ? nil : message.id,
+                        projectID: projectID,
+                        connectsAbove: joinsPreviousTools, connectsBelow: joinsNextTools)
                 }
                 if let error = message.error {
                     Text(error)
                         .font(.callout)
                         .foregroundStyle(.orange)
                 }
-                if message.complete {
+                if message.complete && message.toolEvents.isEmpty && !TranscriptActivity.isEmpty(message) {
                     footer
                         .opacity(hovering || memorySaveState == .saving ? 1 : 0)
                         .allowsHitTesting(hovering)
                 }
             }
             .alignmentGuide(.top) { _ in 0 }
-            if !compactActivity { Spacer(minLength: 40) }
+            Spacer(minLength: 40)
         }
     }
 
@@ -214,13 +246,23 @@ struct MessageView: View {
                 }
                 .buttonStyle(.plain)
                 .labelStyle(.iconOnly)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(Caprine.Activity.font)
+                .foregroundStyle(model.theme.tokens.muted)
                 .help("Regenerate (⌘R)")
             }
             CopyButton(text: message.text.isEmpty ? (message.error ?? "") : message.text)
                 .labelStyle(.iconOnly)
                 .font(.caption)
+            if ResponseDetailsView.hasUsefulDetails(message) {
+                Button("Response Details…", systemImage: "info.circle") {
+                    showingResponseDetails = true
+                }
+                .buttonStyle(.plain)
+                .labelStyle(.iconOnly)
+                .font(Caprine.Activity.font)
+                .foregroundStyle(model.theme.tokens.muted)
+                .help("Response Details")
+            }
             rememberButton
             FeedbackButtons(message: message)
         }
@@ -279,6 +321,110 @@ struct MessageView: View {
 
     private var liveAnimations: Bool {
         model.animationsEnabled && !reduceMotion && scenePhase == .active
+    }
+}
+
+struct CompactionRow: View {
+    let message: ChatMessage
+    let info: CompactionInfo
+    let delete: (() -> Void)?
+    @Environment(AppModel.self) private var model
+    @State private var expanded = false
+
+    init(message: ChatMessage, info: CompactionInfo, delete: (() -> Void)?, initiallyExpanded: Bool = false) {
+        self.message = message
+        self.info = info
+        self.delete = delete
+        _expanded = State(initialValue: initiallyExpanded)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Caprine.Activity.spacing) {
+            HStack(spacing: Caprine.Activity.spacing) {
+                Button {
+                    expanded.toggle()
+                } label: {
+                    Label {
+                        Text("Compacted \(info.coveredExchangeCount) \(exchangeLabel)")
+                            .font(Caprine.Activity.emphasizedFont)
+                    } icon: {
+                        Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                            .font(Caprine.Activity.badgeFont)
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+
+                Spacer(minLength: Caprine.Activity.spacing)
+
+                Menu {
+                    Button("Delete compaction", systemImage: "arrow.uturn.backward", role: .destructive) {
+                        delete?()
+                    }
+                    .disabled(delete == nil)
+                    .help(
+                        delete == nil
+                            ? "Only the newest compaction can restore earlier prompt history."
+                            : "Restore the earlier messages to prompt history."
+                    )
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .foregroundStyle(model.theme.tokens.muted)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .accessibilityLabel("Compaction actions")
+            }
+
+            if expanded {
+                PreparedMarkdownView(
+                    id: message.id,
+                    source: message.text,
+                    fallbackFontSize: model.chatFontSize
+                ) { content in
+                    Markdown(content)
+                        .markdownImageProvider(BlockedMarkdownImageProvider())
+                        .markdownInlineImageProvider(BlockedMarkdownInlineImageProvider())
+                        .goatMarkdownStyle(fontSize: model.chatFontSize)
+                        .markdownBlockStyle(\.codeBlock) { configuration in
+                            CodeBlockView(configuration: configuration)
+                        }
+                        .textSelection(.enabled)
+                }
+
+                fileList("Files edited", paths: info.filesEdited)
+                fileList("Files read", paths: info.filesRead)
+            }
+        }
+        .padding(Caprine.Activity.inset)
+        .background(
+            model.theme.tokens.surface.opacity(model.theme.tokens.bgOpacity),
+            in: RoundedRectangle(cornerRadius: Caprine.Activity.radius)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: Caprine.Activity.radius)
+                .strokeBorder(model.theme.tokens.muted.opacity(Caprine.Activity.cardBorderOpacity))
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private var exchangeLabel: String {
+        info.coveredExchangeCount == 1 ? "exchange" : "exchanges"
+    }
+
+    @ViewBuilder private func fileList(_ title: String, paths: [String]) -> some View {
+        if !paths.isEmpty {
+            VStack(alignment: .leading, spacing: Caprine.Activity.rowPadding) {
+                Text(title)
+                    .font(Caprine.Activity.badgeFont)
+                    .foregroundStyle(model.theme.tokens.muted)
+                ForEach(paths, id: \.self) { path in
+                    Text(path)
+                        .font(Caprine.Activity.monospaceFont)
+                        .textSelection(.enabled)
+                }
+            }
+        }
     }
 }
 
@@ -387,25 +533,35 @@ struct ToolCallCard: View {
 /// MCP tools retain a compact technical transcript. Their disclosure keeps the raw request and
 /// response reachable without turning every completed call into a large card in the conversation.
 private struct ExternalToolCallCard: View {
+    @Environment(\.transcriptInspection) private var inspection
+    @Environment(AppModel.self) private var model
     let event: ToolEventSnapshot
     let live: Bool
     @State private var expanded = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: Caprine.Activity.compactSpacing) {
             Button {
+                inspection.perform()
                 expanded.toggle()
             } label: {
-                HStack(spacing: 7) {
+                HStack(spacing: Caprine.Activity.spacing) {
                     ToolCallStateIndicator(event: event, live: live)
                     Text(ToolActivityLabel.title(event))
-                        .font(.caption.weight(.medium))
+                        .font(Caprine.Activity.emphasizedFont)
                         .strikethrough(event.denied)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 9, weight: .semibold))
+                        .font(Caprine.Activity.badgeFont)
                         .foregroundStyle(.tertiary)
+                    if event.denied {
+                        Text("Denied").foregroundStyle(model.theme.tokens.muted)
+                    } else if event.isError {
+                        Text("Failed").foregroundStyle(model.theme.tokens.muted)
+                    } else if !live && event.result == nil {
+                        Text("No result").foregroundStyle(model.theme.tokens.muted)
+                    }
                     Spacer(minLength: 0)
                 }
                 .contentShape(Rectangle())
@@ -413,6 +569,7 @@ private struct ExternalToolCallCard: View {
             }
             .buttonStyle(.plain)
             .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+            .accessibilityIdentifier("tool-event-" + event.id)
             .help("\(event.server) · \(event.tool)")
             if expanded {
                 ToolCallDetails(event: event)
@@ -430,73 +587,60 @@ private struct MemoryToolCallCard: View {
     @Environment(AppModel.self) private var model
     @State private var detailsPresented = false
 
-    private var action: String {
-        switch event.tool {
-        case "memory_list": "Browse saved memories"
-        case "memory_read": "Read a saved memory"
-        case "memory_write": "Save a memory"
-        case "memory_capture_session": "Save this session"
-        case "memory_handoff": event.result ?? "Save the handover"
-        case "memory_delete": "Remove a memory"
-        case "wiki_ingest_source": "Capture a source"
-        case "wiki_list_sources": "Browse source captures"
-        case "wiki_read_source": "Read a source capture"
-        case "wiki_query": "Search the knowledge pages"
-        case "wiki_lint": "Check the knowledge pages"
-        default: event.tool.replacingOccurrences(of: "_", with: " ").capitalized
-        }
-    }
+    @Environment(\.transcriptInspection) private var inspection
 
+    private var action: String { ToolActivityLabel.memoryAction(event) }
     private var hasDetails: Bool {
         ToolCallPayload.containsValue(event.arguments) || ToolCallPayload.containsValue(event.result)
     }
 
     var body: some View {
-        if hasDetails {
-            Button {
-                detailsPresented.toggle()
-            } label: {
-                header
-            }
-            .buttonStyle(.plain)
-            .contentShape(Rectangle())
-            // The button fills the transcript width for easy clicking; pin the popover to its
-            // leading edge so it opens under Memory instead of in the middle of the chat.
-            .popover(
-                isPresented: $detailsPresented,
-                attachmentAnchor: .point(.bottomLeading),
-                arrowEdge: .bottom
-            ) {
-                MemoryOperationDetails(event: event, action: action)
-            }
-        } else {
-            header
-        }
-    }
-
-    private var header: some View {
-        HStack(spacing: 9) {
+        HStack(spacing: Caprine.Activity.spacing) {
             Image(systemName: "brain.head.profile")
-                .font(.system(size: 13, weight: .semibold))
+                .font(Caprine.Activity.font)
                 .foregroundStyle(model.theme.tokens.tint)
-            Text("Memory")
-                .font(.caption.weight(.semibold))
-            Text(action)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            if hasDetails {
+                Button {
+                    inspection.perform()
+                    detailsPresented.toggle()
+                } label: {
+                    label
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Memory · " + action)
+                .help("Show memory operation details")
+                .popover(
+                    isPresented: $detailsPresented,
+                    attachmentAnchor: .point(.bottomLeading), arrowEdge: .bottom
+                ) {
+                    MemoryOperationDetails(event: event, action: action)
+                }
+            } else {
+                label
+            }
             if live {
                 GoatLoadingIndicator().controlSize(.mini)
             } else if event.isError || event.denied {
                 Image(systemName: event.denied ? "hand.raised.fill" : "exclamationmark.triangle.fill")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(event.isError ? .orange : .secondary)
+                    .font(Caprine.Activity.font)
+                    .foregroundStyle(
+                        event.isError ? Caprine.Semantic.warning : model.theme.tokens.muted
+                    )
+                    .accessibilityLabel(event.denied ? "Denied" : "Failed")
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 3)
-        .padding(.vertical, 5)
-        .contentShape(Rectangle())
+        .padding(.vertical, Caprine.Activity.rowPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var label: some View {
+        HStack(spacing: Caprine.Activity.spacing) {
+            Text("Memory").font(Caprine.Activity.font.weight(.semibold))
+            Text(action).font(Caprine.Activity.font).foregroundStyle(model.theme.tokens.muted)
+                .lineLimit(1).truncationMode(.middle)
+        }
+        .contentShape(Rectangle())
     }
 }
 
@@ -505,19 +649,26 @@ private struct MemoryToolCallCard: View {
 private struct MemoryOperationDetails: View {
     let event: ToolEventSnapshot
     let action: String
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label(action, systemImage: "brain.head.profile")
-                .font(.headline)
+        VStack(alignment: .leading, spacing: Caprine.Activity.inset) {
+            HStack(spacing: Caprine.Activity.spacing) {
+                Label(action, systemImage: "brain.head.profile").font(Caprine.Activity.headingFont)
+                Spacer(minLength: 0)
+                Button("Close", systemImage: "xmark") { dismiss() }
+                    .labelStyle(.iconOnly).buttonStyle(.plain)
+                    .keyboardShortcut(.cancelAction)
+            }
             ToolCallDetails(event: event)
         }
-        .padding(16)
-        .frame(width: 520, alignment: .leading)
+        .padding(Caprine.Activity.treeInset)
+        .frame(width: Caprine.Activity.operationDetailsWidth, alignment: .leading)
     }
 }
 
 private struct ToolCallStateIndicator: View {
+    @Environment(AppModel.self) private var model
     let event: ToolEventSnapshot
     let live: Bool
 
@@ -526,38 +677,43 @@ private struct ToolCallStateIndicator: View {
             GoatLoadingIndicator().controlSize(.mini)
         } else if event.result == nil && !event.denied && !event.isError {
             Image(systemName: "clock")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(model.theme.tokens.muted)
                 .accessibilityLabel("Awaiting result")
         } else {
             Circle()
-                .fill(event.denied ? .gray : (event.isError ? .red : .green))
-                .frame(width: 8, height: 8)
+                .fill(
+                    event.denied
+                        ? Caprine.Semantic.denied
+                        : (event.isError ? Caprine.Semantic.danger : Caprine.Semantic.success)
+                )
+                .frame(width: Caprine.Activity.statusDotSize, height: Caprine.Activity.statusDotSize)
         }
     }
 }
 
 private struct ToolCallDetails: View {
+    @Environment(AppModel.self) private var model
     let event: ToolEventSnapshot
 
     private var hasArguments: Bool { ToolCallPayload.containsValue(event.arguments) }
     private var hasResult: Bool { ToolCallPayload.containsValue(event.result) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: Caprine.Activity.compactSpacing) {
             if hasArguments {
                 labeled("Arguments")
                 JSONTreeView(raw: event.arguments)
             }
             if hasArguments && hasResult {
-                Divider().padding(.vertical, 2)
+                Divider().padding(.vertical, Caprine.Activity.ruleWidth)
             }
             if hasResult, let result = event.result {
                 labeled(event.isError ? "Error" : "Result")
                 ScrollView {
                     if event.isError {
                         Text(result)
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(.orange)
+                            .font(Caprine.Activity.monospaceFont)
+                            .foregroundStyle(Caprine.Semantic.warning)
                             .lineSpacing(3)
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -566,15 +722,15 @@ private struct ToolCallDetails: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-                .frame(maxHeight: 200)
+                .frame(maxHeight: Caprine.Activity.detailMaxHeight)
             }
         }
     }
 
     private func labeled(_ text: String) -> some View {
         Text(text.uppercased())
-            .font(.system(size: 9, weight: .semibold))
-            .foregroundStyle(.tertiary)
+            .font(Caprine.Activity.badgeFont)
+            .foregroundStyle(model.theme.tokens.muted)
     }
 }
 
@@ -596,60 +752,72 @@ private enum ToolCallPayload {
     }
 }
 
-/// The rumination disclosure: while thinking streams it shows a live tail of the
-/// latest thought (collapsed) with rippling dots; once words arrive it settles into
-/// "Thought 12s ▸". Timing is session-local - reloaded chats show a plain "Thought".
+/// Reasoning stays visible when calls arrive. User choices survive stream updates.
 struct ThinkingDisclosure: View {
+    @Environment(\.transcriptInspection) private var inspection
     let message: ChatMessage
-    @State private var expanded = false
+    @State private var visible = true
+    @State private var showAll = false
     @Environment(AppModel.self) private var model
 
-    private var live: Bool { !message.complete && message.text.isEmpty }
-
-    private var title: String {
-        if live { return "Thinking…" }
-        if let s = message.thinkingSeconds { return "Thought \(s)s" }
-        return "Thought"
-    }
-
-    /// The freshest slice of rumination, one line, newest end kept.
-    private var tail: String {
-        ThinkingFenceParser.isFenceLine(message.thinkingTail) ? "" : message.thinkingTail
-    }
-
     var body: some View {
-        DisclosureGroup(isExpanded: $expanded) {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Model reasoning").font(.caption).foregroundStyle(model.theme.tokens.muted)
-                    Spacer()
-                    CopyButton(text: message.thinking)
-                }
-                ScrollView {
-                    if expanded {
-                        ThinkingContentView(source: message.thinking)
+        let preview = ReasoningPreview(message.thinking)
+        VStack(alignment: .leading, spacing: Caprine.Activity.spacing) {
+            HStack {
+                Button {
+                    inspection.perform()
+                    visible.toggle()
+                } label: {
+                    HStack(spacing: Caprine.Activity.spacing) {
+                        Image(systemName: visible ? "chevron.down" : "chevron.right")
+                        Text("Reasoning")
                     }
+                    .contentShape(Rectangle())
                 }
-                .frame(maxHeight: 280)
+                .buttonStyle(.plain)
+                .accessibilityValue(visible ? "Expanded" : "Collapsed")
+                if let seconds = message.thinkingSeconds {
+                    Text(AssistantStatusRow<EmptyView>.elapsedLabel(TimeInterval(seconds)))
+                        .monospacedDigit()
+                }
+                Spacer(minLength: 0)
+                CopyButton(text: message.thinking)
             }
-            .padding(12)
-            .background(model.theme.tokens.surface, in: RoundedRectangle(cornerRadius: 10))
-        } label: {
-            AssistantStatusRow(startedAt: message.complete ? nil : message.createdAt) {
-                HStack(spacing: 7) {
-                    ThinkingLabel(title: title, live: live)
-                        .layoutPriority(1)
-                    if live, !expanded, !tail.isEmpty {
-                        Text(tail)
-                            .font(.caption)
-                            .italic()
-                            .foregroundStyle(model.theme.tokens.muted)
-                            .lineLimit(1)
-                            .truncationMode(.head)
-                            .frame(maxWidth: 440, alignment: .leading)
+            .font(Caprine.Activity.font)
+            .foregroundStyle(model.theme.tokens.muted)
+            if visible {
+                ThinkingContentView(
+                    source: TranscriptText.removingBoundaryBlankLines(
+                        showAll ? message.thinking : preview.text)
+                )
+                .padding(.leading, Caprine.Activity.inset)
+                .overlay(alignment: .leading) {
+                    Rectangle().fill(model.theme.tokens.muted.opacity(Caprine.Activity.branchOpacity))
+                        .frame(width: Caprine.Activity.ruleWidth)
+                }
+                if preview.hasEarlierText {
+                    Button(showAll ? "Show recent reasoning" : "Show all reasoning") {
+                        inspection.perform()
+                        showAll.toggle()
                     }
+                    .buttonStyle(.plain)
+                    .font(Caprine.Activity.font)
+                    .foregroundStyle(model.theme.tokens.tint)
                 }
             }
         }
+    }
+}
+
+/// A bounded live excerpt, with full content available without a nested scroll view.
+struct ReasoningPreview {
+    static let characterLimit = 1_400
+    let text: String
+    let hasEarlierText: Bool
+
+    init(_ source: String) {
+        let tail = source.suffix(Self.characterLimit + 1)
+        hasEarlierText = tail.count > Self.characterLimit
+        text = hasEarlierText ? String(tail.suffix(Self.characterLimit)) : source
     }
 }

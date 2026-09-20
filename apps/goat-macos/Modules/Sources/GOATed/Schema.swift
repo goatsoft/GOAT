@@ -73,6 +73,16 @@ enum Schema {
         let value = try JSONSerialization.jsonObject(with: Data(json.utf8), options: .fragmentsAllowed)
         try check(value, schema: object(schema), depth: 0)
     }
+    /// Give the caller an actionable repair for omitted top-level arguments without echoing input values.
+    static func validateArguments(_ json: String, schema: String) throws {
+        let value = try JSONSerialization.jsonObject(with: Data(json.utf8), options: .fragmentsAllowed)
+        let definition = try object(schema)
+        if let arguments = value as? [String: Any] {
+            let missing = Set(definition["required"] as? [String] ?? []).subtracting(arguments.keys).sorted()
+            if !missing.isEmpty { throw CapabilityError.missingRequiredArguments(missing) }
+        }
+        try check(value, schema: definition, depth: 0)
+    }
     static func check(_ value: Any, schema: [String: Any], depth: Int) throws {
         guard depth < 12 else { throw CapabilityError.invalidPayload }
         switch schema["type"] as? String {

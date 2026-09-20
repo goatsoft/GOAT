@@ -10,7 +10,7 @@ The agent-support pass found no native search, no continuation after a 200-entry
 
 ## Decision
 
-Add literal `pen_search` with filename glob, case sensitivity, line numbers and bounded result excerpts. Search skips links, `.git` and common dependency/build directories. Scanning is limited to 10,000 entries, 1,000 files, 16 MiB, depth 32 and at most 100 matches. Truncation is explicit and asks the model to narrow the search.
+Add literal `pen_search` with filename glob, case sensitivity, line numbers and bounded result excerpts. The path accepts a single regular file or a directory. Direct file selection uses the same anchored, no-follow reads and rejects hard links; it never searches sibling files. Filename filtering and result limits apply to either form. Recursive search skips links, `.git` and common dependency/build directories. Scanning is limited to 10,000 entries, 1,000 files, 16 MiB, depth 32 and at most 100 matches. Truncation is explicit and asks the model to narrow the search.
 
 Directory listings have a sorted `after` cursor and `next_after`, with at most 200 entries and a bounded encoded page. Reads use 1-based `start_line` and `line_count`, return exact content plus separate metadata, and expose `next_start_line`. UTF-8 files may be up to 1 MiB; each read contains at most 200 lines and 32 KiB. LF, CRLF, Unicode and final-newline state are preserved. A single line beyond the read bound fails with guidance. Native create/edit arguments remain limited to 64 KiB; large files should use focused edits or separately approved command tools.
 

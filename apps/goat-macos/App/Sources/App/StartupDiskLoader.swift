@@ -22,6 +22,7 @@ struct StartupDiskSnapshot: Sendable {
     let engineFile: EngineStore.File
     let engineStoreWritable: Bool
     let engineCredentials: [String: String]
+    let modelPreferences: ModelPreferencesFile
     let installedApplicationPaths: Set<String>
     let themes: [ThemeSpec]
     let pens: [StartupPenSnapshot]
@@ -48,6 +49,20 @@ enum StartupDiskLoader {
             engineStoreWritable =
                 !FileManager.default.fileExists(atPath: url.path)
                 && (try? FileManager.default.attributesOfItem(atPath: url.path)) == nil
+        }
+        let modelPreferences: ModelPreferencesFile
+        do {
+            let loaded = try ModelPreferencesStore.load(from: Home.modelPreferencesFile)
+            var preferences = loaded ?? ModelPreferencesFile()
+            if LegacyCompatibilityMigration.migrate(
+                &preferences, engines: engineFile.engines)
+            {
+                try ModelPreferencesStore.save(preferences, to: Home.modelPreferencesFile)
+            }
+            modelPreferences = preferences
+        } catch {
+            warnings.append("Model preferences were not loaded: \(error.localizedDescription)")
+            modelPreferences = ModelPreferencesFile()
         }
         let credentialKeys = engineFile.engines.map { AppModel.keyStore($0.id) }
         let engineCredentials: [String: String]
@@ -122,6 +137,7 @@ enum StartupDiskLoader {
             engineFile: engineFile,
             engineStoreWritable: engineStoreWritable,
             engineCredentials: engineCredentials,
+            modelPreferences: modelPreferences,
             installedApplicationPaths: installedApplicationPaths,
             themes: themes,
             pens: penSnapshots,

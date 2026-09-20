@@ -132,11 +132,10 @@ func rememberedWritesStillRejectEscapesAndChangedWorkspaceIdentity() async throw
     let turn = UUID()
     let routes = try await fixture.routes(chatID: fixture.chat, penID: fixture.pen, turnID: turn)
     for path in ["../escape.txt", "/tmp/escape.txt", ".git/config"] {
-        await #expect(throws: (any Error).self) {
-            _ = try await fixture.router.authorizeAndInvoke(
-                route: try #require(routes["pen_write_file"]),
-                argumentsJSON: "{\"path\":\"\(path)\",\"content\":\"blocked\"}")
-        }
+        let result = try await fixture.router.authorizeAndInvoke(
+            route: try #require(routes["pen_write_file"]),
+            argumentsJSON: "{\"path\":\"\(path)\",\"content\":\"blocked\"}")
+        #expect(result?.isError == true)
         #expect(fixture.mcp.pendingPermission == nil)
     }
     await fixture.router.turnDidEnd(turnID: turn, cancelled: false)

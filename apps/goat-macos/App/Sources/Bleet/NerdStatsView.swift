@@ -185,6 +185,13 @@ struct NerdStatsView: View {
                         "Duration",
                         stats.duration.isFinite && stats.duration >= 0
                             ? String(format: "%.1fs", stats.duration) : "Unknown")
+                    if let cached = stats.cachedPromptTokens, cached >= 0 {
+                        Spacer(minLength: 4)
+                        metric("Cached", "\(cached)")
+                            .help(
+                                "Prompt tokens the engine served from its prefix cache on this response. Higher means more of the prompt was reused instead of re-read, which lowers first-token latency."
+                            )
+                    }
                 }
             }
         }

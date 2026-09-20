@@ -209,6 +209,25 @@ public final class ChatDatabase: Sendable {
                 table.primaryKey(["penID", "chatID", "workspaceIdentity"])
             }
         }
+        migrator.registerMigration("v11-message-generation-provenance") { db in
+            try db.alter(table: "message") { table in
+                table.add(column: "generationProvenanceJson", .text)
+                table.add(column: "statsFinishReason", .text)
+            }
+        }
+
+        migrator.registerMigration("v12-cached-prompt-tokens") { db in
+            try db.alter(table: "message") { table in
+                table.add(column: "statsCachedPromptTokens", .integer)
+            }
+        }
+        migrator.registerMigration("v13-compaction-message-kind") { db in
+            // ADR-0087. Legacy rows migrate to "regular"; compaction rows carry CompactionInfo JSON.
+            try db.alter(table: "message") { table in
+                table.add(column: "kind", .text).notNull().defaults(to: "regular")
+                table.add(column: "compactionJson", .text)
+            }
+        }
         return migrator
     }
 

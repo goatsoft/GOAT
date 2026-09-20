@@ -285,7 +285,12 @@ final class AppToolRouter: ShepherdToolSource {
         switch route.origin {
         case .extensionTool(let handle):
             do {
-                let result = try await extensions.invoke(handle, argumentsJSON: argumentsJSON) {
+                let budget: ToolExecutionBudget =
+                    handle.registration.extensionID.rawValue == "goat.herder"
+                        && handle.name == "pen_run_command"
+                        && penFileSession?.turnID == handle.turnID ? .supervisedCommand : .standard
+                let result = try await extensions.invoke(handle, argumentsJSON: argumentsJSON, executionBudget: budget)
+                {
                     [weak self] handle, arguments in
                     let allowed: Bool
                     do {
@@ -301,8 +306,11 @@ final class AppToolRouter: ShepherdToolSource {
                         server: handle.registration.extensionID.rawValue, tool: handle.name, isExtension: true)
                     return allowed
                 }
-                return ToolResult(content: result.content, isError: result.isError)
-            } catch is OwnerDeniedTool { return nil }
+                return ToolResult(
+                    content: result.content, isError: result.isError, diagnostic: result.diagnostic)
+            } catch is OwnerDeniedTool { return nil } catch let error as PenFileTools.Failure {
+                return ToolResult(content: error.localizedDescription, isError: true, diagnostic: error.diagnostic)
+            }
         case .mcp:
             return try await mcp.authorizeAndInvoke(route: route, argumentsJSON: argumentsJSON)
         case .memory(let context):
@@ -313,8 +321,42 @@ final class AppToolRouter: ShepherdToolSource {
             }
             let result = try await provider.invoke(
                 ToolCallRequest(tool: route.tool, argumentsJSON: argumentsJSON))
-            return ToolResult(content: result.content, isError: result.isError)
+            return ToolResult(
+                content: result.content, isError: result.isError, diagnostic: result.diagnostic)
         }
+    }
+
+    func invokeConcurrently(_ calls: [ConcurrentToolCall]) async -> [ConcurrentToolOutcome] {
+        // Read-only calls are auto-allowed and their file I/O runs off the PenFileTools actor, so
+        // this router (a Sendable @MainActor type) fans them out concurrently and gathers the
+        // outcomes; the caller applies them in call order.
+        await withTaskGroup(of: ConcurrentToolOutcome.self) { group in
+            for call in calls {
+                group.addTask { [self] in
+                    let started = Date()
+                    let result = try? await self.authorizeAndInvoke(
+                        route: call.route, argumentsJSON: call.argumentsJSON)
+                    return ConcurrentToolOutcome(
+                        index: call.index, result: result, duration: Date().timeIntervalSince(started))
+                }
+            }
+            var outcomes: [ConcurrentToolOutcome] = []
+            for await outcome in group { outcomes.append(outcome) }
+            return outcomes
+        }
+    }
+
+    func previewToolEffect(
+        route: ShepherdToolRoute, argumentsJSON: String
+    ) async -> ToolExecutionDiagnostic? {
+        guard case .extensionTool(let handle) = route.origin,
+            handle.registration.extensionID.rawValue == "goat.herder",
+            handle.name == "pen_run_command",
+            let session = penFileSession,
+            session.turnID == handle.turnID
+        else { return nil }
+        return await session.provider.previewToolEffect(
+            ToolCallRequest(tool: route.tool, argumentsJSON: argumentsJSON))
     }
 
     private func authorizeExtension(_ handle: ToolHandle, arguments: String) async throws -> Bool {
@@ -490,11 +532,11 @@ final class AppToolRouter: ShepherdToolSource {
         ToolSpec(
             name: "memory_write",
             description:
-                "Write a concise durable memory note for this chat's current scope. Never claim a memory was saved unless this tool succeeds.",
+                "Write a concise durable memory note for this chat's current scope. Names use lowercase letters, numbers, hyphens or underscores, start and end with a letter or number, and cannot be memory. Never claim a memory was saved unless this tool succeeds.",
             parametersJSON: """
                 {"type":"object","additionalProperties":false,
                 "required":["name","description","body"],
-                "properties":{"name":{"type":"string","maxLength":64},
+                "properties":{"name":{"type":"string","minLength":1,"maxLength":64,"pattern":"^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$"},
                 "description":{"type":"string","maxLength":512},
                 "body":{"type":"string","maxLength":24576}}}
                 """),
@@ -510,11 +552,11 @@ final class AppToolRouter: ShepherdToolSource {
                 """),
         ToolSpec(
             name: "memory_delete",
-            description: "Delete a memory note from this chat's current write scope by safe name.",
+            description: "Delete a memory note from this chat's current write scope by its existing name.",
             parametersJSON: """
                 {"type":"object","additionalProperties":false,
                 "required":["name"],
-                "properties":{"name":{"type":"string","maxLength":64}}}
+                "properties":{"name":{"type":"string","minLength":1,"maxLength":64,"pattern":"^[a-z0-9]([a-z0-9_-]*[a-z0-9])?$"}}}
                 """),
     ]
 

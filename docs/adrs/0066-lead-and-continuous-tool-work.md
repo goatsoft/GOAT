@@ -1,6 +1,6 @@
 # ADR-0066: Lead and continuous tool work
 
-Status: Accepted, 2026-09-08. Refines ADR-0023 and supersedes the eight-round cutoff in ADR-0006 and the cap reference in ADR-0065.
+Status: Accepted, 2026-09-08. Refines ADR-0023 and supersedes the eight-round cutoff in ADR-0006 and the cap reference in ADR-0065. The pre-tool automatic-title timing is revised by [ADR-0085](0085-prefix-stable-prompts-and-usage-calibrated-budgeting.md): titles now run after the turn so no title request evicts the engine prefix cache between tool rounds.
 
 > Superseded in part by [ADR-0067](0067-lead-waits-for-the-current-action.md): Lead waits for the current action and keeps its pending approval open. The earlier decision text is retained as history.
 

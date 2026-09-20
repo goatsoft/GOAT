@@ -64,19 +64,29 @@ public struct MessageRecord: Codable, FetchableRecord, PersistableRecord, Sendab
     public var statsDuration: Double?
     public var statsGenerationTokensPerSecond: Double?
     public var statsTokensAreExact: Bool?
+    public var statsCachedPromptTokens: Int?
     public var complete: Bool
     public var position: Int
     public var createdAt: Date
     public var attachmentsJson: String?
     public var toolsJson: String?
     public var rating: Int?
+    public var generationProvenanceJson: String?
+    public var statsFinishReason: String?
+    /// ADR-0087 message kind: "regular" or "compaction". Legacy rows migrate to "regular".
+    public var kind: String
+    /// ADR-0087 compaction metadata (CompactionInfo as JSON) for kind == "compaction".
+    public var compactionJson: String?
 
     public init(
         id: String, chatId: String, role: String, text: String, thinking: String,
         error: String?, statsTtft: Double?, statsTokens: Int?, statsDuration: Double?,
         statsGenerationTokensPerSecond: Double? = nil, statsTokensAreExact: Bool? = nil,
+        statsCachedPromptTokens: Int? = nil,
         complete: Bool, position: Int, createdAt: Date, attachmentsJson: String? = nil,
-        toolsJson: String? = nil, rating: Int? = nil
+        toolsJson: String? = nil, rating: Int? = nil,
+        generationProvenanceJson: String? = nil, statsFinishReason: String? = nil,
+        kind: String = "regular", compactionJson: String? = nil
     ) {
         self.id = id
         self.chatId = chatId
@@ -89,12 +99,38 @@ public struct MessageRecord: Codable, FetchableRecord, PersistableRecord, Sendab
         self.statsDuration = statsDuration
         self.statsGenerationTokensPerSecond = statsGenerationTokensPerSecond
         self.statsTokensAreExact = statsTokensAreExact
+        self.statsCachedPromptTokens = statsCachedPromptTokens
         self.complete = complete
         self.position = position
         self.createdAt = createdAt
         self.attachmentsJson = attachmentsJson
         self.toolsJson = toolsJson
         self.rating = rating
+        self.generationProvenanceJson = generationProvenanceJson
+        self.statsFinishReason = statsFinishReason
+        self.kind = kind
+        self.compactionJson = compactionJson
+    }
+}
+
+/// ADR-0087 compaction row metadata, persisted as JSON in `MessageRecord.compactionJson`.
+public struct CompactionInfo: Codable, Sendable, Equatable {
+    /// The id of the last message this summary covers; earlier rows are excluded from the prompt.
+    public var coversUpToMessageID: String
+    /// Number of exchanges folded, for the "Compacted N exchanges" transcript row.
+    public var coveredExchangeCount: Int
+    /// Files read and edited so far, carried forward across re-summarisation.
+    public var filesRead: [String]
+    public var filesEdited: [String]
+
+    public init(
+        coversUpToMessageID: String, coveredExchangeCount: Int,
+        filesRead: [String], filesEdited: [String]
+    ) {
+        self.coversUpToMessageID = coversUpToMessageID
+        self.coveredExchangeCount = coveredExchangeCount
+        self.filesRead = filesRead
+        self.filesEdited = filesEdited
     }
 }
 

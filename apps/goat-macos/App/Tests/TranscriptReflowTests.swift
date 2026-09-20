@@ -121,25 +121,39 @@ import Testing
         contentRect: NSRect(x: 80, y: 80, width: 700, height: 450), styleMask: [.titled, .resizable],
         backing: .buffered, defer: false)
     window.isReleasedWhenClosed = false
-    let host = NSHostingView(rootView: ChatTranscriptView(session: session).environment(model))
+    // Seed the SwiftUI scroll-position binding as a real reader gesture would. Direct AppKit
+    // clip-view movement alone does not update that binding consistently across macOS 26 and 27.
+    let readerAnchor = session.messages[10].id
+    let host = NSHostingView(
+        rootView: ChatTranscriptView(
+            session: session, initiallyFollowing: false, initialVisibleMessageID: readerAnchor
+        ).environment(model))
     window.contentView = host
+    // Exercise a displayed window: native scroll settling and display-cycle layout
+    // are suspended differently for a hidden hosting view.
+    window.orderFront(nil)
     defer {
         window.contentView = nil
         window.close()
     }
     try await Task.sleep(for: .milliseconds(500))
     let scroll = try #require(reflowScroll(host))
-    for (phase, delta) in [(NSEvent.Phase.began, 450), (.ended, 0)] {
-        let cgEvent = try #require(
-            CGEvent(
-                scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: Int32(delta), wheel2: 0, wheel3: 0))
-        cgEvent.flags = []
-        cgEvent.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(phase.rawValue))
-        let event = try #require(NSEvent(cgEvent: cgEvent))
-        scroll.scrollWheel(with: event)
-        try await Task.sleep(for: .milliseconds(150))
-    }
+    // Establish a reader who has scrolled up, then wait for native scroll to settle rather than a
+    // fixed delay -- the began->ended wheel phase can land past an estimated end and bounce back
+    // under load (matches transcriptRetainsVisibleContentAcrossFontAndWidthReflow).
     let document = try #require(scroll.documentView)
+    // Synthetic wheel phases are not forwarded to SwiftUI on macOS 27. The fixture starts in
+    // reader-owned mode, tries both native directions, then positions the clip view directly only
+    // when AppKit ignored both events. The assertions below still exercise all later growth.
+    for delta in [450, -450] where document.bounds.maxY - document.visibleRect.maxY <= 150 {
+        try await scrollWheel(scroll, delta: delta)
+        try await waitForScrollToSettle(scroll)
+    }
+    if document.bounds.maxY - document.visibleRect.maxY <= 150 {
+        scroll.contentView.scroll(to: NSPoint(x: document.visibleRect.minX, y: document.bounds.minY))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        host.layoutSubtreeIfNeeded()
+    }
     #expect(document.bounds.maxY - document.visibleRect.maxY > 150)
     active.text += String(repeating: "New streamed content.\n", count: 30)
     active.markRenderChanged()
@@ -161,6 +175,7 @@ import Testing
     model.chatFontSize = 24
     window.setContentSize(NSSize(width: 500, height: 450))
     try await Task.sleep(for: .milliseconds(300))
+    try await waitForScrollToSettle(scroll)
     #expect(
         document.bounds.maxY - document.visibleRect.maxY > 150,
         "Font and width reflow must preserve reading away from the bottom")

@@ -88,6 +88,7 @@ extension AppModel {
         let revision = nextEngineStoreRevision()
         let previous = engineProfiles
         let previousActiveID = activeEngineID
+        let previousProfile = engineProfiles.first(where: { $0.id == profile.id })
         if let i = engineProfiles.firstIndex(where: { $0.id == profile.id }) {
             engineProfiles[i] = profile
         } else {
@@ -100,6 +101,11 @@ extension AppModel {
                 activeEngineID = previousActiveID
             }
             return false
+        }
+        if let previousProfile,
+            previousProfile.url != profile.url || previousProfile.presetID != profile.presetID
+        {
+            _ = await invalidateModelCompatibility(for: profile.id)
         }
         await refreshEngineApplicationAvailability()
         guard engineStoreRevision == revision else { return false }
@@ -127,6 +133,7 @@ extension AppModel {
             }
             return
         }
+        _ = await removeModelPreferences(for: id)
         let credentialRevision = nextCredentialRevision(for: storeKey)
         do {
             let deleted = try await fileWorker.deleteCredentialIfEngineAbsent(
@@ -177,7 +184,7 @@ extension AppModel {
                 config: EngineConfig(
                     baseURL: url, apiKey: key,
                     name: profile.name, metadataDialect: profile.preset.metadataDialect,
-                    requestStyle: profile.requestStyle))
+                    requestStyle: .automatic))
         }
         guard let operation = await beginEngineOperation(for: intentRevision) else { return }
         guard let target else {
@@ -204,7 +211,7 @@ extension AppModel {
             config: EngineConfig(
                 baseURL: url, apiKey: apiKey,
                 name: profile.name, metadataDialect: profile.preset.metadataDialect,
-                requestStyle: profile.requestStyle))
+                requestStyle: .automatic))
         return await probe.health()
     }
 

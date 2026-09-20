@@ -1,70 +1,94 @@
 import Bleet
 import Caprine
+import Persistence
 import SwiftUI
 
-/// Collapsed by default, with one disclosure for the run and existing per-tool inspection inside.
+/// Tool payloads alone are disclosed. Assistant prose and reasoning remain in MessageView.
 struct ToolActivityGroup: View {
     let messages: [ChatMessage]
     let activeAssistantID: UUID?
     let projectID: UUID?
+    var connectsAbove = false
+    var connectsBelow = false
     @Environment(AppModel.self) private var model
-    @State private var expanded = false
+    @Environment(\.transcriptInspection) private var inspection
+    @State private var memoryExpanded = false
 
     var body: some View {
         let summary = TranscriptActivity.summary(messages, activeAssistantID: activeAssistantID)
-        VStack(alignment: .leading, spacing: Caprine.Activity.spacing) {
-            Button {
-                expanded.toggle()
-            } label: {
-                VStack(alignment: .leading, spacing: Caprine.Activity.spacing) {
+        let events = messages.flatMap(\.toolEvents)
+        let groupsMemory = events.count > 1 && events.allSatisfy { $0.server == "Memory" }
+        VStack(alignment: .leading, spacing: 0) {
+            if groupsMemory {
+                Button {
+                    inspection.perform()
+                    memoryExpanded.toggle()
+                } label: {
                     HStack(spacing: Caprine.Activity.spacing) {
-                        if summary.current != nil {
-                            GoatLoadingIndicator().controlSize(.mini)
-                        } else {
-                            Image(systemName: "list.bullet")
+                        Image(systemName: memoryExpanded ? "chevron.down" : "chevron.right")
+                        Label("Memory · \(events.count) actions", systemImage: "brain.head.profile")
+                        if summary.current != nil { GoatLoadingIndicator().controlSize(.mini) }
+                        if !summary.issues.isEmpty {
+                            Text(summary.issues).foregroundStyle(model.theme.tokens.muted)
                         }
-                        Text(summary.title)
-                        Spacer(minLength: 0)
-                        Image(systemName: expanded ? "chevron.down" : "chevron.right")
                     }
-                    if let current = summary.current {
-                        Text(ToolActivityLabel.title(current))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    if !summary.issues.isEmpty {
-                        Label(summary.issues, systemImage: "exclamationmark.circle")
-                    }
+                    .font(Caprine.Activity.font)
+                    .padding(.vertical, Caprine.Activity.rowPadding)
+                    .contentShape(Rectangle())
                 }
-                .font(Caprine.Activity.font)
-                .foregroundStyle(model.theme.tokens.muted)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .accessibilityValue(memoryExpanded ? "Expanded" : "Collapsed")
             }
-            .buttonStyle(.plain)
-            .accessibilityValue(expanded ? "Expanded" : "Collapsed")
-            .help("Show or hide tool activity. Expand an action to inspect its arguments and result.")
-            if expanded {
-                ForEach(messages) { message in
-                    Divider()
-                    MessageView(
-                        message: message, isLast: false, projectID: projectID, compactActivity: true,
-                        activeToolID: message.id == activeAssistantID ? summary.current?.id : nil
-                    )
-                }
-            } else {
-                // Host failures (including interruption and unknown outcomes) must remain visible.
-                ForEach(messages.filter { $0.error != nil }) { message in
-                    if let error = message.error {
-                        Text(error)
-                            .font(Caprine.Activity.font)
-                            .foregroundStyle(model.theme.tokens.ink)
-                            .textSelection(.enabled)
-                    }
-                }
+            if !groupsMemory || memoryExpanded {
+                actions(events: events, currentID: summary.current?.id, isolatedGroup: groupsMemory)
             }
         }
-        .padding(.vertical, Caprine.Activity.spacing)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func actions(events: [ToolEventSnapshot], currentID: String?, isolatedGroup: Bool) -> some View {
+        let hasTree = events.count > 1 || (!isolatedGroup && (connectsAbove || connectsBelow))
+        return
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(messages) { message in
+                    ForEach(message.toolEvents) { event in
+                        ToolCallCard(event: event, live: event.id == currentID)
+                            .padding(.leading, hasTree ? Caprine.Activity.treeInset : 0)
+                            .background(alignment: .leading) {
+                                if hasTree {
+                                    ToolTreeBranch(
+                                        above: (!isolatedGroup && connectsAbove) || event.id != events.first?.id,
+                                        below: (!isolatedGroup && connectsBelow) || event.id != events.last?.id
+                                    )
+                                    .frame(width: Caprine.Activity.treeInset)
+                                }
+                            }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// A decorative connector only; it does not imply that adjacent calls executed concurrently.
+private struct ToolTreeBranch: View {
+    @Environment(AppModel.self) private var model
+    let above: Bool
+    let below: Bool
+
+    var body: some View {
+        Canvas { context, size in
+            let x = Caprine.Activity.ruleWidth
+            let y = min(Caprine.Activity.branchHeight, size.height / 2)
+            var path = Path()
+            path.move(to: CGPoint(x: x, y: above ? 0 : y))
+            path.addLine(to: CGPoint(x: x, y: below ? size.height : y))
+            path.move(to: CGPoint(x: x, y: y))
+            path.addLine(to: CGPoint(x: size.width - Caprine.Activity.ruleWidth, y: y))
+            context.stroke(path, with: .foreground, lineWidth: Caprine.Activity.ruleWidth / 2)
+        }
+        .foregroundStyle(model.theme.tokens.muted.opacity(Caprine.Activity.cardBorderOpacity))
+        .accessibilityHidden(true)
+        .allowsHitTesting(false)
     }
 }

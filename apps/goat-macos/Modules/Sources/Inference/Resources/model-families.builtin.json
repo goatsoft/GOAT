@@ -1,0 +1,1353 @@
+{
+  "schema": 1,
+  "families": [
+    {
+      "id": "muse-glimmer",
+      "matchAny": [
+        "muse-glimmer-30b",
+        "meta-models/muse-glimmer-30b"
+      ],
+      "exclude": [
+        "text",
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "contextLength": 131072,
+      "capabilities": [
+        "vision",
+        "tools",
+        "reasoning"
+      ],
+      "architecture": "Muse-Glimmer",
+      "modelType": "multimodal",
+      "parameterCount": 30000000000,
+      "generation": {
+        "sources": [
+          "https://huggingface.co/meta-models/Muse-Glimmer-30B/blob/main/generation_config.json",
+          "https://huggingface.co/meta-models/Muse-Glimmer-30B/blob/main/chat_template.jinja"
+        ],
+        "reasoningHistory": "all",
+        "sampling": {
+          "temperature": 1.0,
+          "topP": 0.95,
+          "topK": 64
+        },
+        "reasoningPrompt": "museStrength"
+      }
+    },
+    {
+      "id": "qwen3-coder-next",
+      "matchAny": [
+        "qwen3-coder-next"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "contextLength": 262144,
+      "capabilities": [
+        "tools"
+      ],
+      "generation": {
+        "sampling": {
+          "temperature": 1.0,
+          "topP": 0.95,
+          "topK": 40
+        },
+        "reasoningHistory": "omit",
+        "sources": [
+          "https://huggingface.co/Qwen/Qwen3-Coder-Next/blob/main/README.md",
+          "https://huggingface.co/Qwen/Qwen3-Coder-Next/blob/main/generation_config.json",
+          "https://huggingface.co/Qwen/Qwen3-Coder-Next/blob/main/chat_template.jinja"
+        ],
+        "note": "Fixed non-thinking checkpoint. Does not inherit the earlier Qwen3-Coder sampling or hybrid thinking switch."
+      }
+    },
+    {
+      "id": "qwen3.8-27b",
+      "matchAny": [
+        "qwen3.8-27b"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "contextLength": 262144,
+      "capabilities": [
+        "tools",
+        "vision",
+        "reasoning"
+      ],
+      "generation": {
+        "sampling": {
+          "temperature": 1.0,
+          "topP": 0.95,
+          "topK": 20,
+          "minP": 0.0,
+          "presencePenalty": 0.0,
+          "repetitionPenalty": 1.0
+        },
+        "reasoningHistory": "all",
+        "sources": [
+          "https://huggingface.co/Qwen/Qwen3.8-27B/blob/main/README.md",
+          "https://huggingface.co/Qwen/Qwen3.8-27B/blob/main/generation_config.json",
+          "https://huggingface.co/Qwen/Qwen3.8-27B/blob/main/chat_template.jinja"
+        ],
+        "note": "Default thinking-mode sampling and preserved history. Native reasoning_effort still requires engine evidence; allowed checkpoint values are low, medium and xhigh. Server template controls non-thinking mode; GOAT does not infer it from Graze.",
+        "nativeReasoningEffortValues": [
+          "low",
+          "medium",
+          "xhigh"
+        ]
+      }
+    },
+    {
+      "id": "glm-4.7-flash",
+      "matchAny": [
+        "glm-4.7-flash"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "contextLength": 202752,
+      "capabilities": [
+        "tools",
+        "reasoning"
+      ],
+      "generation": {
+        "sampling": {
+          "temperature": 1.0,
+          "topP": 0.95
+        },
+        "reasoningHistory": "currentTurn",
+        "sources": [
+          "https://huggingface.co/zai-org/GLM-4.7-Flash/blob/main/README.md",
+          "https://huggingface.co/zai-org/GLM-4.7-Flash/blob/main/generation_config.json",
+          "https://huggingface.co/zai-org/GLM-4.7-Flash/blob/main/chat_template.jinja"
+        ],
+        "note": "Uses the published default settings, not benchmark-specific coding settings. Cross-turn preserved thinking requires server template configuration."
+      }
+    },
+    {
+      "id": "gemma-4-31b-it",
+      "matchAny": [
+        "gemma-4-31b-it"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "contextLength": 262144,
+      "capabilities": [
+        "tools",
+        "vision",
+        "reasoning"
+      ],
+      "generation": {
+        "sampling": {
+          "temperature": 1.0,
+          "topP": 0.95,
+          "topK": 64
+        },
+        "reasoningHistory": "currentTurn",
+        "sources": [
+          "https://huggingface.co/google/gemma-4-31B-it/blob/main/README.md",
+          "https://huggingface.co/google/gemma-4-31B-it/blob/main/generation_config.json",
+          "https://huggingface.co/google/gemma-4-31B-it/blob/main/chat_template.jinja"
+        ],
+        "note": "Applies to the upstream 31B instruction checkpoint. Custom fine-tunes and other Gemma 4 sizes use engine defaults. Thinking mode and native history translation depend on the engine adapter."
+      }
+    },
+    {
+      "id": "deepseek-r1",
+      "matchAny": [
+        "deepseek-r1"
+      ],
+      "capabilities": [
+        "reasoning"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/deepseek-ai/DeepSeek-R1/blob/main/generation_config.json"
+        ],
+        "reasoningHistory": "omit",
+        "sampling": {
+          "temperature": 0.6,
+          "topP": 0.95
+        }
+      }
+    },
+    {
+      "id": "deepseek-v3.2",
+      "matchAny": [
+        "deepseek-v3.2"
+      ],
+      "capabilities": [
+        "tools",
+        "reasoning"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/deepseek-ai/DeepSeek-V3.2/blob/main/generation_config.json"
+        ],
+        "reasoningHistory": "omit",
+        "sampling": {
+          "temperature": 1.0,
+          "topP": 0.95
+        },
+        "note": "Thinking/tool history needs the engine-specific DeepSeek template; no generic replay assumption."
+      }
+    },
+    {
+      "id": "deepseek-v3.1",
+      "matchAny": [
+        "deepseek-v3.1"
+      ],
+      "capabilities": [
+        "tools",
+        "reasoning"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/deepseek-ai/DeepSeek-V3.1/blob/main/generation_config.json"
+        ],
+        "reasoningHistory": "omit",
+        "sampling": {
+          "temperature": 0.6,
+          "topP": 0.95
+        }
+      }
+    },
+    {
+      "id": "deepseek-v3",
+      "matchAny": [
+        "deepseek-v3"
+      ],
+      "capabilities": [
+        "tools"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/deepseek-ai/DeepSeek-V3/blob/main/README.md"
+        ],
+        "reasoningHistory": "omit",
+        "note": "Use checkpoint engine defaults; no verified family-wide sampling prescription."
+      }
+    },
+    {
+      "id": "qwen3-coder",
+      "matchAny": [
+        "qwen3-coder"
+      ],
+      "capabilities": [
+        "tools"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base",
+        "next"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct/blob/main/generation_config.json"
+        ],
+        "reasoningHistory": "omit",
+        "sampling": {
+          "temperature": 0.7,
+          "topP": 0.8,
+          "topK": 20,
+          "repetitionPenalty": 1.05
+        }
+      }
+    },
+    {
+      "id": "qwen3-vl-thinking",
+      "matchAny": [
+        "qwen3-vl"
+      ],
+      "matchAll": [
+        "thinking"
+      ],
+      "capabilities": [
+        "vision",
+        "tools",
+        "reasoning"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/Qwen/Qwen3-VL-8B-Thinking/blob/main/generation_config.json"
+        ],
+        "reasoningHistory": "omit",
+        "sampling": {
+          "temperature": 1.0,
+          "topP": 0.95,
+          "topK": 20,
+          "repetitionPenalty": 1.0
+        }
+      }
+    },
+    {
+      "id": "qwen3-vl",
+      "matchAny": [
+        "qwen3-vl"
+      ],
+      "capabilities": [
+        "vision",
+        "tools"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct/blob/main/generation_config.json"
+        ],
+        "reasoningHistory": "omit",
+        "sampling": {
+          "temperature": 0.7,
+          "topP": 0.8,
+          "topK": 20,
+          "repetitionPenalty": 1.0
+        }
+      }
+    },
+    {
+      "id": "qwen3-thinking",
+      "matchAny": [
+        "qwen3"
+      ],
+      "matchAll": [
+        "thinking"
+      ],
+      "exclude": [
+        "vl",
+        "embedding",
+        "reranker",
+        "guard",
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "capabilities": [
+        "tools",
+        "reasoning"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/Qwen/Qwen3-30B-A3B-Thinking-2507/blob/main/generation_config.json"
+        ],
+        "reasoningHistory": "omit",
+        "sampling": {
+          "temperature": 0.6,
+          "topP": 0.95,
+          "topK": 20
+        }
+      }
+    },
+    {
+      "id": "qwen3-instruct",
+      "matchAny": [
+        "qwen3"
+      ],
+      "matchAll": [
+        "instruct"
+      ],
+      "exclude": [
+        "vl",
+        "coder",
+        "embedding",
+        "reranker",
+        "guard",
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "capabilities": [
+        "tools"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/Qwen/Qwen3-30B-A3B-Instruct-2507/blob/main/generation_config.json"
+        ],
+        "reasoningHistory": "omit",
+        "sampling": {
+          "temperature": 0.7,
+          "topP": 0.8,
+          "topK": 20
+        }
+      }
+    },
+    {
+      "id": "qwen3",
+      "matchAny": [
+        "qwen3"
+      ],
+      "exclude": [
+        "vl",
+        "coder",
+        "embedding",
+        "reranker",
+        "omni",
+        "guard",
+        "tts",
+        "asr",
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "capabilities": [
+        "tools",
+        "reasoning"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/Qwen/Qwen3-32B/blob/main/generation_config.json",
+          "https://huggingface.co/Qwen/Qwen3-32B/blob/main/README.md"
+        ],
+        "reasoningHistory": "omit",
+        "sampling": {
+          "temperature": 0.6,
+          "topP": 0.95,
+          "topK": 20,
+          "minP": 0
+        },
+        "nonThinkingSampling": {
+          "temperature": 0.7,
+          "topP": 0.8,
+          "topK": 20,
+          "minP": 0
+        },
+        "reasoningPrompt": "qwenSoftSwitch",
+        "note": "Published /think and /no_think soft switches; historical reasoning is omitted per Qwen guidance."
+      }
+    },
+    {
+      "id": "qwen2.5-vl",
+      "matchAny": [
+        "qwen2.5-vl"
+      ],
+      "capabilities": [
+        "vision",
+        "tools"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/blob/main/generation_config.json"
+        ],
+        "reasoningHistory": "omit",
+        "sampling": {
+          "temperature": 1e-06,
+          "repetitionPenalty": 1.05
+        }
+      }
+    },
+    {
+      "id": "qwen2-vl",
+      "matchAny": [
+        "qwen2-vl"
+      ],
+      "capabilities": [
+        "vision",
+        "tools"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/Qwen/Qwen2-VL-7B-Instruct/blob/main/generation_config.json"
+        ],
+        "reasoningHistory": "omit",
+        "sampling": {
+          "temperature": 0.01,
+          "topP": 0.001,
+          "topK": 1,
+          "repetitionPenalty": 1.0
+        }
+      }
+    },
+    {
+      "id": "qwen2.5",
+      "matchAny": [
+        "qwen2.5"
+      ],
+      "exclude": [
+        "vl",
+        "omni",
+        "math",
+        "embedding",
+        "reranker",
+        "audio",
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "capabilities": [
+        "tools"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct/blob/main/generation_config.json"
+        ],
+        "reasoningHistory": "omit",
+        "sampling": {
+          "temperature": 0.7,
+          "topP": 0.8,
+          "topK": 20,
+          "repetitionPenalty": 1.05
+        }
+      }
+    },
+    {
+      "id": "gpt-oss",
+      "matchAny": [
+        "gpt-oss"
+      ],
+      "contextLength": 131072,
+      "capabilities": [
+        "tools",
+        "reasoning"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/openai/gpt-oss-20b/blob/main/README.md"
+        ],
+        "reasoningHistory": "omit",
+        "note": "Use engine sampling defaults. Native reasoning_effort requires advertised engine support; Harmony history uses an engine adapter, not generic reasoning_content replay."
+      }
+    },
+    {
+      "id": "glm-4.1v",
+      "matchAny": [
+        "glm-4.1v"
+      ],
+      "capabilities": [
+        "vision",
+        "tools",
+        "reasoning"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/zai-org/GLM-4.1V-9B-Thinking/blob/main/generation_config.json"
+        ],
+        "reasoningHistory": "omit",
+        "sampling": {
+          "temperature": 0.8,
+          "topP": 0.6,
+          "topK": 2
+        }
+      }
+    },
+    {
+      "id": "glm-4.5v",
+      "matchAny": [
+        "glm-4.5v"
+      ],
+      "capabilities": [
+        "vision",
+        "tools",
+        "reasoning"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/zai-org/GLM-4.5V/blob/main/generation_config.json"
+        ],
+        "reasoningHistory": "omit",
+        "sampling": {
+          "temperature": 1.0,
+          "topP": 0.0001,
+          "topK": 1
+        }
+      }
+    },
+    {
+      "id": "glm-4.6v",
+      "matchAny": [
+        "glm-4.6v"
+      ],
+      "capabilities": [
+        "vision",
+        "tools",
+        "reasoning"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/zai-org/GLM-4.6V/blob/main/generation_config.json"
+        ],
+        "reasoningHistory": "omit",
+        "sampling": {
+          "temperature": 0.8,
+          "topP": 0.6,
+          "topK": 2
+        }
+      }
+    },
+    {
+      "id": "glm-4.5",
+      "matchAny": [
+        "glm-4.5"
+      ],
+      "capabilities": [
+        "tools",
+        "reasoning"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/zai-org/GLM-4.5/blob/main/generation_config.json"
+        ],
+        "reasoningHistory": "omit",
+        "note": "Use checkpoint engine defaults; no verified family-wide sampling prescription."
+      }
+    },
+    {
+      "id": "glm-4.6",
+      "matchAny": [
+        "glm-4.6"
+      ],
+      "capabilities": [
+        "tools",
+        "reasoning"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/zai-org/GLM-4.6/blob/main/generation_config.json"
+        ],
+        "reasoningHistory": "omit",
+        "sampling": {
+          "temperature": 1.0
+        }
+      }
+    },
+    {
+      "id": "glm-4.7",
+      "matchAny": [
+        "glm-4.7"
+      ],
+      "capabilities": [
+        "tools",
+        "reasoning"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base",
+        "flash"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/zai-org/GLM-4.7/blob/main/generation_config.json",
+          "https://huggingface.co/zai-org/GLM-4.7/blob/main/chat_template.jinja"
+        ],
+        "reasoningHistory": "currentTurn",
+        "sampling": {
+          "temperature": 1.0
+        },
+        "note": "Engine controls thinking mode; current-turn replay follows the canonical template. Cross-turn preserved thinking requires engine configuration."
+      }
+    },
+    {
+      "id": "glm-5",
+      "matchAny": [
+        "glm-5"
+      ],
+      "capabilities": [
+        "tools",
+        "reasoning"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/zai-org/GLM-5/blob/main/generation_config.json",
+          "https://huggingface.co/zai-org/GLM-5/blob/main/chat_template.jinja"
+        ],
+        "reasoningHistory": "currentTurn",
+        "sampling": {
+          "temperature": 1.0,
+          "topP": 0.95
+        },
+        "note": "Engine controls thinking mode; current-turn replay follows the canonical template. Cross-turn preserved thinking requires engine configuration."
+      }
+    },
+    {
+      "id": "llama-4",
+      "matchAny": [
+        "llama-4"
+      ],
+      "capabilities": [
+        "vision",
+        "tools"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/meta-llama/Llama-4-Scout-17B-16E-Instruct/blob/main/README.md"
+        ],
+        "reasoningHistory": "omit",
+        "note": "Use configured engine defaults. Sampling configuration was access-gated during the 2026-09-13 audit; no values are inferred from another family."
+      }
+    },
+    {
+      "id": "llama-3.2-vision",
+      "matchAny": [
+        "llama-3.2"
+      ],
+      "matchAll": [
+        "vision"
+      ],
+      "contextLength": 131072,
+      "capabilities": [
+        "vision"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/meta-llama/Llama-3.2-11B-Vision-Instruct/blob/main/README.md"
+        ],
+        "reasoningHistory": "omit",
+        "note": "Use configured engine defaults. Sampling configuration was access-gated during the 2026-09-13 audit; no values are inferred from another family."
+      }
+    },
+    {
+      "id": "llama-3",
+      "matchAny": [
+        "llama-3.1",
+        "llama-3.2",
+        "llama-3.3"
+      ],
+      "exclude": [
+        "guard",
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "contextLength": 131072,
+      "capabilities": [
+        "tools"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct/blob/main/README.md"
+        ],
+        "reasoningHistory": "omit",
+        "note": "Use configured engine defaults. Sampling configuration was access-gated during the 2026-09-13 audit; no values are inferred from another family."
+      }
+    },
+    {
+      "id": "gemma-3-multimodal",
+      "matchAny": [
+        "gemma-3-4b",
+        "gemma-3-12b",
+        "gemma-3-27b"
+      ],
+      "contextLength": 131072,
+      "capabilities": [
+        "vision"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/google/gemma-3-27b-it/blob/main/README.md"
+        ],
+        "reasoningHistory": "omit",
+        "note": "Use configured engine defaults. Sampling configuration was access-gated during the 2026-09-13 audit; no values are inferred from another family."
+      }
+    },
+    {
+      "id": "gemma-3n",
+      "matchAny": [
+        "gemma-3n"
+      ],
+      "capabilities": [
+        "vision"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/google/gemma-3n-E4B-it/blob/main/README.md"
+        ],
+        "reasoningHistory": "omit",
+        "note": "Use configured engine defaults. Sampling configuration was access-gated during the 2026-09-13 audit; no values are inferred from another family."
+      }
+    },
+    {
+      "id": "mistral-small-3",
+      "matchAny": [
+        "mistral-small-3.1",
+        "mistral-small-3.2",
+        "mistral-small-2503",
+        "mistral-small-2506"
+      ],
+      "contextLength": 131072,
+      "capabilities": [
+        "vision",
+        "tools"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/mistralai/Mistral-Small-3.2-24B-Instruct-2506/blob/main/README.md"
+        ],
+        "reasoningHistory": "omit",
+        "sampling": {
+          "temperature": 0.15
+        }
+      }
+    },
+    {
+      "id": "magistral",
+      "matchAny": [
+        "magistral-small-2506"
+      ],
+      "capabilities": [
+        "tools",
+        "reasoning"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/mistralai/Magistral-Small-2506/blob/main/README.md"
+        ],
+        "reasoningHistory": "omit",
+        "sampling": {
+          "temperature": 0.7,
+          "topP": 0.95
+        },
+        "note": "Applies to this release only; later Magistral variants use engine defaults."
+      }
+    },
+    {
+      "id": "devstral",
+      "matchAny": [
+        "devstral-small-2505"
+      ],
+      "capabilities": [
+        "tools"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/mistralai/Devstral-Small-2505/blob/main/README.md"
+        ],
+        "reasoningHistory": "omit",
+        "note": "Published example temperature is not a family-wide recommendation; use engine defaults."
+      }
+    },
+    {
+      "id": "kimi-k2.5",
+      "matchAny": [
+        "kimi-k2.5"
+      ],
+      "capabilities": [
+        "vision",
+        "tools",
+        "reasoning"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/moonshotai/Kimi-K2.5/blob/main/README.md",
+          "https://huggingface.co/moonshotai/Kimi-K2.5/blob/main/chat_template.jinja"
+        ],
+        "reasoningHistory": "currentTurn",
+        "sampling": {
+          "temperature": 1.0,
+          "topP": 0.95
+        },
+        "note": "Default thinking mode. Instant-mode switching requires a compatible engine template; do not equate Graze with instant mode."
+      }
+    },
+    {
+      "id": "kimi-k2-thinking",
+      "matchAny": [
+        "kimi-k2"
+      ],
+      "matchAll": [
+        "thinking"
+      ],
+      "capabilities": [
+        "tools",
+        "reasoning"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/moonshotai/Kimi-K2-Thinking/blob/main/README.md",
+          "https://huggingface.co/moonshotai/Kimi-K2-Thinking/blob/main/chat_template.jinja"
+        ],
+        "reasoningHistory": "currentTurn",
+        "sampling": {
+          "temperature": 1.0
+        }
+      }
+    },
+    {
+      "id": "kimi-k2",
+      "matchAny": [
+        "kimi-k2"
+      ],
+      "capabilities": [
+        "tools"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/moonshotai/Kimi-K2-Instruct/blob/main/README.md"
+        ],
+        "reasoningHistory": "omit",
+        "sampling": {
+          "temperature": 0.6
+        }
+      }
+    },
+    {
+      "id": "minimax-m2",
+      "matchAny": [
+        "minimax-m2"
+      ],
+      "capabilities": [
+        "tools",
+        "reasoning"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/MiniMaxAI/MiniMax-M2/blob/main/generation_config.json",
+          "https://huggingface.co/MiniMaxAI/MiniMax-M2/blob/main/chat_template.jinja"
+        ],
+        "reasoningHistory": "currentTurn",
+        "sampling": {
+          "temperature": 1.0,
+          "topP": 0.95,
+          "topK": 40
+        }
+      }
+    },
+    {
+      "id": "phi-4-multimodal",
+      "matchAny": [
+        "phi-4-multimodal"
+      ],
+      "capabilities": [
+        "vision"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/microsoft/Phi-4-multimodal-instruct/blob/main/README.md"
+        ],
+        "reasoningHistory": "omit",
+        "note": "Use checkpoint engine defaults; no verified family-wide sampling prescription."
+      }
+    },
+    {
+      "id": "phi-4-reasoning",
+      "matchAny": [
+        "phi-4-reasoning"
+      ],
+      "capabilities": [
+        "reasoning"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/microsoft/Phi-4-reasoning/blob/main/generation_config.json"
+        ],
+        "reasoningHistory": "omit",
+        "sampling": {
+          "temperature": 0.8,
+          "topP": 0.95,
+          "topK": 50
+        }
+      }
+    },
+    {
+      "id": "phi-4-mini-reasoning",
+      "matchAny": [
+        "phi-4-mini-reasoning"
+      ],
+      "capabilities": [
+        "reasoning"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/microsoft/Phi-4-mini-reasoning/blob/main/README.md"
+        ],
+        "reasoningHistory": "omit",
+        "sampling": {
+          "temperature": 0.8,
+          "topP": 0.95
+        }
+      }
+    },
+    {
+      "id": "phi-4-mini",
+      "matchAny": [
+        "phi-4-mini"
+      ],
+      "capabilities": [
+        "tools"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/microsoft/Phi-4-mini-instruct/blob/main/README.md"
+        ],
+        "reasoningHistory": "omit",
+        "note": "Use engine defaults; the card shows task examples rather than a universal sampling recommendation."
+      }
+    },
+    {
+      "id": "seed-oss",
+      "matchAny": [
+        "seed-oss"
+      ],
+      "capabilities": [
+        "tools",
+        "reasoning"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/ByteDance-Seed/Seed-OSS-36B-Instruct/blob/main/generation_config.json"
+        ],
+        "reasoningHistory": "omit",
+        "sampling": {
+          "temperature": 1.1,
+          "topP": 0.95
+        }
+      }
+    },
+    {
+      "id": "granite-4",
+      "matchAny": [
+        "granite-4.0"
+      ],
+      "capabilities": [
+        "tools"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "generation": {
+        "sources": [
+          "https://huggingface.co/ibm-granite/granite-4.0-h-small/blob/main/README.md"
+        ],
+        "reasoningHistory": "omit",
+        "note": "Use configured engine defaults; no verified family-wide sampling prescription."
+      }
+    },
+    {
+      "id": "minimax-m2.1",
+      "matchAny": [
+        "minimax-m2.1"
+      ],
+      "capabilities": [
+        "tools",
+        "reasoning"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "generation": {
+        "sampling": {
+          "temperature": 1.0,
+          "topP": 0.95,
+          "topK": 40
+        },
+        "sources": [
+          "https://huggingface.co/MiniMaxAI/MiniMax-M2.1/blob/main/generation_config.json"
+        ],
+        "reasoningHistory": "omit",
+        "note": "Uses published checkpoint sampling. Engine-specific reasoning/template handling remains with the engine."
+      }
+    },
+    {
+      "id": "magistral-small-2509",
+      "matchAny": [
+        "magistral-small-2509"
+      ],
+      "capabilities": [
+        "tools",
+        "reasoning"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "generation": {
+        "sampling": {
+          "temperature": 0.7,
+          "topP": 0.95
+        },
+        "sources": [
+          "https://huggingface.co/mistralai/Magistral-Small-2509/blob/main/generation_config.json"
+        ],
+        "reasoningHistory": "omit",
+        "note": "Uses published checkpoint sampling. Engine-specific reasoning/template handling remains with the engine."
+      }
+    },
+    {
+      "id": "devstral-small-2",
+      "matchAny": [
+        "devstral-small-2"
+      ],
+      "capabilities": [
+        "tools"
+      ],
+      "exclude": [
+        "dflash",
+        "mtp",
+        "draft",
+        "assistant",
+        "base"
+      ],
+      "generation": {
+        "sampling": {
+          "temperature": 0.15
+        },
+        "sources": [
+          "https://huggingface.co/mistralai/Devstral-Small-2-24B-Instruct-2512/blob/main/generation_config.json"
+        ],
+        "reasoningHistory": "omit",
+        "note": "Uses published checkpoint sampling. Engine-specific reasoning/template handling remains with the engine."
+      }
+    }
+  ]
+}

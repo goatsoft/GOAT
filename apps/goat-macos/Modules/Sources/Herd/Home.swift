@@ -25,6 +25,10 @@ public enum Home {
         configDir.appendingPathComponent("engines.json")
     }
 
+    public static var modelPreferencesFile: URL {
+        configDir.appendingPathComponent("model-preferences.json")
+    }
+
     public static var memoryConfigurationFile: URL {
         configDir.appendingPathComponent("memory.json")
     }

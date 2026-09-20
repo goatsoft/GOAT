@@ -75,10 +75,15 @@ import Testing
     let generating = GenerationDisplayState(session: session)
     #expect(generating.phase == .generating)
     #expect(generating.throughput(at: Date.now.addingTimeInterval(2)).hasPrefix("~"))
+    #expect(generating.throughput(at: Date.now.addingTimeInterval(6)) == "Waiting for more output")
     message.stats = previous.stats
     message.complete = true
     #expect(GenerationDisplayState(session: session).phase == .tools)
     #expect(GenerationDisplayState(session: session).throughput(at: .now) == "Tool step · last 35 tok/s")
+    session.activeCompactionID = UUID()
+    #expect(GenerationDisplayState(session: session).throughput(at: .now) == "Compacting context")
+    #expect(AgentProgressState(session: session).title == "Compacting context")
+    session.activeCompactionID = nil
     session.isStreaming = false
     #expect(GenerationDisplayState(session: session).throughput(at: .now) == "35 tok/s")
 }

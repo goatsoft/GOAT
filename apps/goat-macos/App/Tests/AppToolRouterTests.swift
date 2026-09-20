@@ -74,7 +74,7 @@ import Testing
     try await router.turnWillPrepare(chatID: chat, projectID: pen, turnID: turn)
     let (specs, routes) = await router.availableToolSpecs(
         forChatID: chat, projectID: pen, includeMCP: true, excludedMCPServers: [])
-    #expect(specs.filter { $0.name.hasPrefix("pen_") }.count == 8)
+    #expect(specs.filter { $0.name.hasPrefix("pen_") }.count == 9)
     let route = try #require(routes["pen_write_file"])
     guard case .extensionTool(let handle) = route.origin else {
         Issue.record("Missing GOATed route")
@@ -201,7 +201,7 @@ import Testing
         forChatID: chat, projectID: pen, includeMCP: true, excludedMCPServers: [])
     let run = try #require(routes["pen_run_command"])
     let status = try #require(routes["pen_command_status"])
-    let args = #"{"command":"sh","args":["-c","echo command_ok > command.txt"]}"#
+    let args = #"{"command":"sh","args":["-c","echo command_ok > command.txt"],"background":true}"#
     for allow in [false, true] {
         let task = Task { try await router.authorizeAndInvoke(route: run, argumentsJSON: args) }
         for _ in 0..<200 where mcp.pendingPermission == nil { try await Task.sleep(for: .milliseconds(5)) }

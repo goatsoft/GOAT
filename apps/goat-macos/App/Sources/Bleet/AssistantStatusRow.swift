@@ -25,10 +25,10 @@ struct AssistantStatusRow<Content: View>: View {
         }
     }
 
-    private static func elapsedLabel(_ interval: TimeInterval) -> String {
+    static func elapsedLabel(_ interval: TimeInterval) -> String {
         let seconds = max(0, Int(interval))
         if seconds < 60 { return "\(seconds)s" }
-        if seconds < 3600 { return "\(seconds / 60)m" }
-        return "\(seconds / 3600)h"
+        if seconds < 3600 { return "\(seconds / 60)m \(seconds % 60)s" }
+        return "\(seconds / 3600)h \(seconds / 60 % 60)m \(seconds % 60)s"
     }
 }

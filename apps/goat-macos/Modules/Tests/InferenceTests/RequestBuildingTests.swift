@@ -19,7 +19,7 @@ private func encodeToJSON(_ r: GenerationRequest) throws -> [String: Any] {
     return try JSONSerialization.jsonObject(with: data) as! [String: Any]
 }
 
-@Test func popularModelsReceiveGenericEffortWithoutProviderFields() throws {
+@Test func UnresolvedModelsUseEngineSamplingWithoutProviderFields() throws {
     let modelIDs = [
         "deepseek-ai/DeepSeek-R1-Distill-Qwen3-32B",
         "deepseek-ai/DeepSeek-Coder-V2-Instruct",
@@ -55,8 +55,8 @@ private func encodeToJSON(_ r: GenerationRequest) throws -> [String: Any] {
             #expect(!system.hasSuffix("/think"), "unexpected name-derived control for \(modelID)")
             #expect(json["chat_template_kwargs"] == nil)
             #expect(json["reasoning_effort"] == nil)
-            #expect(json["temperature"] as? Double == effort.temperature)
-            #expect(json["max_tokens"] as? Int == effort.maxTokens)
+            #expect(json["temperature"] == nil)
+            #expect(json["max_tokens"] as? Int == effort.reasoningOutputCeiling)
         }
     }
 }
@@ -79,7 +79,7 @@ private func encodeToJSON(_ r: GenerationRequest) throws -> [String: Any] {
     #expect(encoded["reasoning_effort"] as? String == "high")
 }
 
-@Test func qwenLocalTemplateMapsEffortAndReplaysReasoningSeparately() throws {
+@Test func qwenLocalTemplateUsesVerifiedThinkingSwitchAndOmitsHistoricalReasoning() throws {
     let request = GenerationRequest(
         model: "Qwen/Qwen3.8-27B",
         turns: [
@@ -92,14 +92,15 @@ private func encodeToJSON(_ r: GenerationRequest) throws -> [String: Any] {
         OpenAICompatEngine.makeBody(for: request, requestStyle: .qwenChatTemplate))
     let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
 
-    #expect(json["temperature"] as? Double == 1.0)
-    #expect(json["reasoning_effort"] as? String == "xhigh")
-    let kwargs = json["chat_template_kwargs"] as? [String: Bool]
-    #expect(kwargs?["enable_thinking"] == true)
-    #expect(kwargs?["preserve_thinking"] == true)
+    #expect(json["temperature"] as? Double == 0.6)
+    #expect(json["reasoning_effort"] == nil)
+    let kwargs = json["chat_template_kwargs"] as? [String: Any]
+    #expect(kwargs?["enable_thinking"] as? Bool == true)
+    #expect(kwargs?["preserve_thinking"] == nil)
+    #expect(kwargs?["reasoning_effort"] == nil)
     let messages = json["messages"] as! [[String: Any]]
     #expect(messages[1]["content"] as? String == "the answer")
-    #expect(messages[1]["reasoning_content"] as? String == "first, inspect it")
+    #expect(messages[1]["reasoning_content"] == nil)
 }
 
 @Test func qwenLocalGrazeDisablesThinkingWithoutSendingAnInvalidEffort() throws {
@@ -111,9 +112,10 @@ private func encodeToJSON(_ r: GenerationRequest) throws -> [String: Any] {
 
     #expect(json["temperature"] as? Double == 0.7)
     #expect(json["reasoning_effort"] == nil)
-    let kwargs = json["chat_template_kwargs"] as! [String: Bool]
-    #expect(kwargs["enable_thinking"] == false)
-    #expect(kwargs["preserve_thinking"] == true)
+    let kwargs = json["chat_template_kwargs"] as! [String: Any]
+    #expect(kwargs["enable_thinking"] as? Bool == false)
+    #expect(kwargs["preserve_thinking"] == nil)
+    #expect(kwargs["reasoning_effort"] == nil)
 }
 
 @Test func genericRequestsNeverReplayThinkingOrUseQwenFields() throws {
@@ -170,6 +172,7 @@ private func encodeToJSON(_ r: GenerationRequest) throws -> [String: Any] {
         "mistralai/Ministral-3-8B-Instruct-2512",
         "microsoft/Phi-4-multimodal-instruct",
         "moonshotai/Kimi-K2.5",
+        "Muse-Glimmer-30B-4bit",
         "zai-org/GLM-4.5V",
         "mlx-community/llava-1.5-7b-4bit",
     ]

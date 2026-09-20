@@ -1,6 +1,22 @@
 import Bleet
+import Caprine
 import Hoofprint
 import SwiftUI
+
+struct TranscriptInspectionAction: Sendable {
+    var perform: @MainActor @Sendable () -> Void = {}
+}
+
+private struct TranscriptInspectionKey: EnvironmentKey {
+    static let defaultValue = TranscriptInspectionAction()
+}
+
+extension EnvironmentValues {
+    var transcriptInspection: TranscriptInspectionAction {
+        get { self[TranscriptInspectionKey.self] }
+        set { self[TranscriptInspectionKey.self] = newValue }
+    }
+}
 
 /// Its owner keys this view by chat ID. A new chat gets fresh native scroll geometry,
 /// measured row layout and follow tasks instead of inheriting another transcript's viewport.
@@ -9,12 +25,27 @@ struct ChatTranscriptView: View {
     @Environment(AppModel.self) private var model
     @State private var windowEnd: Int?
     @State private var autoFollow = true
+    @State private var readerOwnsViewport = false
     @State private var reader = TranscriptReaderState()
     @State private var visibleMessageID: UUID?
+    @State private var readerAnchorID: UUID?
     @State private var followThrottle = TranscriptFollowThrottle()
     @State private var pendingFollowScroll: Task<Void, Never>?
+    @State private var pendingPreserveScroll: Task<Void, Never>?
 
     private static let bottomAnchor = UUID()
+
+    init(
+        session: ChatSession,
+        initiallyFollowing: Bool = true,
+        initialVisibleMessageID: UUID? = nil
+    ) {
+        self.session = session
+        _autoFollow = State(initialValue: initiallyFollowing)
+        _readerOwnsViewport = State(initialValue: !initiallyFollowing)
+        _visibleMessageID = State(initialValue: initialVisibleMessageID)
+        _readerAnchorID = State(initialValue: initialVisibleMessageID)
+    }
 
     var body: some View {
         if session.isLoadingMessages || (!session.messagesLoaded && session.messageLoadError == nil) {
@@ -40,32 +71,41 @@ struct ChatTranscriptView: View {
         } else {
             ScrollViewReader { proxy in
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 20) {
+                    VStack(alignment: .leading, spacing: 0) {
                         if messageRange.lowerBound > 0 {
                             Button("Earlier messages", systemImage: "chevron.up") {
                                 autoFollow = false
+                                readerOwnsViewport = true
                                 windowEnd = messageRange.lowerBound + TranscriptWindow.step
                             }
                             .buttonStyle(SecondaryChipButtonStyle())
                         }
                         ForEach(TranscriptActivity.rows(session.messages[messageRange])) { row in
-                            // Group identity is the first message, stable as further tool rounds arrive.
+                            // Each message retains its identity and ancestry as tool events arrive.
                             // Keep projection inside the existing bounded, fully measured window.
                             VStack(alignment: .leading, spacing: 0) {
-                                if row.isActivity {
-                                    ToolActivityGroup(
-                                        messages: row.messages,
-                                        activeAssistantID: session.isStreaming
-                                            ? session.messages.last(where: { $0.role == .assistant })?.id : nil,
-                                        projectID: session.projectID
-                                    )
-                                } else if let message = row.messages.first {
+                                if let message = row.messages.first {
                                     MessageView(
                                         message: message, isLast: message.id == session.messages.last?.id,
-                                        projectID: session.projectID)
+                                        projectID: session.projectID, compactActivity: row.isContinuation,
+                                        joinsPreviousTools: row.joinsPreviousTools,
+                                        joinsNextTools: row.joinsNextTools,
+                                        activeToolID: session.isStreaming
+                                            && message.id == session.messages.last(where: { $0.role == .assistant })?.id
+                                            ? TranscriptActivity.summary([message], activeAssistantID: message.id)
+                                                .current?.id : nil,
+                                        deleteCompaction: CompactionDeletion.canRestore(
+                                            message, in: session.messages)
+                                            ? { Task { await model.deleteCompaction(message, in: session) } }
+                                            : nil)
                                 }
                             }
                             .fixedSize(horizontal: false, vertical: true)
+                            .padding(
+                                .top,
+                                row.joinsPreviousTools || row.messages.allSatisfy(TranscriptActivity.isEmpty)
+                                    ? 0 : Caprine.Activity.messageSpacing
+                            )
                             .id(row.id)
                         }
                         if messageRange.upperBound < session.messages.count {
@@ -78,16 +118,23 @@ struct ChatTranscriptView: View {
                                 Button("Latest", systemImage: "arrow.down.to.line") {
                                     windowEnd = nil
                                     autoFollow = true
+                                    readerOwnsViewport = false
                                     snapToBottom(using: proxy)
                                 }
                             }
                             .buttonStyle(SecondaryChipButtonStyle())
                         }
+                        if session.isStreaming && messageRange.upperBound == session.messages.count {
+                            AgentProgressView(session: session)
+                                .padding(.top, Caprine.Activity.spacing)
+                        }
                         // End sentinel the follower scrolls to as the transcript grows.
                         Color.clear
                             .frame(height: 1)
                             .id(Self.bottomAnchor)
-                            .onScrollVisibilityChange(threshold: 0.1, updateBottomVisibility)
+                            .onScrollVisibilityChange(threshold: 0.1) { visible in
+                                updateBottomVisibility(visible, using: proxy)
+                            }
 
                     }
                     .scrollTargetLayout()
@@ -95,40 +142,73 @@ struct ChatTranscriptView: View {
                     .padding(.vertical, 16)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .scrollPosition(id: $visibleMessageID)
+                .environment(
+                    \.transcriptInspection,
+                    TranscriptInspectionAction {
+                        autoFollow = false
+                        readerOwnsViewport = true
+                        cancelPendingFollowScroll()
+                        cancelPendingPreserveScroll()
+                    }
+                )
+                .scrollPosition(id: $visibleMessageID, anchor: .top)
+                .onChange(of: visibleMessageID) {
+                    if reader.isScrolling, let visibleMessageID { readerAnchorID = visibleMessageID }
+                }
                 .defaultScrollAnchor(.bottom, for: .initialOffset)
                 .defaultScrollAnchor(.bottom, for: .alignment)
-                .defaultScrollAnchor(autoFollow ? .bottom : .top, for: .sizeChanges)
+                // Preserve the reader's current content when rows regroup or reflow. Active
+                // following is driven explicitly by requestFollowScroll below.
+                .defaultScrollAnchor(.top, for: .sizeChanges)
                 // Reader gestures own the viewport until they return to the bottom sentinel.
                 .onScrollPhaseChange { _, phase in
                     if phase == .tracking || phase == .interacting || phase == .decelerating {
                         reader.isScrolling = true
                         autoFollow = false
+                        readerOwnsViewport = true
                         cancelPendingFollowScroll()
+                        cancelPendingPreserveScroll()
                     } else if phase == .idle {
+                        let readerFinishedScrolling = reader.isScrolling
+                        if readerFinishedScrolling, let visibleMessageID { readerAnchorID = visibleMessageID }
                         reader.isScrolling = false
-                        autoFollow = windowEnd == nil && reader.isAtBottom
+                        // Only a reader gesture may hand the viewport back to bottom following.
+                        // Regrouping can make the bottom sentinel transiently visible during
+                        // native layout and must not change the ownership captured before it.
+                        if readerFinishedScrolling && windowEnd == nil && reader.isAtBottom {
+                            readerOwnsViewport = false
+                            autoFollow = true
+                        } else if readerOwnsViewport {
+                            autoFollow = false
+                        }
                     }
                 }
                 // Native size-change anchoring handles font/width/Markdown reflow. Do not
                 // feed estimated transcript heights back into programmatic scroll commands.
                 // Chase streaming growth (text + thinking + new messages) while following.
                 .onChange(of: streamRevision) {
-                    guard autoFollow else { return }
-                    requestFollowScroll(using: proxy)
+                    if autoFollow {
+                        requestFollowScroll(using: proxy)
+                    } else if readerOwnsViewport {
+                        preserveReaderPosition(using: proxy)
+                    }
                 }
                 // A newly sent turn always re-arms follow and snaps to the bottom.
                 .onChange(of: session.messages.count) {
                     if session.messages.last?.role == .user {
                         windowEnd = nil
                         autoFollow = true
+                        readerOwnsViewport = false
                         snapToBottom(using: proxy)
                     } else if autoFollow {
                         requestFollowScroll(using: proxy)
+                    } else if readerOwnsViewport {
+                        preserveReaderPosition(using: proxy)
                     }
                 }
                 .onDisappear {
                     cancelPendingFollowScroll()
+                    cancelPendingPreserveScroll()
                     reader.resumeTask?.cancel()
                     reader.resumeTask = nil
                 }
@@ -140,11 +220,22 @@ struct ChatTranscriptView: View {
         TranscriptWindow.range(count: session.messages.count, end: windowEnd)
     }
 
-    private func updateBottomVisibility(_ visible: Bool) {
+    private func updateBottomVisibility(_ visible: Bool, using proxy: ScrollViewProxy) {
         // Visibility is input to the follower, not presentation state. Do not invalidate
         // SwiftUI layout synchronously from its own visibility callback.
         reader.isAtBottom = visible
-        guard windowEnd == nil, visible, !reader.isScrolling, !autoFollow, reader.resumeTask == nil else { return }
+        if visible, readerOwnsViewport, !reader.isScrolling {
+            Task { @MainActor in
+                await Task.yield()
+                if readerOwnsViewport, !reader.isScrolling {
+                    preserveReaderPosition(using: proxy)
+                }
+            }
+            return
+        }
+        guard windowEnd == nil, visible, !reader.isScrolling, !readerOwnsViewport, !autoFollow,
+            reader.resumeTask == nil
+        else { return }
         reader.resumeTask = Task { @MainActor in
             do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
             reader.resumeTask = nil
@@ -181,6 +272,7 @@ struct ChatTranscriptView: View {
     }
 
     private func snapToBottom(using proxy: ScrollViewProxy) {
+        cancelPendingPreserveScroll()
         cancelPendingFollowScroll()
         followThrottle.reset()
         requestFollowScroll(using: proxy)
@@ -195,9 +287,33 @@ struct ChatTranscriptView: View {
         }
     }
 
+    private func preserveReaderPosition(using proxy: ScrollViewProxy) {
+        guard pendingPreserveScroll == nil, let readerAnchorID else { return }
+        pendingPreserveScroll = Task { @MainActor in
+            // The message mutation and its native scroll layout commit on different passes on
+            // macOS 26. Restore after that pass instead of issuing a scroll against stale geometry.
+            do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
+            guard readerOwnsViewport, !autoFollow, !reader.isScrolling, !Task.isCancelled else {
+                pendingPreserveScroll = nil
+                return
+            }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                proxy.scrollTo(readerAnchorID, anchor: .top)
+            }
+            pendingPreserveScroll = nil
+        }
+    }
+
     private func cancelPendingFollowScroll() {
         pendingFollowScroll?.cancel()
         pendingFollowScroll = nil
+    }
+
+    private func cancelPendingPreserveScroll() {
+        pendingPreserveScroll?.cancel()
+        pendingPreserveScroll = nil
     }
 
 }

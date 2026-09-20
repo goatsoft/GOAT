@@ -112,6 +112,13 @@ extension AppModel {
         databaseWriter = snapshot.persistenceReady ? snapshot.database.map(AppDatabaseWriter.init) : nil
         mcp.attachDatabase(snapshot.persistenceReady ? snapshot.database : nil)
         dbWarning = snapshot.databaseWarning
+        modelPreferences = snapshot.modelPreferences.models
+        legacyCompatibilityReviews = snapshot.modelPreferences.legacyReviews
+        durableModelPreferences = snapshot.modelPreferences
+        modelPreferencesWarning =
+            snapshot.databaseWarning?.contains("Model preferences") == true
+            ? snapshot.databaseWarning : nil
+        modelPreferencesLoading = false
         userThemes = snapshot.themes
         engineProfiles = snapshot.engineFile.engines
         engineStoreWritable = snapshot.engineStoreWritable

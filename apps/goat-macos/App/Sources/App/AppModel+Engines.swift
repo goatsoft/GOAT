@@ -27,7 +27,7 @@ extension AppModel {
             config: EngineConfig(
                 baseURL: savedURL, apiKey: savedKey,
                 name: profile.name, metadataDialect: profile.preset.metadataDialect,
-                requestStyle: profile.requestStyle))
+                requestStyle: .automatic))
         if let resolution = await engineLifecycle.probe(savedTarget, for: operation),
             resolution.health.isOK || resolution.health == .authRequired
         {
@@ -49,7 +49,7 @@ extension AppModel {
                     config: EngineConfig(
                         baseURL: url, apiKey: nil,
                         name: profile.name, metadataDialect: profile.preset.metadataDialect,
-                        requestStyle: profile.requestStyle))
+                        requestStyle: .automatic))
                 guard let resolution = await engineLifecycle.probe(target, for: operation) else {
                     await finishEngineTransition(intentRevision: intentRevision, operation: operation)
                     return
@@ -280,9 +280,7 @@ extension AppModel {
     static func resolvedModelID(
         requested: String?, defaultModelID: String?, availableModels: [ModelRef]
     ) -> String? {
-        if let requested, availableModels.contains(where: { $0.id == requested }) {
-            return requested
-        }
+        if let requested, availableModels.contains(where: { $0.id == requested }) { return requested }
         if let defaultModelID, availableModels.contains(where: { $0.id == defaultModelID }) {
             return defaultModelID
         }

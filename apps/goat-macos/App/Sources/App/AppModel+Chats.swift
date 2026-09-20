@@ -5,6 +5,18 @@ import Herd
 import Inference
 import Persistence
 
+@MainActor enum CompactionDeletion {
+    static func canRestore(_ message: ChatMessage, in messages: [ChatMessage]) -> Bool {
+        message.kind == .compaction
+            && messages.last(where: { $0.kind == .compaction })?.id == message.id
+    }
+
+    static func removing(_ message: ChatMessage, from messages: [ChatMessage]) -> [ChatMessage] {
+        guard canRestore(message, in: messages) else { return messages }
+        return messages.filter { $0.id != message.id }
+    }
+}
+
 extension AppModel {
     // MARK: Chat CRUD
 
@@ -113,6 +125,22 @@ extension AppModel {
             if selectedChatID == chat.id { selectedChatID = chats.first?.id }
         } catch {
             dbWarning = "Chat was not deleted: \(error.localizedDescription)"
+        }
+    }
+
+    /// Deleting the latest compaction row restores the prompt boundary to the preceding
+    /// compaction, or to the original transcript when none remains. Covered source messages stay
+    /// stored and visible, so this operation removes only the generated summary row.
+    func deleteCompaction(_ message: ChatMessage, in chat: ChatSession) async {
+        guard startupPhase.hasLocalState, let databaseWriter,
+            !chat.isStreaming, chats.contains(where: { $0.id == chat.id }),
+            CompactionDeletion.canRestore(message, in: chat.messages)
+        else { return }
+        do {
+            try await databaseWriter.deleteMessage(id: message.id.uuidString)
+            chat.messages = CompactionDeletion.removing(message, from: chat.messages)
+        } catch {
+            dbWarning = "Compaction was not deleted: \(error.localizedDescription)"
         }
     }
 
@@ -230,6 +258,7 @@ extension AppModel {
             statsDuration: msg.stats?.duration,
             statsGenerationTokensPerSecond: msg.stats?.generationTokensPerSecond,
             statsTokensAreExact: msg.stats?.tokensAreExact,
+            statsCachedPromptTokens: msg.stats?.cachedPromptTokens,
             complete: msg.complete,
             position: position,
             createdAt: msg.createdAt,
@@ -239,8 +268,107 @@ extension AppModel {
             toolsJson: msg.toolEvents.isEmpty
                 ? nil
                 : (try? JSONEncoder().encode(msg.toolEvents)).flatMap { String(data: $0, encoding: .utf8) },
-            rating: msg.rating
+            rating: msg.rating,
+            generationProvenanceJson: provenanceJSON(for: msg),
+            statsFinishReason: msg.stats?.finishReason,
+            kind: msg.kind.rawValue,
+            compactionJson: msg.compaction.flatMap { info in
+                (try? JSONEncoder().encode(info)).flatMap { String(data: $0, encoding: .utf8) }
+            }
         )
+    }
+
+    /// The context window a turn planned against and where the figure came from, mirroring the
+    /// budgeter's precedence (ADR-0085): a user override, else the engine- or family-reported
+    /// window, else the estimated fallback. Recorded in provenance so a slow prefill or an
+    /// overflow can be attributed to the window that was actually in force.
+    func effectiveContextWindow(forModelID id: String)
+        -> (limit: Int?, source: GenerationProvenanceRecord.ContextLimitSource)
+    {
+        let identity = ModelIdentity(engineProfileID: activeEngineProfile?.id ?? "", modelID: id)
+        let preference = modelPreferences.first { $0.identity == identity }
+        let reported = models.first { $0.id == id }?.contextLength
+        if preference?.contextWindowOverride != nil {
+            return (preference?.effectiveContextLength(reported: reported), .userOverride)
+        }
+        if let reported {
+            return (reported, .reported)
+        }
+        if let family = ModelFamilyRegistry.profile(for: id)?.contextLength {
+            return (family, .modelFamily)
+        }
+        return (PromptBudgeter.fallbackWindowTokens, .fallback)
+    }
+
+    /// Flatten resolved model capabilities into the provenance record's claim map, dropping
+    /// unknowns so the log shows only what was actually established.
+    static func provenanceCapabilities(_ capabilities: ModelCapabilities)
+        -> [String: GenerationProvenanceRecord.CapabilityClaim]
+    {
+        var result: [String: GenerationProvenanceRecord.CapabilityClaim] = [:]
+        func record(_ name: String, _ claim: CapabilityClaim) {
+            guard claim.support != .unknown else { return }
+            result[name] = GenerationProvenanceRecord.CapabilityClaim(
+                support: claim.support.rawValue,
+                evidence: claim.evidence.map(\.rawValue))
+        }
+        record("vision", capabilities.vision)
+        record("tools", capabilities.tools)
+        record("reasoning", capabilities.reasoning)
+        record("reasoningHistory", capabilities.reasoningHistory)
+        return result
+    }
+
+    private func provenanceJSON(for message: ChatMessage) -> String? {
+        guard let context = message.generationContext,
+            let parameters = message.generationParameters,
+            let lifecycle = message.generationLifecycle,
+            let state = GenerationProvenanceRecord.Lifecycle(rawValue: lifecycle)
+        else {
+            guard let existing = message.generationProvenance else { return nil }
+            return try? String(data: JSONEncoder().encode(existing), encoding: .utf8)
+        }
+        let contextWindow = effectiveContextWindow(forModelID: context.identity.modelID)
+        let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown"
+        let appBuild = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "Unknown"
+        let record = GenerationProvenanceRecord(
+            engineProfileID: context.engineProfileID,
+            engineDisplayName: context.engineName,
+            requestedModelID: context.identity.modelID,
+            requestStartedAt: message.createdAt,
+            appVersion: appVersion,
+            appBuild: appBuild,
+            resolvedRequestStyle: context.compatibility.effectiveStyle.rawValue,
+            resolutionSource: context.compatibility.source.rawValue,
+            adapterIdentifier: context.compatibility.adapterIdentifier,
+            selectedEffort: message.generationSelectedEffort ?? "Unknown",
+            actualTemperature: parameters.temperature,
+            samplingValues: parameters.sampling.fields,
+            samplingSource: parameters.samplingSource.rawValue,
+            familyRuleID: parameters.familyRuleID,
+            reasoningInstruction: parameters.reasoningInstruction,
+            omittedSamplingParameters: parameters.omittedSamplingParameters,
+            effectiveOutputTokenCap: parameters.outputTokenCap,
+            nativeReasoningValue: parameters.nativeReasoningEffort,
+            reasoningHistoryReplayed: parameters.replayReasoningHistory,
+            templateControls: parameters.qwenEnableThinking.map {
+                GenerationProvenanceRecord.TemplateControls(
+                    enableThinking: $0,
+                    preserveThinking: parameters.qwenPreserveThinking ?? false,
+                    reasoningEffort: parameters.qwenReasoningEffort)
+            },
+            effectiveContextLimit: contextWindow.limit,
+            contextLimitSource: contextWindow.source,
+            capabilities: Self.provenanceCapabilities(context.compatibility.capabilities),
+            lifecycle: state,
+            finishReason: message.stats?.finishReason,
+            failureCategory: message.generationFailureCategory.flatMap {
+                GenerationProvenanceRecord.FailureCategory(rawValue: $0)
+            })
+        // Refresh the live inspection model as the lifecycle advances. A loaded historical
+        // record is the fallback above, never a reason to freeze an active response at prepared.
+        message.generationProvenance = record
+        return try? String(data: JSONEncoder().encode(record), encoding: .utf8)
     }
 
     func loadMessages(for session: ChatSession) async {
@@ -272,6 +400,28 @@ extension AppModel {
                 msg.error = record.error
                 msg.rating = record.rating
                 msg.complete = record.complete
+                msg.kind = ChatMessageKind(rawValue: record.kind) ?? .regular
+                if let raw = record.compactionJson?.data(using: .utf8),
+                    let info = try? JSONDecoder().decode(CompactionInfo.self, from: raw)
+                {
+                    msg.compaction = info
+                }
+                if let rawText = record.generationProvenanceJson,
+                    rawText.utf8.count <= 256 * 1_024,
+                    let raw = rawText.data(using: .utf8)
+                {
+                    do {
+                        msg.generationProvenance =
+                            try JSONDecoder().decode(GenerationProvenanceRecord.self, from: raw)
+                        msg.generationFailureCategory = msg.generationProvenance?.failureCategory?.rawValue
+                    } catch {
+                        msg.generationProvenanceUnavailable = true
+                        dbWarning = "Some response provenance is unavailable because it could not be decoded."
+                    }
+                } else if record.generationProvenanceJson != nil {
+                    msg.generationProvenanceUnavailable = true
+                    dbWarning = "Some response provenance is unavailable because it exceeded the local limit."
+                }
                 if let raw = record.attachmentsJson?.data(using: .utf8),
                     let paths = try? JSONDecoder().decode([String].self, from: raw)
                 {
@@ -288,7 +438,9 @@ extension AppModel {
                         tokens: tokens,
                         duration: duration,
                         tokensAreExact: record.statsTokensAreExact ?? false,
-                        generationTokensPerSecond: record.statsGenerationTokensPerSecond)
+                        generationTokensPerSecond: record.statsGenerationTokensPerSecond,
+                        finishReason: record.statsFinishReason,
+                        cachedPromptTokens: record.statsCachedPromptTokens)
                 }
                 return msg
             }

@@ -422,6 +422,7 @@ struct PenLandingView: View {
                         localStateReady: model.startupPhase.hasLocalState,
                         engineIsHealthy: model.health.isOK,
                         messagesLoaded: true,
+                        modelCanGenerate: model.canGenerateWithSelectedModel(for: launchSession),
                         isBusy: model.activeTurnSessionID != nil || model.engineTransitioning
                             || model.modelCapabilitiesLoading),
                     isStreaming: false,

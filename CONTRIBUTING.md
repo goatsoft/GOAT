@@ -58,6 +58,6 @@ The local Swift package has 17 library modules plus the `goat` executable. Datab
 
 ## Submit a contribution
 
-Open a pull request against `main` with the concrete problem, resulting behavior and relevant validation. Use a conventional commit subject of at most 72 characters. Include screenshots with synthetic content for interface changes, and update the documentation when behavior changes.
+Create a focused Git-flow-style branch from `main` using a semantic prefix such as `feat/...`, `fix/...`, `chore/...`, `refactor/...`, `docs/...`, `test/...` or `perf/...`; do not use an unclassified branch name. Open a pull request against `main` with the concrete problem, resulting behavior and relevant validation. Use a conventional commit subject of at most 72 characters. Apply the appropriate repository labels/tags to the pull request, including the change type and any relevant area or risk labels. Include screenshots with synthetic content for interface changes, and update the documentation when behavior changes.
 
 Code, documentation and examples are MIT-licensed. GOAT artwork has separate [terms](LICENSE-ART.md); preserve attribution and use your own branding for a distributed modified fork. Contributions should not add material you lack permission to distribute.

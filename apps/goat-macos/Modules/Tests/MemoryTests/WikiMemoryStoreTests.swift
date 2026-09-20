@@ -129,7 +129,8 @@ private func waitForSemaphore(
     let store = WikiMemoryStore(root: paths.root)
     let invalid = [
         "", "memory", "MEMORY", ".hidden", "trailing-", "-leading", "two--/parts",
-        "../outside", "/absolute", "Uppercase", "with space", "under_score",
+        "../outside", "/absolute", "Uppercase", "with space", "_leading", "trailing_",
+        "under_score/../outside", "back\\slash", "nul\0byte",
         String(repeating: "a", count: 65),
     ]
 
@@ -139,6 +140,38 @@ private func waitForSemaphore(
         }
     }
     #expect(!FileManager.default.fileExists(atPath: paths.root.path))
+}
+
+@Test func underscoreMemoryNamesRoundTripAndResolveLinkedWikiPages() async throws {
+    let paths = try temporaryMemoryRoot("underscore-names")
+    defer { try? FileManager.default.removeItem(at: paths.parent) }
+    let store = LLMWikiMemoryStore(root: paths.root)
+    let context = MemoryContext()
+    let source = try await store.ingest(
+        title: "Aurora brief", content: "Shaders use native .wgsl files with Vite ?raw.",
+        context: context, sourceID: UUID())
+    let citation = "[[\(source.rawValue.dropFirst(4))]]"
+    _ = try await store.write(
+        MemoryNote(
+            name: "aurora_product", description: "Aurora requirements.",
+            body: "Native .wgsl with Vite ?raw. [[aurora_handover]]\nSource: \(citation)"),
+        scope: .global, condition: .ifAbsent)
+    _ = try await store.write(
+        MemoryNote(
+            name: "aurora_handover", description: "Aurora checkpoint.",
+            body: "Build remains unverified. [[aurora_product]]\nSource: \(citation)"),
+        scope: .global, condition: .ifAbsent)
+
+    let reopened = LLMWikiMemoryStore(root: paths.root)
+    let entries = try await reopened.query("aurora", context: context)
+    #expect(Set(entries.map(\.title)) == ["aurora_product", "aurora_handover"])
+    let product = try #require(entries.first(where: { $0.title == "aurora_product" }))
+    #expect(try await reopened.browserDocument(product.id, context: context).content.contains(".wgsl"))
+    let lint = try await reopened.lint(for: context)
+    #expect(lint.invalidWikiLinks.isEmpty)
+    #expect(lint.orphanPages.isEmpty)
+    #expect(lint.pageCount == 2)
+    #expect(lint.isHealthy)
 }
 
 @Test func conditionalWritesAndDeletesRejectStaleBrowserRevisions() async throws {

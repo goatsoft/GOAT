@@ -3,6 +3,12 @@ import Inference
 import Observation
 import Persistence
 
+/// ADR-0087 transcript entry kind: ordinary messages and folded compaction summaries.
+public enum ChatMessageKind: String, Sendable, Equatable {
+    case regular
+    case compaction
+}
+
 /// One transcript entry. Mutable while streaming; `complete` seals it.
 @MainActor
 @Observable
@@ -17,12 +23,27 @@ public final class ChatMessage: Identifiable {
     public private(set) var thinkingTail = ""
     public var stats: GenStats?
     public private(set) var liveMetrics = LiveGenerationMetrics()
+    public enum StreamActivity: Sendable { case reasoning, answer, toolArguments }
+    public private(set) var lastStreamActivity: StreamActivity?
+    /// Session-local worker status; never added to the model prompt.
+    public var generationStatus: String?
     public var error: String?
     public var complete = false
     public var attachmentPaths: [String] = []
     public var toolEvents: [ToolEventSnapshot] = []
+    /// ADR-0087 message kind. A compaction row carries the folded summary in `text` and its
+    /// metadata in `compaction`; the transcript shows it as a collapsible "Compacted N exchanges" row.
+    public var kind: ChatMessageKind = .regular
+    public var compaction: CompactionInfo?
     /// User feedback is persisted separately from the streamed message body.
     public var rating: Int?
+    public var generationContext: GenerationContext?
+    public var generationParameters: EffectiveGenerationParameters?
+    public var generationLifecycle: String?
+    public var generationSelectedEffort: String?
+    public var generationFailureCategory: String?
+    public var generationProvenance: GenerationProvenanceRecord?
+    public var generationProvenanceUnavailable = false
     /// Session-local prompt-budget notice. It is UI metadata, never model-visible content.
     public var contextNotice: String?
     public let createdAt: Date
@@ -44,6 +65,14 @@ public final class ChatMessage: Identifiable {
 
     public func appendStream(text textDelta: String, thinking thinkingDelta: String, toolInputBytes: Int = 0) {
         liveMetrics.append(bytes: textDelta.utf8.count + thinkingDelta.utf8.count + max(0, toolInputBytes), at: .now)
+        if !textDelta.isEmpty || !thinkingDelta.isEmpty || toolInputBytes > 0 { generationStatus = nil }
+        if toolInputBytes > 0 {
+            lastStreamActivity = .toolArguments
+        } else if !textDelta.isEmpty {
+            lastStreamActivity = .answer
+        } else if !thinkingDelta.isEmpty {
+            lastStreamActivity = .reasoning
+        }
         guard !textDelta.isEmpty || !thinkingDelta.isEmpty else { return }
         if !thinkingDelta.isEmpty {
             thinking.append(contentsOf: thinkingDelta)
@@ -99,6 +128,8 @@ public final class ChatSession: Identifiable {
     public var toolsEnabled = true
     public var disabledMCPServers: Set<String> = []
     public var isStreaming = false
+    /// Transient ownership for visible compaction progress; never part of saved chat history.
+    public var activeCompactionID: UUID?
     public var isLoadingMessages = false
     public var messagesLoaded = false
     public var messageLoadError: String?
@@ -113,6 +144,11 @@ public final class ChatSession: Identifiable {
     /// Capacity used for warning pressure. Preflight uses the input budget; completion uses the window.
     public var lastContextPressureLimit: Int?
     public var lastPromptWasTrimmed = false
+    /// Ratio of the engine's exact `usage.prompt_tokens` to GOAT's raw estimate for this chat,
+    /// learned per response and applied to the next plan (ADR-0085). Session-scoped; a fresh
+    /// launch starts at 1.0 until the first exact usage arrives.
+    public var contextCalibrationRatio: Double = 1.0
+    public var contextCalibrationSamples = 0
     public let createdAt: Date
     public var updatedAt: Date
 

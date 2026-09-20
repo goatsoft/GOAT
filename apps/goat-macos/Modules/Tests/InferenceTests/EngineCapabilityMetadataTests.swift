@@ -21,6 +21,29 @@ private func fixture(_ json: String) -> Data { Data(json.utf8) }
     #expect(models[1].capabilities == .unknown)
 }
 
+@Test func museGlimmerFamilyProfileSuppliesCapabilitiesWhenCatalogIsSparse() throws {
+    let models = try EngineCapabilityMetadataParser.openAIModelList(
+        fixture(#"{"data":[{"id":"Muse-Glimmer-30B-4bit"}]}"#))
+    let muse = try #require(models.first)
+
+    #expect(muse.contextLength == 131_072)
+    #expect(muse.capabilities.vision.support == .supported)
+    #expect(muse.capabilities.tools.support == .supported)
+    #expect(muse.capabilities.reasoning.support == .supported)
+    #expect(muse.capabilities.vision.evidence == [.modelFamily])
+    #expect(muse.capabilities.nativeReasoningEffort(for: .summit) == nil)
+}
+
+@Test func museGlimmerFamilyProfileDoesNotOverrideExplicitEngineContradictions() throws {
+    let metadata = try EngineCapabilityMetadataParser.openAIModelDetail(
+        fixture(#"{"id":"Muse-Glimmer-30B-4bit","capabilities":{"vision":false,"tools":false,"reasoning":false}}"#))
+
+    #expect(metadata.capabilities.vision.support == .unknown)
+    #expect(metadata.capabilities.tools.support == .unknown)
+    #expect(metadata.capabilities.reasoning.support == .unknown)
+    #expect(metadata.capabilities.hasConflict)
+}
+
 @Test func modelDetailURLTreatsTheWholeModelIDAsOneComponent() throws {
     let base = try #require(URL(string: "http://127.0.0.1:8000/root"))
     let url = try #require(

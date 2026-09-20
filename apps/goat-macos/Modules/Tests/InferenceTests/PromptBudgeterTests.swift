@@ -59,7 +59,7 @@ private func png(width: UInt32, height: UInt32) -> Data {
         model: ModelRef(id: "test-model", contextLength: 10_000))
 
     #expect(reported.report.windowSource == .reported)
-    #expect(reported.report.policyVersion == 3)
+    #expect(reported.report.policyVersion == 5)
     #expect(reported.report.windowTokens == 10_000)
     #expect(reported.report.requestedOutputTokens == 9_000)
     #expect(reported.report.outputReserve == 5_000)
@@ -83,10 +83,14 @@ private func png(width: UInt32, height: UInt32) -> Data {
 
     #expect(fallback.report.windowSource == .fallback)
     #expect(fallback.report.windowTokens == PromptBudgeter.fallbackWindowTokens)
-    #expect(fallback.report.outputReserve == 4_096)
-    #expect(fallback.request.maxTokens == 4_096)
-    #expect(fallback.report.safetyReserve == 409)
-    #expect(fallback.report.inputBudget == 3_687)
+    // Summit may think (reasoning unknown), so it asks for 16,384 and the window clamps to half.
+    #expect(fallback.report.requestedOutputTokens == 16_384)
+    #expect(fallback.report.outputReserve == 8_192)
+    #expect(fallback.request.maxTokens == 8_192)
+    #expect(fallback.report.safetyReserve == 819)
+    #expect(fallback.report.inputBudget == 7_373)
+    #expect(fallback.report.calibrationRatio == 1.0)
+    #expect(fallback.report.calibratedInputTokensAfter == fallback.report.estimatedInputTokensAfter)
 }
 
 @Test func invalidToolSchemaIsChargedForTheWireFallbackObject() throws {
@@ -126,7 +130,8 @@ private func png(width: UInt32, height: UInt32) -> Data {
         budgetRequest(turns: turns, tools: [tool]),
         model: ModelRef(id: "test-model", contextLength: 32_000))
 
-    #expect(plan.report.breakdownBefore.toolSchemas >= tool.description.utf8.count + schema.utf8.count)
+    // Long encoded runs stay byte-for-byte in schemas, arguments, identifiers and results.
+    #expect(plan.report.breakdownBefore.toolSchemas >= encodedRun.utf8.count * 2)
     #expect(plan.report.breakdownBefore.exchanges >= encodedRun.utf8.count * 3)
 }
 
@@ -390,7 +395,7 @@ private func png(width: UInt32, height: UInt32) -> Data {
         - {"id":"global:dog-name","summary":"The user's dog is Mabel.","title":"Dog name"}
         """
 
-    #expect(first.report.policyVersion == 3)
+    #expect(first.report.policyVersion == 5)
     #expect(system == expected)
     #expect(first.report == second.report)
     #expect(first.request.turns.map(\.text) == second.request.turns.map(\.text))
@@ -532,7 +537,7 @@ private func png(width: UInt32, height: UInt32) -> Data {
                 toolCallID: call.id))
     }
     let request = budgetRequest(turns: turns)
-    let model = ModelRef(id: "test-model", contextLength: 14_000)
+    let model = ModelRef(id: "test-model", contextLength: 8_000)
     let plan = try budgeter.plan(request, model: model)
     #expect(plan.report.estimatedInputTokensAfter <= plan.report.inputBudget)
     #expect(plan.report.textTruncations.contains { $0.component == .toolHistory })
@@ -563,4 +568,140 @@ private func png(width: UInt32, height: UInt32) -> Data {
     let plan = try budgeter.plan(small, model: ModelRef(id: "test-model", contextLength: 4_000))
     #expect(plan.request.turns.map(\.text) == small.turns.map(\.text))
     #expect(!plan.report.textTruncations.contains { $0.component == .toolHistory })
+}
+
+@Test func calibrationScalesTheComparisonBudgetAndTheReportedEstimate() throws {
+    let filler = String(repeating: "const value = compute(input) + offset;\n", count: 400)
+    let call = ToolCallEvent(id: "read-1", name: "pen_read_file", argumentsJSON: #"{"path":"src/a.ts"}"#)
+    let turns = [
+        ChatTurn(role: .system, text: "You are GOAT."),
+        ChatTurn(role: .user, text: "Read the file."),
+        ChatTurn(role: .assistant, text: "", toolCalls: [call]),
+        ChatTurn(role: .tool, text: filler, toolCallID: call.id),
+        ChatTurn(role: .user, text: "Now summarise it."),
+    ]
+    let model = ModelRef(id: "test-model", contextLength: 6_000)
+    let request = budgetRequest(turns: turns)
+
+    let neutral = try budgeter.plan(request, model: model)
+    #expect(neutral.report.calibrationRatio == 1.0)
+    #expect(neutral.report.calibratedInputTokensAfter == neutral.report.estimatedInputTokensAfter)
+
+    // The engine reported half of GOAT's estimate last time: twice the history fits.
+    let generous = try budgeter.plan(request, model: model, calibration: 0.5)
+    #expect(generous.report.calibrationRatio == 0.5)
+    #expect(generous.report.inputBudget == neutral.report.inputBudget)
+    #expect(generous.report.retainedExchangeCount >= neutral.report.retainedExchangeCount)
+    #expect(generous.report.calibratedInputTokensAfter <= neutral.report.calibratedInputTokensAfter)
+    #expect(
+        generous.report.calibratedInputTokensAfter
+            == PromptBudgeter.calibrated(generous.report.estimatedInputTokensAfter, ratio: 0.5))
+
+    // The engine reported more than GOAT estimated: the same content must trim earlier.
+    let strict = try budgeter.plan(request, model: model, calibration: 1.8)
+    #expect(strict.report.calibrationRatio == 1.8)
+    #expect(strict.report.estimatedTokensRemoved >= neutral.report.estimatedTokensRemoved)
+
+    // Ratios outside the clamp and non-finite values are neutralised, never trusted.
+    #expect(try budgeter.plan(request, model: model, calibration: 9).report.calibrationRatio == 2.0)
+    #expect(try budgeter.plan(request, model: model, calibration: 0.01).report.calibrationRatio == 0.5)
+    #expect(try budgeter.plan(request, model: model, calibration: .nan).report.calibrationRatio == 1.0)
+}
+
+@Test func toolResultsAreChargedNearFourBytesPerTokenExceptOpaqueRuns() throws {
+    let code = String(repeating: "if (value > limit) { return handle(value, limit); }\n", count: 200)
+    let call = ToolCallEvent(id: "read-1", name: "pen_read_file", argumentsJSON: #"{"path":"src/a.ts"}"#)
+    let turns = [
+        ChatTurn(role: .system, text: "s"),
+        ChatTurn(role: .user, text: "u"),
+        ChatTurn(role: .assistant, text: "", toolCalls: [call]),
+        ChatTurn(role: .tool, text: code, toolCallID: call.id),
+    ]
+    let plan = try budgeter.plan(
+        budgetRequest(turns: turns), model: ModelRef(id: "test-model", contextLength: 64_000))
+    let bytes = code.utf8.count
+    #expect(plan.report.breakdownBefore.exchanges < bytes / 2)
+    #expect(plan.report.breakdownBefore.exchanges > bytes / 5)
+
+    let hash = String(repeating: "f3a9c0d1", count: 64)
+    let hashTurns = [
+        ChatTurn(role: .system, text: "s"),
+        ChatTurn(role: .user, text: "u"),
+        ChatTurn(role: .assistant, text: "", toolCalls: [call]),
+        ChatTurn(role: .tool, text: hash, toolCallID: call.id),
+    ]
+    let hashPlan = try budgeter.plan(
+        budgetRequest(turns: hashTurns), model: ModelRef(id: "test-model", contextLength: 64_000))
+    #expect(hashPlan.report.breakdownBefore.exchanges >= hash.utf8.count)
+}
+
+@Test func tierOnePrunesAgedToolResultBodiesAcrossExchangesKeepingProtocolPairs() throws {
+    let big = String(repeating: "a", count: 15_000)  // ~15,000 opaque tokens per tool result
+    var turns = [ChatTurn(role: .system, text: "You are GOAT.")]
+    var calls: [ToolCallEvent] = []
+    for index in 0..<5 {
+        let call = ToolCallEvent(
+            id: "call-\(index)", name: "pen_read_file",
+            argumentsJSON: #"{"path":"src/file-\#(index).ts"}"#)
+        calls.append(call)
+        turns.append(ChatTurn(role: .user, text: "read \(index)"))
+        turns.append(ChatTurn(role: .assistant, text: "", toolCalls: [call]))
+        turns.append(ChatTurn(role: .tool, text: big, toolCallID: call.id))
+    }
+    turns.append(ChatTurn(role: .user, text: "now summarise"))
+    let request = budgetRequest(turns: turns)
+    let model = ModelRef(id: "test-model", contextLength: 400_000)
+
+    let plan = try budgeter.plan(request, model: model)
+
+    // Nothing dropped or emergency-trimmed; only Tier-1 acts.
+    #expect(plan.report.droppedExchangeCount == 0)
+    #expect(plan.report.retainedExchangeCount == 6)
+    // The newest 40,000 tokens of tool output (results 2, 3, 4) stay verbatim; 0 and 1 are pruned.
+    let toolTexts = plan.request.turns.filter { $0.role == .tool }.map(\.text)
+    #expect(toolTexts.count == 5)
+    #expect(toolTexts[0].contains("GOAT pruned an earlier tool result"))
+    #expect(toolTexts[1].contains("GOAT pruned an earlier tool result"))
+    #expect(toolTexts[2] == big)
+    #expect(toolTexts[3] == big)
+    #expect(toolTexts[4] == big)
+    // Every pruning is an aged-tool-result record; names, arguments and pairing are untouched.
+    #expect(plan.report.textTruncations.count == 2)
+    #expect(plan.report.textTruncations.allSatisfy { $0.component == .agedToolResult })
+    #expect(
+        plan.request.turns.filter { !$0.toolCalls.isEmpty }.map(\.toolCalls) == calls.map { [$0] })
+    let toolCallIDs = plan.request.turns.filter { $0.role == .tool }.map(\.toolCallID)
+    #expect(toolCallIDs == calls.map { $0.id as String? })
+    #expect(plan.report.estimatedInputTokensAfter < plan.report.estimatedInputTokensBefore)
+    #expect(plan.report.estimatedInputTokensAfter <= plan.report.inputBudget)
+
+    // Deterministic and non-mutating; replanning the planned request stays valid.
+    let again = try budgeter.plan(request, model: model)
+    #expect(again.request.turns.map(\.text) == plan.request.turns.map(\.text))
+    #expect(again.report == plan.report)
+    _ = try budgeter.plan(plan.request, model: model)
+    #expect(request.turns.map(\.text) == turns.map(\.text))
+}
+
+@Test func tierOneKeepsRecentToolOutputAndSkipsBelowTheSavingsThreshold() throws {
+    let big = String(repeating: "a", count: 15_000)
+    var turns = [ChatTurn(role: .system, text: "You are GOAT.")]
+    for index in 0..<4 {
+        let call = ToolCallEvent(
+            id: "call-\(index)", name: "pen_read_file",
+            argumentsJSON: #"{"path":"src/file-\#(index).ts"}"#)
+        turns.append(ChatTurn(role: .user, text: "read \(index)"))
+        turns.append(ChatTurn(role: .assistant, text: "", toolCalls: [call]))
+        turns.append(ChatTurn(role: .tool, text: big, toolCallID: call.id))
+    }
+    turns.append(ChatTurn(role: .user, text: "now summarise"))
+    let plan = try budgeter.plan(
+        budgetRequest(turns: turns), model: ModelRef(id: "test-model", contextLength: 400_000))
+
+    // Only the oldest result is aged (45,000 newer tokens), a ~15,000 token saving that is under
+    // the 20,000 hysteresis, so Tier-1 leaves every body verbatim.
+    #expect(!plan.report.textTruncations.contains { $0.component == .agedToolResult })
+    #expect(plan.request.turns.filter { $0.role == .tool }.allSatisfy { $0.text == big })
+    #expect(plan.report.droppedExchangeCount == 0)
+    #expect(!plan.report.didTrim)
 }
