@@ -4,7 +4,7 @@ Status: Accepted · 2026-09-20
 
 Refines [ADR-0008](0008-inference-via-omlx.md), [ADR-0017](0017-engine-agnostic-openai-dialect.md), [ADR-0021](0021-engines-as-managed-list.md), and [ADR-0086](0086-sampling-parameters-are-model-facts.md).
 
-Implementation is deferred to the maintenance work in [issue #31](https://github.com/goatsoft/GOAT/issues/31). The live Qwen3.8 trial reinforced the need to show server memory facts and distinguish context usage from the effective output ceiling, but PR #27 does not implement this proposal.
+Implemented in [PR #36](https://github.com/goatsoft/GOAT/pull/36) for [issue #31](https://github.com/goatsoft/GOAT/issues/31). The Qwen3.8 trial established the need for server memory facts and effective output ceilings. See the [engine qualification record](../ENGINES.md#maintenance-qualification-20-september-2026) for tested configurations and limits.
 
 ## Context
 

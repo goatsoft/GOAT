@@ -15,7 +15,7 @@ GOAT is a streaming client for compatible model engines. It does not run inferen
 | `GET /props?model=...` | llama.cpp template, modality, and context metadata | No; llama.cpp preset only |
 | `POST /v1/chat/completions` (`stream: true`, SSE) | Everything else | **Yes** |
 
-Discovery always probes the saved endpoint, then only conventional ports for that preset: `:8000`/`:8001` for oMLX or vMLX, `:11434` for Ollama, `:1234` for LM Studio, and `:8080` for llama.cpp. Custom discovery stays on the generic adapter. Selected-model metadata calls stay on the active endpoint's origin. They contain a catalog model ID and no conversation data. Cross-origin redirects are rejected. No other inference host is contacted (see the connection-policy reference for app-wide boundaries).
+Discovery probes the saved endpoint first. Profiles with a saved credential do not probe fallback ports or forward that credential to another endpoint. Without a saved credential, discovery can probe conventional ports for that preset: `:8000`/`:8001` for oMLX or vMLX, `:11434` for Ollama, `:1234` for LM Studio, and `:8080` for llama.cpp. Custom discovery stays on the generic adapter. Selected-model metadata calls stay on the active endpoint's origin. They contain a catalog model ID and no conversation data. Cross-origin redirects are rejected. No other inference host is contacted (see the connection-policy reference for app-wide boundaries).
 
 ## Engines (Settings → Engine)
 
@@ -44,7 +44,7 @@ Stats reads model/process memory and aggregate active/waiting request counts onl
 
 Server context and configured output limits join by exact model ID under the current engine revision. Request output is capped by effort, half the context window, and the reported server limit. Stats distinguishes that effective request ceiling from the server configuration. A response ending with `finish_reason=length` offers an explicit **Continue response** action.
 
-Stable oMLX 0.6.4 is the current maintenance qualification baseline. Requalify a stable 0.7 release before adopting its recipe or MTP behavior for a GOAT release. A prerelease can still be tested separately with its exact version recorded.
+Stable oMLX 0.6.4 is the current maintenance qualification baseline. Requalify a stable 0.7 release before adopting its recipe or MTP behavior for a GOAT release. Prerelease 0.7 trials are deferred until a proper release is selected for requalification.
 
 ## Model management and recovery
 
@@ -110,7 +110,7 @@ Compatibility evidence must be captured from the actual configured engine and mo
 
 | Server | Status |
 |---|---|
-| oMLX | Local development has exercised authentication and discovery. Versioned release qualification for chat, tools, vision and reasoning remains separate. |
+| oMLX | Stable 0.6.4 maintenance trials cover limits, continuation, cancellation and the tool workflows below. Broader chat, vision and reasoning qualification remains separate. |
 | vMLX | Earlier development exercised its wire format; requalify the selected version for a release. |
 | Ollama · LM Studio · llama.cpp server · vLLM · mlx-lm | Preset-provided (Ollama/LM Studio/llama.cpp) or same-dialect: expected compatible, unverified; versioned compatibility reports and PRs welcome |
 
@@ -130,3 +130,21 @@ Configured HTTP endpoints can be on this Mac, a local network or the internet, s
 ## Template and sampler qualification
 
 The [integration audit](INFERENCE-INTEGRATION-AUDIT.md) distinguishes client request correctness from server template/parser behaviour and executed sampler settings. Source-backed rules do not establish engine adapter support. An omitted field allows server defaults, which may be global rather than checkpoint-derived. A server can also force sampling values over explicit request values. Response provenance therefore records requested sampling.
+
+
+## Maintenance qualification: 20 September 2026
+
+Stable oMLX 0.6.4 trials ran on M1 Studio with Tahoe 26.6.2, in the order below. All four configurations reached a requested 32-token output limit, continued, and returned aggregate request counts to idle after cancellation. These observations qualify transport behavior, not general coding quality.
+
+| Model | Disposable seven-step tool workflow |
+|---|---|
+| Qwen3.8-27B-MLX-4bit | Passed tool operations and independent exact-file verification, 328.5 seconds. |
+| Devstral-Small-2-24B-Instruct-2512-4bit | Passed the same workflow, 320.9 seconds. |
+| DeepSeek-R1-Distill-Qwen-14B-8bit | Passed after a saved model-specific oMLX template repair, 75.446 seconds. |
+| GLM-4.7-Flash-4bit | Structured call/result transport and all seven operations worked with its existing template. Exact-content verification failed: missing requested semicolon and final newline. |
+
+DeepSeek's installed template omitted tool definitions. The tested per-model `chat_template_kwargs.chat_template` override supplies schemas and serializes call/result history using `<|tool_call_start|>` and `<|tool_call_end|>`, supported by oMLX's existing parser. SHA-256: `9acab20bbbf99b2dbb36f0b6bd497f7367bb6830d4f85fdb7b8b959c02af9b51`. Streaming and non-streaming round trips passed with the saved configuration. This external engine repair is not a template installed or administered by GOAT. No weights, tokenizer files or global sampling settings changed. Do not apply the override to GLM or unrelated checkpoints.
+
+OpenAI-compatible messages and tool schemas form the shared client contract. Model-specific templates and server parsers still determine how those structures reach a checkpoint and return structured calls. Discovery alone does not establish that mapping; printed tool markup never authorizes execution.
+
+The same-request discrepancy between oMLX's reported 37 tok/s and GOAT's live 2–3 tok/s remains under investigation in [issue #38](https://github.com/goatsoft/GOAT/issues/38). These maintenance changes do not resolve it. Live estimates and final engine usage are distinct measurements; no conclusion that all low rates are display errors has been established.

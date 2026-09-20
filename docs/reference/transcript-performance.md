@@ -52,5 +52,11 @@ source, including Markdown fences and whitespace. These are presentation bounds;
 persistence and model context retain the complete content. Rich Markdown and
 embedded code-block actions remain available for smaller responses.
 
-VoiceOver qualification is outside this maintenance fix and is not an acceptance
-or release gate.
+
+## Recorded maintenance evidence
+
+[PR #35](https://github.com/goatsoft/GOAT/pull/35) merged the bounded rendering changes and closed issue #29. The same engine-free Release workload on M1 Max/32 GB, macOS 27.0 and Xcode 27.0 took 19 seconds versus 133 seconds originally; main-actor scheduling delay p95 was 5–18 ms and peak RSS was 285 MB. These are synthetic single-host measurements with the limits described above.
+
+The combined stack in [PR #36](https://github.com/goatsoft/GOAT/pull/36) passed six native disclosure/compaction tests and two reader/reflow tests on Tahoe 26.6.2 with Xcode 27.0. Its non-default test-seeded reader window starts at the requested anchor so there is content below it; normal following initialization is unchanged. Compaction screenshots were inspected at 360/700-point widths in light and dark themes.
+
+A disposable native window on Golden Gate exercised earlier-part navigation, text selection, Command-C, keyboard-adjusted selection and complete copy/paste of a 400-line Unicode fixture spanning two parts. No saved conversations were loaded. This is targeted interaction evidence, not a claim that every application workflow was manually audited.
