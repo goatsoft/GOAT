@@ -132,7 +132,9 @@ struct ChatTranscriptView: View {
                         Color.clear
                             .frame(height: 1)
                             .id(Self.bottomAnchor)
-                            .onScrollVisibilityChange(threshold: 0.1, updateBottomVisibility)
+                            .onScrollVisibilityChange(threshold: 0.1) { visible in
+                                updateBottomVisibility(visible, using: proxy)
+                            }
 
                     }
                     .scrollTargetLayout()
@@ -214,10 +216,19 @@ struct ChatTranscriptView: View {
         TranscriptWindow.range(count: session.messages.count, end: windowEnd)
     }
 
-    private func updateBottomVisibility(_ visible: Bool) {
+    private func updateBottomVisibility(_ visible: Bool, using proxy: ScrollViewProxy) {
         // Visibility is input to the follower, not presentation state. Do not invalidate
         // SwiftUI layout synchronously from its own visibility callback.
         reader.isAtBottom = visible
+        if visible, readerOwnsViewport, !reader.isScrolling {
+            Task { @MainActor in
+                await Task.yield()
+                if readerOwnsViewport, !reader.isScrolling {
+                    preserveReaderPosition(using: proxy)
+                }
+            }
+            return
+        }
         guard windowEnd == nil, visible, !reader.isScrolling, !readerOwnsViewport, !autoFollow,
             reader.resumeTask == nil
         else { return }
