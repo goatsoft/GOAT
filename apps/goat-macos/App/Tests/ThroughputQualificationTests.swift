@@ -79,7 +79,12 @@ final class ThroughputQualificationTests: XCTestCase {
                     rootView: HStack {
                         ChatTranscriptView(session: session).frame(width: 700)
                         if inspector { ScrollView { NerdStatsView(session: session) }.frame(width: 300) }
-                    }.environment(AppModel.shared))
+                    }
+                    .environment(AppModel.shared)
+                    // This standalone NSHostingView has no SwiftUI Scene to supply its
+                    // phase. Model the foreground window so Stats actually samples.
+                    // The operator must still keep the Mac unlocked and inspect the UI.
+                    .environment(\.scenePhase, .active))
                 window.makeKeyAndOrderFront(nil)
                 defer {
                     window.contentView = nil
