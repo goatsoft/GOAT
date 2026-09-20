@@ -1948,10 +1948,12 @@ extension Tag {
         In this disposable Pen, list the workspace, create src/check.ts with exactly export const value = 'one'; followed by one newline, read it back, then edit 'one' to 'two' and read it back again. Do not create any other files. Use the Pen tools to do the work, then report the verified result.
         """
     let verificationScript =
-        "const fs=require('fs'); if(!fs.readFileSync('src/check.ts','utf8').includes('two')) process.exit(1); console.log('GOAT_COMMAND_VERIFIED')"
+        #"const fs=require('fs'); if(fs.readFileSync('src/check.ts','utf8')!=="export const value = 'two';\n") { console.error('Expected exact content, including semicolon and final newline'); process.exit(1); } console.log('GOAT_COMMAND_VERIFIED')"#
+    let verificationArguments = String(
+        decoding: try JSONEncoder().encode(["-e", verificationScript]), as: UTF8.self)
     if !recoverMalformedResponse {
         user.text +=
-            " After editing, use pen_search to locate the literal text 'two'. Then use pen_run_command to run node with args ['-e', \"\(verificationScript)\"], and check its synchronous result for exit code 0. Do not install packages or request network access."
+            " After editing, use pen_search to locate the literal text 'two'. Then use pen_run_command to run node with args \(verificationArguments), and check its synchronous result for exit code 0. Do not install packages or request network access."
     }
     user.complete = true
     session.messages = [user]

@@ -213,6 +213,7 @@ private func fixture(_ json: String) -> Data { Data(json.utf8) }
     #expect(EnginePreset.with(id: "lmstudio").conventionalDiscoveryURLs == ["http://127.0.0.1:1234"])
     #expect(EnginePreset.with(id: "llamacpp").conventionalDiscoveryURLs == ["http://127.0.0.1:8080"])
     #expect(!EnginePreset.with(id: "omlx").conventionalDiscoveryURLs.contains("http://127.0.0.1:11434"))
+    #expect(EnginePreset.custom.conventionalDiscoveryURLs.isEmpty)
 }
 
 @Test func mtplxPresetUsesTheOpenAICompatibleLoopbackServer() {
