@@ -121,8 +121,13 @@ import Testing
         contentRect: NSRect(x: 80, y: 80, width: 700, height: 450), styleMask: [.titled, .resizable],
         backing: .buffered, defer: false)
     window.isReleasedWhenClosed = false
+    // Seed the SwiftUI scroll-position binding as a real reader gesture would. Direct AppKit
+    // clip-view movement alone does not update that binding consistently across macOS 26 and 27.
+    let readerAnchor = session.messages[10].id
     let host = NSHostingView(
-        rootView: ChatTranscriptView(session: session, initiallyFollowing: false).environment(model))
+        rootView: ChatTranscriptView(
+            session: session, initiallyFollowing: false, initialVisibleMessageID: readerAnchor
+        ).environment(model))
     window.contentView = host
     // Exercise a displayed window: native scroll settling and display-cycle layout
     // are suspended differently for a hidden hosting view.

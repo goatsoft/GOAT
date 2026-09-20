@@ -33,10 +33,15 @@ struct ChatTranscriptView: View {
 
     private static let bottomAnchor = UUID()
 
-    init(session: ChatSession, initiallyFollowing: Bool = true) {
+    init(
+        session: ChatSession,
+        initiallyFollowing: Bool = true,
+        initialVisibleMessageID: UUID? = nil
+    ) {
         self.session = session
         _autoFollow = State(initialValue: initiallyFollowing)
         _readerOwnsViewport = State(initialValue: !initiallyFollowing)
+        _visibleMessageID = State(initialValue: initialVisibleMessageID)
     }
 
     var body: some View {
