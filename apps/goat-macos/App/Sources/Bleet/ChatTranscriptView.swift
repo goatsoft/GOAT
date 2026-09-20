@@ -169,12 +169,16 @@ struct ChatTranscriptView: View {
                         cancelPendingFollowScroll()
                         cancelPendingPreserveScroll()
                     } else if phase == .idle {
-                        if reader.isScrolling, let visibleMessageID { readerAnchorID = visibleMessageID }
+                        let readerFinishedScrolling = reader.isScrolling
+                        if readerFinishedScrolling, let visibleMessageID { readerAnchorID = visibleMessageID }
                         reader.isScrolling = false
-                        if windowEnd == nil && reader.isAtBottom {
+                        // Only a reader gesture may hand the viewport back to bottom following.
+                        // Regrouping can make the bottom sentinel transiently visible during
+                        // native layout and must not change the ownership captured before it.
+                        if readerFinishedScrolling && windowEnd == nil && reader.isAtBottom {
                             readerOwnsViewport = false
                             autoFollow = true
-                        } else {
+                        } else if readerOwnsViewport {
                             autoFollow = false
                         }
                     }
@@ -286,20 +290,17 @@ struct ChatTranscriptView: View {
     private func preserveReaderPosition(using proxy: ScrollViewProxy) {
         guard pendingPreserveScroll == nil, let readerAnchorID else { return }
         pendingPreserveScroll = Task { @MainActor in
-            // A completed tool round can change row ancestry over several native layout passes
-            // on macOS 26. Reassert the captured reader anchor after each bounded pass so the
-            // final layout cannot align the newly grown document to its bottom.
-            for delay in [16, 32, 64] {
-                do { try await Task.sleep(for: .milliseconds(delay)) } catch { return }
-                guard readerOwnsViewport, !autoFollow, !reader.isScrolling, !Task.isCancelled else {
-                    pendingPreserveScroll = nil
-                    return
-                }
-                var transaction = Transaction()
-                transaction.disablesAnimations = true
-                withTransaction(transaction) {
-                    proxy.scrollTo(readerAnchorID, anchor: .top)
-                }
+            // The message mutation and its native scroll layout commit on different passes on
+            // macOS 26. Restore after that pass instead of issuing a scroll against stale geometry.
+            do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
+            guard readerOwnsViewport, !autoFollow, !reader.isScrolling, !Task.isCancelled else {
+                pendingPreserveScroll = nil
+                return
+            }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                proxy.scrollTo(readerAnchorID, anchor: .top)
             }
             pendingPreserveScroll = nil
         }
