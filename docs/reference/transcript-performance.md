@@ -60,3 +60,5 @@ embedded code-block actions remain available for smaller responses.
 The combined stack in [PR #36](https://github.com/goatsoft/GOAT/pull/36) passed six native disclosure/compaction tests and two reader/reflow tests on Tahoe 26.6.2 with Xcode 27.0. Its non-default test-seeded reader window starts at the requested anchor so there is content below it; normal following initialization is unchanged. Compaction screenshots were inspected at 360/700-point widths in light and dark themes.
 
 A disposable native window on Golden Gate exercised earlier-part navigation, text selection, Command-C, keyboard-adjusted selection and complete copy/paste of a 400-line Unicode fixture spanning two parts. No saved conversations were loaded. This is targeted interaction evidence, not a claim that every application workflow was manually audited.
+
+Compaction-specific keyboard expansion/collapse and restoration passed with the actual macOS Reduce Motion setting enabled. A fresh process restored compaction preferences, summary text and file metadata; deleting the summary retained both original messages in SQLite. These checks used disposable synthetic data.
