@@ -172,8 +172,11 @@ struct ChatTranscriptView: View {
                 // feed estimated transcript heights back into programmatic scroll commands.
                 // Chase streaming growth (text + thinking + new messages) while following.
                 .onChange(of: streamRevision) {
-                    guard autoFollow else { return }
-                    requestFollowScroll(using: proxy)
+                    if autoFollow {
+                        requestFollowScroll(using: proxy)
+                    } else if readerOwnsViewport {
+                        preserveReaderPosition(using: proxy)
+                    }
                 }
                 // A newly sent turn always re-arms follow and snaps to the bottom.
                 .onChange(of: session.messages.count) {
@@ -184,6 +187,8 @@ struct ChatTranscriptView: View {
                         snapToBottom(using: proxy)
                     } else if autoFollow {
                         requestFollowScroll(using: proxy)
+                    } else if readerOwnsViewport {
+                        preserveReaderPosition(using: proxy)
                     }
                 }
                 .onDisappear {
@@ -253,6 +258,15 @@ struct ChatTranscriptView: View {
         transaction.disablesAnimations = true
         withTransaction(transaction) {
             proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
+        }
+    }
+
+    private func preserveReaderPosition(using proxy: ScrollViewProxy) {
+        guard let visibleMessageID else { return }
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            proxy.scrollTo(visibleMessageID, anchor: .top)
         }
     }
 
