@@ -149,7 +149,7 @@ struct ChatTranscriptView: View {
                 )
                 .scrollPosition(id: $visibleMessageID, anchor: .top)
                 .onChange(of: visibleMessageID) {
-                    if let visibleMessageID { readerAnchorID = visibleMessageID }
+                    if reader.isScrolling, let visibleMessageID { readerAnchorID = visibleMessageID }
                 }
                 .defaultScrollAnchor(.bottom, for: .initialOffset)
                 .defaultScrollAnchor(.bottom, for: .alignment)
@@ -164,6 +164,7 @@ struct ChatTranscriptView: View {
                         readerOwnsViewport = true
                         cancelPendingFollowScroll()
                     } else if phase == .idle {
+                        if let visibleMessageID { readerAnchorID = visibleMessageID }
                         reader.isScrolling = false
                         if windowEnd == nil && reader.isAtBottom {
                             readerOwnsViewport = false
