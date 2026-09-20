@@ -49,13 +49,19 @@ struct ComposerStatus: View {
                 {
                     Text(status.label)
                         .foregroundStyle(status.color == .secondary ? model.theme.tokens.muted : status.color)
-                    ContextBar(ratio: status.ratio ?? 0, color: status.color, width: 128)
-                        .help(
-                            !status.usageKnown
-                                ? "Context usage is unavailable for this saved chat until its next response."
-                                : status.window == nil
-                                    ? "The engine has not reported a context window."
-                                    : "Context usage. ~ indicates an estimate.")
+                    ContextBar(
+                        ratio: status.ratio ?? 0,
+                        color: status.color,
+                        width: 128,
+                        thresholdRatio: Double(model.compactAtPercent) / 100
+                    )
+                    .help(
+                        !status.usageKnown
+                            ? "Context usage is unavailable for this saved chat until its next response."
+                            : status.window == nil
+                                ? "The engine has not reported a context window."
+                                : "Context usage. ~ indicates an estimate. The marker shows the \(model.compactAtPercent)% compaction threshold."
+                    )
                 }
             }
             .font(.caption)

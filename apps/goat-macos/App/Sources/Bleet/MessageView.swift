@@ -16,6 +16,7 @@ struct MessageView: View {
     var joinsPreviousTools = false
     var joinsNextTools = false
     var activeToolID: String? = nil
+    var deleteCompaction: (() -> Void)? = nil
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -41,15 +42,22 @@ struct MessageView: View {
     }
 
     @ViewBuilder private var content: some View {
-        switch message.role {
-        case .user: userBubble
-        case .assistant:
-            assistantBlock
-                .frame(
-                    height: TranscriptActivity.isEmpty(message) ? 0 : nil
-                )
-                .clipped()
-        case .system, .tool: EmptyView()
+        if message.kind == .compaction, let info = message.compaction {
+            CompactionRow(
+                message: message,
+                info: info,
+                delete: deleteCompaction)
+        } else {
+            switch message.role {
+            case .user: userBubble
+            case .assistant:
+                assistantBlock
+                    .frame(
+                        height: TranscriptActivity.isEmpty(message) ? 0 : nil
+                    )
+                    .clipped()
+            case .system, .tool: EmptyView()
+            }
         }
     }
 
@@ -303,6 +311,110 @@ struct MessageView: View {
 
     private var liveAnimations: Bool {
         model.animationsEnabled && !reduceMotion && scenePhase == .active
+    }
+}
+
+struct CompactionRow: View {
+    let message: ChatMessage
+    let info: CompactionInfo
+    let delete: (() -> Void)?
+    @Environment(AppModel.self) private var model
+    @State private var expanded = false
+
+    init(message: ChatMessage, info: CompactionInfo, delete: (() -> Void)?, initiallyExpanded: Bool = false) {
+        self.message = message
+        self.info = info
+        self.delete = delete
+        _expanded = State(initialValue: initiallyExpanded)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Caprine.Activity.spacing) {
+            HStack(spacing: Caprine.Activity.spacing) {
+                Button {
+                    expanded.toggle()
+                } label: {
+                    Label {
+                        Text("Compacted \(info.coveredExchangeCount) \(exchangeLabel)")
+                            .font(.caption.weight(.medium))
+                    } icon: {
+                        Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                            .font(.caption2.weight(.semibold))
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityValue(expanded ? "Expanded" : "Collapsed")
+
+                Spacer(minLength: Caprine.Activity.spacing)
+
+                Menu {
+                    Button("Delete compaction", systemImage: "arrow.uturn.backward", role: .destructive) {
+                        delete?()
+                    }
+                    .disabled(delete == nil)
+                    .help(
+                        delete == nil
+                            ? "Only the newest compaction can restore earlier prompt history."
+                            : "Restore the earlier messages to prompt history."
+                    )
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .foregroundStyle(.secondary)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .accessibilityLabel("Compaction actions")
+            }
+
+            if expanded {
+                PreparedMarkdownView(
+                    id: message.id,
+                    source: message.text,
+                    fallbackFontSize: model.chatFontSize
+                ) { content in
+                    Markdown(content)
+                        .markdownImageProvider(BlockedMarkdownImageProvider())
+                        .markdownInlineImageProvider(BlockedMarkdownInlineImageProvider())
+                        .goatMarkdownStyle(fontSize: model.chatFontSize)
+                        .markdownBlockStyle(\.codeBlock) { configuration in
+                            CodeBlockView(configuration: configuration)
+                        }
+                        .textSelection(.enabled)
+                }
+
+                fileList("Files edited", paths: info.filesEdited)
+                fileList("Files read", paths: info.filesRead)
+            }
+        }
+        .padding(Caprine.Activity.inset)
+        .background(
+            model.theme.tokens.surface.opacity(model.theme.tokens.bgOpacity),
+            in: RoundedRectangle(cornerRadius: Caprine.Activity.radius)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: Caprine.Activity.radius)
+                .strokeBorder(model.theme.tokens.muted.opacity(0.2))
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private var exchangeLabel: String {
+        info.coveredExchangeCount == 1 ? "exchange" : "exchanges"
+    }
+
+    @ViewBuilder private func fileList(_ title: String, paths: [String]) -> some View {
+        if !paths.isEmpty {
+            VStack(alignment: .leading, spacing: Caprine.Activity.rowPadding) {
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                ForEach(paths, id: \.self) { path in
+                    Text(path)
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                }
+            }
+        }
     }
 }
 

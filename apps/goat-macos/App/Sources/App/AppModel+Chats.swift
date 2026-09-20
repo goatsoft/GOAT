@@ -5,6 +5,18 @@ import Herd
 import Inference
 import Persistence
 
+@MainActor enum CompactionDeletion {
+    static func canRestore(_ message: ChatMessage, in messages: [ChatMessage]) -> Bool {
+        message.kind == .compaction
+            && messages.last(where: { $0.kind == .compaction })?.id == message.id
+    }
+
+    static func removing(_ message: ChatMessage, from messages: [ChatMessage]) -> [ChatMessage] {
+        guard canRestore(message, in: messages) else { return messages }
+        return messages.filter { $0.id != message.id }
+    }
+}
+
 extension AppModel {
     // MARK: Chat CRUD
 
@@ -113,6 +125,22 @@ extension AppModel {
             if selectedChatID == chat.id { selectedChatID = chats.first?.id }
         } catch {
             dbWarning = "Chat was not deleted: \(error.localizedDescription)"
+        }
+    }
+
+    /// Deleting the latest compaction row restores the prompt boundary to the preceding
+    /// compaction, or to the original transcript when none remains. Covered source messages stay
+    /// stored and visible, so this operation removes only the generated summary row.
+    func deleteCompaction(_ message: ChatMessage, in chat: ChatSession) async {
+        guard startupPhase.hasLocalState, let databaseWriter,
+            !chat.isStreaming, chats.contains(where: { $0.id == chat.id }),
+            CompactionDeletion.canRestore(message, in: chat.messages)
+        else { return }
+        do {
+            try await databaseWriter.deleteMessage(id: message.id.uuidString)
+            chat.messages = CompactionDeletion.removing(message, from: chat.messages)
+        } catch {
+            dbWarning = "Compaction was not deleted: \(error.localizedDescription)"
         }
     }
 

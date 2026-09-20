@@ -1,4 +1,5 @@
 import Bleet
+import Caprine
 import Inference
 import SwiftUI
 
@@ -81,6 +82,7 @@ struct ContextBar: View {
     let ratio: Double
     let color: Color
     var width: CGFloat? = 56
+    var thresholdRatio: Double? = nil
 
     @Environment(AppModel.self) private var model
     private var fillColor: Color { color == .secondary ? model.theme.tokens.tint : color }
@@ -94,6 +96,16 @@ struct ContextBar: View {
                         colors: [fillColor, model.theme.tokens.accent], startPoint: .leading, endPoint: .trailing)
                 )
                 .frame(width: geo.size.width * min(1, max(0, ratio)))
+                if let thresholdRatio {
+                    Rectangle()
+                        .fill(model.theme.tokens.ink.opacity(0.7))
+                        .frame(width: Caprine.Activity.ruleWidth)
+                        .offset(
+                            x: geo.size.width * min(1, max(0, thresholdRatio))
+                                - Caprine.Activity.ruleWidth / 2
+                        )
+                        .accessibilityHidden(true)
+                }
             }
         }
         .frame(width: width, height: 5)
@@ -114,7 +126,10 @@ struct PastureMeterChip: View {
             HStack(spacing: 6) {
                 if model.presentation.isEnabled { GoatieView(pose: .graze, size: 18) }
                 if let ratio = status.ratio {
-                    ContextBar(ratio: ratio, color: status.color)
+                    ContextBar(
+                        ratio: ratio,
+                        color: status.color,
+                        thresholdRatio: Double(model.compactAtPercent) / 100)
                 }
                 Text(status.label)
                     .font(.caption)
@@ -122,8 +137,11 @@ struct PastureMeterChip: View {
                     .foregroundStyle(status.color)
             }
             .help(
-                "Context this chat is using\(status.exact && status.windowExact ? "" : " (estimated)"). \(status.trimmed ? "Some prompt context was trimmed to fit. " : "")A fuller bar means older turns are close to falling off."
+                "Context this chat is using\(status.exact && status.windowExact ? "" : " (estimated)"). \(status.trimmed ? "Some prompt context was trimmed to fit. " : "")The marker shows the \(model.compactAtPercent)% compaction threshold."
             )
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Conversation context")
+            .accessibilityValue("\(status.label). Compaction threshold \(model.compactAtPercent) percent.")
             .transition(.opacity)
         }
     }

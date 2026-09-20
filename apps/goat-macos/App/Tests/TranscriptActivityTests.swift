@@ -327,6 +327,56 @@ import XCTest
         XCTAssertEqual(host.fittingSize.height, collapsed, accuracy: 2)
     }
 
+    func testCompactionRowPresentsCollapsedAndExpandedContent() async throws {
+        let message = ChatMessage(role: .user)
+        message.kind = .compaction
+        message.text = """
+            Goal: finish the editor model trial while preserving the verified work.
+
+            Continue from the saved validation checkpoint and record any remaining failures.
+            """
+        message.compaction = CompactionInfo(
+            coversUpToMessageID: UUID().uuidString,
+            coveredExchangeCount: 12,
+            filesRead: ["src/App.vue", "src/components/Editor.vue"],
+            filesEdited: ["src/composables/useAurora.ts"])
+        message.complete = true
+        let collapsedHost = NSHostingView(
+            rootView:
+                CompactionRow(message: message, info: try XCTUnwrap(message.compaction), delete: {})
+                .frame(width: 660).environment(AppModel.shared))
+        let window = NSWindow(
+            contentRect: NSRect(x: 80, y: 80, width: 660, height: 140),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = collapsedHost
+        window.orderFront(nil)
+        defer {
+            window.contentView = nil
+            window.close()
+        }
+        try await Task.sleep(for: .milliseconds(200))
+        let collapsed = collapsedHost.fittingSize.height
+        XCTAssertLessThan(collapsed, 60)
+        window.setContentSize(NSSize(width: 660, height: collapsed))
+        try await Task.sleep(for: .milliseconds(100))
+        try attachSnapshot(collapsedHost, name: "Compaction row collapsed")
+
+        let expandedHost = NSHostingView(
+            rootView:
+                CompactionRow(
+                    message: message, info: try XCTUnwrap(message.compaction), delete: {}, initiallyExpanded: true
+                )
+                .frame(width: 660).environment(AppModel.shared))
+        window.contentView = expandedHost
+        try await Task.sleep(for: .milliseconds(250))
+        let expanded = expandedHost.fittingSize.height
+        XCTAssertGreaterThan(expanded, collapsed + 100)
+        window.setContentSize(NSSize(width: 660, height: expanded))
+        try await Task.sleep(for: .milliseconds(100))
+        try attachSnapshot(expandedHost, name: "Compaction row expanded")
+    }
+
     private func attachSnapshot(_ host: NSView, name: String) throws {
         host.layoutSubtreeIfNeeded()
         let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))

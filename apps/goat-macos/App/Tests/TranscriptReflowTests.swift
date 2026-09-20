@@ -121,7 +121,8 @@ import Testing
         contentRect: NSRect(x: 80, y: 80, width: 700, height: 450), styleMask: [.titled, .resizable],
         backing: .buffered, defer: false)
     window.isReleasedWhenClosed = false
-    let host = NSHostingView(rootView: ChatTranscriptView(session: session).environment(model))
+    let host = NSHostingView(
+        rootView: ChatTranscriptView(session: session, initiallyFollowing: false).environment(model))
     window.contentView = host
     // Exercise a displayed window: native scroll settling and display-cycle layout
     // are suspended differently for a hidden hosting view.
@@ -135,9 +136,19 @@ import Testing
     // Establish a reader who has scrolled up, then wait for native scroll to settle rather than a
     // fixed delay -- the began->ended wheel phase can land past an estimated end and bounce back
     // under load (matches transcriptRetainsVisibleContentAcrossFontAndWidthReflow).
-    try await scrollWheel(scroll, delta: 450)
-    try await waitForScrollToSettle(scroll)
     let document = try #require(scroll.documentView)
+    // Synthetic wheel phases are not forwarded to SwiftUI on macOS 27. The fixture starts in
+    // reader-owned mode, tries both native directions, then positions the clip view directly only
+    // when AppKit ignored both events. The assertions below still exercise all later growth.
+    for delta in [450, -450] where document.bounds.maxY - document.visibleRect.maxY <= 150 {
+        try await scrollWheel(scroll, delta: delta)
+        try await waitForScrollToSettle(scroll)
+    }
+    if document.bounds.maxY - document.visibleRect.maxY <= 150 {
+        scroll.contentView.scroll(to: NSPoint(x: document.visibleRect.minX, y: document.bounds.minY))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        host.layoutSubtreeIfNeeded()
+    }
     #expect(document.bounds.maxY - document.visibleRect.maxY > 150)
     active.text += String(repeating: "New streamed content.\n", count: 30)
     active.markRenderChanged()
