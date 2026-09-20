@@ -77,7 +77,12 @@ struct AgentProgressView: View {
             .foregroundStyle(model.theme.tokens.muted)
             .accessibilityElement(children: .combine)
         }
-        .padding(.leading, (model.presentation.isEnabled ? 60 : 28) + 10)
+        .padding(
+            .leading,
+            (model.presentation.isEnabled
+                ? Caprine.Activity.presentationAvatarWidth : Caprine.Activity.standardAvatarWidth)
+                + Caprine.Activity.assistantGutter
+        )
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

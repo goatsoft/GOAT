@@ -4,16 +4,43 @@ import SwiftUI
 /// ring on deep navy. Pasture is the exception by design: browns and greens, an actual
 /// pasture. See docs/DESIGN.md. Views take colors from here, never hardcoded.
 public struct Caprine: Sendable {
+    public enum Semantic {
+        public static let favourite = Color.yellow
+        public static let warning = Color.orange
+        public static let danger = Color.red
+        public static let success = Color.green
+        public static let denied = Color.gray
+        public static let onAccent = Color.white
+    }
+
     public enum Activity {
         public static let ruleWidth: CGFloat = 2
         public static let spacing: CGFloat = 8
+        public static let compactSpacing: CGFloat = 6
         public static let rowPadding: CGFloat = 4
         public static let messageSpacing: CGFloat = 20
         public static let treeInset: CGFloat = 16
         public static let branchHeight: CGFloat = 13
         public static let inset: CGFloat = 12
         public static let radius: CGFloat = 10
+        public static let standardAvatarWidth: CGFloat = 28
+        public static let presentationAvatarWidth: CGFloat = 60
+        public static let assistantGutter: CGFloat = 10
+        public static let singleLineHeight: CGFloat = 17
+        public static let doubleLineHeight: CGFloat = 34
+        public static let trailingSpacer: CGFloat = 40
+        public static let contextMeterWidth: CGFloat = 128
+        public static let operationDetailsWidth: CGFloat = 520
+        public static let detailMaxHeight: CGFloat = 200
+        public static let statusDotSize: CGFloat = 8
+        public static let cardBorderOpacity = 0.2
+        public static let branchOpacity = 0.35
+        public static let thresholdOpacity = 0.7
         public static let font: Font = .caption
+        public static let emphasizedFont: Font = .caption.weight(.medium)
+        public static let badgeFont: Font = .caption2.weight(.semibold)
+        public static let headingFont: Font = .headline
+        public static let monospaceFont: Font = .caption.monospaced()
     }
 
     public let bg: Color

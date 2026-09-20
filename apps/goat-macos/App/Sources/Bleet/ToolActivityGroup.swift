@@ -10,6 +10,7 @@ struct ToolActivityGroup: View {
     let projectID: UUID?
     var connectsAbove = false
     var connectsBelow = false
+    @Environment(AppModel.self) private var model
     @Environment(\.transcriptInspection) private var inspection
     @State private var memoryExpanded = false
 
@@ -28,7 +29,7 @@ struct ToolActivityGroup: View {
                         Label("Memory · \(events.count) actions", systemImage: "brain.head.profile")
                         if summary.current != nil { GoatLoadingIndicator().controlSize(.mini) }
                         if !summary.issues.isEmpty {
-                            Text(summary.issues).foregroundStyle(.secondary)
+                            Text(summary.issues).foregroundStyle(model.theme.tokens.muted)
                         }
                     }
                     .font(Caprine.Activity.font)
@@ -71,6 +72,7 @@ struct ToolActivityGroup: View {
 
 /// A decorative connector only; it does not imply that adjacent calls executed concurrently.
 private struct ToolTreeBranch: View {
+    @Environment(AppModel.self) private var model
     let above: Bool
     let below: Bool
 
@@ -83,9 +85,9 @@ private struct ToolTreeBranch: View {
             path.addLine(to: CGPoint(x: x, y: below ? size.height : y))
             path.move(to: CGPoint(x: x, y: y))
             path.addLine(to: CGPoint(x: size.width - Caprine.Activity.ruleWidth, y: y))
-            context.stroke(path, with: .foreground, lineWidth: 1)
+            context.stroke(path, with: .foreground, lineWidth: Caprine.Activity.ruleWidth / 2)
         }
-        .foregroundStyle(.quaternary)
+        .foregroundStyle(model.theme.tokens.muted.opacity(Caprine.Activity.cardBorderOpacity))
         .accessibilityHidden(true)
         .allowsHitTesting(false)
     }

@@ -26,7 +26,7 @@ struct ResponseDetailsView: View {
                     Section("Diagnostic report") {
                         let report = ModelDiagnosticReportBuilder.build(from: provenance)
                         Text(report)
-                            .font(.system(.caption, design: .monospaced))
+                            .font(Caprine.Activity.monospaceFont)
                             .textSelection(.enabled)
                         Button("Copy Report", systemImage: "doc.on.doc") {
                             NSPasteboard.general.clearContents()
@@ -40,7 +40,7 @@ struct ResponseDetailsView: View {
                 }
             }
             .formStyle(.grouped)
-            .frame(minWidth: 480, minHeight: 220)
+            .frame(minWidth: Caprine.Models.reportMinWidth, minHeight: Caprine.Models.reportMinHeight)
         }
     }
 }

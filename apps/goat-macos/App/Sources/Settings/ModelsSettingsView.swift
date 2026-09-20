@@ -90,9 +90,11 @@ struct ModelsSettingsView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: Caprine.Models.spacing) {
             HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Models").font(.title2.weight(.semibold))
-                    Text(engineSummary).font(.caption).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: Caprine.Models.tightSpacing) {
+                    Text("Models").font(Caprine.Models.titleFont)
+                    Text(engineSummary)
+                        .font(Caprine.Models.metadataFont)
+                        .foregroundStyle(model.theme.tokens.muted)
                 }
                 Spacer()
                 Button {
@@ -104,7 +106,7 @@ struct ModelsSettingsView: View {
                 }
                 .disabled(model.modelCatalogRefreshing || engineID == nil || model.shepherd.hasActiveTurn)
                 .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(model.theme.tokens.muted)
                 Button("Engine Settings…") {
                     model.settingsTab = .engine
                     openSettings()
@@ -120,9 +122,9 @@ struct ModelsSettingsView: View {
     }
 
     private var modelSearchField: some View {
-        HStack(spacing: 7) {
+        HStack(spacing: Caprine.Models.compactSpacing) {
             Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(model.theme.tokens.muted)
             TextField("Search available models", text: $search)
                 .textFieldStyle(.plain)
                 .focused($searchFocused)
@@ -134,25 +136,30 @@ struct ModelsSettingsView: View {
                     showingModelResults = true
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(model.theme.tokens.muted)
                 }
                 .buttonStyle(.borderless)
             }
             Image(systemName: "chevron.down")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .font(Caprine.Models.sectionFont)
+                .foregroundStyle(model.theme.tokens.muted)
         }
-        .padding(.horizontal, 10)
-        .frame(height: 30)
+        .padding(.horizontal, Caprine.Models.compactInset)
+        .frame(height: Caprine.Models.controlHeight)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: Caprine.Models.cornerRadius))
         .overlay {
             RoundedRectangle(cornerRadius: Caprine.Models.cornerRadius)
-                .stroke(searchFocused ? Color.accentColor : Color.secondary.opacity(0.25), lineWidth: 1)
+                .stroke(
+                    searchFocused
+                        ? model.theme.tokens.tint
+                        : model.theme.tokens.muted.opacity(Caprine.Models.borderOpacity),
+                    lineWidth: Caprine.Models.borderWidth
+                )
         }
         .overlay(alignment: .topLeading) {
             if showingModelResults {
                 modelResultsDropdown
-                    .offset(y: 38)
+                    .offset(y: Caprine.Models.dropdownOffset)
                     .zIndex(10)
             }
         }
@@ -169,13 +176,13 @@ struct ModelsSettingsView: View {
             if shouldShowEmptyState {
                 emptyState
                     .frame(maxWidth: .infinity)
-                    .frame(minHeight: 170)
+                    .frame(minHeight: Caprine.Models.dropdownMinHeight)
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 0) {
                             Color.clear
-                                .frame(height: 1)
+                                .frame(height: Caprine.Models.borderWidth)
                                 .id("model-menu-top")
                             if !filteredFavouriteModels.isEmpty {
                                 sectionHeader("Favourites")
@@ -199,9 +206,13 @@ struct ModelsSettingsView: View {
                                 }
                             }
                         }
-                        .padding(.vertical, 2)
+                        .padding(.vertical, Caprine.Models.tightSpacing)
                     }
-                    .frame(maxWidth: .infinity, minHeight: 310, maxHeight: 310)
+                    .frame(
+                        maxWidth: .infinity,
+                        minHeight: Caprine.Models.dropdownHeight,
+                        maxHeight: Caprine.Models.dropdownHeight
+                    )
                     .onChange(of: showingModelResults) { _, isShowing in
                         if isShowing {
                             withAnimation(.none) {
@@ -213,13 +224,20 @@ struct ModelsSettingsView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 4)
+        .padding(.vertical, Caprine.Models.controlInset)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: Caprine.Models.cornerRadius))
         .overlay {
             RoundedRectangle(cornerRadius: Caprine.Models.cornerRadius)
-                .stroke(Color.secondary.opacity(0.28), lineWidth: 1)
+                .stroke(
+                    model.theme.tokens.muted.opacity(Caprine.Models.dropdownBorderOpacity),
+                    lineWidth: Caprine.Models.borderWidth
+                )
         }
-        .shadow(color: .black.opacity(0.24), radius: 14, y: 6)
+        .shadow(
+            color: .black.opacity(Caprine.Models.shadowOpacity),
+            radius: Caprine.Models.shadowRadius,
+            y: Caprine.Models.shadowOffset
+        )
         .onExitCommand { dismissModelMenu() }
     }
 
@@ -230,12 +248,12 @@ struct ModelsSettingsView: View {
 
     private func sectionHeader(_ title: String) -> some View {
         Text(title)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.secondary)
+            .font(Caprine.Models.sectionFont)
+            .foregroundStyle(model.theme.tokens.muted)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 16)
-            .padding(.top, 6)
-            .padding(.bottom, 4)
+            .padding(.horizontal, Caprine.Models.inset)
+            .padding(.top, Caprine.Models.compactSpacing)
+            .padding(.bottom, Caprine.Models.controlInset)
     }
 
     private func resultRow(_ ref: ModelRef) -> some View {
@@ -260,7 +278,7 @@ struct ModelsSettingsView: View {
                 dismissModelMenu()
             }
         )
-        .padding(.horizontal, 8)
+        .padding(.horizontal, Caprine.Models.rowInset)
     }
 
     private func row(for ref: ModelRef) -> some View {
@@ -360,22 +378,22 @@ struct ModelsSettingsView: View {
     }
 
     private var filterButtonLabel: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: Caprine.Models.compactSpacing) {
             Image(systemName: "line.3.horizontal.decrease")
-                .font(.title2)
+                .font(Caprine.Models.iconFont)
             // Always laid out (hidden when zero) so the search field never shifts as the count
             // appears or clears. The facet count is single-digit, so the pill width is stable.
             Text("\(activeFilters.count)")
-                .font(.caption.weight(.semibold))
+                .font(Caprine.Models.sectionFont)
                 .monospacedDigit()
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 1)
-                .background(Capsule().fill(Color.secondary.opacity(0.15)))
+                .foregroundStyle(model.theme.tokens.muted)
+                .padding(.horizontal, Caprine.Models.compactSpacing)
+                .padding(.vertical, Caprine.Models.borderWidth)
+                .background(Capsule().fill(model.theme.tokens.muted.opacity(Caprine.Models.badgeOpacity)))
                 .opacity(activeFilters.isEmpty ? 0 : 1)
         }
-        .foregroundStyle(.secondary)
-        .frame(height: 30)
+        .foregroundStyle(model.theme.tokens.muted)
+        .frame(height: Caprine.Models.controlHeight)
         .contentShape(Rectangle())
     }
 
@@ -388,35 +406,35 @@ struct ModelsSettingsView: View {
         .buttonStyle(.plain)
         .help("Filter models")
         .popover(isPresented: $showFilters, arrowEdge: .bottom) {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: Caprine.Models.borderWidth * 2) {
                 ForEach(ModelFilterFacet.allCases) { facet in
                     Button {
                         toggleFilter(facet)
                     } label: {
-                        HStack(spacing: 10) {
+                        HStack(spacing: Caprine.Models.compactInset) {
                             Label(facet.label, systemImage: facet.symbol)
-                            Spacer(minLength: 24)
+                            Spacer(minLength: Caprine.Models.iconSize)
                             Image(systemName: "checkmark")
-                                .foregroundStyle(.tint)
+                                .foregroundStyle(model.theme.tokens.tint)
                                 .opacity(activeFilters.contains(facet) ? 1 : 0)
                         }
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .padding(.vertical, 4)
-                    .padding(.horizontal, 4)
+                    .padding(.vertical, Caprine.Models.controlInset)
+                    .padding(.horizontal, Caprine.Models.controlInset)
                 }
                 if !activeFilters.isEmpty {
                     Divider()
                     Button("Clear filters") { activeFilters.removeAll() }
                         .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
-                        .padding(.vertical, 4)
-                        .padding(.horizontal, 4)
+                        .foregroundStyle(model.theme.tokens.muted)
+                        .padding(.vertical, Caprine.Models.controlInset)
+                        .padding(.horizontal, Caprine.Models.controlInset)
                 }
             }
-            .padding(10)
-            .frame(minWidth: 210, alignment: .leading)
+            .padding(Caprine.Models.compactInset)
+            .frame(minWidth: Caprine.Models.popoverMinWidth, alignment: .leading)
         }
     }
 

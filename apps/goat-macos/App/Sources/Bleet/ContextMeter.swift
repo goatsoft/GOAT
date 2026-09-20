@@ -98,7 +98,7 @@ struct ContextBar: View {
                 .frame(width: geo.size.width * min(1, max(0, ratio)))
                 if let thresholdRatio {
                     Rectangle()
-                        .fill(model.theme.tokens.ink.opacity(0.7))
+                        .fill(model.theme.tokens.ink.opacity(Caprine.Activity.thresholdOpacity))
                         .frame(width: Caprine.Activity.ruleWidth)
                         .offset(
                             x: geo.size.width * min(1, max(0, thresholdRatio))

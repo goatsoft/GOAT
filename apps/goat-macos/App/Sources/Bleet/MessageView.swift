@@ -145,10 +145,16 @@ struct MessageView: View {
                     } else {
                         // Keep the smaller mark centred beside the label and duration without
                         // shrinking either line or retaining the previous wide avatar column.
-                        FigureheadView(size: 28, fillsFrame: true)
-                            .frame(width: model.presentation.isEnabled ? 60 : 28)
-                            .frame(height: 17)
-                            .frame(height: message.complete || TranscriptActivity.isToolOnly(message) ? 17 : 34)
+                        FigureheadView(size: Caprine.Activity.standardAvatarWidth, fillsFrame: true)
+                            .frame(
+                                width: model.presentation.isEnabled
+                                    ? Caprine.Activity.presentationAvatarWidth : Caprine.Activity.standardAvatarWidth
+                            )
+                            .frame(height: Caprine.Activity.singleLineHeight)
+                            .frame(
+                                height: message.complete || TranscriptActivity.isToolOnly(message)
+                                    ? Caprine.Activity.singleLineHeight : Caprine.Activity.doubleLineHeight
+                            )
                     }
                 }
                 .padding(.top, 1)
@@ -168,7 +174,11 @@ struct MessageView: View {
                 }
             }
             if compactActivity {
-                Color.clear.frame(width: model.presentation.isEnabled ? 60 : 28, height: 1)
+                Color.clear.frame(
+                    width: model.presentation.isEnabled
+                        ? Caprine.Activity.presentationAvatarWidth : Caprine.Activity.standardAvatarWidth,
+                    height: Caprine.Activity.ruleWidth / 2
+                )
             }
             VStack(alignment: .leading, spacing: Caprine.Activity.spacing) {
                 if TranscriptText.hasContent(message.thinking) {
@@ -236,8 +246,8 @@ struct MessageView: View {
                 }
                 .buttonStyle(.plain)
                 .labelStyle(.iconOnly)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(Caprine.Activity.font)
+                .foregroundStyle(model.theme.tokens.muted)
                 .help("Regenerate (⌘R)")
             }
             CopyButton(text: message.text.isEmpty ? (message.error ?? "") : message.text)
@@ -249,8 +259,8 @@ struct MessageView: View {
                 }
                 .buttonStyle(.plain)
                 .labelStyle(.iconOnly)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(Caprine.Activity.font)
+                .foregroundStyle(model.theme.tokens.muted)
                 .help("Response Details")
             }
             rememberButton
@@ -336,10 +346,10 @@ struct CompactionRow: View {
                 } label: {
                     Label {
                         Text("Compacted \(info.coveredExchangeCount) \(exchangeLabel)")
-                            .font(.caption.weight(.medium))
+                            .font(Caprine.Activity.emphasizedFont)
                     } icon: {
                         Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                            .font(.caption2.weight(.semibold))
+                            .font(Caprine.Activity.badgeFont)
                     }
                 }
                 .buttonStyle(.plain)
@@ -359,7 +369,7 @@ struct CompactionRow: View {
                     )
                 } label: {
                     Image(systemName: "ellipsis.circle")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(model.theme.tokens.muted)
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
@@ -393,7 +403,7 @@ struct CompactionRow: View {
         )
         .overlay {
             RoundedRectangle(cornerRadius: Caprine.Activity.radius)
-                .strokeBorder(model.theme.tokens.muted.opacity(0.2))
+                .strokeBorder(model.theme.tokens.muted.opacity(Caprine.Activity.cardBorderOpacity))
         }
         .accessibilityElement(children: .contain)
     }
@@ -406,11 +416,11 @@ struct CompactionRow: View {
         if !paths.isEmpty {
             VStack(alignment: .leading, spacing: Caprine.Activity.rowPadding) {
                 Text(title)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .font(Caprine.Activity.badgeFont)
+                    .foregroundStyle(model.theme.tokens.muted)
                 ForEach(paths, id: \.self) { path in
                     Text(path)
-                        .font(.caption.monospaced())
+                        .font(Caprine.Activity.monospaceFont)
                         .textSelection(.enabled)
                 }
             }
@@ -524,32 +534,33 @@ struct ToolCallCard: View {
 /// response reachable without turning every completed call into a large card in the conversation.
 private struct ExternalToolCallCard: View {
     @Environment(\.transcriptInspection) private var inspection
+    @Environment(AppModel.self) private var model
     let event: ToolEventSnapshot
     let live: Bool
     @State private var expanded = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: Caprine.Activity.compactSpacing) {
             Button {
                 inspection.perform()
                 expanded.toggle()
             } label: {
-                HStack(spacing: 7) {
+                HStack(spacing: Caprine.Activity.spacing) {
                     ToolCallStateIndicator(event: event, live: live)
                     Text(ToolActivityLabel.title(event))
-                        .font(.caption.weight(.medium))
+                        .font(Caprine.Activity.emphasizedFont)
                         .strikethrough(event.denied)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 9, weight: .semibold))
+                        .font(Caprine.Activity.badgeFont)
                         .foregroundStyle(.tertiary)
                     if event.denied {
-                        Text("Denied").foregroundStyle(.secondary)
+                        Text("Denied").foregroundStyle(model.theme.tokens.muted)
                     } else if event.isError {
-                        Text("Failed").foregroundStyle(.secondary)
+                        Text("Failed").foregroundStyle(model.theme.tokens.muted)
                     } else if !live && event.result == nil {
-                        Text("No result").foregroundStyle(.secondary)
+                        Text("No result").foregroundStyle(model.theme.tokens.muted)
                     }
                     Spacer(minLength: 0)
                 }
@@ -612,7 +623,9 @@ private struct MemoryToolCallCard: View {
             } else if event.isError || event.denied {
                 Image(systemName: event.denied ? "hand.raised.fill" : "exclamationmark.triangle.fill")
                     .font(Caprine.Activity.font)
-                    .foregroundStyle(event.isError ? .orange : .secondary)
+                    .foregroundStyle(
+                        event.isError ? Caprine.Semantic.warning : model.theme.tokens.muted
+                    )
                     .accessibilityLabel(event.denied ? "Denied" : "Failed")
             }
             Spacer(minLength: 0)
@@ -624,7 +637,7 @@ private struct MemoryToolCallCard: View {
     private var label: some View {
         HStack(spacing: Caprine.Activity.spacing) {
             Text("Memory").font(Caprine.Activity.font.weight(.semibold))
-            Text(action).font(Caprine.Activity.font).foregroundStyle(.secondary)
+            Text(action).font(Caprine.Activity.font).foregroundStyle(model.theme.tokens.muted)
                 .lineLimit(1).truncationMode(.middle)
         }
         .contentShape(Rectangle())
@@ -639,9 +652,9 @@ private struct MemoryOperationDetails: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: Caprine.Activity.inset) {
             HStack(spacing: Caprine.Activity.spacing) {
-                Label(action, systemImage: "brain.head.profile").font(.headline)
+                Label(action, systemImage: "brain.head.profile").font(Caprine.Activity.headingFont)
                 Spacer(minLength: 0)
                 Button("Close", systemImage: "xmark") { dismiss() }
                     .labelStyle(.iconOnly).buttonStyle(.plain)
@@ -649,12 +662,13 @@ private struct MemoryOperationDetails: View {
             }
             ToolCallDetails(event: event)
         }
-        .padding(16)
-        .frame(width: 520, alignment: .leading)
+        .padding(Caprine.Activity.treeInset)
+        .frame(width: Caprine.Activity.operationDetailsWidth, alignment: .leading)
     }
 }
 
 private struct ToolCallStateIndicator: View {
+    @Environment(AppModel.self) private var model
     let event: ToolEventSnapshot
     let live: Bool
 
@@ -663,38 +677,43 @@ private struct ToolCallStateIndicator: View {
             GoatLoadingIndicator().controlSize(.mini)
         } else if event.result == nil && !event.denied && !event.isError {
             Image(systemName: "clock")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(model.theme.tokens.muted)
                 .accessibilityLabel("Awaiting result")
         } else {
             Circle()
-                .fill(event.denied ? .gray : (event.isError ? .red : .green))
-                .frame(width: 8, height: 8)
+                .fill(
+                    event.denied
+                        ? Caprine.Semantic.denied
+                        : (event.isError ? Caprine.Semantic.danger : Caprine.Semantic.success)
+                )
+                .frame(width: Caprine.Activity.statusDotSize, height: Caprine.Activity.statusDotSize)
         }
     }
 }
 
 private struct ToolCallDetails: View {
+    @Environment(AppModel.self) private var model
     let event: ToolEventSnapshot
 
     private var hasArguments: Bool { ToolCallPayload.containsValue(event.arguments) }
     private var hasResult: Bool { ToolCallPayload.containsValue(event.result) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: Caprine.Activity.compactSpacing) {
             if hasArguments {
                 labeled("Arguments")
                 JSONTreeView(raw: event.arguments)
             }
             if hasArguments && hasResult {
-                Divider().padding(.vertical, 2)
+                Divider().padding(.vertical, Caprine.Activity.ruleWidth)
             }
             if hasResult, let result = event.result {
                 labeled(event.isError ? "Error" : "Result")
                 ScrollView {
                     if event.isError {
                         Text(result)
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(.orange)
+                            .font(Caprine.Activity.monospaceFont)
+                            .foregroundStyle(Caprine.Semantic.warning)
                             .lineSpacing(3)
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -703,15 +722,15 @@ private struct ToolCallDetails: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-                .frame(maxHeight: 200)
+                .frame(maxHeight: Caprine.Activity.detailMaxHeight)
             }
         }
     }
 
     private func labeled(_ text: String) -> some View {
         Text(text.uppercased())
-            .font(.system(size: 9, weight: .semibold))
-            .foregroundStyle(.tertiary)
+            .font(Caprine.Activity.badgeFont)
+            .foregroundStyle(model.theme.tokens.muted)
     }
 }
 
@@ -773,7 +792,7 @@ struct ThinkingDisclosure: View {
                 )
                 .padding(.leading, Caprine.Activity.inset)
                 .overlay(alignment: .leading) {
-                    Rectangle().fill(model.theme.tokens.muted.opacity(0.35))
+                    Rectangle().fill(model.theme.tokens.muted.opacity(Caprine.Activity.branchOpacity))
                         .frame(width: Caprine.Activity.ruleWidth)
                 }
                 if preview.hasEarlierText {

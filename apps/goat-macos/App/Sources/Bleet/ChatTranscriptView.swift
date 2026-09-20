@@ -145,7 +145,7 @@ struct ChatTranscriptView: View {
                         cancelPendingFollowScroll()
                     }
                 )
-                .scrollPosition(id: $visibleMessageID)
+                .scrollPosition(id: $visibleMessageID, anchor: .top)
                 .defaultScrollAnchor(.bottom, for: .initialOffset)
                 .defaultScrollAnchor(.bottom, for: .alignment)
                 // Preserve the reader's current content when rows regroup or reflow. Active

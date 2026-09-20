@@ -29,7 +29,7 @@ struct ModelSamplingSection: View {
         SectionCard(title: "Generation", systemImage: "slider.horizontal.3") {
             LabeledContent("Requested sampling", value: parameters.sampling.summary)
             Text("The engine may apply its own overrides. These values describe the request.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(Caprine.Models.metadataFont).foregroundStyle(model.theme.tokens.muted)
             LabeledContent("Source", value: parameters.samplingSource.rawValue)
             if let rule = parameters.familyRuleID { LabeledContent("Family rule", value: rule) }
             LabeledContent(
@@ -39,16 +39,20 @@ struct ModelSamplingSection: View {
             LabeledContent("Reasoning history", value: parameters.historyPolicy.rawValue)
             if !parameters.omittedSamplingParameters.isEmpty {
                 Text("Engine does not support: " + parameters.omittedSamplingParameters.joined(separator: ", "))
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(Caprine.Models.metadataFont).foregroundStyle(model.theme.tokens.muted)
             }
-            if let note = policy?.note { Text(note).font(.caption).foregroundStyle(.secondary) }
+            if let note = policy?.note {
+                Text(note).font(Caprine.Models.metadataFont).foregroundStyle(model.theme.tokens.muted)
+            }
             ForEach(policy?.sources ?? [], id: \.self) { source in
-                if let url = URL(string: source) { Link("Published model guidance", destination: url).font(.caption) }
+                if let url = URL(string: source) {
+                    Link("Published model guidance", destination: url).font(Caprine.Models.metadataFont)
+                }
             }
             Toggle("Custom sampling", isOn: $custom)
             if custom {
                 Text("Blank fields use engine defaults. Custom values replace the family recommendation.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(Caprine.Models.metadataFont).foregroundStyle(model.theme.tokens.muted)
                 TextField("Temperature (0–2)", text: $temperature)
                 TextField("Top p (greater than 0, up to 1)", text: $topP)
                 TextField("Top k (0 or greater)", text: $topK)
@@ -69,7 +73,9 @@ struct ModelSamplingSection: View {
                     }
                 }
             }
-            if let notice { Text(notice).font(.caption).foregroundStyle(.secondary) }
+            if let notice {
+                Text(notice).font(Caprine.Models.metadataFont).foregroundStyle(model.theme.tokens.muted)
+            }
         }
         .disabled(model.shepherd.hasActiveTurn || model.engineTransitioning)
         .onAppear { load() }

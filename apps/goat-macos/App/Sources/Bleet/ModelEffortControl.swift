@@ -20,10 +20,10 @@ struct ModelEffortControl: View {
 
     private var nativeMenuLabel: AttributedString {
         var modelPart = AttributedString(projection.selectedDisplayName)
-        modelPart.foregroundColor = .white
+        modelPart.foregroundColor = Caprine.Semantic.onAccent
 
         var separator = AttributedString(" · ")
-        separator.foregroundColor = .secondary
+        separator.foregroundColor = model.theme.tokens.muted
 
         var effortPart = AttributedString(session.effort.label)
         effortPart.foregroundColor = session.effort.presentationColor(in: model.theme)
@@ -38,13 +38,13 @@ struct ModelEffortControl: View {
             nativeMenuContent
         } label: {
             Text(nativeMenuLabel)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.primary)
+                .font(Caprine.ModelMenu.labelFont)
+                .foregroundStyle(model.theme.tokens.ink)
         }
         .menuStyle(.borderlessButton)
         .buttonStyle(.plain)
-        .tint(.white)
-        .foregroundStyle(.white)
+        .tint(Caprine.Semantic.onAccent)
+        .foregroundStyle(Caprine.Semantic.onAccent)
         .accessibilityLabel("Model and effort")
         .accessibilityValue(
             "\(projection.selectedDisplayName), \(projection.selectedAvailability), \(session.effort.label)"
@@ -120,16 +120,16 @@ struct ModelEffortControl: View {
             guard !model.shepherd.hasActiveTurn, !model.engineTransitioning else { return }
             model.selectModel(ref.id, in: session)
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: Caprine.ModelMenu.systemRowSpacing) {
                 Image(systemName: ref.menuTypeSymbol)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Caprine.Semantic.onAccent)
                 Text("\(ref.displayName) · \(subtitle ?? self.subtitle(for: ref))")
-                Spacer(minLength: 16)
+                Spacer(minLength: Caprine.ModelMenu.selectedRowSpacer)
                 if favourite {
-                    Image(systemName: "star.fill").foregroundStyle(.yellow)
+                    Image(systemName: "star.fill").foregroundStyle(Caprine.Semantic.favourite)
                 }
                 if ref.id == activeModelID {
-                    Image(systemName: "checkmark").foregroundStyle(.white)
+                    Image(systemName: "checkmark").foregroundStyle(Caprine.Semantic.onAccent)
                 }
             }
         }
@@ -139,7 +139,7 @@ struct ModelEffortControl: View {
         VStack(alignment: .leading, spacing: 0) {
             Text("MODEL")
                 .font(Caprine.ModelMenu.sectionFont.weight(.semibold))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(model.theme.tokens.muted)
                 .padding(.horizontal, Caprine.ModelMenu.horizontalInset)
                 .padding(.top, Caprine.ModelMenu.verticalInset)
             ScrollView {
@@ -183,7 +183,7 @@ struct ModelEffortControl: View {
                 }
             }
 
-            Divider().padding(.vertical, 4)
+            Divider().padding(.vertical, Caprine.ModelMenu.dividerInset)
             submenu(title: "Effort", value: session.effort.label, disabled: false) {
                 ForEach(Effort.allCases) { effort in
                     Toggle(isOn: effortBinding(for: effort)) {
@@ -193,7 +193,7 @@ struct ModelEffortControl: View {
                 }
             }
 
-            Divider().padding(.vertical, 4)
+            Divider().padding(.vertical, Caprine.ModelMenu.dividerInset)
             plainRow("Manage Models…") {
                 showMenu = false
                 model.settingsTab = .models
@@ -218,7 +218,7 @@ struct ModelEffortControl: View {
             HStack(spacing: Caprine.ModelMenu.spacing) {
                 Text(title)
                 Spacer()
-                if let value { Text(value).foregroundStyle(.secondary) }
+                if let value { Text(value).foregroundStyle(model.theme.tokens.muted) }
             }
             .padding(.horizontal, Caprine.ModelMenu.horizontalInset)
             .padding(.vertical, Caprine.ModelMenu.verticalInset)
@@ -235,15 +235,15 @@ struct ModelEffortControl: View {
             model.selectModel(ref.id, in: session)
             showMenu = false
         } label: {
-            HStack(spacing: 9) {
+            HStack(spacing: Caprine.ModelMenu.rowSpacing) {
                 Image(systemName: ref.looksVisionCapable ? "eye" : "cpu")
                     .symbolRenderingMode(.palette)
-                    .foregroundStyle(Color.secondary)
+                    .foregroundStyle(model.theme.tokens.muted)
                 Text("\(ref.displayName) · \(subtitle(for: ref))")
-                Spacer(minLength: 12)
+                Spacer(minLength: Caprine.ModelMenu.rowSpacer)
                 if selected {
                     Image(systemName: "checkmark")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(model.theme.tokens.muted)
                 }
             }
             .font(Caprine.ModelMenu.titleFont)
@@ -269,18 +269,20 @@ struct ModelEffortControl: View {
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            HStack(spacing: 9) {
+            HStack(spacing: Caprine.ModelMenu.rowSpacing) {
                 if favourite {
                     Image(systemName: "star.fill")
-                        .foregroundStyle(.yellow)
+                        .foregroundStyle(Caprine.Semantic.favourite)
                 }
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(ref.displayName).font(.system(size: 13, weight: .semibold))
-                    Text(subtitle ?? self.subtitle(for: ref)).font(.system(size: 11)).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: Caprine.ModelMenu.rowDetailSpacing) {
+                    Text(ref.displayName).font(Caprine.ModelMenu.rowTitleFont)
+                    Text(subtitle ?? self.subtitle(for: ref))
+                        .font(Caprine.ModelMenu.rowDetailFont)
+                        .foregroundStyle(model.theme.tokens.muted)
                 }
                 Spacer()
                 if selected {
-                    Image(systemName: "checkmark").font(.system(size: 11, weight: .semibold)).foregroundStyle(
+                    Image(systemName: "checkmark").font(Caprine.ModelMenu.rowIconFont).foregroundStyle(
                         model.theme.tokens.tint)
                 }
             }

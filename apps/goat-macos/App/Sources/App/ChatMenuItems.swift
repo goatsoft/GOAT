@@ -1,3 +1,4 @@
+import Caprine
 import Inference
 import SwiftUI
 
@@ -37,7 +38,7 @@ struct ModelMenuItems: View {
                 Label {
                     Text("\(ModelRef(id: preference.identity.modelID).displayName) - Unavailable")
                 } icon: {
-                    Image(systemName: "star.fill").foregroundStyle(.yellow)
+                    Image(systemName: "star.fill").foregroundStyle(Caprine.Semantic.favourite)
                 }
             }
             Menu("Other models") {
@@ -75,16 +76,16 @@ struct ModelMenuItems: View {
         Button {
             model.selectModel(ref.id, in: model.currentSession)
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: Caprine.ModelMenu.systemRowSpacing) {
                 Image(systemName: ref.menuTypeSymbol)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(Caprine.Semantic.onAccent)
                 Text("\(ref.displayName) - \(subtitle(for: ref))")
-                Spacer(minLength: 12)
+                Spacer(minLength: Caprine.ModelMenu.rowSpacer)
                 if favourite {
-                    Image(systemName: "star.fill").foregroundStyle(.yellow)
+                    Image(systemName: "star.fill").foregroundStyle(Caprine.Semantic.favourite)
                 }
                 if activeID == ref.id {
-                    Image(systemName: "checkmark").foregroundStyle(.white)
+                    Image(systemName: "checkmark").foregroundStyle(Caprine.Semantic.onAccent)
                 }
             }
         }
@@ -102,7 +103,12 @@ struct EffortMenuItems: View {
                     Text("\(effort.label) - \(effort.blurb)")
                         .foregroundStyle(effort.presentationColor(in: model.theme))
                 } icon: {
-                    if model.presentation.isEnabled { effort.goatie.image.resizable().frame(width: 16, height: 16) }
+                    if model.presentation.isEnabled {
+                        effort.goatie.image.resizable().frame(
+                            width: Caprine.ModelMenu.iconSize,
+                            height: Caprine.ModelMenu.iconSize
+                        )
+                    }
                 }
             }
             .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)

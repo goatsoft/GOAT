@@ -1,4 +1,5 @@
 import Bleet
+import Caprine
 import Foundation
 import SwiftUI
 
@@ -52,7 +53,7 @@ struct ComposerStatus: View {
                     ContextBar(
                         ratio: status.ratio ?? 0,
                         color: status.color,
-                        width: 128,
+                        width: Caprine.Activity.contextMeterWidth,
                         thresholdRatio: Double(model.compactAtPercent) / 100
                     )
                     .help(

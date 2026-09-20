@@ -23,14 +23,14 @@ struct ModelCompatibilitySection: View {
             .disabled(model.shepherd.hasActiveTurn || model.engineTransitioning)
 
             if let review, review.state == .pending {
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: Caprine.Models.spacing) {
                     Label("Review migrated engine compatibility", systemImage: "arrow.triangle.2.circlepath")
-                        .font(.callout.weight(.medium))
+                        .font(Caprine.Models.rowTitleFont)
                     Text(
                         "The old engine-wide setting was \(review.legacyStyle == .qwenChatTemplate ? "Qwen chat template" : "automatic"). Assign it to one model or discard it before relying on per-model compatibility."
                     )
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(Caprine.Models.metadataFont)
+                    .foregroundStyle(model.theme.tokens.muted)
                     HStack {
                         Picker("Model", selection: $selectedLegacyModelID) {
                             Text("Choose a model").tag("")

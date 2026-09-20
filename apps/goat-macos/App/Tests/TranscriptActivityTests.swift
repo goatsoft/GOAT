@@ -433,7 +433,7 @@ import XCTest
 
 }
 
-@Test func reasoningPreviewKeepsRecentContentAndElapsedClockKeepsSeconds() {
+@MainActor @Test func reasoningPreviewKeepsRecentContentAndElapsedClockKeepsSeconds() {
     #expect(ReasoningPreview("Inspect the file.").text == "Inspect the file.")
     #expect(!ReasoningPreview("Inspect the file.").hasEarlierText)
     let long = String(repeating: "Earlier thoughts. ", count: 500) + "Latest decision."

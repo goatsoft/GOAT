@@ -40,58 +40,62 @@ struct ModelInventoryRow: View {
                 Task { _ = await model.setModelFavourite(!(preference?.isFavourite ?? false), for: identity) }
             } label: {
                 Image(systemName: preference?.isFavourite == true ? "star.fill" : "star")
-                    .foregroundStyle(preference?.isFavourite == true ? .yellow : .secondary)
+                    .foregroundStyle(
+                        preference?.isFavourite == true ? Caprine.Semantic.favourite : model.theme.tokens.muted
+                    )
             }
             .buttonStyle(.borderless)
             .help(preference?.isFavourite == true ? "Remove favourite" : "Add favourite")
 
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: Caprine.Models.tightSpacing) {
+                HStack(spacing: Caprine.Models.compactSpacing) {
                     Text(modelRef?.displayName ?? identity.modelID)
-                        .font(.body.weight(.medium))
+                        .font(Caprine.Models.rowTitleFont)
                         .lineLimit(1)
                     if let modelRef {
                         Image(systemName: modelRef.menuTypeSymbol)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(Caprine.Models.metadataFont)
+                            .foregroundStyle(model.theme.tokens.muted)
                     }
                     if isCurrentChatModel {
                         Text("Current")
-                            .font(.caption2.weight(.medium))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 1)
-                            .background(Capsule().fill(Color.secondary.opacity(0.15)))
+                            .font(Caprine.Models.badgeFont)
+                            .foregroundStyle(model.theme.tokens.muted)
+                            .padding(.horizontal, Caprine.Models.compactSpacing)
+                            .padding(.vertical, Caprine.Models.borderWidth)
+                            .background(
+                                Capsule().fill(model.theme.tokens.muted.opacity(Caprine.Models.badgeOpacity))
+                            )
                     }
                 }
                 Text(identity.modelID)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
+                    .font(Caprine.Models.detailFont)
+                    .foregroundStyle(model.theme.tokens.muted)
                     .lineLimit(1)
             }
-            Spacer(minLength: 4)
+            Spacer(minLength: Caprine.Models.controlInset)
             if isUnavailable {
                 Text("Unavailable")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .font(Caprine.Models.badgeFont)
+                    .foregroundStyle(model.theme.tokens.muted)
             }
             if isSelected && !isUnavailable {
                 Image(systemName: "checkmark")
-                    .foregroundStyle(.tint)
+                    .foregroundStyle(model.theme.tokens.tint)
                     .fontWeight(.semibold)
             }
         }
         .padding(.vertical, Caprine.Models.rowInset)
-        .padding(.horizontal, 8)
+        .padding(.horizontal, Caprine.Models.rowInset)
         .background(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: Caprine.Models.rowCornerRadius)
                 .fill(
                     isSelected
-                        ? Color.accentColor.opacity(0.16)
-                        : (isHovering ? Color.primary.opacity(0.06) : Color.clear))
+                        ? model.theme.tokens.selection.opacity(Caprine.Models.selectionOpacity)
+                        : (isHovering ? model.theme.tokens.ink.opacity(Caprine.Models.hoverOpacity) : Color.clear))
         )
         .contentShape(Rectangle())
-        .opacity(isUnavailable ? 0.72 : 1)
+        .opacity(isUnavailable ? Caprine.Models.unavailableOpacity : 1)
         .onHover { isHovering = $0 }
         .onTapGesture { onSelect?() }
     }

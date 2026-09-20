@@ -29,11 +29,11 @@ struct ModelDetailView: View {
 
     private var currentPill: some View {
         Text("Current")
-            .font(.caption.weight(.medium))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
-            .background(Capsule().fill(Color.secondary.opacity(0.15)))
+            .font(Caprine.Models.badgeFont)
+            .foregroundStyle(model.theme.tokens.muted)
+            .padding(.horizontal, Caprine.Models.compactInset)
+            .padding(.vertical, Caprine.Models.controlInset)
+            .background(Capsule().fill(model.theme.tokens.muted.opacity(Caprine.Models.badgeOpacity)))
     }
 
     var body: some View {
@@ -68,19 +68,21 @@ struct ModelDetailView: View {
     }
 
     private var titleSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: Caprine.Models.compactSpacing) {
             HStack {
                 Text(modelRef?.displayName ?? identity.modelID)
-                    .font(.title2.weight(.semibold))
+                    .font(Caprine.Models.titleFont)
                 Spacer()
                 Button {
                     Task { _ = await model.setModelFavourite(!(preference?.isFavourite ?? false), for: identity) }
                 } label: {
                     let isFavourite = preference?.isFavourite == true
                     Image(systemName: isFavourite ? "star.fill" : "star")
-                        .font(.title2)
-                        .frame(width: 24, height: 24)
-                        .foregroundStyle(isFavourite ? Color.yellow : Color.white)
+                        .font(Caprine.Models.iconFont)
+                        .frame(width: Caprine.Models.iconSize, height: Caprine.Models.iconSize)
+                        .foregroundStyle(
+                            isFavourite ? Caprine.Semantic.favourite : Caprine.Semantic.onAccent
+                        )
                 }
                 .buttonStyle(.plain)
                 .help(preference?.isFavourite == true ? "Remove from favourites" : "Add to favourites")
@@ -89,19 +91,19 @@ struct ModelDetailView: View {
                         onClear()
                     } label: {
                         Image(systemName: "xmark")
-                            .font(.title2)
-                            .frame(width: 24, height: 24)
-                            .foregroundStyle(.secondary)
+                            .font(Caprine.Models.iconFont)
+                            .frame(width: Caprine.Models.iconSize, height: Caprine.Models.iconSize)
+                            .foregroundStyle(model.theme.tokens.muted)
                     }
                     .buttonStyle(.plain)
                     .help("Clear selection")
                 }
             }
             Text(identity.modelID)
-                .font(.callout.monospaced())
+                .font(Caprine.Models.detailFont)
                 .textSelection(.enabled)
-                .foregroundStyle(.secondary)
-            HStack(spacing: 8) {
+                .foregroundStyle(model.theme.tokens.muted)
+            HStack(spacing: Caprine.Models.spacing) {
                 if isCurrentChatModel {
                     currentPill
                 } else {
@@ -110,8 +112,8 @@ struct ModelDetailView: View {
                         .buttonStyle(SecondaryChipButtonStyle())
                     if !canUseInChat {
                         Text("Unavailable during an active turn or engine change")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(Caprine.Models.metadataFont)
+                            .foregroundStyle(model.theme.tokens.muted)
                     }
                 }
             }
@@ -123,27 +125,27 @@ struct ModelDetailView: View {
             textRow("Engine", model.activeEngineProfile?.name ?? "No engine configured")
             if modelRef == nil {
                 DetailRow("Status") {
-                    Text("Not in the current engine catalog").foregroundStyle(.secondary)
+                    Text("Not in the current engine catalog").foregroundStyle(model.theme.tokens.muted)
                 }
             } else {
                 textRow("Status", model.health.isOK ? "Available" : "Engine offline")
             }
             DetailRow("Last checked") {
                 if let snapshot {
-                    HStack(spacing: 6) {
+                    HStack(spacing: Caprine.Models.compactSpacing) {
                         Text(snapshot.fetchedAt, style: .relative)
                         if snapshot.freshness() == .stale {
-                            Text("Stale").foregroundStyle(.orange)
+                            Text("Stale").foregroundStyle(Caprine.Semantic.warning)
                         }
                     }
                 } else {
-                    Text("Not checked yet").foregroundStyle(.secondary)
+                    Text("Not checked yet").foregroundStyle(model.theme.tokens.muted)
                 }
             }
             Button("Refresh Details") { Task { await model.inspectModel(identity) } }
                 .disabled(modelRef == nil || model.engineTransitioning || model.shepherd.hasActiveTurn)
                 .buttonStyle(SecondaryChipButtonStyle())
-                .padding(.top, 2)
+                .padding(.top, Caprine.Models.tightSpacing)
         }
     }
 
@@ -154,8 +156,8 @@ struct ModelDetailView: View {
                     "Engine metadata conflicts with family knowledge. Conflicting capabilities remain unverified.",
                     systemImage: "exclamationmark.triangle.fill"
                 )
-                .font(.caption)
-                .foregroundStyle(.orange)
+                .font(Caprine.Models.metadataFont)
+                .foregroundStyle(Caprine.Semantic.warning)
             }
             capabilityRow("Tools", claim: ref.capabilities.tools)
             capabilityRow("Vision", claim: ref.capabilities.vision)
@@ -166,7 +168,7 @@ struct ModelDetailView: View {
 
     private func capabilityRow(_ title: String, claim: CapabilityClaim) -> some View {
         DetailRow(title) {
-            HStack(spacing: 5) {
+            HStack(spacing: Caprine.Models.compactSpacing) {
                 Image(
                     systemName: claim.isConflict
                         ? "exclamationmark.triangle.fill"
@@ -181,15 +183,16 @@ struct ModelDetailView: View {
                             : claim.support == .unsupported ? "Unsupported" : "Unknown")
                 if !claim.evidence.isEmpty {
                     Text(claim.evidence.map(\.rawValue).sorted().joined(separator: ", "))
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .font(Caprine.Models.badgeFont)
+                        .foregroundStyle(model.theme.tokens.muted)
                 }
             }
             .foregroundStyle(
                 claim.isConflict
-                    ? .red
+                    ? Caprine.Semantic.danger
                     : claim.support == .supported
-                        ? .green : claim.support == .unsupported ? .secondary : .orange
+                        ? Caprine.Semantic.success
+                        : claim.support == .unsupported ? model.theme.tokens.muted : Caprine.Semantic.warning
             )
         }
     }
@@ -216,7 +219,7 @@ struct ModelDetailView: View {
     /// reported one; it never raises what the engine reports (ADR-0085).
     private func budgetRow(reported: Int?) -> some View {
         DetailRow("Budget window") {
-            HStack(spacing: 6) {
+            HStack(spacing: Caprine.Models.compactSpacing) {
                 EditableValueField(
                     text: $contextOverrideText,
                     placeholder: (reported ?? PromptBudgeter.fallbackWindowTokens).formatted(),
@@ -227,7 +230,7 @@ struct ModelDetailView: View {
                     focused: $budgetFocused,
                     onCommit: commitContextOverride
                 )
-                Text("tokens").foregroundStyle(.secondary)
+                Text("tokens").foregroundStyle(model.theme.tokens.muted)
                 Button {
                     contextOverrideText = ""
                     Task { _ = await model.setContextWindowOverride(nil, for: identity) }
@@ -258,15 +261,15 @@ struct ModelDetailView: View {
     private func textRow(_ label: String, _ value: String?) -> some View {
         DetailRow(label) {
             Text(value ?? "Not reported")
-                .foregroundStyle(value == nil ? Color.secondary : Color.primary)
+                .foregroundStyle(value == nil ? model.theme.tokens.muted : model.theme.tokens.ink)
         }
     }
 
     private var diagnosticsSection: some View {
         SectionCard(title: "Diagnostics", systemImage: "stethoscope") {
             Text("Capability evidence is shown conservatively. Name-based hints never become a Supported claim.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(Caprine.Models.metadataFont)
+                .foregroundStyle(model.theme.tokens.muted)
             Button("Copy Model Report") {
                 let report =
                     "Model: \(identity.modelID)\nEngine: \(model.activeEngineProfile?.name ?? "Not configured")\nStatus: \(modelRef == nil ? "Unavailable" : "Available")"
@@ -292,7 +295,7 @@ struct EditableValueField: View {
     var body: some View {
         TextField(placeholder, text: $text)
             .textFieldStyle(.roundedBorder)
-            .frame(width: 96)
+            .frame(width: Caprine.Models.editableValueWidth)
             .focused(focused)
             // Return unfocuses; losing focus reformats the value as the visible commit indication.
             .onSubmit { focused.wrappedValue = false }
@@ -321,7 +324,8 @@ struct EditableValueField: View {
 /// so values line up in one shared column across every panel, and the value can be static text or
 /// an editable control. Prose-style panels (Diagnostics) do not use this.
 struct DetailRow<Value: View>: View {
-    static var labelColumnWidth: CGFloat { 150 }
+    @Environment(AppModel.self) private var model
+    static var labelColumnWidth: CGFloat { Caprine.Models.detailLabelWidth }
     let label: String
     @ViewBuilder var value: Value
 
@@ -331,9 +335,9 @@ struct DetailRow<Value: View>: View {
     }
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
+        HStack(alignment: .firstTextBaseline, spacing: Caprine.Models.sectionSpacing) {
             Text(label)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(model.theme.tokens.muted)
                 .frame(width: Self.labelColumnWidth, alignment: .leading)
             value
             Spacer(minLength: 0)
@@ -342,13 +346,16 @@ struct DetailRow<Value: View>: View {
 }
 
 struct SectionCard<Content: View>: View {
+    @Environment(AppModel.self) private var model
     let title: String
     let systemImage: String
     @ViewBuilder let content: Content
 
     var body: some View {
         VStack(alignment: .leading, spacing: Caprine.Models.spacing) {
-            Label(title, systemImage: systemImage).font(.headline)
+            Label(title, systemImage: systemImage)
+                .font(Caprine.Activity.headingFont)
+                .foregroundStyle(model.theme.tokens.ink)
             content
         }
         .padding(Caprine.Models.inset)

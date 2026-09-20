@@ -232,13 +232,13 @@ struct GeneralSettings: View {
             }
             Section("Conversation context") {
                 Toggle(isOn: $model.autoCompactEnabled) {
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: Caprine.Activity.ruleWidth) {
                         Text("Auto-compact")
                         Text("Summarise older exchanges before the next send when the context fills up.")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(Caprine.Activity.font).foregroundStyle(model.theme.tokens.muted)
                     }
                 }
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: Caprine.Activity.compactSpacing) {
                     LabeledContent("Compact at") {
                         Text("\(model.compactAtPercent)%").monospacedDigit()
                     }
@@ -251,15 +251,15 @@ struct GeneralSettings: View {
                     ) {
                         Text("Compact at")
                     } minimumValueLabel: {
-                        Text("50%").font(.caption2).foregroundStyle(.secondary)
+                        Text("50%").font(Caprine.Activity.badgeFont).foregroundStyle(model.theme.tokens.muted)
                     } maximumValueLabel: {
-                        Text("95%").font(.caption2).foregroundStyle(.secondary)
+                        Text("95%").font(Caprine.Activity.badgeFont).foregroundStyle(model.theme.tokens.muted)
                     }
                     .labelsHidden()
                     Text(
                         "Percentage of the available input budget. The manual /compact command uses this threshold too."
                     )
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(Caprine.Activity.font).foregroundStyle(model.theme.tokens.muted)
                 }
             }
             Section("Data and installation") {
