@@ -31,6 +31,7 @@ struct ChatTranscriptView: View {
     @State private var readerAnchorID: UUID?
     @State private var followThrottle = TranscriptFollowThrottle()
     @State private var pendingFollowScroll: Task<Void, Never>?
+    @State private var pendingPreserveScroll: Task<Void, Never>?
 
     private static let bottomAnchor = UUID()
 
@@ -145,6 +146,7 @@ struct ChatTranscriptView: View {
                         autoFollow = false
                         readerOwnsViewport = true
                         cancelPendingFollowScroll()
+                        cancelPendingPreserveScroll()
                     }
                 )
                 .scrollPosition(id: $visibleMessageID, anchor: .top)
@@ -163,8 +165,9 @@ struct ChatTranscriptView: View {
                         autoFollow = false
                         readerOwnsViewport = true
                         cancelPendingFollowScroll()
+                        cancelPendingPreserveScroll()
                     } else if phase == .idle {
-                        if let visibleMessageID { readerAnchorID = visibleMessageID }
+                        if reader.isScrolling, let visibleMessageID { readerAnchorID = visibleMessageID }
                         reader.isScrolling = false
                         if windowEnd == nil && reader.isAtBottom {
                             readerOwnsViewport = false
@@ -199,6 +202,7 @@ struct ChatTranscriptView: View {
                 }
                 .onDisappear {
                     cancelPendingFollowScroll()
+                    cancelPendingPreserveScroll()
                     reader.resumeTask?.cancel()
                     reader.resumeTask = nil
                 }
@@ -253,6 +257,7 @@ struct ChatTranscriptView: View {
     }
 
     private func snapToBottom(using proxy: ScrollViewProxy) {
+        cancelPendingPreserveScroll()
         cancelPendingFollowScroll()
         followThrottle.reset()
         requestFollowScroll(using: proxy)
@@ -268,17 +273,32 @@ struct ChatTranscriptView: View {
     }
 
     private func preserveReaderPosition(using proxy: ScrollViewProxy) {
-        guard let readerAnchorID else { return }
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            proxy.scrollTo(readerAnchorID, anchor: .top)
+        guard pendingPreserveScroll == nil, let readerAnchorID else { return }
+        pendingPreserveScroll = Task { @MainActor in
+            // The message mutation and its native scroll layout commit on different passes on
+            // macOS 26. Restore after that pass instead of issuing a scroll against stale geometry.
+            do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
+            guard readerOwnsViewport, !autoFollow, !Task.isCancelled else {
+                pendingPreserveScroll = nil
+                return
+            }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                proxy.scrollTo(readerAnchorID, anchor: .top)
+            }
+            pendingPreserveScroll = nil
         }
     }
 
     private func cancelPendingFollowScroll() {
         pendingFollowScroll?.cancel()
         pendingFollowScroll = nil
+    }
+
+    private func cancelPendingPreserveScroll() {
+        pendingPreserveScroll?.cancel()
+        pendingPreserveScroll = nil
     }
 
 }
