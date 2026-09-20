@@ -51,6 +51,7 @@ public struct ResolvedModelCompatibility: Codable, Equatable, Sendable {
     public var generationPolicy: ModelGenerationPolicy?
     public var familyRuleID: String?
     public var familyEvidence: CapabilityEvidence?
+    public var generationSettingsOwner: GenerationSettingsOwner?
     public var samplingOverride: SamplingOverride?
 
     public init(
@@ -62,7 +63,8 @@ public struct ResolvedModelCompatibility: Codable, Equatable, Sendable {
         capabilities: ModelCapabilities = .unknown,
         schemaVersion: Int = Self.currentSchemaVersion,
         generationPolicy: ModelGenerationPolicy? = nil, familyRuleID: String? = nil,
-        familyEvidence: CapabilityEvidence? = nil, samplingOverride: SamplingOverride? = nil
+        familyEvidence: CapabilityEvidence? = nil, samplingOverride: SamplingOverride? = nil,
+        generationSettingsOwner: GenerationSettingsOwner? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.identity = identity
@@ -75,6 +77,7 @@ public struct ResolvedModelCompatibility: Codable, Equatable, Sendable {
         self.familyRuleID = familyRuleID
         self.familyEvidence = familyEvidence
         self.samplingOverride = samplingOverride
+        self.generationSettingsOwner = generationSettingsOwner
     }
 }
 
@@ -148,11 +151,12 @@ public struct EffectiveGenerationParameters: Codable, Equatable, Sendable {
         let nonThinking =
             (qwen || policy?.reasoningPrompt == .qwenSoftSwitch)
             && request.effort == .graze
-        let familySampling = nonThinking ? policy?.nonThinkingSampling : policy?.sampling
+        let engineManaged = request.compatibility.generationSettingsOwner == .engineManaged
+        let familySampling = engineManaged ? nil : (nonThinking ? policy?.nonThinkingSampling : policy?.sampling)
         let configured = request.compatibility.samplingOverride
         let candidate =
             configured ?? familySampling
-            ?? (qwen
+            ?? (qwen && !engineManaged
                 ? SamplingOverride(
                     temperature: nonThinking ? 0.7 : 0.6,
                     topP: nonThinking ? 0.8 : 0.95, topK: 20, minP: 0) : SamplingOverride())
@@ -161,7 +165,7 @@ public struct EffectiveGenerationParameters: Codable, Equatable, Sendable {
             ? .userOverride
             : familySampling != nil
                 ? (request.compatibility.familyEvidence == .userModelFamily ? .userModelFamily : .modelFamily)
-                : qwen ? .compatibilityOverride : .engineDefault
+                : qwen && !engineManaged ? .compatibilityOverride : .engineDefault
         let vetoed =
             request.modelCapabilities.supportedRequestParameters.map {
                 Set(candidate.fields.keys).subtracting($0)
@@ -204,6 +208,7 @@ public enum ModelCompatibilityResolver {
         metadata: ModelCompatibilityMetadata? = nil,
         familyProfile: KnownModelProfile? = nil,
         samplingOverride: SamplingOverride? = nil,
+        generationSettingsOwner: GenerationSettingsOwner? = nil,
         now: Date = .now
     ) -> ResolvedModelCompatibility {
         var result = resolveBase(
@@ -213,6 +218,7 @@ public enum ModelCompatibilityResolver {
         result.familyRuleID = familyProfile?.ruleID
         result.familyEvidence = familyProfile?.evidence
         result.samplingOverride = samplingOverride
+        result.generationSettingsOwner = generationSettingsOwner
         return result
     }
 

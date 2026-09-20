@@ -50,3 +50,29 @@ import Testing
     #expect(EnginePreset.with(id: "omlx").metadataDialect == .omlx)
     #expect(EnginePreset.custom.metadataDialect == .generic)
 }
+
+@Test func omlxLimitsRequireExactUnambiguousIdentity() throws {
+    let status = try #require(
+        OMLXStatusDecoder.decode(
+            server: nil,
+            models: Data(
+                #"{"models":[{"id":"same","max_tokens":100},{"id":"same","max_tokens":200},{"id":"org/Model","max_tokens":1000,"max_context_window":32000}]}"#
+                    .utf8)))
+    #expect(status.models?.map(\.id) == ["org/Model"])
+    let row = try #require(status.models?.first)
+    let wrong = ModelRef(id: "org/model", contextLength: 8000)
+    #expect(row.applying(to: wrong) == wrong)
+    let joined = row.applying(to: ModelRef(id: "org/Model"))
+    #expect(joined.contextLength == 32000)
+    #expect(joined.serverOutputLimit == 1000)
+    #expect(joined.limitsSource == "oMLX /v1/models/status")
+}
+
+@Test func legacyModelReferencesDecodeWithoutServerLimits() throws {
+    let original = ModelRef(id: "old", contextLength: 8192)
+    var json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(original)) as? [String: Any])
+    json.removeValue(forKey: "serverOutputLimit")
+    json.removeValue(forKey: "limitsSource")
+    let decoded = try JSONDecoder().decode(ModelRef.self, from: JSONSerialization.data(withJSONObject: json))
+    #expect(decoded == original)
+}

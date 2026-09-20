@@ -139,8 +139,12 @@ extension AppModel {
         modelCatalogRefreshing = true
         defer { modelCatalogRefreshing = false }
         if case .ok = health, !engineTransitioning {
+            let revision = engineIntentRevision
+            let profileID = activeEngineID
             let refreshed = await engine.health()
-            guard !shepherd.hasActiveTurn, !engineTransitioning else { return }
+            guard revision == engineIntentRevision, profileID == activeEngineID,
+                !shepherd.hasActiveTurn, !engineTransitioning
+            else { return }
             apply(health: refreshed)
             return
         }

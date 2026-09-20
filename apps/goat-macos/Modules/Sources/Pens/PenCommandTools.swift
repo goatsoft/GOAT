@@ -58,7 +58,8 @@ public actor PenCommandTools {
         public let workspaceIdentity: String
     }
 
-    /// Read-only owner setup. Does not launch a process, connect or grant authority.
+    /// Read-only owner setup. May query the selected developer directory, but never runs
+    /// the requested executable, connects or grants authority.
     public func reviewExecutable(_ command: String) async throws -> ExecutableReview {
         guard !closed, !command.isEmpty, command.utf8.count <= 4096, !command.contains("\0") else {
             throw Failure("Enter an executable name or path, without command arguments.")
@@ -68,7 +69,7 @@ public actor PenCommandTools {
         guard !closed else { throw Failure("Command authority expired.") }
         try Task.checkCancellation()
         try validateCommandWorkspace()
-        let path = try resolveExecutable(command, directory: workspace.path)
+        let path = try await resolveExecutable(command, directory: workspace.path)
         return ExecutableReview(
             path: path, name: URL(fileURLWithPath: path).lastPathComponent,
             identity: try Self.executableIdentity(path), workspaceIdentity: files.workspaceIdentity)
@@ -107,7 +108,10 @@ public actor PenCommandTools {
     private let workspace: URL
     private let files: PenFileTools
     private let judas: Judas
-    private let searchPaths: [String]
+    private var searchPaths: [String]
+    private let usesDefaultSearchPaths: Bool
+    private var toolchain: DeveloperToolchain?
+    private var toolchainResolved = false
     private let defaultTimeout: Int
     private var jobs: [String: Job] = [:]
     private var closed = false
@@ -122,6 +126,7 @@ public actor PenCommandTools {
         self.files = files
         self.judas = judas
         self.searchPaths = searchPaths ?? Self.defaultSearchPaths()
+        self.usesDefaultSearchPaths = searchPaths == nil
     }
 
     public func prepare(argumentsJSON: String) async throws -> PreparedCommand {
@@ -140,14 +145,17 @@ public actor PenCommandTools {
             input.args.allSatisfy({ !$0.contains("\0") }), (1...600).contains(input.timeout_seconds ?? defaultTimeout)
         else { throw Failure("Supply a command, literal args and a timeout between 1 and 600 seconds.") }
         let directory = try confinedDirectory(input.working_directory ?? ".")
-        let executable = try resolveExecutable(input.command, directory: directory)
+        let executable = try await resolveExecutable(input.command, directory: directory)
         let commandIdentity = try Self.executableIdentity(executable)
         let network = input.network ?? false
         let background = input.background ?? false
         try judas.authorizePenCommand(network: network)
-        let roots = Self.runtimeRoots(executable: executable, searchPaths: searchPaths)
+        let roots =
+            Self.runtimeRoots(executable: executable, searchPaths: searchPaths)
+            + (toolchain.map { [$0.directory] } ?? [])
         let preview: [String: Any] = [
-            "command": executable, "args": input.args, "working_directory": directory,
+            "command": executable, "resolved_executable": try Self.canonicalPath(executable),
+            "args": input.args, "working_directory": directory,
             "network": network ? "Allowed for this command and its children" : "Blocked",
             "filesystem":
                 "Read and write inside this Pen and private scratch only; toolchains are read-only. Child commands inherit these restrictions.",
@@ -202,13 +210,19 @@ public actor PenCommandTools {
         let profile = Self.profile(
             workspace: workspace.path, scratch: scratch.path, executable: command.executable,
             roots: command.runtimeRoots, network: command.network)
-        let environment = [
+        var environment = [
             "PATH": searchPaths.joined(separator: ":"), "HOME": scratch.appendingPathComponent("home").path,
             "TMPDIR": scratch.appendingPathComponent("tmp").path + "/",
             "XDG_CACHE_HOME": scratch.appendingPathComponent("cache").path,
             "npm_config_cache": scratch.appendingPathComponent("cache/npm").path, "npm_config_update_notifier": "false",
             "npm_config_audit": "false", "npm_config_fund": "false", "CI": "1", "NO_COLOR": "1", "LANG": "en_US.UTF-8",
         ]
+        if let toolchain {
+            environment["DEVELOPER_DIR"] = toolchain.directory
+            environment["SDKROOT"] = toolchain.sdkRoot
+        }
+        environment["CLANG_MODULE_CACHE_PATH"] = scratch.appendingPathComponent("cache/clang").path
+        environment["SWIFTPM_MODULECACHE_OVERRIDE"] = scratch.appendingPathComponent("cache/swift").path
         try Task.checkCancellation()
         let spawned = try Self.spawn(command: command, profile: profile, environment: environment)
         keepScratch = true
@@ -346,6 +360,26 @@ public actor PenCommandTools {
         object["exit_code"] = job.exitCode
         object["notice"] = job.stopped
         let succeeded = job.finished && job.exitCode == 0 && job.stopped == nil
+        if job.finished, !succeeded {
+            let denial =
+                output.contains("Operation not permitted") || output.contains("permissionDenied")
+                || output.contains("file system sandbox")
+                || output.contains("sandbox-exec:")
+            object["failure_kind"] =
+                job.timedOut
+                ? "timeout"
+                : job.stopped != nil
+                    ? "cancelled"
+                    : denial ? "sandbox_or_permission_denied" : "command_failed"
+            if denial, job.stopped == nil {
+                object["notice"] =
+                    "The confined command reported a sandbox or permission denial. Its filesystem and network grants were not expanded."
+                if output.contains("permissionDenied"), output.contains("Ld ") {
+                    object["notice"] =
+                        "The build attempted an operation outside the command sandbox. For SwiftPM, use swift build --build-system native --disable-sandbox; GOAT's outer command sandbox remains active."
+                }
+            }
+        }
         var diagnostic: ToolExecutionDiagnostic?
         if succeeded, let observation = job.directRemovalObservation, !job.observationReported {
             diagnostic = ToolExecutionDiagnostic(fileObservations: [observation])
@@ -463,7 +497,18 @@ public actor PenCommandTools {
         return url.path
     }
 
-    private func resolveExecutable(_ command: String, directory: String) throws -> String {
+    private func resolveExecutable(_ command: String, directory: String) async throws -> String {
+        if !toolchainResolved {
+            let selected = await DeveloperToolchain.selected()
+            try Task.checkCancellation()
+            guard !closed else { throw Failure("Command authority expired.") }
+            toolchain = selected
+            toolchainResolved = true
+            if let selected, usesDefaultSearchPaths {
+                // Shell children inherit the same concrete tools instead of rediscovering shims.
+                searchPaths = selected.searchPaths + searchPaths
+            }
+        }
         let candidates =
             command.contains("/")
             ? [command.hasPrefix("/") ? command : URL(fileURLWithPath: directory).appendingPathComponent(command).path]
@@ -473,7 +518,11 @@ public actor PenCommandTools {
                 "Executable '\(command)' is not installed on the available PATH. Use an installed tool or ask the owner to install a runtime."
             )
         }
-        return try Self.canonicalPath(path)
+        let selected = toolchain?.replacingShim(path) ?? path
+        // Preserve the invocation name: swift/clang++ are driver aliases whose argv[0] matters.
+        let invocation = URL(fileURLWithPath: selected).standardizedFileURL
+        let parent = try Self.canonicalPath(invocation.deletingLastPathComponent().path)
+        return URL(fileURLWithPath: parent).appendingPathComponent(invocation.lastPathComponent).path
     }
 
     private static func canonicalPath(_ path: String) throws -> String {

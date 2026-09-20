@@ -106,3 +106,15 @@ private func temporaryEngineFile() throws -> URL {
             EngineStore.File(active: "missing", engines: [first]), to: file)
     }
 }
+
+@Test func oldProfilesMigrateSamplingOwnershipByExplicitPresetAndRetainChoice() throws {
+    for (preset, expected) in [("omlx", GenerationSettingsOwner.engineManaged), ("custom", .goatManaged)] {
+        let data = Data(
+            "{\"id\":\"test\",\"name\":\"test\",\"url\":\"http://localhost:8000\",\"presetID\":\"\(preset)\"}".utf8)
+        var profile = try JSONDecoder().decode(EngineProfile.self, from: data)
+        #expect(profile.generationSettingsOwner == expected)
+        profile.generationSettingsOwner = .goatManaged
+        let restored = try JSONDecoder().decode(EngineProfile.self, from: JSONEncoder().encode(profile))
+        #expect(restored.generationSettingsOwner == .goatManaged)
+    }
+}

@@ -95,7 +95,8 @@ Older records retain the package and type names used when accepted. [ADR-0054](0
 | [0087](0087-conversation-compaction.md) | Conversation compaction: pruning tier, `/compact`, auto-compact threshold | Accepted · supersedes the parked summary decision in 0024 |
 | [0088](0088-single-round-tool-results.md) | Single-round tool results: synchronous commands, plain-text reads, glob, concurrent reads | Accepted · refines 0069 and 0070 |
 | [0089](0089-turn-continuity-and-engine-resilience.md) | Turn continuity and engine resilience: failed turns kept, repetition guard, retry, stall watchdog | Accepted · refines 0023, 0065, 0066 and 0084 |
-| [0090](0090-omlx-capability-status-and-generation-ownership.md) | oMLX capability status and generation-setting ownership | Proposed · refines 0008, 0017, 0021 and 0086 |
+| [0090](0090-omlx-capability-status-and-generation-ownership.md) | oMLX capability status and generation-setting ownership | Accepted · refines 0008, 0017, 0021 and 0086 |
 | [0091](0091-content-bounded-transcript-layout.md) | Content-bounded transcript layout | Accepted · refines 0056 and 0074 |
+| [0092](0092-selected-toolchain-resolution-for-pen-commands.md) | Selected toolchain resolution for Pen commands | Accepted · refines 0070 |
 
 New session? Start with **[../../AGENT.md](../../AGENT.md)**, then [the roadmap](../ROADMAP.md).

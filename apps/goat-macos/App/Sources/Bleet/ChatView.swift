@@ -64,6 +64,18 @@ struct ChatView: View {
             } else if !model.health.isOK {
                 EngineBanner()
             }
+            if model.engineStopRevision == model.engineIntentRevision, let notice = model.engineStopStatus {
+                HStack {
+                    Text(notice).font(Caprine.Activity.font)
+                    Spacer()
+                    Button("Dismiss") {
+                        model.engineStopStatus = nil
+                        model.engineStopTask?.cancel()
+                    }
+                }
+                .padding(Caprine.Activity.inset)
+                .background(.bar)
+            }
             ChatTranscriptView(session: session).id(session.id)
             Composer(
                 session: session,
@@ -422,7 +434,7 @@ struct EngineBanner: View {
         if model.activeEngineProfile == nil { return "Connect an engine to start chatting." }
         return switch model.health {
         case .authRequired: "The engine requires an API key."
-        case .offline(let reason): "Engine unavailable: \(reason)"
+        case .offline(let reason): "\(model.activeEngineProfile?.name ?? "Engine") unavailable: \(reason)"
         case .ok: ""
         }
     }

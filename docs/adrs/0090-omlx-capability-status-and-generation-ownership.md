@@ -1,6 +1,6 @@
 # ADR-0090: oMLX capability status and generation-setting ownership
 
-Status: Proposed · 2026-09-20
+Status: Accepted · 2026-09-20
 
 Refines [ADR-0008](0008-inference-via-omlx.md), [ADR-0017](0017-engine-agnostic-openai-dialect.md), [ADR-0021](0021-engines-as-managed-list.md), and [ADR-0086](0086-sampling-parameters-are-model-facts.md).
 

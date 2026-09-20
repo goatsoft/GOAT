@@ -119,7 +119,8 @@ struct ProbedModelMetadata: Equatable, Sendable {
         ModelRef(
             id: model.id,
             contextLength: contextLength ?? model.contextLength,
-            capabilities: model.capabilities.merged(with: capabilities))
+            capabilities: model.capabilities.merged(with: capabilities),
+            serverOutputLimit: model.serverOutputLimit, limitsSource: model.limitsSource)
     }
 
     func observed(at date: Date, source: String? = nil) -> ProbedModelMetadata {

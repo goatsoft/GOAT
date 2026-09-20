@@ -72,15 +72,53 @@ extension AppModel {
     }
 
     func stop() {
+        if shepherd.hasActiveTurn { observeServerAfterStop() }
         if let turn = shepherd.activeTurnID { controlTurns[turn]?.cancelled = true }
         shepherd.stop()
     }
 
     func stop(sessionID: UUID) {
+        if shepherd.activeSessionID == sessionID { observeServerAfterStop() }
         if shepherd.activeSessionID == sessionID, let turn = shepherd.activeTurnID {
             controlTurns[turn]?.cancelled = true
         }
         shepherd.stop(sessionID: sessionID)
+    }
+
+    /// Server counts are aggregate facts. They cannot prove that a particular request is ours.
+    private func observeServerAfterStop() {
+        engineStopTask?.cancel()
+        engineStopStatus = nil
+        guard enginePreset.metadataDialect == .omlx else { return }
+        let revision = engineIntentRevision
+        let profileID = activeEngineID
+        engineStopRevision = revision
+        engineStopStatus = "Stop sent. Checking server request status…"
+        engineStopTask = Task { [weak self] in
+            guard let self else { return }
+            let deadline = ContinuousClock.now + .seconds(60)
+            while ContinuousClock.now < deadline {
+                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                guard !Task.isCancelled, revision == engineIntentRevision,
+                    profileID == activeEngineID
+                else { return }
+                let status = await engine.runtimeStatus()
+                guard !Task.isCancelled, revision == engineIntentRevision,
+                    profileID == activeEngineID
+                else { return }
+                guard let active = status?.activeRequests else {
+                    engineStopStatus = "Stop sent. Server request status is unavailable."
+                    return
+                }
+                if active == 0, status?.waitingRequests == 0 {
+                    engineStopStatus = nil
+                    return
+                }
+                let waiting = status?.waitingRequests.map(String.init) ?? "unknown"
+                engineStopStatus =
+                    "After Stop, the server reports \(active) active and \(waiting) waiting requests. New work may queue. Counts include other clients."
+            }
+        }
     }
 
     func regenerate() async {
@@ -127,7 +165,8 @@ extension AppModel: ShepherdEnvironment {
             return ModelRef(
                 id: model.id,
                 contextLength: preference.effectiveContextLength(reported: model.contextLength),
-                capabilities: model.capabilities)
+                capabilities: model.capabilities,
+                serverOutputLimit: model.serverOutputLimit, limitsSource: model.limitsSource)
         }
     }
     var fallbackModelID: String? { defaultModelID }
@@ -144,6 +183,7 @@ extension AppModel: ShepherdEnvironment {
             identity: identity, override: override,
             familyProfile: ModelFamilyRegistry.profile(for: modelID),
             samplingOverride: modelPreferences.first(where: { $0.identity == identity })?.samplingOverride,
+            generationSettingsOwner: profile.generationSettingsOwner,
             now: .now)
         return GenerationContext(
             engineProfileID: profile.id,

@@ -27,6 +27,27 @@ struct ModelSamplingSection: View {
 
     var body: some View {
         SectionCard(title: "Generation", systemImage: "slider.horizontal.3") {
+            Picker(
+                "Sampling managed by",
+                selection: Binding(
+                    get: { model.activeEngineProfile?.generationSettingsOwner ?? .goatManaged },
+                    set: { owner in
+                        guard var profile = model.activeEngineProfile,
+                            profile.id == identity.engineProfileID
+                        else { return }
+                        profile.generationSettingsOwner = owner
+                        Task {
+                            if !(await model.addOrUpdateEngine(profile, connect: false)) {
+                                notice = "Sampling ownership could not be saved."
+                            }
+                        }
+                    })
+            ) {
+                Text("Engine").tag(GenerationSettingsOwner.engineManaged)
+                Text("GOAT").tag(GenerationSettingsOwner.goatManaged)
+            }
+            Text("Applies to this engine. Explicit per-model sampling values still take precedence.")
+                .font(Caprine.Models.metadataFont).foregroundStyle(model.theme.tokens.muted)
             LabeledContent("Requested sampling", value: parameters.sampling.summary)
             Text("The engine may apply its own overrides. These values describe the request.")
                 .font(Caprine.Models.metadataFont).foregroundStyle(model.theme.tokens.muted)
@@ -62,7 +83,7 @@ struct ModelSamplingSection: View {
             }
             HStack {
                 Button("Apply") { Task { await apply() } }
-                Button("Reset to Family Defaults") {
+                Button("Clear Custom Sampling") {
                     Task {
                         if await model.setSamplingOverride(nil, for: identity) {
                             load()

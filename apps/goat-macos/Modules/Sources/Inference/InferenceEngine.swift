@@ -84,14 +84,24 @@ public struct ModelRef: Codable, Identifiable, Hashable, Sendable {
     /// Context window in tokens, when the server reports one (`/v1/models` extras).
     public let contextLength: Int?
     public let capabilities: ModelCapabilities
+    public let serverOutputLimit: Int?
+    public let limitsSource: String?
     public init(
         id: String, contextLength: Int? = nil,
-        capabilities: ModelCapabilities = .unknown
+        capabilities: ModelCapabilities = .unknown,
+        serverOutputLimit: Int? = nil, limitsSource: String? = nil
     ) {
         self.id = id
         self.contextLength = contextLength
         self.capabilities = capabilities
+        self.serverOutputLimit = serverOutputLimit.flatMap { $0 > 0 ? $0 : nil }
+        self.limitsSource = limitsSource
     }
+    public func effectiveOutputLimit(requested: Int) -> Int {
+        let context = contextLength.flatMap { $0 > 0 ? $0 : nil } ?? PromptBudgeter.fallbackWindowTokens
+        return min(max(1, requested), context / 2, serverOutputLimit ?? Int.max)
+    }
+
     /// "mlx-community/Qwen3-30B-A3B-4bit" → "Qwen3-30B-A3B-4bit"
     public var displayName: String { id.split(separator: "/").last.map(String.init) ?? id }
     /// Presentation and ordering hint only. It never changes the request dialect.

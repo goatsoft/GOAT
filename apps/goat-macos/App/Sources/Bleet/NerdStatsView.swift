@@ -55,6 +55,7 @@ struct NerdStatsView: View {
             throughputChart
             Divider().overlay(tokens.muted.opacity(0.15))
             contextChart
+            outputLimit
             if !history.isEmpty {
                 Divider().overlay(tokens.muted.opacity(0.15))
                 historyChart
@@ -115,6 +116,26 @@ struct NerdStatsView: View {
         }
     }
 
+    private var outputLimit: some View {
+        let selectedID = session.modelID ?? model.defaultModelID
+        let selected = model.availableModels.first { $0.id == selectedID }
+        let actual = activeMessage?.generationParameters?.outputTokenCap
+        let preview = selected.map {
+            $0.effectiveOutputLimit(requested: session.effort.outputCeiling(for: $0.capabilities))
+        }
+        return VStack(alignment: .leading, spacing: Caprine.Activity.compactSpacing) {
+            Text(actual == nil ? "Next request output ceiling" : "Current request output ceiling")
+                .font(Caprine.Activity.emphasizedFont)
+            Text((actual ?? preview).map { "\($0.formatted()) tokens" } ?? "Unavailable")
+            Text(
+                "Server configured output limit: "
+                    + (selected?.serverOutputLimit.map { "\($0.formatted()) tokens" } ?? "Unavailable"))
+            Text("Output is bounded by effort, context reserve and any reported server limit.")
+        }
+        .font(Caprine.Activity.font)
+        .foregroundStyle(tokens.muted)
+    }
+
     private var engineStatus: some View {
         let status = runtimeStatusOwner == statusKey ? runtimeStatus : nil
         return VStack(alignment: .leading, spacing: Caprine.Activity.compactSpacing) {
@@ -124,6 +145,12 @@ struct NerdStatsView: View {
             Text("Server memory ceiling: \(memoryLabel(status?.modelMemoryMaximum))")
             Text("Active requests: \(status?.activeRequests.map(String.init) ?? "Unavailable")")
             Text("Waiting requests: \(status?.waitingRequests.map(String.init) ?? "Unavailable")")
+            if let selected = status?.models?.first(where: { $0.id == (session.modelID ?? model.defaultModelID) }) {
+                Text(
+                    "Selected model: "
+                        + (selected.loading == true
+                            ? "Loading" : selected.loaded.map { $0 ? "Loaded" : "Not loaded" } ?? "Unavailable"))
+            }
         }
         .font(Caprine.Activity.font)
         .foregroundStyle(tokens.muted)

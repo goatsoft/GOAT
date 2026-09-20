@@ -7,9 +7,9 @@ GOAT is a streaming client for compatible model engines. It does not run inferen
 | Endpoint | Used for | Required |
 |---|---|---|
 | `GET /v1/models` | Model list, health probe, auth detection (401/403 ⇒ key prompt) | **Yes** |
-| `GET /v1/models/{model-id}` | Explicit model metadata on generic, oMLX, vMLX, and Custom profiles | No; unsupported falls back to generic chat |
-| `GET /api/status` | oMLX server, queue, cache, and model-memory status | Planned optional oMLX capability; see ADR-0090 |
-| `GET /v1/models/status` | oMLX loaded state, context window, and maximum output | Planned optional oMLX capability; see ADR-0090 |
+| `GET /v1/models/{model-id}` | Explicit model metadata on generic, vMLX, and Custom profiles | No; unsupported falls back to generic chat |
+| `GET /api/status` | oMLX server, queue, cache, and model-memory status | Optional for explicitly selected oMLX profiles; see ADR-0090 |
+| `GET /v1/models/status` | oMLX loaded state, context window, and maximum output | Optional for explicitly selected oMLX profiles; see ADR-0090 |
 | `GET /api/v1/models` | LM Studio context and capability metadata | No; LM Studio preset only |
 | `POST /api/show`, `GET /api/ps` | Ollama capability and effective-context metadata | No; Ollama preset only |
 | `GET /props?model=...` | llama.cpp template, modality, and context metadata | No; llama.cpp preset only |
@@ -36,9 +36,13 @@ Choosing a preset in the editor fills the URL; use Test to check the connection.
 
 ### oMLX configuration ownership
 
-GOAT uses oMLX through the same generic Chat Completions contract as other compatible engines. Configure model profiles, recipes, templates, quantization, MTP, ANE use, cache policy, memory limits, and eviction in oMLX. GOAT should read bounded status for presentation and diagnostics, but should not become a second administrator for those settings.
+GOAT uses oMLX through the same generic Chat Completions contract as other compatible engines. Configure model profiles, recipes, templates, quantization, MTP, ANE use, cache policy, memory limits, and eviction in oMLX. GOAT reads bounded status for presentation and diagnostics; it does not administer those settings.
 
-Today, an audited GOAT family policy can send sampling values for a known model. oMLX normally gives request values precedence over its model profile, so those values can replace an oMLX recipe. [ADR-0090](adrs/0090-omlx-capability-status-and-generation-ownership.md) proposes an explicit engine-managed mode that omits implicit family sampling while preserving deliberate per-model overrides. Until that work lands, inspect Models settings and response diagnostics when qualifying an oMLX recipe.
+Models settings exposes **Sampling managed by** for the active engine. oMLX profiles default to Engine; other profiles retain GOAT-managed family recommendations. Explicit per-model custom sampling survives migration and takes precedence in either mode. Clearing custom sampling returns to the selected ownership policy. Reasoning history and compatibility facts are independent of this choice. Response diagnostics record the actual request values and source. [ADR-0090](adrs/0090-omlx-capability-status-and-generation-ownership.md) defines the boundary.
+
+Stats reads model/process memory and aggregate active/waiting request counts only while visible and active. Missing values remain unavailable. After Stop, GOAT checks for server idle for a bounded interval; counts include other clients and are not a per-request cancellation receipt. An unavailable saved endpoint stays selected and is named in the chat banner.
+
+Server context and configured output limits join by exact model ID under the current engine revision. Request output is capped by effort, half the context window, and the reported server limit. Stats distinguishes that effective request ceiling from the server configuration. A response ending with `finish_reason=length` offers an explicit **Continue response** action.
 
 Stable oMLX 0.6.4 is the current maintenance qualification baseline. Requalify a stable 0.7 release before adopting its recipe or MTP behavior for a GOAT release. A prerelease can still be tested separately with its exact version recorded.
 
@@ -67,7 +71,7 @@ Optional metadata can fall back to generic chat behavior; required endpoint or p
 | Vision | User-selected images encoded as content-array `image_url` parts with `data:image/png` payloads; model-name hints never block them | The selected model or server returns its own unsupported-input error |
 | Honest stats | `stream_options: {"include_usage": true}` is requested; `usage` on the final chunk gives exact token counts. oMLX generation timing and llama.cpp `timings` are preferred when present. | The client measures from the first real output to completion. Estimated speed or chunk-count tokens are marked `~` in the UI. |
 | Context meter | The deterministic request plan feeds the preflight meter; complete server `usage` replaces the used-token estimate after generation and calibrates the next plan's estimate for this chat. `prompt_tokens_details.cached_tokens` (or a top-level `cached_tokens`) is shown when reported. `context_length` / `max_context_length` / `max_model_len` supplies the window | Conservative 16,384-token fallback. Exact usage and estimated window are marked independently |
-| oMLX status | Planned read-only status shows model/process memory, configured ceiling, load state, queue counts, and server-reported limits with provenance | Unavailable; generic chat remains usable |
+| oMLX status | Read-only status shows model/process memory, configured ceiling, load state, queue counts, and server-reported limits with provenance | Unavailable; generic chat remains usable |
 
 ## Model families
 

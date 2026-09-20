@@ -273,3 +273,31 @@ private func policyBody(_ request: GenerationRequest) throws -> [String: Any] {
         #expect(try OpenAICompatEngine.encodedBody(for: request) == first)
     }
 }
+
+@Test func engineManagedSamplingOmitsFamilyValuesButPreservesReasoningAndExplicitOverrides() throws {
+    var request = policyRequest("Muse-Glimmer-30B-4bit")
+    let original = EffectiveGenerationParameters(request: request)
+    request.compatibility.generationSettingsOwner = .engineManaged
+    let body = try policyBody(request)
+    for key in ["temperature", "top_p", "top_k", "min_p", "repetition_penalty", "presence_penalty"] {
+        #expect(body[key] == nil)
+    }
+    let managed = EffectiveGenerationParameters(request: request)
+    #expect(managed.samplingSource == .engineDefault)
+    #expect(managed.historyPolicy == original.historyPolicy)
+    #expect(managed.reasoningInstruction == original.reasoningInstruction)
+    request.compatibility.samplingOverride = SamplingOverride(temperature: 0.42)
+    #expect(try policyBody(request)["temperature"] as? Double == 0.42)
+    #expect(EffectiveGenerationParameters(request: request).samplingSource == .userOverride)
+}
+
+@Test func engineManagedQwenOverrideDoesNotReintroduceImplicitSampling() throws {
+    var request = policyRequest("unknown")
+    request.compatibility = ModelCompatibilityResolver.resolve(
+        identity: ModelIdentity(engineProfileID: "fixture", modelID: "unknown"),
+        override: .qwenChatTemplate, generationSettingsOwner: .engineManaged)
+    let body = try policyBody(request)
+    #expect(body["temperature"] == nil)
+    #expect(body["top_p"] == nil)
+    #expect(body["chat_template_kwargs"] != nil)
+}

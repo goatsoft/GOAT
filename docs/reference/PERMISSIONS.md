@@ -39,6 +39,10 @@ Command networking is intentionally coarser than HTTP endpoint policy. **Local n
 
 Jobs use a confined working directory, isolated home/cache and read-only system/toolchain access. They are non-interactive, have bounded output and a maximum ten-minute deadline. The initial Herder default timeout is 120 seconds. Detached background services are unsupported. The model must inspect required job completion before declaring success.
 
+Apple developer tools are resolved against the selected toolchain before entering the sandbox. The fixed local `xcode-select --print-path` query has no model-supplied arguments or network access. Approval records the executable identity; the preview also reports its resolved path. Driver aliases such as `swift` retain their invocation names, and shell children inherit the selected toolchain PATH and macOS SDK. The selected toolchain remains read-only.
+
+On Golden Gate with Swift 6.4, the default SwiftPM `swiftbuild` backend can fail under the command sandbox. Use `swift build --build-system native --disable-sandbox` for a confined package build. The flag disables SwiftPM's nested sandbox, not GOAT's outer filesystem/network/process restrictions. GOAT reports permission failures and never retries outside confinement. This qualification does not establish arbitrary Xcode project builds or detached build services.
+
 Confinement currently depends on macOS `sandbox-exec`. Missing runtimes, authenticated registries and host configuration require deliberate compatibility work, not automatic access to personal files. An approved shell command can modify files even when Herder’s separate native-write option is off.
 
 ## External MCP and failure boundaries

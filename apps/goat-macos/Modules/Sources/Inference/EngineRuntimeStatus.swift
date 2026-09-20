@@ -28,8 +28,8 @@ enum OMLXStatusDecoder {
         let server = server.flatMap { boundedDecode(Server.self, from: $0) }
         let catalog = models.flatMap { boundedDecode(Catalog.self, from: $0) }
         guard server != nil || catalog != nil else { return nil }
-        var seen = Set<String>()
-        let rows = catalog?.models?.filter { !$0.id.isEmpty && seen.insert($0.id).inserted }
+        let counts = catalog?.models?.reduce(into: [String: Int]()) { $0[$1.id, default: 0] += 1 } ?? [:]
+        let rows = catalog?.models?.filter { !$0.id.isEmpty && counts[$0.id] == 1 }
         return EngineRuntimeStatus(
             observedAt: observedAt, version: server?.version,
             modelMemoryUsed: nonnegative(server?.model_memory_used),
@@ -76,5 +76,19 @@ enum OMLXStatusDecoder {
         let max_context_window: Int?
         let model_context_length: Int?
         let max_tokens: Int?
+    }
+}
+
+extension EngineModelRuntimeStatus {
+    /// Callers bind the status response to their captured engine revision before applying it.
+    func applying(to model: ModelRef) -> ModelRef {
+        guard id == model.id else { return model }
+        return ModelRef(
+            id: model.id, contextLength: contextWindow ?? model.contextLength,
+            capabilities: model.capabilities, serverOutputLimit: configuredOutputLimit,
+            limitsSource: contextWindow == nil && configuredOutputLimit == nil
+                ? model.limitsSource
+                : "oMLX /v1/models/status"
+                    + (contextWindow == nil ? " (output only)" : configuredOutputLimit == nil ? " (context only)" : ""))
     }
 }
