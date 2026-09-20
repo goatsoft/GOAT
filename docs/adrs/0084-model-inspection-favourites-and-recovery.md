@@ -2,13 +2,13 @@
 
 **2026-09-13 amendment:** [ADR-0086](0086-sampling-parameters-are-model-facts.md) supersedes earlier effort-derived sampling and Qwen-only reasoning-history rules. Source-backed family generation policies, explicit engine veto, per-model overrides and bounded sampling rejection recovery now define those behaviours. Earlier descriptions below retain their historical rationale.
 
-**Status:** Proposed · 2026-09-11 · extends [ADR-0021](0021-engines-as-managed-list.md), [ADR-0024](0024-deterministic-prompt-budgeting.md), [ADR-0065](0065-bounded-tool-format-recovery.md) and [ADR-0066](0066-lead-and-continuous-tool-work.md)
+**Status:** Accepted · 2026-09-20 · extends [ADR-0021](0021-engines-as-managed-list.md), [ADR-0024](0024-deterministic-prompt-budgeting.md), [ADR-0065](0065-bounded-tool-format-recovery.md) and [ADR-0066](0066-lead-and-continuous-tool-work.md)
 
 ## Implementation status
 
-The current development branch implements the core design described here: a Models settings tab with favourites and setup guidance, compact native model menus, per-model compatibility resolution, preference migration and fallback, active-scene catalog refresh, request provenance, typed engine/model failure diagnostics, printed-tool-markup safety, and bounded file-repair progress.
+PR #27 implements the design described here: a Models settings tab with favourites and setup guidance, compact native model menus, per-model compatibility resolution, preference migration and fallback, active-scene catalog refresh, request provenance, typed engine/model failure diagnostics, printed-tool-markup safety, and bounded file-repair progress.
 
-Build/test qualification and live engine/model qualification remain pending. This ADR stays Proposed until those checks are complete and the design is reviewed for acceptance.
+The complete branch passed local Release verification and macOS 26 CI on 20 September 2026. Live trials supplied acceptance evidence for the architecture and also exposed pairing-specific limits. Those limits remain qualification facts rather than blockers for this decision and are tracked in issues #29 and #31.
 
 ## Context
 
@@ -18,7 +18,7 @@ Observed chat failures include repetitive output, malformed tool markup and repe
 
 These observations justify investigation and recovery work. They do not establish that GOAT caused every malformed response or that a different output budget will fix a model.
 
-## Proposed decision
+## Decision
 
 ### Models settings and evidence
 

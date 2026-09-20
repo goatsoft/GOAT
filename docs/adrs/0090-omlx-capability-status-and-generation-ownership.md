@@ -4,6 +4,8 @@ Status: Proposed · 2026-09-20
 
 Refines [ADR-0008](0008-inference-via-omlx.md), [ADR-0017](0017-engine-agnostic-openai-dialect.md), [ADR-0021](0021-engines-as-managed-list.md), and [ADR-0086](0086-sampling-parameters-are-model-facts.md).
 
+Implementation is deferred to the 0.1.2 maintenance work in [issue #31](https://github.com/goatsoft/GOAT/issues/31). The live Qwen3.8 trial reinforced the need to show server memory facts and distinguish context usage from the effective output ceiling, but PR #27 does not implement this proposal.
+
 ## Context
 
 GOAT correctly uses one engine-neutral OpenAI Chat Completions path for generation. The configured oMLX server also exposes bounded read-only status that the generic path does not consume. In oMLX 0.6.4, `/api/status` reports server and request state, cache metrics, and model memory used and allowed. `/v1/models/status` reports loaded state plus context and output limits.
