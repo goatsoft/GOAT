@@ -1,6 +1,6 @@
 # ADR-0086: Model-family generation policies and engine defaults
 
-Status: Accepted design · 2026-09-13. Implementation and live qualification are distinct.
+Status: Accepted · 2026-09-20. Implementation and live qualification are distinct.
 
 Refines [ADR-0024](0024-deterministic-prompt-budgeting.md), [ADR-0084](0084-model-inspection-favourites-and-recovery.md), [ADR-0085](0085-prefix-stable-prompts-and-usage-calibrated-budgeting.md) and [ADR-0089](0089-turn-continuity-and-engine-resilience.md).
 
@@ -77,4 +77,4 @@ Converted checkpoints can bundle older templates than their upstream model. Muse
 
 ## Implementation status
 
-The branch implements source-linked policies, optional sampling, per-model settings, metadata veto, reasoning instructions/history scopes, bounded rejection recovery and provenance. Final verification is recorded with the implementation; design acceptance does not imply live qualification of every pairing.
+PR #27 implements source-linked policies, optional sampling, per-model settings, metadata veto, reasoning instructions/history scopes, bounded rejection recovery and provenance. Local Release verification and macOS 26 CI passed on 20 September 2026. Acceptance does not imply live qualification of every engine, template, checkpoint, and quantization pairing.

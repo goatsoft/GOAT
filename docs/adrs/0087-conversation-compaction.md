@@ -1,6 +1,6 @@
 # ADR-0087: Conversation compaction
 
-Status: Proposed · 2026-09-11 (amended 2026-09-13: owner defaults confirmed; implementation refinements)
+Status: Accepted · 2026-09-20 (amended 2026-09-13: owner defaults confirmed; implementation refinements)
 
 Supersedes the parked rolling-summary decision in [ADR-0024](0024-deterministic-prompt-budgeting.md); refines [ADR-0069](0069-coding-navigation-and-context-retention.md) and the handoff command in [ADR-0066](0066-lead-and-continuous-tool-work.md). Depends on the calibrated estimate from [ADR-0085](0085-prefix-stable-prompts-and-usage-calibrated-budgeting.md).
 
@@ -44,18 +44,10 @@ Long coding sessions keep their task state across the window boundary and the mo
 
 Keep dropping exchanges (rejected: amnesia is the failure users notice most). Summarise during send without persistence (rejected by ADR-0024 for nondeterminism; persisting the row answers that objection). Summarise mid-stream on overflow (rejected: violates the single-active-turn ownership and cannot show a stable UI state). Rasterising old history into images (rejected: needs a vision model and hides content from inspection). A separate small summariser model (deferred: worthwhile once multi-slot engines are common, and the design leaves room for a model choice on the summary request).
 
-## Implementation status (2026-09-13)
+## Implementation and qualification status
 
-Backend complete on `feat/model-management` and green under `make verify` (module suite; the app-suite reflow test `streamingAndReflowRespectAReaderWhoScrolledUp` is a pre-existing load-order flake, passes in isolation, unrelated to this ADR):
+PR #27 implements both tiers, persisted compaction rows, prompt folding, manual `/compact`, automatic and overflow-forced compaction, General settings, the slash-command entry, the collapsible transcript row, deletion recovery, visible operation state, and the pasture-meter threshold.
 
-- Tier-1 aged-tool-result pruning: `1cb931a`.
-- Tier-2 content core (fixed sections, one-shot focus, deterministic file-list derivation): `ea07711`.
-- Persisted `compaction` message kind (GRDB migration v13 + `CompactionInfo`): `bdbfa9a`.
-- Prompt assembly (fold everything before the most recent compaction row; render it as a user turn = summary + file lists): `62f12e2`.
-- Manual `/compact` runner: `4fa0542`.
-- Auto-compaction trigger: `c391681`.
-- Overflow-forced compaction + `contextOverflow` engine classification: `505e1b2`.
+Local Release verification and macOS 26 CI passed on 20 September 2026. The formerly intermittent `streamingAndReflowRespectAReaderWhoScrolledUp()` failure was a real scroll-ownership defect and is fixed in the accepted branch.
 
-The compaction row is persisted with role `user` and kind `compaction`; both compaction paths share the summary construction via `promptSnapshot(truncateAfterIndex:appendedUserRequest:)`. The threshold is read from `ShepherdEnvironment.autoCompactEnabled` / `compactAtPercent` (extension defaults on / 80).
-
-Remaining (Stage 2c, UI): the General-tab **Auto-compact** toggle and **Compact at** slider (wire `AppModel` UserDefaults to override the environment defaults), `/compact` in the slash-command menu, the collapsible "Compacted N exchanges" transcript row in `MessageView` (click to expand the summary and file lists; a compaction row can be deleted to restore the prior prompt history, per Persistence and prompt shape above), and the pasture-meter threshold tick. Then whole-branch qualification flips this ADR Proposed to Accepted.
+A live Qwen3.8 27B 4-bit manual compaction on an approximately 79,600-token chat remained in **Compacting context** for more than 20 minutes before cancellation. The chat remained intact and cancellation was safe, but the latency is not an acceptable user experience. Issues #29 and #31 track long-transcript performance, status, and engine ownership. This result limits the qualified pairing; it does not change the persisted, inspectable, cancellation-safe decision accepted here.

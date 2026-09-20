@@ -29,7 +29,7 @@ The maintainer accepted the tested maintenance candidate. The official release w
 
 ## Model selection, capabilities and recovery
 
-The model-management implementation is present on the current development branch and is pending final build/test qualification and ADR acceptance:
+The model-management implementation is complete on PR #27 and passed local Release verification plus macOS 26 CI on 20 September 2026:
 
 - **Models settings:** browse the active engine's catalog, inspect model capabilities and their evidence, review compatibility and load failures, maintain favourites, and receive setup guidance when no engine or model is configured.
 - **Compact model menu:** show favourites at the top level and the remaining catalog in **Other models**, while retaining the selected model and the engine's management and refresh actions.
@@ -38,11 +38,19 @@ The model-management implementation is present on the current development branch
 - **Catalog refresh:** support manual refresh and active-scene polling so newly available engine models can appear without an app restart.
 - **Recovery and reporting:** recognise malformed tool attempts without executing printed markup, break unproductive file-repair cycles, and record the actual model, engine and effective settings per response.
 
-Fake-engine qualification covers fragmented structured calls, mixed printed markup, exactly-once execution, continuation, and output-cap behavior. Live model qualification remains a separate activity and no candidate is treated as qualified from discovery alone. The [proposed model-management design](adrs/0084-model-inspection-favourites-and-recovery.md) records the scope and acceptance boundaries.
+Fake-engine qualification covers fragmented structured calls, mixed printed markup, exactly-once execution, continuation, and output-cap behavior. Live model qualification remains a separate activity and no candidate is treated as qualified from discovery alone. The [accepted model-management decision](adrs/0084-model-inspection-favourites-and-recovery.md) records the scope and acceptance boundaries.
 
-## Inference efficiency (proposed)
+## Inference efficiency
 
-An inference-efficiency review on 11 September 2026 assessed GOAT's inference loop against established local-agent practice. The architecture held; the gaps are prefix-cache stability, budget accuracy, round-trip count and loop resilience. Five proposed ADRs record the fixes: [prefix-stable prompts and calibrated budgeting](adrs/0085-prefix-stable-prompts-and-usage-calibrated-budgeting.md), [sampling parameters as model facts](adrs/0086-sampling-parameters-are-model-facts.md), [conversation compaction with `/compact` and an auto-compact threshold](adrs/0087-conversation-compaction.md), [single-round tool results](adrs/0088-single-round-tool-results.md) and [turn continuity and engine resilience](adrs/0089-turn-continuity-and-engine-resilience.md). They are ordered so each phase is independently shippable. [ADR-0085](adrs/0085-prefix-stable-prompts-and-usage-calibrated-budgeting.md) is accepted and implemented on the model-management branch (prefix-stable prompts, policy-version-4 budgeting with usage calibration, and the built-in model-family registry with a user `model-families.json`); its build and live-model qualification are pending. [ADR-0086](adrs/0086-sampling-parameters-are-model-facts.md) now implements source-backed model generation policies, custom sampling, reasoning controls and provenance; live engine/checkpoint qualification remains separate. See each ADR for the current status of 0087 through 0089.
+An inference-efficiency review on 11 September 2026 assessed GOAT's inference loop against established local-agent practice. PR #27 implements and verifies the resulting decisions: [prefix-stable prompts and calibrated budgeting](adrs/0085-prefix-stable-prompts-and-usage-calibrated-budgeting.md), [sampling parameters as model facts](adrs/0086-sampling-parameters-are-model-facts.md), [conversation compaction with `/compact` and an auto-compact threshold](adrs/0087-conversation-compaction.md), [single-round tool results](adrs/0088-single-round-tool-results.md), and [turn continuity and engine resilience](adrs/0089-turn-continuity-and-engine-resilience.md).
+
+Live engine and checkpoint qualification remains separate. A Qwen3.8 27B 4-bit trial showed strong reasoning and tool selection but did not complete the Aurora repair. It also exposed an unclear effective output ceiling and a manual compaction that remained busy for more than 20 minutes. The [oMLX status and generation ownership proposal](adrs/0090-omlx-capability-status-and-generation-ownership.md) and the 0.1.2 maintenance backlog cover those usability gaps.
+
+## Kid 0.1.2 maintenance backlog
+
+[Issue #30](https://github.com/goatsoft/GOAT/issues/30) is the maintenance umbrella. The ordered work is long-transcript responsiveness and memory pressure in [issue #29](https://github.com/goatsoft/GOAT/issues/29), oMLX status, memory, sampling ownership, and effective-limit reporting in [issue #31](https://github.com/goatsoft/GOAT/issues/31), and macOS 27 Golden Gate Pen-sandbox qualification while retaining macOS 26 Tahoe support in [issue #33](https://github.com/goatsoft/GOAT/issues/33).
+
+Repeat controlled model qualification with Qwen3.8 27B 4-bit first, followed by Devstral, DeepSeek, and the practical GLM-4.7-Flash 31B candidate. Native subagent work in [issue #32](https://github.com/goatsoft/GOAT/issues/32) follows the usability fixes and starts with one sequential, read-only, isolated child before adding write, parallel, or recursive execution.
 
 ## M7: The polish pass
 

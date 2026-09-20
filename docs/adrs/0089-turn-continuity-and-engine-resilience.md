@@ -2,7 +2,7 @@
 
 **2026-09-13 amendment:** [ADR-0086](0086-sampling-parameters-are-model-facts.md) supersedes earlier effort-derived sampling and Qwen-only reasoning-history rules. Source-backed family generation policies, explicit engine veto, per-model overrides and bounded sampling rejection recovery now define those behaviours. Earlier descriptions below retain their historical rationale.
 
-Status: Proposed · 2026-09-11
+Status: Accepted · 2026-09-20
 
 Presentation amendment · 2026-09-13: [ADR-0074](0074-grouped-transcript-tool-activity.md) supersedes the inferred prefill label with observed activity and visible reasoning. The recovery and execution decisions below are unchanged.
 
@@ -44,6 +44,10 @@ Fallback tool-call identifiers become `call_<round>_<index>` so they are unique 
 ## Consequences
 
 Continuation after an output limit or a Stop works, and the model no longer repeats completed file actions after an interruption. Transient engine errors self-heal without duplicating output. Long prefills are visible instead of silent. Repetition loops end with an explanation rather than running until Stop. Fixture tests through the fake engine cover length continuation history, stopped-turn history with executed tool results, repetition pause after three identical calls, retry on 503 before first token, no retry after first token, empty-response retry, stall detection and identifier uniqueness.
+
+## Implementation status
+
+PR #27 implements retained partial and stopped turns, generic and file-content repetition guards, bounded retry, differentiated plain/tool stall handling, and request-safe identifiers. Local Release verification and macOS 26 CI passed on 20 September 2026. A Qwen3.8 trial confirmed that an output-limited response remains available to continue; issue #31 tracks clearer presentation of the effective output ceiling.
 
 ## Alternatives considered
 

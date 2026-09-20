@@ -1,6 +1,6 @@
 # ADR-0088: Single-round tool results
 
-Status: Proposed · 2026-09-11
+Status: Accepted · 2026-09-20
 
 Refines [ADR-0069](0069-coding-navigation-and-context-retention.md) and [ADR-0070](0070-confined-pen-command-jobs.md); the confinement, whitelist, approval and turn-end cleanup rules of ADR-0070 are unchanged.
 
@@ -32,7 +32,11 @@ Within one response, calls to `pen_read_file`, `pen_search`, `pen_glob` and `pen
 
 ## Consequences
 
-A typical build-test-fix cycle drops from roughly eight to twelve rounds to three or four, and a whole-file read is one round. Small models copy edit fragments from raw text far more reliably. Prompt guidance about job polling, escaped content and cursor continuation is removed, shortening the stable prefix. The scratch log path gives the model a way to inspect large output without a bigger context. Existing ADR-0070 fixtures for job lifecycle move behind the `background` flag; new fixtures cover synchronous exit codes, timeout marking, middle elision, scratch spill, glob bounds, regex bounds and concurrent read ordering.
+A typical build-test-fix cycle drops from roughly eight to twelve rounds to three or four, and a whole-file read is one round. Small models copy edit fragments from raw text far more reliably. Prompt guidance about job polling, escaped content and cursor continuation is removed, shortening the stable prefix. Explicit workspace redirection gives the model a way to inspect large output without a bigger context. Existing ADR-0070 fixtures for job lifecycle move behind the `background` flag; new fixtures cover synchronous exit codes, timeout marking, middle elision, no-spill output, glob bounds, regex bounds and concurrent read ordering.
+
+## Implementation status
+
+PR #27 implements synchronous foreground commands, bounded head-and-tail output, opt-in background jobs, plain-text reads and searches, glob and regex navigation, and ordered concurrent read-only calls. Local Release verification and macOS 26 CI passed on 20 September 2026.
 
 ## Alternatives considered
 
