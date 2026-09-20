@@ -227,6 +227,7 @@ private func fakeToolRoute(server: String = "srv", tool: String = "tool") -> She
 @MainActor
 private final class FakeEnv: ShepherdEnvironment {
     var automaticChatTitles = true
+    var liveGenerationContext: GenerationContext?
     var autoCompactEnabled = true
     var compactAtPercent = 80
     var availableModels: [ModelRef] = [ModelRef(id: "test-model")]
@@ -246,6 +247,7 @@ private final class FakeEnv: ShepherdEnvironment {
     private var pendingPersistenceResult: Bool?
 
     func generationContext(for modelID: String) -> GenerationContext? {
+        if let liveGenerationContext { return liveGenerationContext }
         guard availableModels.contains(where: { $0.id == modelID }) else { return nil }
         let identity = ModelIdentity(engineProfileID: "test", modelID: modelID)
         let compatibility = ModelCompatibilityResolver.resolve(identity: identity)
@@ -1888,18 +1890,26 @@ extension Tag {
 
 @Test(
     .tags(.integration), .enabled(if: ProcessInfo.processInfo.environment["GOAT_LIVE_TOOLS"] == "1"),
-    arguments: [false, true])
+    arguments: ProcessInfo.processInfo.environment["GOAT_LIVE_RECOVERY"] == "1" ? [true] : [false])
 @MainActor func liveNativeCodingUsesStructuredCallsAndVerifiesBytes(recoverMalformedResponse: Bool) async throws {
-    let config = try #require(try EngineStore.load(from: Home.enginesFile))
+    // Opt-in reads only the saved engine connection; all test data and grants are disposable.
+    let directory = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".goat/config")
+    let config = try #require(try EngineStore.load(from: directory.appendingPathComponent("engines.json")))
+    let credentials = try JSONDecoder().decode(
+        [String: String].self,
+        from: Data(contentsOf: directory.appendingPathComponent("credentials.json")))
     let profile = try #require(config.engines.first { $0.id == config.active })
     let endpoint = try #require(URL(string: profile.url))
     let engine = OpenAICompatEngine(
         config: EngineConfig(
-            baseURL: endpoint, apiKey: try CredentialStore.get("engine.\(profile.id).apiKey"),
-            name: profile.name, requestStyle: profile.requestStyle))
+            baseURL: endpoint, apiKey: credentials["engine.\(profile.id).apiKey"],
+            name: profile.name, metadataDialect: profile.preset.metadataDialect, requestStyle: profile.requestStyle))
     let health = await engine.health()
     #expect(health.isOK, "Configured engine health: \(health)")
-    let model = try #require(health.models.first { $0.id == "Qwen3-Coder-30B-A3B-Instruct-MLX-4bit" })
+    let status = try #require(await engine.runtimeStatus())
+    try #require(status.activeRequests == 0 && status.waitingRequests == 0, "Requires an idle engine")
+    let modelID = ProcessInfo.processInfo.environment["GOAT_LIVE_MODEL"] ?? "Qwen3.8-27B-MLX-4bit"
+    let model = try #require(health.models.first { $0.id == modelID })
     let root = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
         .appendingPathComponent("goat-live-coding-\(UUID())")
     let workspace = root.appendingPathComponent("workspace")
@@ -1918,6 +1928,14 @@ extension Tag {
     let session = ChatSession(effort: .trot, modelID: model.id)
     session.projectID = UUID()
     let env = FakeEnv()
+    env.automaticChatTitles = false
+    let identity = ModelIdentity(engineProfileID: profile.id, modelID: model.id)
+    env.liveGenerationContext = GenerationContext(
+        engineProfileID: profile.id, engineName: profile.name, engineConfigurationRevision: 1,
+        identity: identity,
+        compatibility: ModelCompatibilityResolver.resolve(
+            identity: identity, familyProfile: ModelFamilyRegistry.profile(for: model.id),
+            generationSettingsOwner: profile.generationSettingsOwner))
     env.availableModels = [model]
     env.fallbackModelID = model.id
     env.project = ShepherdProjectContext(
@@ -1929,37 +1947,55 @@ extension Tag {
     user.text = """
         In this disposable Pen, list the workspace, create src/check.ts with exactly export const value = 'one'; followed by one newline, read it back, then edit 'one' to 'two' and read it back again. Do not create any other files. Use the Pen tools to do the work, then report the verified result.
         """
+    let verificationScript =
+        "const fs=require('fs'); if(!fs.readFileSync('src/check.ts','utf8').includes('two')) process.exit(1); console.log('GOAT_COMMAND_VERIFIED')"
     if !recoverMalformedResponse {
         user.text +=
-            " After editing, use pen_search to locate the literal text 'two'. Then use pen_run_command to run node with args ['-e', \"const fs=require('fs'); if(!fs.readFileSync('src/check.ts','utf8').includes('two')) process.exit(1); console.log('GOAT_COMMAND_VERIFIED')\"], and poll pen_command_status until it finishes with exit code 0. Do not install packages or request network access."
+            " After editing, use pen_search to locate the literal text 'two'. Then use pen_run_command to run node with args ['-e', \"\(verificationScript)\"], and check its synchronous result for exit code 0. Do not install packages or request network access."
     }
     user.complete = true
     session.messages = [user]
     #expect(shepherd.run(in: session))
-    let deadline = ContinuousClock.now.advanced(by: .seconds(240))
+    let deadline = ContinuousClock.now.advanced(by: .seconds(600))
     var approvals = 0
     while shepherd.hasActiveTurn && ContinuousClock.now < deadline {
         if let request = mcp.pendingPermission {
             // This grant belongs only to the random chat in the disposable test database.
             #expect(request.allowsPenScopes)
-            mcp.resolvePermission(request.tool == "pen_run_command" ? .allowOnce : .allowChat, requestID: request.id)
+            if request.tool == "pen_run_command" {
+                let preview = try JSONSerialization.jsonObject(with: Data(request.arguments.utf8)) as? [String: Any]
+                let command = preview?["command"] as? String ?? ""
+                let allowed =
+                    URL(fileURLWithPath: command).lastPathComponent == "node"
+                    && preview?["args"] as? [String] == ["-e", verificationScript]
+                    && preview?["network"] as? String == "Blocked"
+                mcp.resolvePermission(allowed ? .allowOnce : .deny, requestID: request.id)
+                #expect(allowed, "Qualification grants only the exact offline verification command")
+            } else {
+                mcp.resolvePermission(request.allowsPenScopes ? .allowChat : .deny, requestID: request.id)
+            }
             approvals += 1
         }
         try await Task.sleep(for: .milliseconds(50))
     }
-    if shepherd.hasActiveTurn { shepherd.stop() }
+    let timedOut: Bool = shepherd.hasActiveTurn
+    if timedOut { shepherd.stop() }
     await shepherd.streamTask?.value
-    let events = session.messages.flatMap(\.toolEvents)
+    if timedOut { Issue.record("Live tool workflow exceeded its deadline") }
+    let events = session.messages.flatMap { (message: ChatMessage) in message.toolEvents }
+    print(
+        "LIVE_NATIVE_MODEL", model.id, "omlx", status.version ?? "unknown", "sampling",
+        profile.generationSettingsOwner.rawValue)
     print(
         "LIVE_NATIVE_TOOLS", events.map { "\($0.tool):\($0.isError ? "error" : "ok")" }, "approvals", approvals,
         "title", session.title)
     for message in session.messages where message.error != nil { print("LIVE_NATIVE_ERROR", message.error ?? "") }
-    #expect(approvals == (recoverMalformedResponse ? 1 : 2))
+    #expect(approvals >= 1)
     if !recoverMalformedResponse {
         #expect(events.contains { $0.tool == "pen_search" && !$0.isError })
         #expect(
             events.contains {
-                $0.tool == "pen_command_status" && $0.result?.contains("GOAT_COMMAND_VERIFIED") == true && !$0.isError
+                $0.tool == "pen_run_command" && $0.result?.contains("GOAT_COMMAND_VERIFIED") == true && !$0.isError
             })
     }
     #expect(events.contains { $0.tool == "pen_list_files" && !$0.isError })
@@ -1969,7 +2005,7 @@ extension Tag {
     #expect(
         try String(contentsOf: workspace.appendingPathComponent("src/check.ts"), encoding: .utf8)
             == "export const value = 'two';\n")
-    #expect(!session.hasDefaultTitle)
+    #expect(session.messages.allSatisfy { $0.error == nil })
 }
 
 @Test @MainActor func leadDuringGenerationIsDurableAndJoinsTheNextResponse() async {

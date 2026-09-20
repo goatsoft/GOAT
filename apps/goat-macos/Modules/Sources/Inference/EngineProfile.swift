@@ -1,6 +1,10 @@
 import Foundation
 import Herd
 
+public enum GenerationSettingsOwner: String, Codable, CaseIterable, Sendable {
+    case engineManaged, goatManaged
+}
+
 /// Engine settings persisted in `~/.goat/config/engines.json` (ADR-0021).
 /// The active profile supplies the generation endpoint. API keys are stored separately
 /// in `credentials.json`, keyed by profile ID (ADR-0012).
@@ -11,17 +15,20 @@ public struct EngineProfile: Identifiable, Codable, Hashable, Sendable {
     /// The preset this profile follows, for its blurb + "manage models" affordance; nil = custom.
     public var presetID: String?
     /// Explicit request semantics for this engine. Existing configs decode as `.automatic`.
+    public var generationSettingsOwner: GenerationSettingsOwner
     public var requestStyle: EngineRequestStyle
 
     public init(
         id: String = UUID().uuidString, name: String, url: String, presetID: String? = nil,
-        requestStyle: EngineRequestStyle = .automatic
+        requestStyle: EngineRequestStyle = .automatic,
+        generationSettingsOwner: GenerationSettingsOwner? = nil
     ) {
         self.id = id
         self.name = name
         self.url = url
         self.presetID = presetID
         self.requestStyle = requestStyle
+        self.generationSettingsOwner = generationSettingsOwner ?? (presetID == "omlx" ? .engineManaged : .goatManaged)
     }
 
     /// The preset backing this profile (custom when it follows none).
@@ -36,7 +43,7 @@ public struct EngineProfile: Identifiable, Codable, Hashable, Sendable {
             presetID: preset.id == "custom" ? nil : preset.id)
     }
 
-    private enum CodingKeys: String, CodingKey { case id, name, url, presetID, requestStyle }
+    private enum CodingKeys: String, CodingKey { case id, name, url, presetID, requestStyle, generationSettingsOwner }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -44,6 +51,9 @@ public struct EngineProfile: Identifiable, Codable, Hashable, Sendable {
         name = try container.decode(String.self, forKey: .name)
         url = try container.decode(String.self, forKey: .url)
         presetID = try container.decodeIfPresent(String.self, forKey: .presetID)
+        generationSettingsOwner =
+            try container.decodeIfPresent(GenerationSettingsOwner.self, forKey: .generationSettingsOwner)
+            ?? (presetID == "omlx" ? .engineManaged : .goatManaged)
         requestStyle =
             try container.decodeIfPresent(EngineRequestStyle.self, forKey: .requestStyle)
             ?? .automatic

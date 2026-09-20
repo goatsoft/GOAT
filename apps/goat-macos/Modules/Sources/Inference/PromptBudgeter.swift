@@ -216,7 +216,7 @@ public struct PromptBudgeter: Sendable {
         let windowSource: PromptContextWindowSource = reportedWindow == nil ? .fallback : .reported
         let requestedOutputTokens = max(
             1, request.maxTokens ?? request.effort.outputCeiling(for: request.modelCapabilities))
-        let outputReserve = min(requestedOutputTokens, windowTokens / 2)
+        let outputReserve = model.effectiveOutputLimit(requested: requestedOutputTokens)
         let safetyReserve = min(2_048, max(256, windowTokens / 20))
         let calibrationRatio = Self.clampedCalibration(calibration)
         let realInputBudget = windowTokens - outputReserve - safetyReserve

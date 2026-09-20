@@ -705,3 +705,17 @@ private func png(width: UInt32, height: UInt32) -> Data {
     #expect(plan.report.droppedExchangeCount == 0)
     #expect(!plan.report.didTrim)
 }
+
+@Test func serverOutputLimitClampsActualRequestAndKeepsEffortWhenLower() throws {
+    let model = ModelRef(id: "test-model", contextLength: 32000, serverOutputLimit: 1000)
+    let capped = try budgeter.plan(budgetRequest(turns: systemAndUser(), maxTokens: 4000), model: model)
+    #expect(capped.request.maxTokens == 1000)
+    #expect(capped.report.outputReserve == 1000)
+    #expect(EffectiveGenerationParameters(request: capped.request).outputTokenCap == 1000)
+    let lower = try budgeter.plan(budgetRequest(turns: systemAndUser(), maxTokens: 500), model: model)
+    #expect(lower.request.maxTokens == 500)
+    let unknown = try budgeter.plan(
+        budgetRequest(turns: systemAndUser(), maxTokens: 4000),
+        model: ModelRef(id: "test-model", contextLength: 32000))
+    #expect(unknown.request.maxTokens == 4000)
+}

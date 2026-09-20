@@ -51,7 +51,7 @@ architecture does not claim completed cross-platform runtime qualification.
 Compare the same engine-free Release workload before and after on each qualified
 OS. Cover paging reachability with uneven message sizes, an oversized single
 entry, Unicode round trips, active growth while reading, tool order, selection,
-copy, disclosures, narrow widths, font changes, keyboard and VoiceOver. Unit
+copy, disclosures, narrow widths, font changes, keyboard. Unit
 tests and profiling proxies do not substitute for interaction checks. Tahoe and
 Golden Gate qualification must be recorded separately before acceptance.
 

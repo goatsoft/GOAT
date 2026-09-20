@@ -26,6 +26,7 @@ public actor OpenAICompatEngine: InferenceEngine {
 
     public func health() async -> EngineHealth {
         let config = self.config
+        let revision = configRevision
         guard config.isValidEndpoint else { return .offline("Invalid engine URL") }
         guard
             let url = EngineMetadataEndpoint.url(
@@ -41,16 +42,43 @@ public actor OpenAICompatEngine: InferenceEngine {
                 wallClockLimit: config.metadataProbeWallClockLimit)
             if http.statusCode == 401 || http.statusCode == 403 { return .authRequired }
             guard http.statusCode == 200 else { return .offline("HTTP \(http.statusCode)") }
-            let models = try EngineCapabilityMetadataParser.openAIModelList(data).map { model in
+            var models = try EngineCapabilityMetadataParser.openAIModelList(data).map { model in
                 ModelRef(
                     id: model.id,
                     contextLength: model.contextLength,
                     capabilities: model.capabilities)
             }
+            if config.metadataDialect == .omlx {
+                let status = await Self.modelStatus(config: config)
+                models = models.map { model in
+                    status?.first(where: { $0.id == model.id })?.applying(to: model) ?? model
+                }
+            }
+            guard revision == configRevision, config == self.config, !Task.isCancelled else {
+                return .offline("Engine configuration changed")
+            }
             return .ok(models)
         } catch {
             return .offline(error.localizedDescription)
         }
+    }
+
+    /// Optional read-only telemetry from an explicitly configured oMLX profile.
+    /// Capturing and rechecking the revision prevents a reply from a replaced engine escaping.
+    public func runtimeStatus() async -> EngineRuntimeStatus? {
+        let config = self.config
+        let revision = configRevision
+        guard config.isValidEndpoint, config.metadataDialect == .omlx,
+            let serverURL = EngineMetadataEndpoint.url(
+                baseURL: config.baseURL, components: ["api", "status"]),
+            let modelsURL = EngineMetadataEndpoint.url(
+                baseURL: config.baseURL, components: ["v1", "models", "status"])
+        else { return nil }
+        async let server = Self.metadataData(url: serverURL, config: config)
+        async let models = Self.metadataData(url: modelsURL, config: config)
+        let result = await OMLXStatusDecoder.decode(server: server, models: models)
+        guard revision == configRevision, config == self.config, !Task.isCancelled else { return nil }
+        return result
     }
 
     /// Best-effort metadata handshake for the selected model. Failure returns the catalog
@@ -64,6 +92,8 @@ public actor OpenAICompatEngine: InferenceEngine {
         switch config.metadataDialect {
         case .generic:
             metadata = await Self.probeGenericDetail(config: config, modelID: model.id)
+        case .omlx:
+            metadata = nil
         case .lmStudio:
             metadata = await Self.probeLMStudio(config: config, modelID: model.id)
         case .ollama:
@@ -72,6 +102,9 @@ public actor OpenAICompatEngine: InferenceEngine {
             metadata = await Self.probeLlamaCpp(config: config, modelID: model.id)
         }
 
+        let runtimeModel =
+            config.metadataDialect == .omlx
+            ? await Self.modelStatus(config: config)?.first(where: { $0.id == model.id }) : nil
         guard revision == configRevision, config == self.config, !Task.isCancelled else {
             return EngineModelInspection(model: model)
         }
@@ -80,11 +113,21 @@ public actor OpenAICompatEngine: InferenceEngine {
             EngineCapabilityMetadataParser
             .applyingKnownProfile(reported, for: model.id)
         return EngineModelInspection(
-            model: enriched.applying(to: model), metadata: enriched.inspection)
+            model: runtimeModel?.applying(to: enriched.applying(to: model)) ?? enriched.applying(to: model),
+            metadata: enriched.inspection)
     }
 
     public func probeCapabilities(for model: ModelRef) async -> ModelRef {
         await inspectModel(model).model
+    }
+
+    private static func modelStatus(config: EngineConfig) async -> [EngineModelRuntimeStatus]? {
+        guard
+            let url = EngineMetadataEndpoint.url(
+                baseURL: config.baseURL, components: ["v1", "models", "status"]),
+            let data = await metadataData(url: url, config: config)
+        else { return nil }
+        return OMLXStatusDecoder.decode(server: nil, models: data)?.models
     }
 
     private static func probeGenericDetail(

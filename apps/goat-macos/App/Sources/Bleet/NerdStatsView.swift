@@ -1,6 +1,7 @@
 import Bleet
 import Caprine
 import Charts
+import Inference
 import SwiftUI
 
 /// Native charts consume existing coalesced stream counters. Only the visible, active inspector
@@ -9,6 +10,8 @@ struct NerdStatsView: View {
     @Bindable var session: ChatSession
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
+    @State private var runtimeStatus: EngineRuntimeStatus?
+    @State private var runtimeStatusOwner: String?
     @State private var series = GenerationRateSeries()
     @State private var generationID: UUID?
     @State private var selectedResponse: String?
@@ -29,6 +32,10 @@ struct NerdStatsView: View {
         "\(session.id):\(activeMessage?.id.uuidString ?? "idle"):\(scenePhase == .active)"
     }
 
+    private var statusKey: String {
+        "\(model.activeEngineID):\(model.engineIntentRevision):\(model.engineTransitioning):\(scenePhase == .active)"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
@@ -41,12 +48,31 @@ struct NerdStatsView: View {
                         .foregroundStyle(tokens.tint)
                 }
             }
+            if model.enginePreset.metadataDialect == .omlx {
+                engineStatus
+                Divider()
+            }
             throughputChart
             Divider().overlay(tokens.muted.opacity(0.15))
             contextChart
+            outputLimit
             if !history.isEmpty {
                 Divider().overlay(tokens.muted.opacity(0.15))
                 historyChart
+            }
+        }
+        .task(id: statusKey) {
+            let owner = statusKey
+            runtimeStatus = nil
+            runtimeStatusOwner = owner
+            guard scenePhase == .active, !model.engineTransitioning,
+                model.activeEngineProfile != nil, model.enginePreset.metadataDialect == .omlx
+            else { return }
+            while !Task.isCancelled {
+                let status = await model.engine.runtimeStatus()
+                guard !Task.isCancelled, owner == statusKey else { return }
+                runtimeStatus = status
+                do { try await Task.sleep(for: .seconds(5)) } catch { return }
             }
         }
         .task(id: samplingKey) {
@@ -88,6 +114,51 @@ struct NerdStatsView: View {
             meter.reset()
             dialMaximum = 100
         }
+    }
+
+    private var outputLimit: some View {
+        let selectedID = session.modelID ?? model.defaultModelID
+        let selected = model.availableModels.first { $0.id == selectedID }
+        let actual = activeMessage?.generationParameters?.outputTokenCap
+        let preview = selected.map {
+            $0.effectiveOutputLimit(requested: session.effort.outputCeiling(for: $0.capabilities))
+        }
+        return VStack(alignment: .leading, spacing: Caprine.Activity.compactSpacing) {
+            Text(actual == nil ? "Next request output ceiling" : "Current request output ceiling")
+                .font(Caprine.Activity.emphasizedFont)
+            Text((actual ?? preview).map { "\($0.formatted()) tokens" } ?? "Unavailable")
+            Text(
+                "Server configured output limit: "
+                    + (selected?.serverOutputLimit.map { "\($0.formatted()) tokens" } ?? "Unavailable"))
+            Text("Output is bounded by effort, context reserve and any reported server limit.")
+        }
+        .font(Caprine.Activity.font)
+        .foregroundStyle(tokens.muted)
+    }
+
+    private var engineStatus: some View {
+        let status = runtimeStatusOwner == statusKey ? runtimeStatus : nil
+        return VStack(alignment: .leading, spacing: Caprine.Activity.compactSpacing) {
+            Text(status?.version.map { "oMLX \($0)" } ?? "oMLX status")
+                .font(Caprine.Activity.emphasizedFont)
+            Text("Model/process memory: \(memoryLabel(status?.modelMemoryUsed))")
+            Text("Server memory ceiling: \(memoryLabel(status?.modelMemoryMaximum))")
+            Text("Active requests: \(status?.activeRequests.map(String.init) ?? "Unavailable")")
+            Text("Waiting requests: \(status?.waitingRequests.map(String.init) ?? "Unavailable")")
+            if let selected = status?.models?.first(where: { $0.id == (session.modelID ?? model.defaultModelID) }) {
+                Text(
+                    "Selected model: "
+                        + (selected.loading == true
+                            ? "Loading" : selected.loaded.map { $0 ? "Loaded" : "Not loaded" } ?? "Unavailable"))
+            }
+        }
+        .font(Caprine.Activity.font)
+        .foregroundStyle(tokens.muted)
+    }
+
+    private func memoryLabel(_ bytes: Int64?) -> String {
+        guard let bytes else { return "Unavailable" }
+        return ByteCountFormatter.string(fromByteCount: bytes, countStyle: .memory)
     }
 
     @ViewBuilder private var contextChart: some View {

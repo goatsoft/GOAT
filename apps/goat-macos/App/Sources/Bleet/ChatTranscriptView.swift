@@ -46,13 +46,20 @@ struct ChatTranscriptView: View {
         _visibleMessageID = State(initialValue: initialVisibleMessageID)
         _readerAnchorID = State(initialValue: initialVisibleMessageID)
         if !initiallyFollowing {
-            let end = initialVisibleMessageID.flatMap { id in
-                session.messages.firstIndex(where: { $0.id == id }).map { $0 + 1 }
+            let start = initialVisibleMessageID.flatMap { id in
+                session.messages.firstIndex(where: { $0.id == id })
             }
+            // The visible anchor starts the reader's window. Ending the window at that
+            // message leaves no content below it, so native restoration clamps to the bottom.
             _heldRange = State(
-                initialValue: TranscriptWindow.range(count: session.messages.count, end: end) {
-                    TranscriptWindow.displayCost(session.messages[$0])
-                })
+                initialValue: start.map { start in
+                    TranscriptWindow.range(count: session.messages.count, startingAt: start) {
+                        TranscriptWindow.displayCost(session.messages[$0])
+                    }
+                }
+                    ?? TranscriptWindow.range(count: session.messages.count, end: nil) {
+                        TranscriptWindow.displayCost(session.messages[$0])
+                    })
         }
     }
 

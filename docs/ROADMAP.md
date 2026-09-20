@@ -44,11 +44,13 @@ Fake-engine qualification covers fragmented structured calls, mixed printed mark
 
 An inference-efficiency review on 11 September 2026 assessed GOAT's inference loop against established local-agent practice. PR #27 implements and verifies the resulting decisions: [prefix-stable prompts and calibrated budgeting](adrs/0085-prefix-stable-prompts-and-usage-calibrated-budgeting.md), [sampling parameters as model facts](adrs/0086-sampling-parameters-are-model-facts.md), [conversation compaction with `/compact` and an auto-compact threshold](adrs/0087-conversation-compaction.md), [single-round tool results](adrs/0088-single-round-tool-results.md), and [turn continuity and engine resilience](adrs/0089-turn-continuity-and-engine-resilience.md).
 
-Live engine and checkpoint qualification remains separate. A Qwen3.8 27B 4-bit trial showed strong reasoning and tool selection but did not complete the Aurora repair. It also exposed an unclear effective output ceiling and a manual compaction that remained busy for more than 20 minutes. The [oMLX status and generation ownership proposal](adrs/0090-omlx-capability-status-and-generation-ownership.md) and the 0.1.2 maintenance backlog cover those usability gaps.
+Live engine and checkpoint qualification remains separate. A Qwen3.8 27B 4-bit trial showed strong reasoning and tool selection but did not complete the Aurora repair. It also exposed an unclear effective output ceiling and a manual compaction that remained busy for more than 20 minutes. The [oMLX status and generation ownership decision](adrs/0090-omlx-capability-status-and-generation-ownership.md) and the maintenance backlog cover those usability gaps.
 
-## Kid 0.1.2 maintenance backlog
+## Kid maintenance backlog
 
 [Issue #30](https://github.com/goatsoft/GOAT/issues/30) is the maintenance umbrella. The ordered work is long-transcript responsiveness and memory pressure in [issue #29](https://github.com/goatsoft/GOAT/issues/29), oMLX status, memory, sampling ownership, and effective-limit reporting in [issue #31](https://github.com/goatsoft/GOAT/issues/31), and macOS 27 Golden Gate Pen-sandbox qualification while retaining macOS 26 Tahoe support in [issue #33](https://github.com/goatsoft/GOAT/issues/33).
+
+PR #35 is merged and issue #29 is closed. PR #36 delivers issues #31 and #33; current review and merge state is tracked on the [project board](https://github.com/orgs/goatsoft/projects/1). Live throughput [#38](https://github.com/goatsoft/GOAT/issues/38) and the maintained Xcode project workflow [#39](https://github.com/goatsoft/GOAT/issues/39) are separate backlog work. The XcodeGen source-of-truth rule remains in effect.
 
 Repeat controlled model qualification with Qwen3.8 27B 4-bit first, followed by Devstral, DeepSeek, and the practical GLM-4.7-Flash 31B candidate. Native subagent work in [issue #32](https://github.com/goatsoft/GOAT/issues/32) follows the usability fixes and starts with one sequential, read-only, isolated child before adding write, parallel, or recursive execution.
 

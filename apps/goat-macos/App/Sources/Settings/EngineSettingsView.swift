@@ -471,7 +471,8 @@ private struct EngineEditorSheet: View {
             name: name.trimmingCharacters(in: .whitespaces),
             url: urlText.trimmingCharacters(in: .whitespaces),
             presetID: presetID == "custom" ? nil : presetID,
-            requestStyle: existing?.requestStyle ?? .automatic)
+            requestStyle: existing?.requestStyle ?? .automatic,
+            generationSettingsOwner: existing?.generationSettingsOwner)
     }
 
     private func runTest() async {

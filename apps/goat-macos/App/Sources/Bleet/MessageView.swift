@@ -214,6 +214,19 @@ struct MessageView: View {
                         .font(.callout)
                         .foregroundStyle(.orange)
                 }
+                if isLast, message.complete, message.stats?.finishReason == "length" {
+                    Button("Continue response") {
+                        guard
+                            let session = model.chats.first(where: { chat in
+                                chat.messages.contains { $0.id == message.id }
+                            })
+                        else { return }
+                        _ = model.send(
+                            "Continue from where the previous response stopped. Do not repeat completed content.",
+                            in: session)
+                    }
+                    .disabled(model.shepherd.hasActiveTurn || model.engineTransitioning || !model.health.isOK)
+                }
                 if message.complete && message.toolEvents.isEmpty && !TranscriptActivity.isEmpty(message) {
                     footer
                         .opacity(hovering || memorySaveState == .saving ? 1 : 0)

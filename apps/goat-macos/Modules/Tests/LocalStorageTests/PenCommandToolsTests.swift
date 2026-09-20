@@ -1,7 +1,8 @@
 import Foundation
 import JUDAS
-import Pens
 import Testing
+
+@testable import Pens
 
 private func commandFolder() throws -> URL {
     let root = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent(
@@ -48,6 +49,7 @@ private func runCommand(_ runner: PenCommandTools, _ input: [String: Any]) async
     #expect(output.contains("verified 🐐"))
     #expect(!output.contains("PRIVATE_MARKER"))
     #expect(output.contains("Operation not permitted"))
+    #expect(result["failure_kind"] as? String == "sandbox_or_permission_denied")
     #expect(!FileManager.default.fileExists(atPath: outside.appendingPathComponent("bad").path))
     #expect(try String(contentsOf: secret, encoding: .utf8) == "PRIVATE_MARKER")
     let literal = try await runCommand(runner, ["command": "/bin/echo", "args": ["$(touch injected)", "a b", "x;y"]])
@@ -237,4 +239,70 @@ func nativeNpmInstallsBuildsAndTestsWithAnIsolatedHome() async throws {
     #expect(result["exit_code"] as? Int == 0)
     #expect(result["running"] as? Bool == false)
     #expect(!FileManager.default.fileExists(atPath: path.path))
+}
+
+@Test func developerShimResolutionPreservesSwiftDriverInvocation() async throws {
+    let root = try commandFolder()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let runner = PenCommandTools(workspace: root, files: try PenFileTools(workspace: root), judas: Judas())
+    let command = try await runner.prepare(
+        argumentsJSON: commandJSON(["command": "/usr/bin/swift", "args": ["--version"]]))
+    #expect(command.executablePath != "/usr/bin/swift")
+    #expect(URL(fileURLWithPath: command.executablePath).lastPathComponent == "swift")
+    #expect(!command.isDefaultAllowed)
+    let preview = try commandObject(command.previewJSON)
+    #expect((preview["resolved_executable"] as? String)?.contains("/Developer/") == true)
+    let result = try commandObject(await runner.start(command).content)
+    #expect(result["exit_code"] as? Int == 0, "Swift driver result: \(result)")
+    #expect((result["output"] as? String)?.contains("Swift version") == true, "Swift driver result: \(result)")
+    await runner.stopAll()
+}
+
+@Test func selectedToolchainReadRootIncludesOnlyItsRuntimeBundle() {
+    #expect(
+        DeveloperToolchain(directory: "/Applications/Xcode_26.3.app/Contents/Developer").runtimeReadRoot
+            == "/Applications/Xcode_26.3.app")
+    #expect(
+        DeveloperToolchain(directory: "/Volumes/Tools/Custom Xcode.app/Contents/Developer").runtimeReadRoot
+            == "/Volumes/Tools/Custom Xcode.app")
+    #expect(
+        DeveloperToolchain(directory: "/Library/Developer/CommandLineTools").runtimeReadRoot
+            == "/Library/Developer/CommandLineTools")
+    #expect(
+        DeveloperToolchain(directory: "/opt/custom/Contents/Developer").runtimeReadRoot
+            == "/opt/custom/Contents/Developer")
+}
+
+@Test(.enabled(if: ProcessInfo.processInfo.environment["GOAT_PEN_TOOLCHAIN_QUALIFICATION"] == "1"))
+func penToolchainQualificationBuildsSwiftAndRunsApprovedTools() async throws {
+    let root = try commandFolder()
+    defer { try? FileManager.default.removeItem(at: root) }
+    try """
+    // swift-tools-version: 6.0
+    import PackageDescription
+    let package = Package(name: "Qualification", targets: [.executableTarget(name: "Qualification")])
+    """.write(to: root.appendingPathComponent("Package.swift"), atomically: true, encoding: .utf8)
+    let source = root.appendingPathComponent("Sources/Qualification")
+    try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+    try "print(\"qualified\")".write(to: source.appendingPathComponent("main.swift"), atomically: true, encoding: .utf8)
+    let runner = PenCommandTools(workspace: root, files: try PenFileTools(workspace: root), judas: Judas())
+    for (command, args) in [
+        ("/usr/bin/git", ["--version"]),
+        ("npm", ["--version"]),
+        ("/usr/bin/xcodebuild", ["-version"]),
+        ("/bin/sh", ["-c", "git --version && swift --version"]),
+        ("/usr/bin/swift", ["build", "--build-system", "native", "--disable-sandbox", "-c", "release"]),
+        (".build/release/Qualification", []),
+    ] {
+        if command == "/usr/bin/xcodebuild",
+            ProcessInfo.processInfo.environment["GOAT_SKIP_XCODEBUILD_QUALIFICATION"] == "1"
+        {
+            print("PEN_QUALIFICATION command=xcodebuild unavailable: full Xcode not installed")
+            continue
+        }
+        let result = try await runCommand(runner, ["command": command, "args": args, "timeout_seconds": 120])
+        #expect(result["exit_code"] as? Int == 0, "\(command): \(result["output"] ?? "")")
+        print("PEN_QUALIFICATION command=\(command) exit=\(result["exit_code"] ?? "unknown")")
+    }
+    await runner.stopAll()
 }

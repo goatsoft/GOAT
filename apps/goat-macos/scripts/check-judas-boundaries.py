@@ -11,7 +11,8 @@ rules = [
      'native commands need the reviewed Pen sandbox and JUDAS boundary'),
     (re.compile(r'\bProcess\s*\('),
      {'Modules/Sources/Herd/HerdWorkspace.swift', 'Modules/Sources/MCPClient/ServerManager.swift',
-      'App/Sources/Settings/UninstallCoordinator.swift'},
+      'App/Sources/Settings/UninstallCoordinator.swift',
+      'Modules/Sources/Pens/DeveloperToolchain.swift'},  # Fixed xcode-select query, ADR-0092.
      'process launch needs a reviewed Git, MCP or local maintenance boundary (ADR-0081)'),
     (re.compile(r'\bURLSession\s*(?:\(|\.\s*shared\b)'),
      {'Modules/Sources/JUDAS/Judas.swift'}, 'HTTP must use JudasHTTPClient'),

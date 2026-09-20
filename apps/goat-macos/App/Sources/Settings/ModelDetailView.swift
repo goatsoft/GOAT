@@ -200,6 +200,8 @@ struct ModelDetailView: View {
     private func metadataSection(snapshot: ModelInspectionSnapshot?, model ref: ModelRef) -> some View {
         SectionCard(title: "Reported model details", systemImage: "info.circle") {
             textRow("Context", ref.contextLength.map { "\($0.formatted()) tokens" })
+            textRow("Server output limit", ref.serverOutputLimit.map { "\($0.formatted()) tokens" })
+            textRow("Limits source", ref.limitsSource)
             budgetRow(reported: ref.contextLength)
             textRow("Format", snapshot?.format)
             textRow("Quantization", snapshot?.quantization)
