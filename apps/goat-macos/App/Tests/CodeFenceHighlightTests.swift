@@ -5,6 +5,22 @@ import Testing
 @testable import GOAT
 @testable import Paddock
 
+@Test(arguments: [false, true])
+func sharedCodeHighlightingPreservesWhitespaceAndColoursAcrossRepeatedRequests(dark: Bool) async throws {
+    let renderer = CodeSyntaxHighlighter()
+    let source = "\n  let goat = \"🐐\"\n\n"
+    for _ in 0..<3 {
+        let output = try await renderer.render(source, language: "swift", dark: dark)
+        #expect(String(output.characters) == source)
+        let keyword = try #require(output.range(of: "let"))
+        #expect(output[keyword].runs.contains { $0.appKit.foregroundColor != nil })
+    }
+    let huge = String(repeating: "x", count: HighlightedCodeView.maximumHighlightedBytes + 1)
+    let plain = try await renderer.render(huge, language: "swift", dark: dark)
+    #expect(String(plain.characters) == huge)
+    #expect(plain.runs.allSatisfy { $0.appKit.foregroundColor == nil })
+}
+
 @Test func vueSectionsRespectScriptLanguagesCommentsAndIncompleteStreams() {
     let source = """
         <!-- <script lang="ts">ignore this</script> -->

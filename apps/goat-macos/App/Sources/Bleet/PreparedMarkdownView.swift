@@ -142,23 +142,31 @@ struct PreparedMarkdownView<Rendered: View>: View {
 
     var body: some View {
         Group {
-            switch preparedRequest == request || retainsPreviousContent ? preparation : nil {
-            case .parsed(let content):
-                render(content.value)
-            case .plainText:
-                Text(source)
-                    .font(Font(ReadingFonts.nsFont(model.effectiveChatFontID, size: fallbackFontSize, role: .chat)))
-                    .textSelection(.enabled)
-            case nil:
-                // Never flash raw Markdown while a saved transcript is being prepared. The
-                // cache actor keeps parsing off the UI thread; this short placeholder is less
-                // disruptive than showing fences and then replacing them a moment later.
-                Label("Formatting response…", systemImage: "text.badge.checkmark")
-                    .font(Font(ReadingFonts.nsFont(model.effectiveChatFontID, size: fallbackFontSize, role: .chat)))
-                    .foregroundStyle(.secondary)
+            if source.utf8.count > TranscriptTextParts.maximumBytes {
+                TranscriptTextPartsView(source: source, fontSize: fallbackFontSize, onPrepared: onPrepared)
+            } else {
+                switch preparedRequest == request || retainsPreviousContent ? preparation : nil {
+                case .parsed(let content):
+                    render(content.value)
+                case .plainText:
+                    Text(source)
+                        .font(Font(ReadingFonts.nsFont(model.effectiveChatFontID, size: fallbackFontSize, role: .chat)))
+                        .textSelection(.enabled)
+                case nil:
+                    // Never flash raw Markdown while a saved transcript is being prepared. The
+                    // cache actor keeps parsing off the UI thread; this short placeholder is less
+                    // disruptive than showing fences and then replacing them a moment later.
+                    Label("Formatting response…", systemImage: "text.badge.checkmark")
+                        .font(Font(ReadingFonts.nsFont(model.effectiveChatFontID, size: fallbackFontSize, role: .chat)))
+                        .foregroundStyle(.secondary)
+                }
             }
         }
+        // Align the document boundary without searching nested lists and code scrollers.
+        .alignmentGuide(.leading) { _ in 0 }
+        .alignmentGuide(.trailing) { dimensions in dimensions.width }
         .task(id: request) {
+            guard source.utf8.count <= TranscriptTextParts.maximumBytes else { return }
             let result = await MarkdownRenderCache.shared.prepare(id: id, source: source)
             guard !Task.isCancelled else { return }
             preparedRequest = request

@@ -1,0 +1,53 @@
+# Transcript performance qualification
+
+Issue [#29](https://github.com/goatsoft/GOAT/issues/29) requires runtime evidence,
+including histories with fewer than 40 very large messages. The engine-free
+`TranscriptPerformanceTests` workload creates 24 messages containing repeated
+Markdown, Swift code, reasoning and tool results in a displayed native window.
+It exercises idle, waiting between rounds and incoming output, with reader
+ownership and bottom following in separate runs. No private chat is loaded and
+no inference request is sent.
+
+Run the workload alone in Release:
+
+```sh
+make test-app CONFIG=Release XCODE_FLAGS='-only-testing:GOATTests/TranscriptPerformanceTests'
+```
+
+Each `TRANSCRIPT_PROFILE` record includes elapsed time, process CPU time, the
+95th percentile of main-actor scheduling delay beyond a requested 50 ms sleep,
+and process-lifetime peak resident memory in bytes. CPU time divided by elapsed
+time gives utilization relative to one core. Scheduling delay is a responsiveness
+proxy, not measured keyboard or pointer latency. Peak resident memory includes
+the test host and earlier phases and is not an allocation delta or physical
+footprint. Compare fresh test-host runs under the same conditions.
+
+Use Instruments Time Profiler on the test host to attribute main-thread work to
+native layout, Markdown preparation, highlighting, scrolling or other work.
+The existing `MarkdownParse` and `TranscriptFollow` signposts and the workload's
+`TranscriptWorkloadPhase` markers help align samples. Record hardware, OS build,
+Xcode, source revision, build configuration, window dimensions, font, animation
+settings and background load with each local receipt. Retain raw profiles
+privately; public reports should contain synthetic findings only.
+
+The workload is an investigation aid, not complete acceptance. Also exercise
+composer typing, selection/copy, tool and reasoning disclosures, Earlier/Later
+navigation, keyboard and VoiceOver, narrow widths, font changes and reader
+position. Use the existing transcript layout and reflow tests for regression
+coverage. Repeat runtime qualification on Tahoe 26 and Golden Gate 27. Passing
+tests or a faster scheduling proxy does not establish those interactive results.
+
+## Presentation bounds
+
+The transcript admits at most 40 messages and approximately 16 KiB of source
+cost per window. At least one message is always admitted. Earlier/Later paging
+keeps every message reachable; a reader-owned window holds its range during
+incoming output. Latest or a new user turn restores following.
+
+An individual response or expanded reasoning above 8 KiB is presented as
+selectable plain-text parts, prepared off the main actor. Earlier text and Later
+text navigate those parts; Latest text follows the newest part. Choosing an
+older part holds that choice as output arrives. Copy retains the full original
+source, including Markdown fences and whitespace. These are presentation bounds;
+persistence and model context retain the complete content. Rich Markdown and
+embedded code-block actions remain available for smaller responses.

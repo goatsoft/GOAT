@@ -1,11 +1,69 @@
-/// Bounds expensive rich-text layout while keeping all messages available for navigation.
-/// Paging overlaps half the window so the current edge remains a stable scroll target.
+import Bleet
+
+/// Bounds rich-text layout by both message count and visible source cost.
+/// An oversized message is always admitted and its text is presented in bounded parts.
 enum TranscriptWindow {
     static let capacity = 40
     static let step = capacity / 2
+    static let sourceBudget = 16 * 1_024
 
-    static func range(count: Int, end: Int?) -> Range<Int> {
+    static func range(count: Int, end: Int?, cost: (Int) -> Int = { _ in 0 }) -> Range<Int> {
         let upper = min(max(0, count), max(0, end ?? count))
-        return max(0, upper - capacity)..<upper
+        var lower = upper
+        var bytes = 0
+        while lower > 0, upper - lower < capacity {
+            let next = min(sourceBudget, max(0, cost(lower - 1)))
+            if lower < upper, bytes + next > sourceBudget { break }
+            bytes += next
+            lower -= 1
+        }
+        return lower..<upper
+    }
+
+    static func range(count: Int, startingAt start: Int, cost: (Int) -> Int) -> Range<Int> {
+        let lower = min(max(0, count), max(0, start))
+        var upper = lower
+        var bytes = 0
+        while upper < count, upper - lower < capacity {
+            let next = min(sourceBudget, max(0, cost(upper)))
+            if upper > lower, bytes + next > sourceBudget { break }
+            bytes += next
+            upper += 1
+        }
+        return lower..<upper
+    }
+
+    static func earlier(_ current: Range<Int>, count: Int, cost: (Int) -> Int) -> Range<Int> {
+        let candidate = range(count: count, end: current.lowerBound + current.count / 2, cost: cost)
+        return candidate.lowerBound < current.lowerBound
+            ? candidate : range(count: count, end: current.lowerBound, cost: cost)
+    }
+
+    static func later(_ current: Range<Int>, count: Int, cost: (Int) -> Int) -> Range<Int> {
+        let candidate = range(count: count, startingAt: current.upperBound - current.count / 2, cost: cost)
+        return candidate.upperBound > current.upperBound
+            ? candidate : range(count: count, startingAt: current.upperBound, cost: cost)
+    }
+
+    static func clamped(
+        _ held: Range<Int>, count: Int, anchor: Int? = nil, cost: (Int) -> Int = { _ in 0 }
+    ) -> Range<Int> {
+        let upper = min(max(0, count), held.upperBound)
+        let lower = min(held.lowerBound, upper)
+        // Compaction can remove the held window or shift a surviving reader anchor.
+        let surviving =
+            lower == upper && upper > 0
+            ? range(count: count, end: upper, cost: cost) : lower..<upper
+        if let anchor, (0..<max(0, count)).contains(anchor), !surviving.contains(anchor) {
+            return range(count: count, startingAt: anchor, cost: cost)
+        }
+        return surviving
+    }
+
+    @MainActor static func displayCost(_ message: ChatMessage) -> Int {
+        // Do not scan tool payloads or all reasoning merely to decide which rows to admit.
+        min(sourceBudget, message.text.utf8.count)
+            + min(sourceBudget, message.thinking.utf8.count)
+            + min(capacity, message.toolEvents.count) * 256
     }
 }

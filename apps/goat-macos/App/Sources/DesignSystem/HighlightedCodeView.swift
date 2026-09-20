@@ -1,4 +1,3 @@
-import HighlightSwift
 import SwiftUI
 
 /// Read-only highlighted code, one component for every preview surface (in-chat fenced
@@ -65,10 +64,10 @@ struct HighlightedCodeView: View {
             if language == "vue" {
                 VueCodeText(code: code)
             } else {
-                CodeText(code).highlightMode(.languageAlias(language))
+                PreparedCodeText(code: code, language: language)
             }
         } else {
-            CodeText(code)
+            PreparedCodeText(code: code, language: nil)
         }
     }
 
