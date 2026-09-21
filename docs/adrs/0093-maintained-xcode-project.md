@@ -1,6 +1,6 @@
 # ADR-0093: Maintained Xcode project and build-time release identity
 
-**Status:** Proposed · 2026-09-21 · supersedes the generated-project ownership in ADR-0004
+**Status:** Accepted · 2026-09-21 · supersedes the generated-project ownership in ADR-0004
 
 ## Context
 

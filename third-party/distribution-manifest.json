@@ -1903,7 +1903,7 @@
     },
     {
       "path": "apps/goat-macos/Modules/Package.swift",
-      "sha256": "42aa7e3aa7f383c9b19f0feab9d07a4c5c01e585ae2e7909ad1fa3d8989c543b"
+      "sha256": "c39c253cb9bd14eb27f99db655e2c5714561e528ce20359b0962427ccb57812c"
     },
     {
       "path": "apps/goat-macos/GOAT.xcodeproj/project.pbxproj",

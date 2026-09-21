@@ -58,7 +58,7 @@ let package = Package(
         .testTarget(name: "CaprineTests", dependencies: ["Caprine", "Herd"]),
         .testTarget(name: "HerdTests", dependencies: ["Herd"]),
         .testTarget(name: "JUDASTests", dependencies: ["JUDAS"]),
-        .testTarget(name: "PensTests", dependencies: ["Pens", "Herd", "Tools"]),
+        .testTarget(name: "PensTests", dependencies: ["Pens", "Herd", "JUDAS"]),
         .testTarget(name: "PersistenceTests", dependencies: ["Persistence", .product(name: "GRDB", package: "GRDB.swift")]),
         .testTarget(name: "MCPClientTests", dependencies: ["JUDAS", "MCPClient"]),
         .testTarget(name: "MemoryTests", dependencies: ["Herd", "Memory"]),

@@ -30,6 +30,15 @@ products = [objects[key]['productName'] for key in app['packageProductDependenci
 if set(products) != set(expected) - {'goat'} or len(products) != len(set(products)):
     failures.append('GOAT.xcodeproj must compose every current library product exactly once.')
 
+# Focused test targets must declare the local modules they import directly too.
+for name, body in re.findall(r'\.testTarget\(\s*name:\s*"(\w+)",\s*dependencies:\s*\[([\s\S]*?)\]', manifest):
+    dependencies = set(re.findall(r'"(\w+)"', body))
+    for path in (modules / 'Tests' / name).rglob('*.swift'):
+        imports = set(re.findall(r'^\s*(?:@testable\s+)?import\s+(\w+)', path.read_text(), re.M))
+        missing = (imports & expected.keys()) - dependencies
+        if missing:
+            failures.append(f'{name}: undeclared test dependencies {", ".join(sorted(missing))} in {path.name}')
+
 visiting, visited = set(), set()
 def visit(name):
     if name in visiting:
