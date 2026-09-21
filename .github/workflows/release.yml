@@ -116,6 +116,13 @@ jobs:
         run: |
           python3 scripts/check-release-signing.py --verify .build/DerivedData/Build/Products/Release/GOAT.app
           python3 scripts/check-release-signing.py --verify Modules/.build/release/goat
+      - name: Sign and verify release DMG
+        run: |
+          VERSION="$(python3 -c 'import json; print(json.load(open("release.json"))["version"])')"
+          DMG="dist/GOAT-$VERSION.dmg"
+          codesign --force --timestamp --sign "$CODE_SIGN_IDENTITY" \
+            --identifier dev.leet.goat.diskimage "$DMG"
+          codesign --verify --strict -R '=anchor apple generic' "$DMG"
       - name: Notarize and staple official release
         env:
           NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
@@ -124,6 +131,12 @@ jobs:
         run: |
           VERSION="$(python3 -c 'import json; print(json.load(open("release.json"))["version"])')"
           DMG="dist/GOAT-$VERSION.dmg" ./scripts/notarize.sh
+      - name: Verify Gatekeeper accepts the notarized DMG
+        run: |
+          VERSION="$(python3 -c 'import json; print(json.load(open("release.json"))["version"])')"
+          DMG="dist/GOAT-$VERSION.dmg"
+          codesign --verify --strict -R '=anchor apple generic' "$DMG"
+          spctl -a -t open --context context:primary-signature -vv "$DMG"
       - name: Record final artifact checksums
         run: |
           VERSION="$(python3 -c 'import json; print(json.load(open("release.json"))["version"])')"
