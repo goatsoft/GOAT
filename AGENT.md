@@ -33,6 +33,7 @@ Use a macOS 26 host with a compatible Xcode 26 toolchain for app builds and test
 make open     # validate and open the maintained Xcode project
 make gen      # compatibility alias for project/metadata validation
 make build    # xcodebuild build
+make build-signed # hardened Developer ID build plus signature verification
 make run      # build + quit/relaunch; never use during active work
 make test     # tests for the local Modules package
 make test-app # xcodebuild test: the GOATTests target (Shepherd + stream tests)

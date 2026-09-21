@@ -64,10 +64,18 @@ def validate_entitlements(data):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--local", action="store_true",
+                        help="validate the selected local Developer ID identity and team")
     parser.add_argument("--verify", type=Path, help="check a signed app or executable")
     args = parser.parse_args()
     try:
-        if args.verify:
+        if args.local and args.verify:
+            raise ValueError("choose either --local or --verify")
+        if args.local:
+            validate_publisher(
+                os.environ.get("CODE_SIGN_IDENTITY", ""),
+                os.environ.get("APPLE_TEAM_ID") or os.environ.get("DEVELOPMENT_TEAM", ""))
+        elif args.verify:
             subprocess.run(
                 ["codesign", "--verify", "--deep", "--strict", "-R", "=anchor apple generic", str(args.verify)],
                 check=True, capture_output=True, text=True)

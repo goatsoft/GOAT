@@ -18,7 +18,7 @@ SIGNING_FLAGS = CODE_SIGN_IDENTITY="$(CODE_SIGN_IDENTITY)" CODE_SIGN_STYLE=Manua
 RELEASE_SIGNING_FLAGS = CODE_SIGN_IDENTITY="$(RELEASE_SIGNING_IDENTITY)" CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="$(DEVELOPMENT_TEAM)"
 DIST := dist
 
-.PHONY: test-module test-package test-tools test-web gen prepare open build run test test-app format lint verify clean release dmg
+.PHONY: test-module test-package test-tools test-web gen prepare open build run test test-app format lint verify clean release check-signing verify-signing build-signed dmg
 
 # Compatibility alias: never regenerate or overwrite the maintained project.
 gen: prepare
@@ -106,6 +106,21 @@ release: prepare
 	  OTHER_CODE_SIGN_FLAGS="$(if $(filter -,$(RELEASE_SIGNING_IDENTITY)),,--timestamp)" \
 	  build
 	python3 scripts/release-metadata.py bundle --channel "$(RELEASE_CHANNEL)" $(if $(RELEASE_TAG),--tag "$(RELEASE_TAG)",) --app "$(DERIVED)/Build/Products/Release/GOAT.app"
+
+# A signed build is successful only after its Developer ID publisher, team,
+# hardened runtime, secure timestamp and release entitlements are verified.
+check-signing:
+	@CODE_SIGN_IDENTITY="$(RELEASE_SIGNING_IDENTITY)" APPLE_TEAM_ID="$(DEVELOPMENT_TEAM)" \
+	  python3 scripts/check-release-signing.py --local
+
+verify-signing:
+	@CODE_SIGN_IDENTITY="$(RELEASE_SIGNING_IDENTITY)" APPLE_TEAM_ID="$(DEVELOPMENT_TEAM)" \
+	  python3 scripts/check-release-signing.py --verify "$(DERIVED)/Build/Products/Release/GOAT.app"
+
+build-signed: RELEASE_CHANNEL = Candidate
+build-signed: check-signing
+	$(MAKE) release RELEASE_CHANNEL="$(RELEASE_CHANNEL)" RELEASE_TAG="$(RELEASE_TAG)"
+	$(MAKE) verify-signing
 
 # Package the Release .app into a distributable DMG under dist/.
 dmg: RELEASE_CHANNEL = Candidate
