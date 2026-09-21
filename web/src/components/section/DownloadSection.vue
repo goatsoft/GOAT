@@ -4,7 +4,7 @@ const site = useSite()
 const { reveal, stagger, heading } = useReveal()
 const steps = [
   { n: '01', title: 'Set up an engine', body: 'Run a supported model with your chosen compatible engine.', link: { label: 'Engine setup', href: site.doc('Engines') } },
-  { n: '02', title: site.releaseAvailable ? 'Install GOAT' : 'Build GOAT', body: site.releaseAvailable ? 'Open the signed, notarized disk image and drag GOAT into Applications.' : 'Build the source preview with Xcode and XcodeGen. No Apple Developer membership is required.', link: { label: 'Getting started', href: site.doc('Getting-Started') } },
+  { n: '02', title: site.releaseAvailable ? 'Install GOAT' : 'Build GOAT', body: site.releaseAvailable ? 'Open the signed, notarized disk image and drag GOAT into Applications.' : 'Build the source preview with Xcode. No Apple Developer membership is required.', link: { label: 'Getting started', href: site.doc('Getting-Started') } },
   { n: '03', title: 'Create a Pen', body: 'Add project instructions, choose a workspace and start a chat.', link: { label: 'Your first Pen', href: site.doc('how-to/CREATE-A-PEN') } },
 ]
 
@@ -33,7 +33,7 @@ const palette = (i: number) => {
       </motion.div>
 
       <p v-if="site.releaseAvailable" class="mt-5 text-center text-sm text-muted-foreground"><a :href="`${site.releases}/tag/${site.releaseTag}`" class="text-primary hover:underline">{{ site.releaseLabel }} · Release notes and checksums</a></p>
-      <p class="mx-auto mt-5 max-w-2xl text-center text-sm text-muted-foreground">Kid 0.1.1 focuses on clearer sidebar navigation, preference reset, recoverable uninstall and a refined Finder installer. <a :href="site.doc('ROADMAP')" class="text-primary hover:underline">Maintenance scope and the M7 plan</a></p>
+      <p class="mx-auto mt-5 max-w-2xl text-center text-sm text-muted-foreground">Kid 0.1.2 brings model management, smoother long conversations, clearer engine status and more dependable coding workflows. <a :href="site.doc('ROADMAP')" class="text-primary hover:underline">Maintenance scope and the M7 plan</a></p>
       <p class="mt-5 text-center text-xs text-muted-foreground">{{ site.requirements }} · Code, docs and examples: MIT. Artwork has separate terms.</p>
 
       <!-- Same cloud language as the rest of the page, but softer and top-lit: the cloud

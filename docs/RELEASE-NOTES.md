@@ -1,6 +1,6 @@
 # Release notes
 
-## Kid 0.1.2: in preparation
+## Kid 0.1.2
 
 GOAT 0.1.2 makes local-model work easier to set up, easier to follow and more dependable over a long session. It brings model management into the app, keeps large conversations responsive and gives coding workflows clearer recovery when a model or engine has a difficult turn.
 
@@ -37,13 +37,13 @@ This release keeps **oMLX 0.6.4** as the qualified baseline.
 
 ### Installation and upgrade
 
-GOAT 0.1.2 requires Apple Silicon and macOS 26 or later. The signed and notarized download will be added to GitHub Releases after the final candidate passes qualification.
+GOAT 0.1.2 requires Apple Silicon and macOS 26 or later. Download the signed, notarized [0.1.2 (Kid) release](https://github.com/goatsoft/GOAT/releases/tag/v0.1.2), build 1354, with its manifest and checksums.
 
 An ordinary upgrade replaces the app without resetting chats, engine profiles, memory, permissions or Pens. Finish active work before quitting GOAT to install the update, and keep a [backup of local data](reference/STORAGE.md#back-up-safely).
 
 ### Qualification and known limits
 
-The final release record will identify the exact accepted source revision and build. The candidate must pass the complete Release suite, website checks, supported-host Xcode builds, Developer ID signing, notarization, mounted-DMG validation and Gatekeeper assessment before publication.
+The official Release-channel package is built from the immutable `v0.1.2` source. The release workflow verifies the complete Release suite, website and docs, Developer ID publisher identity, hardened runtime, notarization, stapling and artifact checksums. See the [release metadata](https://github.com/goatsoft/GOAT/releases/tag/v0.1.2) for the exact source revision and artifact hashes.
 
 The previously reported difference between a 37 tok/s server reading and a 2–3 tok/s live display has not been reproduced. This release makes those measurements distinct and easier to diagnose; it does not claim an engine-speed improvement. Model and tool results apply to the tested configurations, including stable oMLX 0.6.4, rather than every compatible server or workload.
 

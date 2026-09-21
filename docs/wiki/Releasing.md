@@ -1,6 +1,6 @@
 # Release a GOAT build
 
-This guide is for maintainers. The current candidate’s canonical version is `0.1.2`, public label **0.1.2 (Kid)** and release tag `v0.1.2`. The published 0.1.1 release remains unchanged until publication. Identity comes from `apps/goat-macos/release.json`.
+This guide is for maintainers. The current published version is `0.1.2`, public label **0.1.2 (Kid)** and release tag `v0.1.2`. Earlier releases remain unchanged. Identity comes from `apps/goat-macos/release.json`.
 
 1. Review [Release readiness](../RELEASE-CHECKLIST.md). Complete content, distribution, live-service, clean-machine and performance checks appropriate to the release.
 2. Follow [Versioning](../VERSIONING.md) to generate metadata, build a separate candidate and verify source/bundle/artifact agreement. Do not restart an app doing active work.
@@ -53,4 +53,4 @@ Configure these controls before enabling the workflow:
 
 Required reviewers are available for public repositories on GitHub Free, Pro and Team. Private repositories need an eligible Enterprise plan for this protection. While the repository is private without that feature, leave CI signing disabled and keep the signing key local. Making the repository public remains a separate publication decision. See [GitHub's environment requirements](https://docs.github.com/en/actions/how-tos/managing-workflow-runs-and-deployments/managing-deployments/reviewing-deployments).
 
-The workflow runs only in the official repository for tags pushed by the configured owner, including checks on the actor requesting a rerun. Verification runs in a separate job without signing credentials. The signing job uses `release-signing`, so its environment secrets become available only after the configured approval. Fork and pull-request builds do not receive official signing credentials. A YAML environment name alone does not configure required reviewers; complete the repository settings above first.
+The workflow runs only in the official repository for owner-created release tags or an owner-requested manual recovery from `main` that checks out an existing immutable tag. It checks the actor requesting a rerun. Verification runs in a separate job without signing credentials. The signing job uses `release-signing`, so its environment secrets become available only after the configured approval. Fork and pull-request builds do not receive official signing credentials. A YAML environment name alone does not configure required reviewers; complete the repository settings above first.
