@@ -76,6 +76,9 @@ import Testing
     #expect(generating.phase == .generating)
     #expect(generating.throughput(at: Date.now.addingTimeInterval(2)).hasPrefix("~"))
     #expect(generating.throughput(at: Date.now.addingTimeInterval(6)) == "Waiting for more output")
+    #expect(generating.isWaitingForOutput(at: Date.now.addingTimeInterval(6)))
+    #expect(!generating.isWaitingForOutput(at: Date.now.addingTimeInterval(2)))
+    #expect(generating.caption.contains("Received output estimate"))
     message.stats = previous.stats
     message.complete = true
     #expect(GenerationDisplayState(session: session).phase == .tools)

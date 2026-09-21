@@ -214,6 +214,7 @@
 		FC9B73870FC87AFB55EAE07A /* Hindsight in Frameworks */ = {isa = PBXBuildFile; productRef = C94AC284248909895DEB7212 /* Hindsight */; };
 		FEFB488911B1B220CBE1323C /* AppInfoTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00B0FE09CFA9316E66AAAC7 /* AppInfoTests.swift */; };
 		FF3EC7060CDC378194E66D7D /* Memory in Frameworks */ = {isa = PBXBuildFile; productRef = 61750E12AE82DACA31DC204C /* Memory */; };
+		4600ED45160A679AFFA4AD10 /* ThroughputQualificationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1438DCB55454965F6FD46BF /* ThroughputQualificationTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -418,6 +419,7 @@
 		FD330E840460D97D1F16ACF6 /* HerdWorkspaceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HerdWorkspaceTests.swift; sourceTree = "<group>"; };
 		FFC769DD08F4F0C11DBCF2DC /* PreferenceResetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferenceResetTests.swift; sourceTree = "<group>"; };
 		FFD8218812A1EEBCA5B5DF03 /* AssistantRowLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantRowLayoutTests.swift; sourceTree = "<group>"; };
+		A1438DCB55454965F6FD46BF /* ThroughputQualificationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThroughputQualificationTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -566,6 +568,7 @@
 		A8AA55865332AE6A196CD2EF /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+				A1438DCB55454965F6FD46BF /* ThroughputQualificationTests.swift */,
 				5B51E24100ADE8D11F214FC2 /* AboutUnlockCaptureTests.swift */,
 				D00B0FE09CFA9316E66AAAC7 /* AppInfoTests.swift */,
 				D1B77F4A48CA403FA6539D3A /* AppToolRouterTests.swift */,
@@ -929,6 +932,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				4600ED45160A679AFFA4AD10 /* ThroughputQualificationTests.swift in Sources */,
 				6B983052ED5AD2FDA0E5FF5C /* AboutUnlockCaptureTests.swift in Sources */,
 				FEFB488911B1B220CBE1323C /* AppInfoTests.swift in Sources */,
 				091EE457FC0466F00F394BE2 /* AppToolRouterTests.swift in Sources */,
