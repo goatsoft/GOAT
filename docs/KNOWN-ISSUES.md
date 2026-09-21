@@ -1,6 +1,6 @@
 # Known issues
 
-Current limitations in the Kid release line. The current download is 0.1.1; older-version notes are labelled explicitly. This page separates reproducible behavior from compatibility that still needs qualification.
+Current limitations in the Kid release line. The current download is 0.1.1 and 0.1.2 is in release preparation; older-version notes are labelled explicitly. This page separates reproducible behavior from compatibility that still needs qualification.
 
 ## Sidebar width
 
@@ -35,5 +35,7 @@ macOS can ask again for local-network permission when an ad-hoc build changes. C
 The official 0.1.0 build 1343 passed Developer ID signature, notarization, mounted-package and Gatekeeper checks. The maintainer tested the candidate on a separate Mac and accepted the build and first-engine guidance. This evidence applies to that exact 0.1.0 artifact.
 
 For 0.1.1 build 1353, the maintainer accepted the tested maintenance candidate. The official Release-channel package was rebuilt from the same source content. Developer ID signing, Apple notarization/stapling, checksums, mounted-package validation and Gatekeeper assessments of both the DMG and its app passed. Candidate acceptance does not imply full qualification of every service, accessibility setting or workload.
+
+The 0.1.2 candidate is build 1354. Evidence from earlier maintenance candidates does not substitute for qualification of the exact 0.1.2 source and artifact. The reported difference between a 37 tok/s server reading and a 2–3 tok/s live display has not been reproduced; 0.1.2 separates the available measurements and adds bounded diagnostics but does not claim an engine-speed improvement. Stable oMLX 0.6.4 remains the qualified baseline.
 
 Broader engine/service combinations, full accessibility coverage and long-workload profiling remain ongoing. A successful installation does not establish compatibility with every model or integration. Consult [Release readiness](RELEASE-CHECKLIST.md) for the acceptance scope.

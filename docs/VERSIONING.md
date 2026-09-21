@@ -4,16 +4,16 @@ Implemented by ADR-0040. Public release approval, clean-machine acceptance and p
 
 [release.json](../apps/goat-macos/release.json) is the editable product identity: canonical `version`, `codename` and positive integer `build`. Read that record for the current build number, which must remain above the legacy build 1337. Increment the build when preparing a new candidate with changed content. The record alone does not make a candidate distributable.
 
-The current maintenance release is **0.1.1 (Kid)**. The published 0.1.0 artifacts retain their original identity.
+The current candidate is **0.1.2 (Kid)**. The published 0.1.1 artifacts retain their original identity until the new release is approved and published.
 
-| Surface | 0.1.1 release value |
+| Surface | 0.1.2 release value |
 |---|---|
-| About and Activity Log, either presentation mode | `0.1.1 (Kid)` |
-| Website label and GitHub draft title | `GOAT 0.1.1 (Kid)` |
-| Bundle version / tag / DMG filename | `0.1.1` / `v0.1.1` / `GOAT-0.1.1.dmg` |
+| About and Activity Log, either presentation mode | `0.1.2 (Kid)` |
+| Website label and GitHub draft title | `GOAT 0.1.2 (Kid)` |
+| Bundle version / tag / DMG filename | `0.1.2` / `v0.1.2` / `GOAT-0.1.2.dmg` |
 | Secondary UI diagnostics | `Development · build <number>` or `Candidate · build <number>` |
 
-Only a zero patch is omitted from display; `0.1.1 (Kid)` keeps its patch. Choose codenames from [CODENAMES.md](CODENAMES.md). Patch candidates preserve their release-line codename. Versions change for releases, not milestones or rebuilds.
+Only a zero patch is omitted from display; `0.1.2 (Kid)` keeps its patch. Choose codenames from [CODENAMES.md](CODENAMES.md). Patch candidates preserve their release-line codename. Versions change for releases, not milestones or rebuilds.
 
 ## Build and validation
 
