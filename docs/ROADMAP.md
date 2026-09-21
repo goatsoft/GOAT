@@ -1,6 +1,6 @@
 # Roadmap
 
-The current release is **0.1.1 (Kid)**. The capabilities below are included in the downloadable Mac app. Future work has no promised delivery date.
+The current published release is **0.1.1 (Kid)**. **0.1.2 (Kid)** is in release preparation. The capabilities below are present in the current source; future work has no promised delivery date.
 
 ## Available in Kid
 
@@ -27,6 +27,19 @@ Downloads and release notes are on [GitHub Releases](https://github.com/goatsoft
 
 The maintainer accepted the tested maintenance candidate. The official release was rebuilt from the same source content and passed signing, notarization and mounted-package checks. See [Release readiness](RELEASE-CHECKLIST.md) for the acceptance requirements. These maintenance changes do not complete M7 or require a 0.2 release.
 
+## Kid 0.1.2 maintenance release
+
+0.1.2 brings the completed model-management work and the subsequent usability, engine, transcript and developer-workflow improvements into one Kid maintenance release. Its user-facing scope is:
+
+- model inventory, favourites, capability filters, compatibility details and per-model preferences;
+- conversation compaction, bounded recovery from transient engine failures and safer tool-call handling;
+- responsive navigation and faithful copy for very large transcripts;
+- clearer oMLX status, limits and performance measurements while retaining stable oMLX 0.6.4 as the qualified baseline;
+- preservation of configured Custom endpoints while offline; and
+- a maintained Xcode project, domain-owned tests, focused module runners and verified Developer ID builds.
+
+The [0.1.2 release notes](RELEASE-NOTES.md#kid-0-1-2-in-preparation) describe the changes for users. Exact-candidate qualification and publication remain governed by [Release readiness](RELEASE-CHECKLIST.md).
+
 ## Model selection, capabilities and recovery
 
 The model-management implementation is complete on PR #27 and passed local Release verification plus macOS 26 CI on 20 September 2026:
@@ -50,7 +63,7 @@ Live engine and checkpoint qualification remains separate. A Qwen3.8 27B 4-bit t
 
 [Issue #30](https://github.com/goatsoft/GOAT/issues/30) is the maintenance umbrella. The ordered work is long-transcript responsiveness and memory pressure in [issue #29](https://github.com/goatsoft/GOAT/issues/29), oMLX status, memory, sampling ownership, and effective-limit reporting in [issue #31](https://github.com/goatsoft/GOAT/issues/31), and macOS 27 Golden Gate Pen-sandbox qualification while retaining macOS 26 Tahoe support in [issue #33](https://github.com/goatsoft/GOAT/issues/33).
 
-PRs #35, #36, #40 and #41 are merged. Qualification issues #24, #26, #29, #30, #31 and #33 are closed. The [engine contract](ENGINES.md#maintenance-qualification-20-september-2026) records live qualification and its limits. Current delivery state is tracked on the [project board](https://github.com/orgs/goatsoft/projects/1). PR #41 distinguishes received-output estimates from server decode speed and records arrival/publication timings; [#38](https://github.com/goatsoft/GOAT/issues/38) remains open for the original unreproduced throughput discrepancy. Stable oMLX 0.6.4 remains the baseline. Current maintainer work is the maintained Xcode project, build workflow and domain test organization [#39](https://github.com/goatsoft/GOAT/issues/39), recorded in [ADR-0093](adrs/0093-maintained-xcode-project.md) and [Testing by domain](reference/testing.md). WebKit helper-process reuse and log-noise reduction #28 and native delegation #32 remain separate. A release version and publication are not assigned by this scope.
+PRs #35, #36, #40, #41 and #42 are merged. Qualification issues #24, #26, #29, #30, #31, #33 and #39 are closed. The [engine contract](ENGINES.md#maintenance-qualification-20-september-2026) records live qualification and its limits. Current delivery state is tracked on the [project board](https://github.com/orgs/goatsoft/projects/1). PR #41 distinguishes received-output estimates from server decode speed and records arrival/publication timings; [#38](https://github.com/goatsoft/GOAT/issues/38) remains open for the original unreproduced throughput discrepancy. Stable oMLX 0.6.4 remains the baseline. PR #42 delivered the maintained Xcode project, build workflow and domain test organization recorded in [ADR-0093](adrs/0093-maintained-xcode-project.md) and [Testing by domain](reference/testing.md). WebKit helper-process reuse and log-noise reduction #28 and native delegation #32 remain separate backlog work. The completed maintenance scope is assigned to 0.1.2; publication still requires exact-candidate acceptance.
 
 Repeat controlled model qualification with Qwen3.8 27B 4-bit first, followed by Devstral, DeepSeek, and the practical GLM-4.7-Flash 31B candidate. Native subagent work in [issue #32](https://github.com/goatsoft/GOAT/issues/32) follows the usability fixes and starts with one sequential, read-only, isolated child before adding write, parallel, or recursive execution.
 
