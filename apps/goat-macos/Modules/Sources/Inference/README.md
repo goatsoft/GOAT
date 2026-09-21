@@ -8,6 +8,6 @@ Dependencies: Herd, JUDAS.
 
 Configured endpoints through JUDAS; context is data, never permission; no in-process ML.
 
-Validation: InferenceTests covers wire handling, budgets, capabilities and lifecycle ownership.
+Validation: InferenceTests covers wire handling, budgets, capabilities and lifecycle ownership. Run `make test MODULE=Inference`.
 
 See the [module catalogue](../../../../../docs/MODULES.md) and [architecture](../../../../../docs/ARCHITECTURE.md). App-specific screens and routing stay in the host; importing this module does not initialize the app.

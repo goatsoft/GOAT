@@ -1903,11 +1903,11 @@
     },
     {
       "path": "apps/goat-macos/Modules/Package.swift",
-      "sha256": "a7eb8bd82a91fc5e9510690382fc75e918949dac9cd65f811fdbd1d0fb62c0f0"
+      "sha256": "42aa7e3aa7f383c9b19f0feab9d07a4c5c01e585ae2e7909ad1fa3d8989c543b"
     },
     {
       "path": "apps/goat-macos/GOAT.xcodeproj/project.pbxproj",
-      "sha256": "2aa5890aec07f24154d1fc74ecaa089ed97d407ce9b19c08653784b55868f725"
+      "sha256": "f191e06fe39be3d53f2806ea15ad6d193a79a644d4f2b2aed0e871ce3daf70d6"
     },
     {
       "path": "scripts/distribution-notices.py",

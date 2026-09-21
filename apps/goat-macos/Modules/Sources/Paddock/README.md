@@ -8,6 +8,6 @@ Dependencies: Caprine, JUDAS.
 
 Bounded in-memory document preparation; ephemeral WebKit, shared immutable rules, Source-mode document retirement and JUDAS revocation.
 
-Validation: PaddockTests, PaddockWebRenderingTests, PaddockBenchmarkTests, RenderingPerformanceTests.
+Validation: The Paddock test plan covers navigation, rendering, document and rule-cache contracts. Repeated timing workloads are in Qualification. Run `make test MODULE=Paddock`.
 
 See the [module catalogue](../../../../../docs/MODULES.md) and [architecture](../../../../../docs/ARCHITECTURE.md). App-specific screens and routing stay in the host; importing this module does not initialize the app.

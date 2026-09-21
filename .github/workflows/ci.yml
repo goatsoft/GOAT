@@ -68,7 +68,9 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: app-test-results
-          path: apps/goat-macos/.build/DerivedData/Logs/Test/*.xcresult
+          path: |
+            apps/goat-macos/.build/DerivedData/Logs/Test/*.xcresult
+            apps/goat-macos/.build/TestResults/**/*.xcresult
           include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 7

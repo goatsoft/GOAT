@@ -2,6 +2,8 @@
 CONFIG ?= Debug
 -include signing.local.mk
 SWIFT_FLAGS ?=
+TEST_PLAN ?= All
+MODULE ?=
 XCODE_FLAGS ?=
 DERIVED := .build/DerivedData
 APP := $(DERIVED)/Build/Products/$(CONFIG)/GOAT.app
@@ -16,7 +18,7 @@ SIGNING_FLAGS = CODE_SIGN_IDENTITY="$(CODE_SIGN_IDENTITY)" CODE_SIGN_STYLE=Manua
 RELEASE_SIGNING_FLAGS = CODE_SIGN_IDENTITY="$(RELEASE_SIGNING_IDENTITY)" CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="$(DEVELOPMENT_TEAM)"
 DIST := dist
 
-.PHONY: gen prepare open build run test test-app format lint verify clean release dmg
+.PHONY: test-module test-package test-tools test-web gen prepare open build run test test-app format lint verify clean release dmg
 
 # Compatibility alias: never regenerate or overwrite the maintained project.
 gen: prepare
@@ -24,6 +26,7 @@ gen: prepare
 prepare:
 	python3 scripts/release-metadata.py check --channel "$(RELEASE_CHANNEL)" $(if $(RELEASE_TAG),--tag "$(RELEASE_TAG)",)
 	python3 scripts/check-xcode-project.py
+	python3 scripts/check-test-layout.py
 
 open: prepare
 	open GOAT.xcodeproj
@@ -42,26 +45,49 @@ run: build
 	@pkill -TERM -f '$(APP)/Contents/MacOS/GOAT' >/dev/null 2>&1 || true
 	open -n $(APP)
 
+# MODULE selects both layers; unfiltered test retains the full package gate.
 test:
-	swift test $(SWIFT_FLAGS) --arch arm64 --package-path $(MODULES) --no-parallel
+ifeq ($(strip $(MODULE)),)
+	$(MAKE) test-package
+else
+	$(MAKE) test-module
+endif
+
+test-module:
+	python3 scripts/test-domain.py "$(MODULE)"
+
+test-package:
+	$(if $(MODULE),@test -d "Modules/Tests/$(MODULE)Tests" || { echo "Unknown package test domain: $(MODULE)"; exit 2; },@true)
+	swift test $(SWIFT_FLAGS) --arch arm64 --package-path $(MODULES) --no-parallel $(if $(MODULE),--filter '^$(MODULE)Tests[.]',)
+
+test-tools:
+	python3 -m unittest discover -s scripts/tests -p 'test_*.py'
+	python3 -m unittest discover -s ../../scripts/tests -p 'test_*.py'
+
+test-web:
+	npm --prefix ../../web run test:unit
 
 test-app: prepare
-	xcodebuild -project GOAT.xcodeproj -scheme GOAT -configuration $(CONFIG) \
-	  -derivedDataPath $(DERIVED) -destination 'platform=macOS,arch=arm64' ARCHS=arm64 -onlyUsePackageVersionsFromResolvedFile ENABLE_TESTABILITY=YES $(SIGNING_FLAGS) GOAT_RELEASE_CHANNEL="$(RELEASE_CHANNEL)" RELEASE_TAG="$(RELEASE_TAG)" $(XCODE_FLAGS) test
+	python3 scripts/run-host-tests.py xcodebuild -project GOAT.xcodeproj -scheme GOAT -configuration $(CONFIG) \
+	  -derivedDataPath $(DERIVED) -destination 'platform=macOS,arch=arm64' ARCHS=arm64 -onlyUsePackageVersionsFromResolvedFile ENABLE_TESTABILITY=YES $(SIGNING_FLAGS) GOAT_RELEASE_CHANNEL="$(RELEASE_CHANNEL)" RELEASE_TAG="$(RELEASE_TAG)" -testPlan "$(TEST_PLAN)" $(XCODE_FLAGS) test
 
 format:
 	swift format --in-place --recursive App/Sources App/Tests Modules/Sources Modules/Tests
 
 lint:
 	python3 scripts/release-metadata.py check
-	python3 -m unittest discover -s scripts/tests -p 'test_*.py'
+	$(MAKE) test-tools
 	python3 scripts/sync-module-docs.py --check
 	python3 scripts/check-xcode-project.py
+	python3 scripts/check-test-layout.py
 	python3 scripts/check-module-boundaries.py
 	python3 scripts/check-judas-boundaries.py
 	swift format lint --strict --recursive App/Sources App/Tests Modules/Sources Modules/Tests
 
-verify: lint test test-app
+# A focused shell selection must never silently narrow the release gate.
+verify: lint
+	$(MAKE) test-package MODULE= SWIFT_FLAGS="-c $(shell echo $(CONFIG) | tr A-Z a-z)"
+	$(MAKE) test-app TEST_PLAN=All XCODE_FLAGS=
 	$(MAKE) build
 
 clean:

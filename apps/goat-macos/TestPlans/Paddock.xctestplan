@@ -1,0 +1,63 @@
+{
+  "configurations": [
+    {
+      "id": "F1DB1D28-6FE1-5E12-A060-76526D8E9CB7",
+      "name": "Default",
+      "options": {}
+    }
+  ],
+  "defaultOptions": {
+    "environmentVariableEntries": [
+      {
+        "key": "GOAT_TEST_MODE",
+        "value": "1"
+      },
+      {
+        "key": "GOAT_HOME",
+        "value": "$(PROJECT_TEMP_DIR)/GOATTestsHome"
+      }
+    ],
+    "targetForVariableExpansion": {
+      "containerPath": "container:GOAT.xcodeproj",
+      "identifier": "C832E203313CE6669FE5A036",
+      "name": "GOAT"
+    }
+  },
+  "testTargets": [
+    {
+      "target": {
+        "containerPath": "container:GOAT.xcodeproj",
+        "identifier": "738207A62649A08AC4700238",
+        "name": "GOATTests"
+      },
+      "parallelizable": false,
+      "selectedTests": {
+        "suites": [
+          {
+            "name": "AppTests",
+            "suites": [
+              {
+                "name": "Paddock"
+              }
+            ]
+          }
+        ],
+        "xctestClasses": [
+          {
+            "name": "ChatArtifactPreviewTests"
+          },
+          {
+            "name": "ChatArtifactSyntaxTests"
+          },
+          {
+            "name": "PaddockTests"
+          },
+          {
+            "name": "PaddockWebRenderingTests"
+          }
+        ]
+      }
+    }
+  ],
+  "version": 1
+}

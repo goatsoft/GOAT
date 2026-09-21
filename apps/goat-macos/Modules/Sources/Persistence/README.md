@@ -8,6 +8,6 @@ Dependencies: Herd.
 
 Async GRDB pool with indexed reads; cached narrow checkpoints preserve independent metadata. Durable records never depend on render caches.
 
-Validation: DatabaseTests and PersistenceWriterTests.
+Validation: DatabaseTests and PersistenceWriterTests. Run `make test MODULE=Persistence`.
 
 See the [module catalogue](../../../../../docs/MODULES.md) and [architecture](../../../../../docs/ARCHITECTURE.md). App-specific screens and routing stay in the host; importing this module does not initialize the app.

@@ -11,7 +11,7 @@ no inference request is sent.
 Run the workload alone in Release:
 
 ```sh
-make test-app CONFIG=Release XCODE_FLAGS='-only-testing:GOATTests/TranscriptPerformanceTests'
+make test-app CONFIG=Release TEST_PLAN=Qualification XCODE_FLAGS='-only-testing:GOATTests/TranscriptPerformanceTests'
 ```
 
 Each `TRANSCRIPT_PROFILE` record includes elapsed time, process CPU time, the

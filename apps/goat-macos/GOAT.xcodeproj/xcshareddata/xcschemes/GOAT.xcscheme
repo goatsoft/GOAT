@@ -38,19 +38,40 @@
             ReferencedContainer = "container:GOAT.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
-      <Testables>
-         <TestableReference
-            skipped = "NO"
-            parallelizable = "NO">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "738207A62649A08AC4700238"
-               BuildableName = "GOATTests.xctest"
-               BlueprintName = "GOATTests"
-               ReferencedContainer = "container:GOAT.xcodeproj">
-            </BuildableReference>
-         </TestableReference>
-      </Testables>
+      <TestPlans>
+         <TestPlanReference reference = "container:TestPlans/All.xctestplan" default = "YES">
+         </TestPlanReference>
+         <TestPlanReference reference = "container:TestPlans/App.xctestplan">
+         </TestPlanReference>
+         <TestPlanReference reference = "container:TestPlans/Bleet.xctestplan">
+         </TestPlanReference>
+         <TestPlanReference reference = "container:TestPlans/Caprine.xctestplan">
+         </TestPlanReference>
+         <TestPlanReference reference = "container:TestPlans/Shepherd.xctestplan">
+         </TestPlanReference>
+         <TestPlanReference reference = "container:TestPlans/Inference.xctestplan">
+         </TestPlanReference>
+         <TestPlanReference reference = "container:TestPlans/GOATed.xctestplan">
+         </TestPlanReference>
+         <TestPlanReference reference = "container:TestPlans/Herd.xctestplan">
+         </TestPlanReference>
+         <TestPlanReference reference = "container:TestPlans/Hindsight.xctestplan">
+         </TestPlanReference>
+         <TestPlanReference reference = "container:TestPlans/Memory.xctestplan">
+         </TestPlanReference>
+         <TestPlanReference reference = "container:TestPlans/MCPClient.xctestplan">
+         </TestPlanReference>
+         <TestPlanReference reference = "container:TestPlans/Pens.xctestplan">
+         </TestPlanReference>
+         <TestPlanReference reference = "container:TestPlans/Persistence.xctestplan">
+         </TestPlanReference>
+         <TestPlanReference reference = "container:TestPlans/Hoofprint.xctestplan">
+         </TestPlanReference>
+         <TestPlanReference reference = "container:TestPlans/Paddock.xctestplan">
+         </TestPlanReference>
+         <TestPlanReference reference = "container:TestPlans/Qualification.xctestplan">
+         </TestPlanReference>
+      </TestPlans>
       <CommandLineArguments>
       </CommandLineArguments>
       <EnvironmentVariables>

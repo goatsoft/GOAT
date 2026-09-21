@@ -44,6 +44,8 @@ make release  # Release config, hardened runtime
 
 All targets work from the repo root (delegated) or from `apps/goat-macos` directly.
 
+For domain selection in Make and Xcode, see [Testing by domain](docs/reference/testing.md). `make test MODULE=Bleet` and `make test MODULE=Paddock` run the tests owned by those domains. Website tests use `make test-web`; build/release tooling uses `make test-tools`.
+
 Documentation and website-only changes use the web and content checks in [Contributing](CONTRIBUTING.md#verify-a-change); they do not require a local app rebuild. [ADR-0083](docs/adrs/0083-selective-app-ci.md) defines the corresponding CI path policy, including root Markdown guides and bundled-notice exceptions. App/build changes and release qualification still require full verification.
 
 ## Hard rules

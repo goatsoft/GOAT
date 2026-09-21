@@ -1,0 +1,54 @@
+{
+  "configurations": [
+    {
+      "id": "A6E1E44D-0F4E-5A24-A320-B807CB636C74",
+      "name": "Default",
+      "options": {}
+    }
+  ],
+  "defaultOptions": {
+    "environmentVariableEntries": [
+      {
+        "key": "GOAT_TEST_MODE",
+        "value": "1"
+      },
+      {
+        "key": "GOAT_HOME",
+        "value": "$(PROJECT_TEMP_DIR)/GOATTestsHome"
+      }
+    ],
+    "targetForVariableExpansion": {
+      "containerPath": "container:GOAT.xcodeproj",
+      "identifier": "C832E203313CE6669FE5A036",
+      "name": "GOAT"
+    }
+  },
+  "testTargets": [
+    {
+      "target": {
+        "containerPath": "container:GOAT.xcodeproj",
+        "identifier": "738207A62649A08AC4700238",
+        "name": "GOATTests"
+      },
+      "parallelizable": false,
+      "selectedTests": {
+        "suites": [
+          {
+            "name": "AppTests",
+            "suites": [
+              {
+                "name": "Inference"
+              }
+            ]
+          }
+        ],
+        "xctestClasses": [
+          {
+            "name": "EngineSetupTests"
+          }
+        ]
+      }
+    }
+  ],
+  "version": 1
+}

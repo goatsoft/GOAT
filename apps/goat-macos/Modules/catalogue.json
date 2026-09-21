@@ -9,7 +9,7 @@
       "summary": "Observable session and transcript state with incremental live metrics.",
       "interfaces": "ChatSession, ChatMessage, LiveGenerationMetrics",
       "security": "No transport or tool execution; streamed display state is coalesced by Shepherd.",
-      "validation": "ComposerStatusTests, ShepherdModelTests, persistence host tests."
+      "validation": "BleetTests covers message revisions and live metrics; the Bleet test plan covers composer, transcript and status presentation. Run `make test MODULE=Bleet`."
     },
     {
       "name": "Caprine",
@@ -20,7 +20,7 @@
       "summary": "Themes, colour rendering and reusable visual primitives.",
       "interfaces": "Caprine, ThemeSpec, ThemeStore, ThemeCatalog",
       "security": "Theme files are bounded local data; font declarations never download assets.",
-      "validation": "ThemeFontTests, theme persistence tests, ReadingFontTests."
+      "validation": "CaprineTests covers theme catalogues, storage security and font persistence; hosted Caprine tests cover appearance and font rendering. Run `make test MODULE=Caprine`."
     },
     {
       "name": "goat",
@@ -40,7 +40,7 @@
       "summary": "Scoped extension capabilities, registration lifetimes, skills and declarative .goated packages.",
       "interfaces": "ExtensionRuntime, Extension, ExtensionPackage, ToolHandle, SkillProvider",
       "security": "Bundled native code remains trusted; handles are scoped, revocable and bounded. User archives are validated in memory without extraction or execution.",
-      "validation": "GOATedTests (including package admission and scope), AppToolRouterTests and UserExtensionTests."
+      "validation": "GOATedTests (including package admission and scope), AppToolRouterTests and UserExtensionTests. Run `make test MODULE=GOATed`."
     },
     {
       "name": "Herd",
@@ -48,7 +48,7 @@
       "summary": "Local home, credentials, attachment files and user workspace bindings.",
       "interfaces": "Home, LocalFileStore, CredentialStore, AttachmentStore, HerdWorkspaceFileWorker, GitWorkspaceWorker",
       "security": "Owner-only credentials and bounded filesystem reads; Git probes stay local and initialization is explicit.",
-      "validation": "PersistenceSecurityTests, AttachmentStoreTests, HerdWorkspaceTests."
+      "validation": "HerdTests covers credentials, bounded filesystem reads and attachments; hosted Herd tests cover workspaces and image preparation. Run `make test MODULE=Herd`."
     },
     {
       "name": "Hindsight",
@@ -62,7 +62,7 @@
       "summary": "Optional bank-scoped memory service transport and store.",
       "interfaces": "HindsightControlClient, HindsightProviderClient, HindsightMemoryStore, HindsightLimits",
       "security": "Uses JUDAS and the bounded MCP adapter; bank authority and response limits are explicit. No automatic cross-Pen migration.",
-      "validation": "HindsightBrowserTests, MemoryModelTests, Hindsight configuration tests."
+      "validation": "The Hindsight test plan covers provider contracts, bounded responses, browsing and session ownership. Run `make test MODULE=Hindsight`."
     },
     {
       "name": "Hitch",
@@ -72,7 +72,7 @@
       "summary": "Same-user local control API, replay ledger and Unix socket.",
       "interfaces": "HitchRequest, HitchReply, HitchDispatcher, HitchServer, LocalSocket",
       "security": "Off by default; private Unix socket, no TCP, no credentials API, no approval bypass.",
-      "validation": "HitchTests includes real temporary sockets and the built CLI."
+      "validation": "HitchTests includes real temporary sockets and the built CLI. Run `make test MODULE=Hitch`."
     },
     {
       "name": "Hoofprint",
@@ -82,7 +82,7 @@
       "summary": "Bounded activity history, event-driven audit publication and local rendering signposts.",
       "interfaces": "ActivityLog, RenderSignposts",
       "security": "Bounded to 500 in-memory entries; no durable telemetry or endpoint.",
-      "validation": "JudasActivityTests; rendering and Shepherd host tests."
+      "validation": "JudasActivityTests; rendering and Shepherd host tests. Run `make test MODULE=Hoofprint`."
     },
     {
       "name": "Inference",
@@ -93,7 +93,7 @@
       "summary": "Engine contracts, capability discovery, prompt budgets and streaming.",
       "interfaces": "InferenceEngine, OpenAICompatEngine, PromptBudgeter, EngineLifecycleController",
       "security": "Configured endpoints through JUDAS; context is data, never permission; no in-process ML.",
-      "validation": "InferenceTests covers wire handling, budgets, capabilities and lifecycle ownership."
+      "validation": "InferenceTests covers wire handling, budgets, capabilities and lifecycle ownership. Run `make test MODULE=Inference`."
     },
     {
       "name": "JUDAS",
@@ -101,7 +101,7 @@
       "summary": "Host connection policy, revocation and bounded security events.",
       "interfaces": "Judas, JudasHTTPClient, JudasRegistration, JudasMode, LocalNetworkAddress",
       "security": "Configured / local-networks-only / blocked policy; redirects rejected. Not an OS firewall or native-code sandbox.",
-      "validation": "JudasTests, JudasMCPTests, JudasActivityTests and the network boundary checker."
+      "validation": "JudasTests, JudasMCPTests, JudasActivityTests and the network boundary checker. Run `make test MODULE=JUDAS`."
     },
     {
       "name": "MCPClient",
@@ -112,7 +112,7 @@
       "summary": "MCP server configuration, transport and capability-bound invocation.",
       "interfaces": "MCPServerManager, MCPServerConfig, MCPError",
       "security": "Only module importing the external MCP SDK. JUDAS admits transports/processes; app approvals bind to configuration identity.",
-      "validation": "MCPClientTests and MCPModelSecurityTests."
+      "validation": "MCPClientTests and MCPModelSecurityTests. Run `make test MODULE=MCPClient`."
     },
     {
       "name": "Memory",
@@ -123,7 +123,7 @@
       "summary": "Provider-neutral memory contracts, scope and local stores.",
       "interfaces": "MemoryStore, MemoryContext, WikiMemoryStore, LLMWikiMemoryStore, MemoryConfigurationStore",
       "security": "Exclusive Global or Pen scope, bounded descriptor-relative filesystem operations; provider content does not grant authority.",
-      "validation": "MemoryTests and MemoryModelTests."
+      "validation": "MemoryTests and MemoryModelTests. Run `make test MODULE=Memory`."
     },
     {
       "name": "Paddock",
@@ -134,7 +134,7 @@
       "summary": "Artifact values, HTML shells, navigation policy and WebKit host.",
       "interfaces": "PaddockArtifact, PaddockDocumentCache, PaddockHTML, PaddockNavigationPolicy, WebPreview",
       "security": "Bounded in-memory document preparation; ephemeral WebKit, shared immutable rules, Source-mode document retirement and JUDAS revocation.",
-      "validation": "PaddockTests, PaddockWebRenderingTests, PaddockBenchmarkTests, RenderingPerformanceTests."
+      "validation": "The Paddock test plan covers navigation, rendering, document and rule-cache contracts. Repeated timing workloads are in Qualification. Run `make test MODULE=Paddock`."
     },
     {
       "name": "Pens",
@@ -146,7 +146,7 @@
       "summary": "Folder-backed Pen metadata, instructions and serializable colour. Native workspace file operations support the bundled GOATed Herder extension.",
       "interfaces": "PenSpec, PenStore, PenFileRef, OKLCH, PenFileTools, PenCommandTools",
       "security": "Validated identifiers, staged writes, explicit workspace binding; no UI framework or database dependency. File tools use a turn-bound workspace and descriptor-relative traversal, reject symlinks and multiple hard links, bound reads, and require host approval before writes. Commands use a deny-default macOS sandbox, isolated environment, separate owner whitelist and JUDAS network admission.",
-      "validation": "PersistenceSecurityTests, PensHomeTests and scope tests. PenFileToolsTests and AppToolRouterTests cover writes, path boundaries and approval revocation."
+      "validation": "PensTests covers stores and file/command tools; hosted Pens tests cover permission grants and project navigation. Run `make test MODULE=Pens`."
     },
     {
       "name": "Persistence",
@@ -156,7 +156,7 @@
       "summary": "Chat database, migrations, records and tool-grant storage.",
       "interfaces": "ChatDatabase, ChatRecord, MessageRecord, ToolGrantRecord, PenFileGrantRecord, ToolEventSnapshot",
       "security": "Async GRDB pool with indexed reads; cached narrow checkpoints preserve independent metadata. Durable records never depend on render caches.",
-      "validation": "DatabaseTests and PersistenceWriterTests."
+      "validation": "DatabaseTests and PersistenceWriterTests. Run `make test MODULE=Persistence`."
     },
     {
       "name": "Pronk",
@@ -168,7 +168,7 @@
       "summary": "The offline, Pen-scoped fictional-goat extension example.",
       "interfaces": "PronkExtension",
       "security": "Bundled example using public GOATed contracts; state stays in the selected Pen scope; no network or scripts.",
-      "validation": "CapabilityTests exercises contributions and scope; examples/pronk documents usage."
+      "validation": "PronkTests exercises offline persistence and Pen scope; examples/pronk documents usage. Run `make test MODULE=Pronk`."
     },
     {
       "name": "Shepherd",
@@ -186,7 +186,7 @@
       "summary": "Single-turn orchestration, worker execution, tool rounds and durable handover.",
       "interfaces": "ShepherdModel, ShepherdEnvironment, ShepherdToolSource",
       "security": "One active turn for GUI and Hitch; persistence and capability checks gate progress. Worker I/O stays off MainActor.",
-      "validation": "ShepherdModelTests and turn-ownership host tests."
+      "validation": "ShepherdModelTests and turn-ownership host tests. Run `make test MODULE=Shepherd`."
     },
     {
       "name": "Tools",

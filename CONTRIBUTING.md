@@ -37,6 +37,8 @@ When no GOAT chat or command is active, open the built app at `apps/goat-macos/.
 
 ## Verify a change
 
+For domain selection in Make and Xcode, see [Testing by domain](docs/reference/testing.md). `make test MODULE=Bleet` and `make test MODULE=Paddock` run the tests owned by those domains. Website tests use `make test-web`; build/release tooling uses `make test-tools`.
+
 `make verify` checks metadata, module/network boundaries, formatting, package tests, app tests and the app build. It does not start a live model request. Run it before committing app/build changes. Use the checks relevant to documentation and website edits as well:
 
 ```sh
