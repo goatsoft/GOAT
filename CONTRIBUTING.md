@@ -14,21 +14,30 @@ Compatibility reports should include GOAT, macOS, engine and model versions, the
 
 ## Build locally
 
-Use an Apple Silicon Mac with macOS 26 or later, Xcode with the macOS 26 SDK, and XcodeGen. Select the intended Xcode installation with the normal developer-tool configuration. From the repository root:
+Use an Apple Silicon Mac with macOS 26 or later and Xcode with the macOS 26 SDK. Select the intended Xcode installation with the normal developer-tool configuration. From a fresh checkout:
 
 ```sh
-brew install xcodegen
-make gen
-make build
+make open
 ```
 
-The project is generated from `apps/goat-macos/project.yml`. Never commit `.xcodeproj` output. `make build` also regenerates it and does not launch GOAT.
+Select the shared **GOAT** scheme and **My Mac**, then use Product > Build (Command-B), Run (Command-R) or Test (Command-U). Debug uses the normal LLDB debugger. Run opens a development GOAT instance, so finish any active GOAT chat or command first. To experiment with separate data, duplicate the scheme as a user scheme and set `GOAT_HOME` to a disposable directory in its Run environment. Do not commit that personal scheme. Tests already use isolated state.
 
-The app dependency lock is `apps/goat-macos/Package.resolved`; `make gen` copies it into the generated project and build targets require those versions. The local package and CLI have a separate lock in `Modules/Package.resolved`. Review both locks and refresh third-party notices when updating dependencies.
+`apps/goat-macos/GOAT.xcodeproj` is maintained source. Edits to target settings and the shared scheme persist and belong in the same commit as the change. Add new source files to the appropriate GOAT or GOATTests target in Xcode; `make lint` checks membership. Do not regenerate the project. `make gen` remains a validation-only compatibility alias. `make clean` preserves the project.
+
+The project owns app/test build settings. `Modules/Package.swift` owns the local package graph. `release.json` owns version, build and codename; each app build generates current provenance in DerivedData. Do not override those identity fields in Xcode. Ad-hoc signing works without an Apple Developer account; official release signing remains in the documented Make workflow.
+
+The app dependency lock is `apps/goat-macos/GOAT.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`. The local package and CLI retain a separate lock in `Modules/Package.resolved`. Commit intentional dependency updates from Xcode and refresh third-party notices after reviewing both locks. Command-line builds require the pinned versions.
+
+```sh
+make build
+make test-app
+```
 
 When no GOAT chat or command is active, open the built app at `apps/goat-macos/.build/DerivedData/Build/Products/Debug/GOAT.app`. The convenience `make run` target quits/relaunches GOAT; never use it during active work. Use a separate derived-data directory for acceptance builds when necessary.
 
 ## Verify a change
+
+For domain selection in Make and Xcode, see [Testing by domain](docs/reference/testing.md). `make test MODULE=Bleet` and `make test MODULE=Paddock` run the tests owned by those domains. Website tests use `make test-web`; build/release tooling uses `make test-tools`.
 
 `make verify` checks metadata, module/network boundaries, formatting, package tests, app tests and the app build. It does not start a live model request. Run it before committing app/build changes. Use the checks relevant to documentation and website edits as well:
 

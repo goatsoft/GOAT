@@ -34,6 +34,21 @@ class ReleaseSigningTests(unittest.TestCase):
             with self.subTest(identity=identity), self.assertRaises(ValueError):
                 signing.validate_configuration({**self.env, "CODE_SIGN_IDENTITY": identity})
 
+    def test_local_signing_requires_matching_developer_id_and_team(self):
+        result = subprocess.run(
+            ["python3", str(Path(__file__).parents[1] / "check-release-signing.py"), "--local"],
+            env={"CODE_SIGN_IDENTITY": self.identity, "APPLE_TEAM_ID": "ABCDEFGHIJ"},
+            capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for identity, team in [("-", "ABCDEFGHIJ"), (self.identity, ""),
+                               (self.identity, "XXXXXXXXXX")]:
+            with self.subTest(identity=identity, team=team):
+                result = subprocess.run(
+                    ["python3", str(Path(__file__).parents[1] / "check-release-signing.py"), "--local"],
+                    env={"CODE_SIGN_IDENTITY": identity, "APPLE_TEAM_ID": team},
+                    capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+
     def test_invalid_certificate_encoding_is_rejected(self):
         with self.assertRaises(ValueError):
             signing.validate_configuration({**self.env, "MACOS_CERTIFICATE": "not-base64!"})
@@ -97,6 +112,12 @@ class ReleaseSigningTests(unittest.TestCase):
             self.assertIn('CODE_SIGN_IDENTITY="-"', dry_run("build", "CODE_SIGN_IDENTITY=-"))
             self.assertIn('OTHER_CODE_SIGN_FLAGS=""',
                           dry_run("release", "RELEASE_SIGNING_IDENTITY=-"))
+            selected = dry_run("check-signing")
+            self.assertIn(f'CODE_SIGN_IDENTITY="{self.identity}"', selected)
+            self.assertIn('APPLE_TEAM_ID="ABCDEFGHIJ"', selected)
+            self.assertIn('check-release-signing.py --local', selected)
+            verified = dry_run("verify-signing")
+            self.assertIn('check-release-signing.py --verify', verified)
 
 
 if __name__ == "__main__":

@@ -9,7 +9,7 @@ Older records retain the package and type names used when accepted. [ADR-0054](0
 | [0001](0001-inference-mlx.md) | On-device inference via MLX (`mlx-swift-lm`) | Superseded by 0008 |
 | [0002](0002-ui-architecture.md) | SwiftUI-first, `@Observable` MV, actor domain | Accepted |
 | [0003](0003-persistence-grdb.md) | GRDB/SQLite for persistence | Accepted |
-| [0004](0004-xcodegen-cli-builds.md) | XcodeGen + xcodebuild CLI builds | Accepted |
+| [0004](0004-xcodegen-cli-builds.md) | XcodeGen + xcodebuild CLI builds | Ownership superseded by 0093 |
 | [0005](0005-memory-architecture.md) | Pluggable memory: wiki default, Hindsight optional | Accepted · Hindsight runtime superseded by 0036; refined by 0031, 0033, 0035, and 0037 |
 | [0006](0006-mcp-integration.md) | MCP via official Swift SDK | Accepted |
 | [0007](0007-no-app-sandbox.md) | No App Sandbox; Hardened Runtime at ship | Accepted · signing refined by 0078 |
@@ -98,5 +98,7 @@ Older records retain the package and type names used when accepted. [ADR-0054](0
 | [0090](0090-omlx-capability-status-and-generation-ownership.md) | oMLX capability status and generation-setting ownership | Accepted · refines 0008, 0017, 0021 and 0086 |
 | [0091](0091-content-bounded-transcript-layout.md) | Content-bounded transcript layout | Accepted · refines 0056 and 0074 |
 | [0092](0092-selected-toolchain-resolution-for-pen-commands.md) | Selected toolchain resolution for Pen commands | Accepted · refines 0070 |
+
+| [0093](0093-maintained-xcode-project.md) | Maintained Xcode project and build-time release identity | Proposed · supersedes project ownership in 0004 |
 
 New session? Start with **[../../AGENT.md](../../AGENT.md)**, then [the roadmap](../ROADMAP.md).

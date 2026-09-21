@@ -15,6 +15,7 @@ Use these pages for exact behavior, defaults, limits and interfaces. Start with 
 | [Package format](PACKAGES.md) | Declarative archive fields, permissions and validation. |
 | [Theme format](../THEMES.md) | Theme fields, local fonts and examples. |
 | [Module catalogue](../MODULES.md) | Internal responsibilities and dependency direction. |
+| [Testing by domain](testing.md) | Focused module runs, Xcode test plans and test ownership. |
 | [Transcript performance](transcript-performance.md) | Synthetic Release workload, metric limits and runtime qualification. |
 | [Glossary](../GLOSSARY.md) | Product and technical terms. |
 

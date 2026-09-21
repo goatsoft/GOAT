@@ -37,7 +37,7 @@ You need an **Apple Silicon Mac running macOS 26 or later** and a compatible mod
 
 [Download the DMG](https://github.com/goatsoft/GOAT/releases/download/v0.1.1/GOAT-0.1.1.dmg), open it and drag GOAT into Applications. Follow [Getting started](https://goatherd.dev/Getting-Started) and the [engine compatibility reference](https://goatherd.dev/reference/engines). Configure your engine’s actual endpoint and credentials, select a model and send a first message. For project work, [create a Pen](https://goatherd.dev/how-to/CREATE-A-PEN) and review its workspace permissions.
 
-To build from source, install the required Xcode toolchain and XcodeGen, then:
+To build from source, install the required Xcode toolchain, then:
 
 ```sh
 git clone https://github.com/goatsoft/GOAT.git

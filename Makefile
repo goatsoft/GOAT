@@ -2,7 +2,7 @@
 # delegate there so `make build` / `make verify` keep working from the repo root.
 MACAPP := apps/goat-macos
 
-.PHONY: gen build run test test-app format lint verify clean release cli dmg module-docs
+.PHONY: gen prepare open build run test test-module test-package test-tools test-web test-app format lint verify clean release cli dmg module-docs
 
-gen build run test test-app format lint verify clean release cli dmg module-docs:
+gen prepare open build run test test-module test-package test-tools test-web test-app format lint verify clean release cli dmg module-docs:
 	$(MAKE) -C $(MACAPP) $@

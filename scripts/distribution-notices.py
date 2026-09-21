@@ -52,7 +52,7 @@ def main():
                  if not (ROOT / r['path']).is_file() or sha(ROOT / r['path']) != r['sha256']]
         if stale:
             fail('Distribution notices are stale; refresh and review:\n' + '\n'.join(stale))
-        resolved = args.app_resolved or APP / 'Package.resolved'
+        resolved = args.app_resolved or APP / 'GOAT.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved'
         if resolved:
             pins = sorted(json.loads(resolved.read_text())['pins'], key=lambda p: p['identity'])
             if pins != manifest['swiftPackages']:
@@ -187,7 +187,7 @@ def main():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
     inputs = [ROOT / 'LICENSE', ROOT / 'LICENSE-ART.md', WEB / 'package-lock.json', renderer,
-              APP / 'Modules/Package.resolved', APP / 'Modules/Package.swift', APP / 'project.yml',
+              APP / 'Modules/Package.resolved', APP / 'Modules/Package.swift', APP / 'GOAT.xcodeproj/project.pbxproj',
               Path(__file__).resolve(), *sorted(upstream.iterdir())]
     manifest = {'schemaVersion': 1, 'swiftPackages': swift, 'cliPackages': cli_pins,
                 'npmPackages': [{k: v for k, v in row.items() if k != 'text'} for row in npm.values()],

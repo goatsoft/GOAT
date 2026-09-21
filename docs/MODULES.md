@@ -37,7 +37,7 @@ Public seams: `ChatSession`, `ChatMessage`, `LiveGenerationMetrics`.
 
 No transport or tool execution; streamed display state is coalesced by Shepherd.
 
-Validation: ComposerStatusTests, ShepherdModelTests, persistence host tests.
+Validation: BleetTests covers message revisions and live metrics; the Bleet test plan covers composer, transcript and status presentation. Run `make test MODULE=Bleet`.
 
 ## Caprine
 
@@ -49,7 +49,7 @@ Public seams: `Caprine`, `ThemeSpec`, `ThemeStore`, `ThemeCatalog`.
 
 Theme files are bounded local data; font declarations never download assets.
 
-Validation: ThemeFontTests, theme persistence tests, ReadingFontTests.
+Validation: CaprineTests covers theme catalogues, storage security and font persistence; hosted Caprine tests cover appearance and font rendering. Run `make test MODULE=Caprine`.
 
 ## goat
 
@@ -73,7 +73,7 @@ Public seams: `ExtensionRuntime`, `Extension`, `ExtensionPackage`, `ToolHandle`,
 
 Bundled native code remains trusted; handles are scoped, revocable and bounded. User archives are validated in memory without extraction or execution.
 
-Validation: GOATedTests (including package admission and scope), AppToolRouterTests and UserExtensionTests.
+Validation: GOATedTests (including package admission and scope), AppToolRouterTests and UserExtensionTests. Run `make test MODULE=GOATed`.
 
 ## Herd
 
@@ -85,7 +85,7 @@ Public seams: `Home`, `LocalFileStore`, `CredentialStore`, `AttachmentStore`, `H
 
 Owner-only credentials and bounded filesystem reads; Git probes stay local and initialization is explicit.
 
-Validation: PersistenceSecurityTests, AttachmentStoreTests, HerdWorkspaceTests.
+Validation: HerdTests covers credentials, bounded filesystem reads and attachments; hosted Herd tests cover workspaces and image preparation. Run `make test MODULE=Herd`.
 
 ## Hindsight
 
@@ -97,7 +97,7 @@ Public seams: `HindsightControlClient`, `HindsightProviderClient`, `HindsightMem
 
 Uses JUDAS and the bounded MCP adapter; bank authority and response limits are explicit. No automatic cross-Pen migration.
 
-Validation: HindsightBrowserTests, MemoryModelTests, Hindsight configuration tests.
+Validation: The Hindsight test plan covers provider contracts, bounded responses, browsing and session ownership. Run `make test MODULE=Hindsight`.
 
 ## Hitch
 
@@ -109,7 +109,7 @@ Public seams: `HitchRequest`, `HitchReply`, `HitchDispatcher`, `HitchServer`, `L
 
 Off by default; private Unix socket, no TCP, no credentials API, no approval bypass.
 
-Validation: HitchTests includes real temporary sockets and the built CLI.
+Validation: HitchTests includes real temporary sockets and the built CLI. Run `make test MODULE=Hitch`.
 
 ## Hoofprint
 
@@ -121,7 +121,7 @@ Public seams: `ActivityLog`, `RenderSignposts`.
 
 Bounded to 500 in-memory entries; no durable telemetry or endpoint.
 
-Validation: JudasActivityTests; rendering and Shepherd host tests.
+Validation: JudasActivityTests; rendering and Shepherd host tests. Run `make test MODULE=Hoofprint`.
 
 ## Inference
 
@@ -133,7 +133,7 @@ Public seams: `InferenceEngine`, `OpenAICompatEngine`, `PromptBudgeter`, `Engine
 
 Configured endpoints through JUDAS; context is data, never permission; no in-process ML.
 
-Validation: InferenceTests covers wire handling, budgets, capabilities and lifecycle ownership.
+Validation: InferenceTests covers wire handling, budgets, capabilities and lifecycle ownership. Run `make test MODULE=Inference`.
 
 ## JUDAS
 
@@ -145,7 +145,7 @@ Public seams: `Judas`, `JudasHTTPClient`, `JudasRegistration`, `JudasMode`, `Loc
 
 Configured / local-networks-only / blocked policy; redirects rejected. Not an OS firewall or native-code sandbox.
 
-Validation: JudasTests, JudasMCPTests, JudasActivityTests and the network boundary checker.
+Validation: JudasTests, JudasMCPTests, JudasActivityTests and the network boundary checker. Run `make test MODULE=JUDAS`.
 
 ## MCPClient
 
@@ -157,7 +157,7 @@ Public seams: `MCPServerManager`, `MCPServerConfig`, `MCPError`.
 
 Only module importing the external MCP SDK. JUDAS admits transports/processes; app approvals bind to configuration identity.
 
-Validation: MCPClientTests and MCPModelSecurityTests.
+Validation: MCPClientTests and MCPModelSecurityTests. Run `make test MODULE=MCPClient`.
 
 ## Memory
 
@@ -169,7 +169,7 @@ Public seams: `MemoryStore`, `MemoryContext`, `WikiMemoryStore`, `LLMWikiMemoryS
 
 Exclusive Global or Pen scope, bounded descriptor-relative filesystem operations; provider content does not grant authority.
 
-Validation: MemoryTests and MemoryModelTests.
+Validation: MemoryTests and MemoryModelTests. Run `make test MODULE=Memory`.
 
 ## Paddock
 
@@ -181,7 +181,7 @@ Public seams: `PaddockArtifact`, `PaddockDocumentCache`, `PaddockHTML`, `Paddock
 
 Bounded in-memory document preparation; ephemeral WebKit, shared immutable rules, Source-mode document retirement and JUDAS revocation.
 
-Validation: PaddockTests, PaddockWebRenderingTests, PaddockBenchmarkTests, RenderingPerformanceTests.
+Validation: The Paddock test plan covers navigation, rendering, document and rule-cache contracts. Repeated timing workloads are in Qualification. Run `make test MODULE=Paddock`.
 
 ## Pens
 
@@ -193,7 +193,7 @@ Public seams: `PenSpec`, `PenStore`, `PenFileRef`, `OKLCH`, `PenFileTools`, `Pen
 
 Validated identifiers, staged writes, explicit workspace binding; no UI framework or database dependency. File tools use a turn-bound workspace and descriptor-relative traversal, reject symlinks and multiple hard links, bound reads, and require host approval before writes. Commands use a deny-default macOS sandbox, isolated environment, separate owner whitelist and JUDAS network admission.
 
-Validation: PersistenceSecurityTests, PensHomeTests and scope tests. PenFileToolsTests and AppToolRouterTests cover writes, path boundaries and approval revocation.
+Validation: PensTests covers stores and file/command tools; hosted Pens tests cover permission grants and project navigation. Run `make test MODULE=Pens`.
 
 ## Persistence
 
@@ -205,7 +205,7 @@ Public seams: `ChatDatabase`, `ChatRecord`, `MessageRecord`, `ToolGrantRecord`, 
 
 Async GRDB pool with indexed reads; cached narrow checkpoints preserve independent metadata. Durable records never depend on render caches.
 
-Validation: DatabaseTests and PersistenceWriterTests.
+Validation: DatabaseTests and PersistenceWriterTests. Run `make test MODULE=Persistence`.
 
 ## Pronk
 
@@ -217,7 +217,7 @@ Public seams: `PronkExtension`.
 
 Bundled example using public GOATed contracts; state stays in the selected Pen scope; no network or scripts.
 
-Validation: CapabilityTests exercises contributions and scope; examples/pronk documents usage.
+Validation: PronkTests exercises offline persistence and Pen scope; examples/pronk documents usage. Run `make test MODULE=Pronk`.
 
 ## Shepherd
 
@@ -229,7 +229,7 @@ Public seams: `ShepherdModel`, `ShepherdEnvironment`, `ShepherdToolSource`.
 
 One active turn for GUI and Hitch; persistence and capability checks gate progress. Worker I/O stays off MainActor.
 
-Validation: ShepherdModelTests and turn-ownership host tests.
+Validation: ShepherdModelTests and turn-ownership host tests. Run `make test MODULE=Shepherd`.
 
 ## Tools
 
