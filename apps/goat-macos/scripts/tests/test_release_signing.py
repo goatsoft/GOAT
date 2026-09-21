@@ -91,9 +91,15 @@ class ReleaseSigningTests(unittest.TestCase):
         makefile = Path(__file__).parents[2] / "Makefile"
         with tempfile.TemporaryDirectory() as directory:
             def dry_run(target, *overrides):
+                env = os.environ.copy()
+                for name in ("MAKEFLAGS", "MFLAGS", "MAKELEVEL", "CONFIG", "SWIFT_FLAGS",
+                             "TEST_PLAN", "MODULE", "XCODE_FLAGS", "RELEASE_CHANNEL",
+                             "RELEASE_TAG", "CODE_SIGN_IDENTITY", "RELEASE_SIGNING_IDENTITY",
+                             "DEVELOPMENT_TEAM"):
+                    env.pop(name, None)
                 result = subprocess.run(
                     ["make", "-n", "-f", str(makefile), target, *overrides],
-                    cwd=directory, check=True, capture_output=True, text=True)
+                    cwd=directory, env=env, check=True, capture_output=True, text=True)
                 return result.stdout
 
             self.assertIn('CODE_SIGN_IDENTITY="-"', dry_run("build"))
