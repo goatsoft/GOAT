@@ -1,6 +1,6 @@
 # Roadmap
 
-The current published release is **0.1.1 (Kid)**. **0.1.2 (Kid)** is in release preparation. The capabilities below are present in the current source; future work has no promised delivery date.
+The current published release is **0.1.2 (Kid)**. The capabilities below are present in the current source; future work has no promised delivery date.
 
 ## Available in Kid
 
@@ -15,7 +15,7 @@ The current published release is **0.1.1 (Kid)**. **0.1.2 (Kid)** is in release 
 - JUDAS connection policy, session Activity Log, themes and local reading preferences.
 - Optional Hitch local API/CLI and the Pronk contributor example.
 
-Downloads and release notes are on [GitHub Releases](https://github.com/goatsoft/GOAT/releases/tag/v0.1.1). See [Known issues](KNOWN-ISSUES.md) for current limitations.
+Downloads and release notes are on [GitHub Releases](https://github.com/goatsoft/GOAT/releases/tag/v0.1.2). See [Known issues](KNOWN-ISSUES.md) for current limitations.
 
 ## Kid 0.1.1 maintenance release
 
@@ -38,7 +38,7 @@ The maintainer accepted the tested maintenance candidate. The official release w
 - preservation of configured Custom endpoints while offline; and
 - a maintained Xcode project, domain-owned tests, focused module runners and verified Developer ID builds.
 
-The [0.1.2 release notes](RELEASE-NOTES.md#kid-0-1-2-in-preparation) describe the changes for users. Exact-candidate qualification and publication remain governed by [Release readiness](RELEASE-CHECKLIST.md).
+The [0.1.2 release notes](RELEASE-NOTES.md#kid-0-1-2) describe the changes for users. Exact-candidate qualification and publication remain governed by [Release readiness](RELEASE-CHECKLIST.md).
 
 ## Model selection, capabilities and recovery
 
@@ -57,13 +57,13 @@ Fake-engine qualification covers fragmented structured calls, mixed printed mark
 
 An inference-efficiency review on 11 September 2026 assessed GOAT's inference loop against established local-agent practice. PR #27 implements and verifies the resulting decisions: [prefix-stable prompts and calibrated budgeting](adrs/0085-prefix-stable-prompts-and-usage-calibrated-budgeting.md), [sampling parameters as model facts](adrs/0086-sampling-parameters-are-model-facts.md), [conversation compaction with `/compact` and an auto-compact threshold](adrs/0087-conversation-compaction.md), [single-round tool results](adrs/0088-single-round-tool-results.md), and [turn continuity and engine resilience](adrs/0089-turn-continuity-and-engine-resilience.md).
 
-Live engine and checkpoint qualification remains separate. A Qwen3.8 27B 4-bit trial showed strong reasoning and tool selection but did not complete the Aurora repair. It also exposed an unclear effective output ceiling and a manual compaction that remained busy for more than 20 minutes. The [oMLX status and generation ownership decision](adrs/0090-omlx-capability-status-and-generation-ownership.md) and the maintenance backlog cover those usability gaps.
+Live engine and checkpoint qualification remains separate. A Qwen3.8 27B 4-bit trial showed strong reasoning and tool selection but did not complete the tested project repair. It also exposed an unclear effective output ceiling and a manual compaction that remained busy for more than 20 minutes. The [oMLX status and generation ownership decision](adrs/0090-omlx-capability-status-and-generation-ownership.md) and the maintenance backlog cover those usability gaps.
 
 ## Kid maintenance backlog
 
 [Issue #30](https://github.com/goatsoft/GOAT/issues/30) is the maintenance umbrella. The ordered work is long-transcript responsiveness and memory pressure in [issue #29](https://github.com/goatsoft/GOAT/issues/29), oMLX status, memory, sampling ownership, and effective-limit reporting in [issue #31](https://github.com/goatsoft/GOAT/issues/31), and macOS 27 Golden Gate Pen-sandbox qualification while retaining macOS 26 Tahoe support in [issue #33](https://github.com/goatsoft/GOAT/issues/33).
 
-PRs #35, #36, #40, #41 and #42 are merged. Qualification issues #24, #26, #29, #30, #31, #33 and #39 are closed. The [engine contract](ENGINES.md#maintenance-qualification-20-september-2026) records live qualification and its limits. Current delivery state is tracked on the [project board](https://github.com/orgs/goatsoft/projects/1). PR #41 distinguishes received-output estimates from server decode speed and records arrival/publication timings; [#38](https://github.com/goatsoft/GOAT/issues/38) remains open for the original unreproduced throughput discrepancy. Stable oMLX 0.6.4 remains the baseline. PR #42 delivered the maintained Xcode project, build workflow and domain test organization recorded in [ADR-0093](adrs/0093-maintained-xcode-project.md) and [Testing by domain](reference/testing.md). WebKit helper-process reuse and log-noise reduction #28 and native delegation #32 remain separate backlog work. The completed maintenance scope is assigned to 0.1.2; publication still requires exact-candidate acceptance.
+PRs #35, #36, #40, #41 and #42 are merged. Qualification issues #24, #26, #29, #30, #31, #33 and #39 are closed. The [engine contract](ENGINES.md#maintenance-qualification-20-september-2026) records live qualification and its limits. Current delivery state is tracked on the [project board](https://github.com/orgs/goatsoft/projects/1). PR #41 distinguishes received-output estimates from server decode speed and records arrival/publication timings; [#38](https://github.com/goatsoft/GOAT/issues/38) remains open for the original unreproduced throughput discrepancy. Stable oMLX 0.6.4 remains the baseline. PR #42 delivered the maintained Xcode project, build workflow and domain test organization recorded in [ADR-0093](adrs/0093-maintained-xcode-project.md) and [Testing by domain](reference/testing.md). WebKit helper-process reuse and log-noise reduction #28 and native delegation #32 remain separate backlog work. The completed maintenance scope is included in 0.1.2.
 
 Repeat controlled model qualification with Qwen3.8 27B 4-bit first, followed by Devstral, DeepSeek, and the practical GLM-4.7-Flash 31B candidate. Native subagent work in [issue #32](https://github.com/goatsoft/GOAT/issues/32) follows the usability fixes and starts with one sequential, read-only, isolated child before adding write, parallel, or recursive execution.
 
