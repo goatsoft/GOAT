@@ -389,6 +389,7 @@ actor ShepherdGenerationWorker {
             var toolInputBytes = 0
             var toolCalls: [ToolCallEvent] = []
             var stats: GenStats?
+            var publicationMetrics = GenerationDeliveryMetrics()
             var lastFlush = ContinuousClock.now
             var lastCheckpoint = ContinuousClock.now
             var receivedContentEvent = false
@@ -427,7 +428,11 @@ actor ShepherdGenerationWorker {
                     toolInputBytes = 0
                     lastFlush = now
                     if shouldCheckpoint { lastCheckpoint = now }
+                    let publicationStart = ContinuousClock.now
                     guard await publish(update) else { throw CancellationError() }
+                    let duration = publicationStart.duration(to: .now).components
+                    publicationMetrics.published(
+                        seconds: Double(duration.seconds) + Double(duration.attoseconds) / 1e18)
                 }
             } catch {
                 if !receivedContentEvent, !parameterRetried,
@@ -485,12 +490,20 @@ actor ShepherdGenerationWorker {
             }
 
             if !textBuffer.isEmpty || !thinkingBuffer.isEmpty || toolInputBytes > 0 {
+                let publicationStart = ContinuousClock.now
                 let accepted = await publish(
                     ShepherdStreamUpdate(
                         text: textBuffer,
                         thinking: thinkingBuffer,
                         shouldCheckpoint: false, toolInputBytes: toolInputBytes))
                 guard accepted else { throw CancellationError() }
+                let duration = publicationStart.duration(to: .now).components
+                publicationMetrics.published(
+                    seconds: Double(duration.seconds) + Double(duration.attoseconds) / 1e18)
+            }
+            if stats?.delivery != nil {
+                stats?.delivery?.publicationCount = publicationMetrics.publicationCount
+                stats?.delivery?.maximumPublicationSeconds = publicationMetrics.maximumPublicationSeconds
             }
             try Task.checkCancellation()
             return ShepherdStreamResult(toolCalls: toolCalls, stats: stats)

@@ -65,7 +65,9 @@ struct ThroughputDial: View {
         .frame(maxWidth: .infinity)
         .aspectRatio(1.55, contentMode: .fit)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(live ? "Live generation speed" : "Generation speed")
+        .accessibilityLabel(
+            live ? "Estimated received-output speed" : estimated ? "Derived response speed" : "Server decode speed"
+        )
         .accessibilityValue("\(readout) tokens per second, scale zero to \(Int(maximum))")
     }
 }

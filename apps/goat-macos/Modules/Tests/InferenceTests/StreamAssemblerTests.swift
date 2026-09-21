@@ -233,3 +233,24 @@ private func doneStats(_ events: [GenerationEvent]) -> GenStats? {
             return false
         })
 }
+
+@Test func streamDeliveryKeepsClientArrivalSeparateFromServerTiming() throws {
+    let start = Date(timeIntervalSinceReferenceDate: 100)
+    var assembler = StreamAssembler(start: start)
+    _ = assembler.feed(try chunk(#"{"choices":[{"delta":{"role":"assistant"}}]}"#), at: start.addingTimeInterval(20))
+    _ = assembler.feed(try chunk(#"{"choices":[{"delta":{"content":"Hello"}}]}"#), at: start.addingTimeInterval(25))
+    _ = assembler.feed(
+        try chunk(
+            #"{"choices":[],"usage":{"completion_tokens":10,"time_to_first_token":2,"generation_tokens_per_second":37,"model_load_duration":20,"prompt_eval_duration":2}}"#
+        ), at: start.addingTimeInterval(26))
+    let stats = try #require(doneStats(assembler.finish()))
+    #expect(stats.ttft == 2)
+    #expect(stats.toksPerSec == 37)
+    #expect(stats.delivery?.firstEventSeconds == 20)
+    #expect(stats.delivery?.firstOutputSeconds == 25)
+    #expect(stats.delivery?.maximumEventGap == 5)
+    #expect(stats.delivery?.eventCount == 3)
+    #expect(stats.delivery?.outputBytes == 5)
+    #expect(stats.delivery?.serverModelLoadSeconds == 20)
+    #expect(stats.delivery?.serverPromptSeconds == 2)
+}

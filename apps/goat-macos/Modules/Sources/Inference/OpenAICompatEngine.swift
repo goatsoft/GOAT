@@ -550,6 +550,7 @@ struct CompletionBody: Encodable {
 struct StreamAssembler {
     private var ttft: TimeInterval?
     private var chunkCount = 0
+    private var delivery = GenerationDeliveryMetrics()
     private var usage: StreamChunk.Usage?
     private var finishReason: String?
     private var timings: StreamChunk.Timings?
@@ -564,7 +565,8 @@ struct StreamAssembler {
         self.round = round
     }
 
-    mutating func feed(_ chunk: StreamChunk) -> [GenerationEvent] {
+    mutating func feed(_ chunk: StreamChunk, at date: Date = .now) -> [GenerationEvent] {
+        delivery.receiveEvent(elapsed: date.timeIntervalSince(start))
         if let u = chunk.usage { usage = u }
         if let value = chunk.timings { timings = value }
         if let reason = chunk.choices.first?.finish_reason { finishReason = reason }
@@ -602,6 +604,14 @@ struct StreamAssembler {
             }
             if bytes > 0 { events.append(.toolInput(bytes: bytes)) }
         }
+        let bytes = events.reduce(0) { count, event in
+            switch event {
+            case .token(let text), .thinking(let text): count + text.utf8.count
+            case .toolInput(let bytes): count + bytes
+            default: count
+            }
+        }
+        delivery.receive(bytes: bytes, elapsed: date.timeIntervalSince(start))
         return events
     }
 
@@ -638,6 +648,12 @@ struct StreamAssembler {
                     finishReason: finishReason,
                     cachedPromptTokens: usage?.cachedPromptTokens
                 )))
+        if case .done(var stats) = events.last {
+            delivery.serverPromptSeconds = usage?.prompt_eval_duration.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
+            delivery.serverModelLoadSeconds = usage?.model_load_duration.flatMap { $0.isFinite && $0 >= 0 ? $0 : nil }
+            stats.delivery = delivery
+            events[events.count - 1] = .done(stats)
+        }
         return events
     }
 
@@ -772,6 +788,8 @@ struct StreamChunk: Decodable {
         let completion_tokens: Int?
         let time_to_first_token: Double?
         let generation_duration: Double?
+        let prompt_eval_duration: Double?
+        let model_load_duration: Double?
         let generation_tokens_per_second: Double?
         /// OpenAI-style prefix-cache accounting; several local servers report it too.
         let prompt_tokens_details: PromptTokensDetails?
