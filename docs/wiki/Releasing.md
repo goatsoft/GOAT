@@ -1,6 +1,6 @@
 # Release a GOAT build
 
-This guide is for maintainers. The current published version is `0.1.2`, public label **0.1.2 (Kid)** and release tag `v0.1.2`. Earlier releases remain unchanged. Identity comes from `apps/goat-macos/release.json`.
+This guide is for maintainers. The current release identity, its canonical version, public label and release tag, comes from `apps/goat-macos/release.json`. Earlier releases remain unchanged.
 
 1. Review [Release readiness](../RELEASE-CHECKLIST.md). Complete content, distribution, live-service, clean-machine and performance checks appropriate to the release.
 2. Follow [Versioning](../VERSIONING.md) to generate metadata, build a separate candidate and verify source/bundle/artifact agreement. Do not restart an app doing active work.
@@ -40,7 +40,7 @@ Official downloads use Developer ID Application signing with hardened runtime. T
 
 ## Local notarization
 
-Local notarization can use a Keychain profile without exporting signing credentials to GitHub. Run `xcrun notarytool store-credentials "GOAT-notary"` in your terminal and follow its prompts for your Apple Account, team and app-specific password. For a locally packaged DMG, first sign the container with `codesign --timestamp --sign "Developer ID Application: Your Name (YOURTEAMID)" /path/to/GOAT-0.1.2.dmg`. This is separate from signing the app and CLI inside it. Then run `NOTARY_KEYCHAIN_PROFILE=GOAT-notary DMG=/path/to/GOAT-0.1.2.dmg ./scripts/notarize.sh` from `apps/goat-macos/`. The script still requires Apple's Accepted result and validates the stapled ticket. Regenerate the artifact manifest and checksums after stapling. This does not enable the GitHub release workflow or replace clean-Mac acceptance.
+Local notarization can use a Keychain profile without exporting signing credentials to GitHub. Run `xcrun notarytool store-credentials "GOAT-notary"` in your terminal and follow its prompts for your Apple Account, team and app-specific password. For a locally packaged DMG, first sign the container with `codesign --timestamp --sign "Developer ID Application: Your Name (YOURTEAMID)" /path/to/GOAT-<version>.dmg`. This is separate from signing the app and CLI inside it. Then run `NOTARY_KEYCHAIN_PROFILE=GOAT-notary DMG=/path/to/GOAT-<version>.dmg ./scripts/notarize.sh` from `apps/goat-macos/`. The script still requires Apple's Accepted result and validates the stapled ticket. Regenerate the artifact manifest and checksums after stapling. This does not enable the GitHub release workflow or replace clean-Mac acceptance.
 
 ## GitHub approval gate
 

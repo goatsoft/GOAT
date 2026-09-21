@@ -4,16 +4,16 @@ Implemented by ADR-0040. Public release approval, clean-machine acceptance and p
 
 [release.json](../apps/goat-macos/release.json) is the editable product identity: canonical `version`, `codename` and positive integer `build`. Read that record for the current build number, which must remain above the legacy build 1337. Increment the build when preparing a new candidate with changed content. The record alone does not make a candidate distributable.
 
-The current published release is **0.1.2 (Kid)**. Earlier artifacts retain their original identities; a later release must use a new version and build.
+The current release identity comes from [release.json](../apps/goat-macos/release.json). Earlier artifacts retain their original identities; a later release must use a new version and build.
 
-| Surface | 0.1.2 release value |
+| Surface | Current release value |
 |---|---|
-| About and Activity Log, either presentation mode | `0.1.2 (Kid)` |
-| Website label and GitHub release title | `GOAT 0.1.2 (Kid)` |
-| Bundle version / tag / DMG filename | `0.1.2` / `v0.1.2` / `GOAT-0.1.2.dmg` |
+| About and Activity Log, either presentation mode | <!--stamp:label-->`0.1.3 (Kid)`<!--/stamp:label--> |
+| Website label and GitHub release title | <!--stamp:title-->`GOAT 0.1.3 (Kid)`<!--/stamp:title--> |
+| Bundle version / tag / DMG filename | <!--stamp:identity-->`0.1.3` / `v0.1.3` / `GOAT-0.1.3.dmg`<!--/stamp:identity--> |
 | Secondary UI diagnostics | `Development · build <number>` or `Candidate · build <number>` |
 
-Only a zero patch is omitted from display; `0.1.2 (Kid)` keeps its patch. Choose codenames from [CODENAMES.md](CODENAMES.md). Patch candidates preserve their release-line codename. Versions change for releases, not milestones or rebuilds.
+Only a zero patch is omitted from display; a nonzero patch is shown in full. Choose codenames from [CODENAMES.md](CODENAMES.md). Patch candidates preserve their release-line codename. Versions change for releases, not milestones or rebuilds.
 
 ## Build and validation
 

@@ -1,10 +1,12 @@
 # Release notes
 
-## Kid 0.1.2
+## Kid 0.1.3
 
-GOAT 0.1.2 makes local-model work easier to set up, easier to follow and more dependable over a long session. It brings model management into the app, keeps large conversations responsive and gives coding workflows clearer recovery when a model or engine has a difficult turn.
+GOAT 0.1.3 makes local-model work easier to set up, easier to follow and more dependable over a long session. It brings model management into the app, keeps large conversations responsive and gives coding workflows clearer recovery when a model or engine has a difficult turn.
 
 This release keeps **oMLX 0.6.4** as the qualified baseline.
+
+0.1.3 supersedes the withdrawn 0.1.2 candidate. It is the same app with release-signing and packaging fixes so the automated build can produce a signed, notarized DMG.
 
 ### Your models, in one place
 
@@ -37,13 +39,13 @@ This release keeps **oMLX 0.6.4** as the qualified baseline.
 
 ### Installation and upgrade
 
-GOAT 0.1.2 requires Apple Silicon and macOS 26 or later. Download the signed, notarized [0.1.2 (Kid) release](https://github.com/goatsoft/GOAT/releases/tag/v0.1.2), build 1354, with its manifest and checksums.
+GOAT 0.1.3 requires Apple Silicon and macOS 26 or later. Download the signed, notarized [latest release](https://github.com/goatsoft/GOAT/releases/latest) with its manifest and checksums.
 
 An ordinary upgrade replaces the app without resetting chats, engine profiles, memory, permissions or Pens. Finish active work before quitting GOAT to install the update, and keep a [backup of local data](reference/STORAGE.md#back-up-safely).
 
 ### Qualification and known limits
 
-The official Release-channel package is built from the immutable `v0.1.2` source. The release workflow verifies the complete Release suite, website and docs, Developer ID publisher identity, hardened runtime, notarization, stapling and artifact checksums. See the [release metadata](https://github.com/goatsoft/GOAT/releases/tag/v0.1.2) for the exact source revision and artifact hashes.
+The official Release-channel package is built from the immutable `v0.1.3` source. The release workflow verifies the complete Release suite, website and docs, Developer ID publisher identity, hardened runtime, notarization, stapling and artifact checksums. See the [release metadata](https://github.com/goatsoft/GOAT/releases/latest) for the exact source revision and artifact hashes.
 
 The previously reported difference between a 37 tok/s server reading and a 2–3 tok/s live display has not been reproduced. This release makes those measurements distinct and easier to diagnose; it does not claim an engine-speed improvement. Model and tool results apply to the tested configurations, including stable oMLX 0.6.4, rather than every compatible server or workload.
 

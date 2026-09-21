@@ -2,9 +2,9 @@
 
 GOAT brings models, project files, tools and memory into a native Mac workspace. Use these pages to understand the concepts, follow a practical task or check exact behavior.
 
-0.1.2 (Kid) is a maintenance update. See the [roadmap](../ROADMAP.md) for its scope and the separate M7 checklist.
+Kid releases are maintenance updates. See the [roadmap](../ROADMAP.md) for scope and the separate M7 checklist.
 
-**0.1.2 (Kid) is available.** [Download the signed, notarized Mac app](https://github.com/goatsoft/GOAT/releases/tag/v0.1.2), follow [Getting started](Getting-Started.md) and check [known issues](../KNOWN-ISSUES.md).
+**GOAT is available for Mac.** [Download the latest release](https://github.com/goatsoft/GOAT/releases/latest), follow [Getting started](Getting-Started.md) and check [known issues](../KNOWN-ISSUES.md).
 
 ## Start here
 

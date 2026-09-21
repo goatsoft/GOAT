@@ -1,10 +1,10 @@
 # Release readiness
 
-**0.1.2 (Kid) is available as a signed, notarized Mac download.** This is the acceptance checklist for ongoing releases, not a claim that every configuration or workflow has been tested. See [Known issues](KNOWN-ISSUES.md#release-qualification) for the scope of Kid’s installation check. Detailed machine logs and historical reports remain in the private maintainer archive.
+**The current Kid release is available as a signed, notarized Mac download.** This is the acceptance checklist for ongoing releases, not a claim that every configuration or workflow has been tested. See [Known issues](KNOWN-ISSUES.md#release-qualification) for the scope of Kid’s installation check. Detailed machine logs and historical reports remain in the private maintainer archive.
 
-## 0.1.2 maintenance scope
+## 0.1.3 maintenance scope
 
-Qualify the model-management, compaction and recovery work; long-transcript navigation; oMLX status, limit and measurement changes; Custom endpoint restoration; maintained Xcode project; domain test organisation; focused test runners; and signed-build verification described in the [release notes](RELEASE-NOTES.md#kid-0-1-2). Use the exact final 0.1.2 source and artifact for distribution evidence. Keep stable oMLX 0.6.4 as the qualified baseline and preserve the documented limits of the unreproduced throughput report.
+Qualify the model-management, compaction and recovery work; long-transcript navigation; oMLX status, limit and measurement changes; Custom endpoint restoration; maintained Xcode project; domain test organisation; focused test runners; and signed-build verification described in the [release notes](RELEASE-NOTES.md). Use the exact final 0.1.3 source and artifact for distribution evidence. Keep stable oMLX 0.6.4 as the qualified baseline and preserve the documented limits of the unreproduced throughput report.
 
 ## 0.1.1 maintenance scope
 

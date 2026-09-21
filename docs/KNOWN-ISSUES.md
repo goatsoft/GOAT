@@ -1,6 +1,6 @@
 # Known issues
 
-Current limitations in the Kid release line. The current download is 0.1.2; older-version notes are labelled explicitly. This page separates reproducible behavior from compatibility that still needs qualification.
+Current limitations in the Kid release line. The current download is the latest Kid release; older-version notes are labelled explicitly. This page separates reproducible behavior from compatibility that still needs qualification.
 
 ## Sidebar width
 
@@ -36,6 +36,6 @@ The official 0.1.0 build 1343 passed Developer ID signature, notarization, mount
 
 For 0.1.1 build 1353, the maintainer accepted the tested maintenance candidate. The official Release-channel package was rebuilt from the same source content. Developer ID signing, Apple notarization/stapling, checksums, mounted-package validation and Gatekeeper assessments of both the DMG and its app passed. Candidate acceptance does not imply full qualification of every service, accessibility setting or workload.
 
-The official 0.1.2 build 1354 is built from the immutable tagged source and passes the Release verification, Developer ID, notarization, stapling and checksum gates. Evidence from earlier maintenance candidates does not substitute for qualification of this exact source and artifact. The reported difference between a 37 tok/s server reading and a 2–3 tok/s live display has not been reproduced; 0.1.2 separates the available measurements and adds bounded diagnostics but does not claim an engine-speed improvement. Stable oMLX 0.6.4 remains the qualified baseline.
+The 0.1.3 candidate is build 1355 and supersedes the withdrawn 0.1.2 candidate. Its official Release-channel package is qualified through the release workflow, Developer ID signing, notarization, stapling and checksums before publication. Evidence from earlier maintenance candidates does not substitute for qualification of this exact source and artifact. The reported difference between a 37 tok/s server reading and a 2–3 tok/s live display has not been reproduced; 0.1.2 separates the available measurements and adds bounded diagnostics but does not claim an engine-speed improvement. Stable oMLX 0.6.4 remains the qualified baseline.
 
 Broader engine/service combinations, full accessibility coverage and long-workload profiling remain ongoing. A successful installation does not establish compatibility with every model or integration. Consult [Release readiness](RELEASE-CHECKLIST.md) for the acceptance scope.

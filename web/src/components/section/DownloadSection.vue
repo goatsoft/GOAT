@@ -33,7 +33,7 @@ const palette = (i: number) => {
       </motion.div>
 
       <p v-if="site.releaseAvailable" class="mt-5 text-center text-sm text-muted-foreground"><a :href="`${site.releases}/tag/${site.releaseTag}`" class="text-primary hover:underline">{{ site.releaseLabel }} · Release notes and checksums</a></p>
-      <p class="mx-auto mt-5 max-w-2xl text-center text-sm text-muted-foreground">Kid 0.1.2 brings model management, smoother long conversations, clearer engine status and more dependable coding workflows. <a :href="site.doc('ROADMAP')" class="text-primary hover:underline">Maintenance scope and the M7 plan</a></p>
+      <p class="mx-auto mt-5 max-w-2xl text-center text-sm text-muted-foreground">The latest Kid release brings model management, smoother long conversations, clearer engine status and more dependable coding workflows. <a :href="site.doc('ROADMAP')" class="text-primary hover:underline">Maintenance scope and the M7 plan</a></p>
       <p class="mt-5 text-center text-xs text-muted-foreground">{{ site.requirements }} · Code, docs and examples: MIT. Artwork has separate terms.</p>
 
       <!-- Same cloud language as the rest of the page, but softer and top-lit: the cloud

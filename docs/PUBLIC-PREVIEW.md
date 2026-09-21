@@ -1,8 +1,8 @@
-# Try GOAT 0.1.2 (Kid)
+# Try GOAT (Kid)
 
-Download the signed, notarized Mac app from [GitHub Releases](https://github.com/goatsoft/GOAT/releases/tag/v0.1.2). This guide covers getting started, exploring the features and reporting useful feedback.
+Download the signed, notarized Mac app from [GitHub Releases](https://github.com/goatsoft/GOAT/releases/latest). This guide covers getting started, exploring the features and reporting useful feedback.
 
-0.1.2 (Kid) is a maintenance update. See the [roadmap](ROADMAP.md) for its scope and the separate M7 checklist.
+Kid releases are maintenance updates. See the [roadmap](ROADMAP.md) for scope and the separate M7 checklist.
 
 ## Install and connect
 
