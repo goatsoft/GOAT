@@ -1,5 +1,11 @@
-# Generated project: source of truth is project.yml (ADR-0004)
-*.xcodeproj
+# Maintained project and shared scheme are committed (ADR-0093).
+# Xcode creates workspace state locally; only its shared dependency lock is source.
+apps/goat-macos/GOAT.xcodeproj/project.xcworkspace/*
+!apps/goat-macos/GOAT.xcodeproj/project.xcworkspace/xcshareddata/
+apps/goat-macos/GOAT.xcodeproj/project.xcworkspace/xcshareddata/*
+!apps/goat-macos/GOAT.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
+apps/goat-macos/GOAT.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/*
+!apps/goat-macos/GOAT.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 # Maintainer-only signing selection. Certificates and private keys stay in Keychain.
 apps/goat-macos/signing.local.mk
 

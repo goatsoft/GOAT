@@ -17,7 +17,7 @@ Only a zero patch is omitted from display; `0.1.1 (Kid)` keeps its patch. Choose
 
 ## Build and validation
 
-`make gen` validates the record and generates `.build/release-settings.yml`, which XcodeGen includes. The tracked generated Info.plist contains build-setting references. Missing metadata, malformed versions and conflicting `MARKETING_VERSION`, `CURRENT_PROJECT_VERSION` or `GOAT_CODENAME` environment/Make overrides fail. Run `make gen` before opening the generated Xcode project. Direct edits or overrides in Xcode are not a supported release path; bundle validation catches drift before packaging.
+The maintained Xcode project runs `scripts/release-metadata.py plist` on every app build. It validates the record and generates `GOAT-Info.plist` in `DERIVED_FILE_DIR` from the committed `App/Info.plist` template, including the current commit, source fingerprint and dirty state. Both IDE and Make builds use this path. `make gen` is now a validation-only compatibility alias. Missing metadata, malformed versions and conflicting `MARKETING_VERSION`, `CURRENT_PROJECT_VERSION` or `GOAT_CODENAME` overrides fail. The template and project are included in the source fingerprint. Official release identity still requires a clean matching tag, and bundle validation catches drift before packaging. See [ADR-0093](adrs/0093-maintained-xcode-project.md).
 
 Normal builds use **Development**. `make release` and `make dmg` use **Candidate** even with Release optimisation. A **Release** channel requires an explicit matching `RELEASE_TAG`, an exact canonical tag pointing to HEAD, and clean source. About and Log always disclose the channel of unpublished builds; missing UI metadata is shown as unknown rather than falling back to Kid.
 

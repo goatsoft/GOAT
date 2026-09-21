@@ -16,18 +16,22 @@ SIGNING_FLAGS = CODE_SIGN_IDENTITY="$(CODE_SIGN_IDENTITY)" CODE_SIGN_STYLE=Manua
 RELEASE_SIGNING_FLAGS = CODE_SIGN_IDENTITY="$(RELEASE_SIGNING_IDENTITY)" CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="$(DEVELOPMENT_TEAM)"
 DIST := dist
 
-.PHONY: gen build run test test-app format lint verify clean release dmg
+.PHONY: gen prepare open build run test test-app format lint verify clean release dmg
 
-gen:
-	python3 scripts/release-metadata.py generate --channel "$(RELEASE_CHANNEL)" $(if $(RELEASE_TAG),--tag "$(RELEASE_TAG)",)
-	xcodegen generate
-	mkdir -p GOAT.xcodeproj/project.xcworkspace/xcshareddata/swiftpm
-	cp Package.resolved GOAT.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+# Compatibility alias: never regenerate or overwrite the maintained project.
+gen: prepare
+
+prepare:
+	python3 scripts/release-metadata.py check --channel "$(RELEASE_CHANNEL)" $(if $(RELEASE_TAG),--tag "$(RELEASE_TAG)",)
+	python3 scripts/check-xcode-project.py
+
+open: prepare
+	open GOAT.xcodeproj
 
 # Command-line ARCHS also applies to Swift package dependencies.
-build: gen
+build: prepare
 	xcodebuild -project GOAT.xcodeproj -scheme GOAT -configuration $(CONFIG) \
-	  -derivedDataPath $(DERIVED) -destination 'platform=macOS,arch=arm64' ARCHS=arm64 -onlyUsePackageVersionsFromResolvedFile $(SIGNING_FLAGS) build
+	  -derivedDataPath $(DERIVED) -destination 'platform=macOS,arch=arm64' ARCHS=arm64 -onlyUsePackageVersionsFromResolvedFile $(SIGNING_FLAGS) GOAT_RELEASE_CHANNEL="$(RELEASE_CHANNEL)" RELEASE_TAG="$(RELEASE_TAG)" build
 
 run: build
 	@osascript -e 'tell application id "dev.leet.goat" to quit' >/dev/null 2>&1 || true
@@ -41,9 +45,9 @@ run: build
 test:
 	swift test $(SWIFT_FLAGS) --arch arm64 --package-path $(MODULES) --no-parallel
 
-test-app: gen
+test-app: prepare
 	xcodebuild -project GOAT.xcodeproj -scheme GOAT -configuration $(CONFIG) \
-	  -derivedDataPath $(DERIVED) -destination 'platform=macOS,arch=arm64' ARCHS=arm64 -onlyUsePackageVersionsFromResolvedFile ENABLE_TESTABILITY=YES $(SIGNING_FLAGS) $(XCODE_FLAGS) test
+	  -derivedDataPath $(DERIVED) -destination 'platform=macOS,arch=arm64' ARCHS=arm64 -onlyUsePackageVersionsFromResolvedFile ENABLE_TESTABILITY=YES $(SIGNING_FLAGS) GOAT_RELEASE_CHANNEL="$(RELEASE_CHANNEL)" RELEASE_TAG="$(RELEASE_TAG)" $(XCODE_FLAGS) test
 
 format:
 	swift format --in-place --recursive App/Sources App/Tests Modules/Sources Modules/Tests
@@ -52,6 +56,7 @@ lint:
 	python3 scripts/release-metadata.py check
 	python3 -m unittest discover -s scripts/tests -p 'test_*.py'
 	python3 scripts/sync-module-docs.py --check
+	python3 scripts/check-xcode-project.py
 	python3 scripts/check-module-boundaries.py
 	python3 scripts/check-judas-boundaries.py
 	swift format lint --strict --recursive App/Sources App/Tests Modules/Sources Modules/Tests
@@ -60,18 +65,18 @@ verify: lint test test-app
 	$(MAKE) build
 
 clean:
-	rm -rf .build GOAT.xcodeproj $(DIST)
+	rm -rf .build $(DIST)
 
 # Release build: Release config, Hardened Runtime on (required for notarization, ADR-0007).
 # Signing stays ad-hoc unless a local or command-line release identity is supplied.
 release: RELEASE_CHANNEL = Candidate
-release: gen
+release: prepare
 	xcodebuild -project GOAT.xcodeproj -scheme GOAT -configuration Release \
 	  -derivedDataPath $(DERIVED) -destination 'platform=macOS,arch=arm64' ARCHS=arm64 \
 	  -onlyUsePackageVersionsFromResolvedFile \
 	  ENABLE_HARDENED_RUNTIME=YES \
 	  CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
-	  $(RELEASE_SIGNING_FLAGS) \
+	  $(RELEASE_SIGNING_FLAGS) GOAT_RELEASE_CHANNEL="$(RELEASE_CHANNEL)" RELEASE_TAG="$(RELEASE_TAG)" \
 	  OTHER_CODE_SIGN_FLAGS="$(if $(filter -,$(RELEASE_SIGNING_IDENTITY)),,--timestamp)" \
 	  build
 	python3 scripts/release-metadata.py bundle --channel "$(RELEASE_CHANNEL)" $(if $(RELEASE_TAG),--tag "$(RELEASE_TAG)",) --app "$(DERIVED)/Build/Products/Release/GOAT.app"

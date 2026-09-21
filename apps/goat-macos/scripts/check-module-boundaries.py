@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Verify the reviewed module graph and adapter boundaries without network access."""
 import json
+import subprocess
 from pathlib import Path
 import re
 import sys
@@ -21,10 +22,13 @@ if actual != expected:
 if {p.name for p in (modules / 'Sources').iterdir() if p.is_dir()} != set(expected):
     failures.append('Every source module must be present in the catalogue.')
 
-project = (root / 'project.yml').read_text()
-products = set(re.findall(r'- package: Modules\s+product: (\w+)', project))
-if products != set(expected) - {'goat'}:
-    failures.append('project.yml must compose every current library product exactly by name.')
+project = json.loads(subprocess.check_output([
+    'plutil', '-convert', 'json', '-o', '-', str(root / 'GOAT.xcodeproj/project.pbxproj')]))
+objects = project['objects']
+app = next(v for v in objects.values() if v['isa'] == 'PBXNativeTarget' and v['name'] == 'GOAT')
+products = [objects[key]['productName'] for key in app['packageProductDependencies'] if 'package' not in objects[key]]
+if set(products) != set(expected) - {'goat'} or len(products) != len(set(products)):
+    failures.append('GOAT.xcodeproj must compose every current library product exactly once.')
 
 visiting, visited = set(), set()
 def visit(name):

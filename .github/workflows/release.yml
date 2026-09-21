@@ -37,8 +37,6 @@ jobs:
           python3 scripts/check-release-host.py
           python3 scripts/release-metadata.py check --channel Release --tag "$RELEASE_TAG"
           python3 scripts/check-distribution-history.py
-      - name: Install XcodeGen
-        run: brew install xcodegen
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'
@@ -80,8 +78,6 @@ jobs:
           NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: python3 scripts/check-release-signing.py
-      - name: Install XcodeGen
-        run: brew install xcodegen
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'

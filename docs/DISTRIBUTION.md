@@ -26,7 +26,7 @@ The root [third-party notices](../THIRD-PARTY-NOTICES.md) identify bundled depen
 
 ### Refresh the notices
 
-The tracked `apps/goat-macos/Package.resolved` pins the app's reviewed dependency graph. `make gen` restores it into the generated Xcode project; build targets require that resolution. `Modules/Package.resolved` separately pins the package tests and CLI. After a deliberate dependency update, copy the reviewed app resolution back to the tracked lock before refreshing notices. The notice check compares that lock with the recorded app dependencies even without an Xcode checkout.
+The tracked `apps/goat-macos/GOAT.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved` pins the app's reviewed dependency graph in Xcode's standard location. Build targets require that resolution. `Modules/Package.resolved` separately pins package tests and the CLI. Commit intentional dependency updates and refresh notices. The notice check compares the app lock with recorded dependencies without requiring dependency checkouts.
 
 Run `npm ci` in `web/`, generate the Xcode project and resolve its packages. Then run from the repository root, supplying the checkout directory used by that build:
 

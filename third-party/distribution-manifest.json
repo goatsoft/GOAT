@@ -1906,12 +1906,12 @@
       "sha256": "a7eb8bd82a91fc5e9510690382fc75e918949dac9cd65f811fdbd1d0fb62c0f0"
     },
     {
-      "path": "apps/goat-macos/project.yml",
-      "sha256": "68e9ecb58150b423166b071743ec77b70742125be69a3e38441d5abb5bd1a8bc"
+      "path": "apps/goat-macos/GOAT.xcodeproj/project.pbxproj",
+      "sha256": "394789e88a16df060566d8f212967827dcd933a389042514dd5999b4ab6bf2dd"
     },
     {
       "path": "scripts/distribution-notices.py",
-      "sha256": "3081b7a93f0b59d8cb9368350889b990af25ad9c4acfc3aebf387d346551bf41"
+      "sha256": "8232e8000bdea1d8a85465ca7a076e5e7870f6b546c4e3c30b9a647ed939131e"
     },
     {
       "path": "third-party/upstream/docsearch-4.7.0.txt",

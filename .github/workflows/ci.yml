@@ -61,8 +61,6 @@ jobs:
           python3 scripts/check-release-host.py
           xcodebuild -version
           swift --version
-      - name: Install XcodeGen
-        run: brew install xcodegen
       - name: Release verification
         run: make verify CONFIG=Release SWIFT_FLAGS='-c release'
       - name: Preserve failed app test results

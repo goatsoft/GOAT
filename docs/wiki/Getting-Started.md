@@ -29,7 +29,7 @@ The revised 0.1.1 disk image places the optional executable in **CLI Tools** and
 
 ### Build from source
 
-Source builds require Xcode with the macOS 26 SDK and XcodeGen. Follow [Contributing](../../CONTRIBUTING.md) for build and launch instructions. They use ad-hoc signing by default and do not require Apple Developer membership. Certificate-signed local builds are optional; see [Releasing](Releasing.md#signing-setup). Do not restart GOAT while a chat or command is active.
+Source builds require Xcode with the macOS 26 SDK. Follow [Contributing](../../CONTRIBUTING.md) for build and launch instructions. They use ad-hoc signing by default and do not require Apple Developer membership. Certificate-signed local builds are optional; see [Releasing](Releasing.md#signing-setup). Do not restart GOAT while a chat or command is active.
 
 ## Connect your engine
 

@@ -1,6 +1,6 @@
 # ADR-0004: XcodeGen + xcodebuild CLI builds
 
-**Status:** Accepted · 2026-08-29
+**Status:** Project ownership superseded by [ADR-0093](0093-maintained-xcode-project.md) · originally accepted 2026-08-29
 
 ## Context
 

@@ -14,7 +14,7 @@ GOAT: a native macOS 26 app, local-LLM work through compatible model engines ([o
 ## Monorepo layout (ADR-0018)
 
 ```
-apps/goat-macos/   # the app: App/ + Modules/ + project.yml + Makefile + art/
+apps/goat-macos/   # the app: App/ + Modules/ + GOAT.xcodeproj + Makefile + art/
 web/               # the GitHub Pages landing site: Vite + Vue SPA (ADR-0041), `npm run build`
 docs/              # user overviews/how-tos, technical reference and ADRs
 .github/           # CI + release workflows, issue/PR templates, community health
@@ -25,12 +25,13 @@ assets/            # shared brand images (README/site logo)
 
 ## Environment
 
-Use a macOS 26 host with a compatible Xcode 26 toolchain for app builds and tests. The deployment target is macOS 26.0, Apple Silicon only. Check for XcodeGen before building. Engines run independently: read the configured endpoint and never hardcode a development port or assume which server answers.
+Use a macOS 26 host with a compatible Xcode 26 toolchain for app builds and tests. The deployment target is macOS 26.0, Apple Silicon only. Engines run independently: read the configured endpoint and never hardcode a development port or assume which server answers.
 
 ## Build & test
 
 ```sh
-make gen      # xcodegen generate   (rerun after ANY project.yml change)
+make open     # validate and open the maintained Xcode project
+make gen      # compatibility alias for project/metadata validation
 make build    # xcodebuild build
 make run      # build + quit/relaunch; never use during active work
 make test     # tests for the local Modules package
@@ -47,7 +48,7 @@ Documentation and website-only changes use the web and content checks in [Contri
 
 ## Hard rules
 
-- **`.xcodeproj` is generated. Never commit it.** Edit `project.yml`, run `make gen`.
+- **`GOAT.xcodeproj` is maintained source (ADR-0093).** Commit target, shared-scheme and source-membership changes. Do not regenerate it. User workspace state remains ignored. `release.json` owns release identity; the app build generates its Info.plist under DerivedData.
 - **Module boundaries:** use the explicit graph in `Modules/Package.swift` and [docs/MODULES.md](docs/MODULES.md). No library imports the app. `import GRDB` only inside Persistence; `import MCP` only inside MCPClient. Backend modules do not import UI frameworks. Inference is an HTTP/SSE client, with **no ML frameworks in-process**. If a view needs a capability, extend the domain protocol. `make lint` checks these boundaries.
 - **Swift 6 strict concurrency stays on.** No `@unchecked Sendable` without an ADR-worthy reason in a comment.
 - **No new dependencies without an ADR.** The existing direct set is GRDB, MCP swift-sdk, swift-markdown-ui and HighlightSwift, plus their transitive dependencies. Do not add to it without an ADR.

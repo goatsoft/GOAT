@@ -110,6 +110,34 @@ class SourceIdentityTests(unittest.TestCase):
                 release.check_history(current)
 
 
+class IDEMetadataTests(unittest.TestCase):
+    def test_build_output_refreshes_without_editing_the_template(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "App").mkdir()
+            (root / "web").mkdir()
+            template = root / "App/Info.plist"
+            original = plistlib.dumps({"CFBundleIdentifier": "dev.leet.goat", "NSPrincipalClass": "NSApplication"})
+            template.write_bytes(original)
+            record = {"version": "0.1.1", "codename": "Kid", "build": 1353}
+            (root / "release.json").write_text(json.dumps(record))
+            (root / "web/package.json").write_text(json.dumps({"version": "0.1.1"}))
+            output = root / "Derived/GOAT-Info.plist"
+            argv = ["release-metadata.py", "plist", "--output", str(output)]
+            with patch.object(release, "ROOT", root), patch.object(release, "APP_ROOT", root), \
+                    patch.object(release, "RECORD", root / "release.json"), \
+                    patch.object(release, "check_history"), patch.object(release.sys, "argv", argv):
+                for commit in ["first", "next"]:
+                    snapshot = {"source_commit": commit, "source_tree_sha256": commit * 2, "dirty": True}
+                    with patch.object(release, "source", return_value=snapshot):
+                        release.main()
+                    info = plistlib.loads(output.read_bytes())
+                    self.assertEqual(info["GOATSourceCommit"], commit)
+                    self.assertEqual(info["CFBundleVersion"], "1353")
+                    self.assertEqual(info["NSPrincipalClass"], "NSApplication")
+                    self.assertEqual(template.read_bytes(), original)
+
+
 class DistributionHistoryTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

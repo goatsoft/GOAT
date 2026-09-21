@@ -45,11 +45,9 @@ def git(*args):
 
 
 def source():
-    # Info.plist is an XcodeGen output retained for historical compatibility.
-    excluded = "apps/goat-macos/App/Info.plist"
     paths = git("ls-files", "-z", "--cached", "--others", "--exclude-standard").split("\0")
     digest = hashlib.sha256()
-    for name in sorted(set(paths) - {"", excluded}):
+    for name in sorted(set(paths) - {""}):
         path = ROOT / name
         digest.update(name.encode() + b"\0")
         if path.is_symlink():
@@ -58,7 +56,7 @@ def source():
             digest.update(str(path.stat().st_mode & 0o111).encode() + b"\0" + hashlib.sha256(path.read_bytes()).digest())
         else:
             digest.update(b"deleted")
-    dirty = bool(git("status", "--porcelain", "--untracked-files=normal", "--", ".", f":(exclude){excluded}"))
+    dirty = bool(git("status", "--porcelain", "--untracked-files=normal"))
     return {"source_commit": git("rev-parse", "HEAD"), "source_tree_sha256": digest.hexdigest(), "dirty": dirty}
 
 
@@ -116,7 +114,7 @@ def check_history(record):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["check", "generate", "bundle", "manifest"])
+    parser.add_argument("action", choices=["check", "plist", "bundle", "manifest"])
     parser.add_argument("--channel", choices=["Development", "Candidate", "Release"], default="Development")
     parser.add_argument("--tag")
     parser.add_argument("--app", type=Path)
@@ -134,14 +132,19 @@ def main():
     if web["version"] != record["version"]:
         raise ValueError("web/package.json version conflicts with release.json")
     data = identity(record, args.channel, args.tag)
-    if args.action == "generate":
-        settings = {"MARKETING_VERSION": record["version"], "CURRENT_PROJECT_VERSION": str(record["build"]),
-                    "GOAT_CODENAME": record["codename"], "GOAT_RELEASE_CHANNEL": args.channel,
-                    "GOAT_SOURCE_COMMIT": data["source_commit"], "GOAT_SOURCE_TREE_SHA256": data["source_tree_sha256"],
-                    "GOAT_SOURCE_DIRTY": "dirty" if data["dirty"] else "clean"}
-        output = APP_ROOT / ".build/release-settings.yml"
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(json.dumps({"settings": {"base": settings}}, indent=2) + "\n")
+    if args.action == "plist":
+        if args.output is None:
+            raise ValueError("plist requires --output")
+        with (APP_ROOT / "App/Info.plist").open("rb") as stream:
+            info = plistlib.load(stream)
+        info.update({"CFBundleShortVersionString": record["version"], "CFBundleVersion": str(record["build"]),
+                     "GOATCodename": record["codename"], "GOATReleaseChannel": args.channel,
+                     "GOATSourceCommit": data["source_commit"], "GOATSourceTreeSHA256": data["source_tree_sha256"],
+                     "GOATSourceDirty": "dirty" if data["dirty"] else "clean"})
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        content = plistlib.dumps(info)
+        if not args.output.exists() or args.output.read_bytes() != content:
+            args.output.write_bytes(content)
     if args.action in {"bundle", "manifest"}:
         if args.app is None:
             raise ValueError("--app is required")
