@@ -47,7 +47,7 @@ An ordinary upgrade replaces the app without resetting chats, engine profiles, m
 
 The official Release-channel package is built from the immutable `v0.1.3` source. The release workflow verifies the complete Release suite, website and docs, Developer ID publisher identity, hardened runtime, notarization, stapling and artifact checksums. See the [release metadata](https://github.com/goatsoft/GOAT/releases/latest) for the exact source revision and artifact hashes.
 
-The previously reported difference between a 37 tok/s server reading and a 2–3 tok/s live display has not been reproduced. This release makes those measurements distinct and easier to diagnose; it does not claim an engine-speed improvement. Model and tool results apply to the tested configurations, including stable oMLX 0.6.4, rather than every compatible server or workload.
+The previously reported difference between a 37 tok/s server reading and a 2-3 tok/s live display has not been reproduced. This release makes those measurements distinct and easier to diagnose; it does not claim an engine-speed improvement. Model and tool results apply to the tested configurations, including stable oMLX 0.6.4, rather than every compatible server or workload.
 
 ## 0.1.1 (Kid)
 
