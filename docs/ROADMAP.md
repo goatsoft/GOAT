@@ -38,7 +38,7 @@ The maintainer accepted the tested maintenance candidate. The official release w
 - preservation of configured Custom endpoints while offline; and
 - a maintained Xcode project, domain-owned tests, focused module runners and verified Developer ID builds.
 
-The [0.1.2 release notes](RELEASE-NOTES.md#012-kid--in-preparation) describe the changes for users. Exact-candidate qualification and publication remain governed by [Release readiness](RELEASE-CHECKLIST.md).
+The [0.1.2 release notes](RELEASE-NOTES.md#kid-0-1-2-in-preparation) describe the changes for users. Exact-candidate qualification and publication remain governed by [Release readiness](RELEASE-CHECKLIST.md).
 
 ## Model selection, capabilities and recovery
 

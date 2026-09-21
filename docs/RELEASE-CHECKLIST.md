@@ -4,7 +4,7 @@
 
 ## 0.1.2 maintenance scope
 
-Qualify the model-management, compaction and recovery work; long-transcript navigation; oMLX status, limit and measurement changes; Custom endpoint restoration; maintained Xcode project; domain test organisation; focused test runners; and signed-build verification described in the [release notes](RELEASE-NOTES.md#012-kid--in-preparation). Use the exact final 0.1.2 source and artifact for distribution evidence. Keep stable oMLX 0.6.4 as the qualified baseline and preserve the documented limits of the unreproduced throughput report.
+Qualify the model-management, compaction and recovery work; long-transcript navigation; oMLX status, limit and measurement changes; Custom endpoint restoration; maintained Xcode project; domain test organisation; focused test runners; and signed-build verification described in the [release notes](RELEASE-NOTES.md#kid-0-1-2-in-preparation). Use the exact final 0.1.2 source and artifact for distribution evidence. Keep stable oMLX 0.6.4 as the qualified baseline and preserve the documented limits of the unreproduced throughput report.
 
 ## 0.1.1 maintenance scope
 

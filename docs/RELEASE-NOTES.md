@@ -1,6 +1,6 @@
 # Release notes
 
-## 0.1.2 (Kid) — in preparation
+## Kid 0.1.2: in preparation
 
 GOAT 0.1.2 makes local-model work easier to set up, easier to follow and more dependable over a long session. It brings model management into the app, keeps large conversations responsive and gives coding workflows clearer recovery when a model or engine has a difficult turn.
 
