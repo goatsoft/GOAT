@@ -186,13 +186,14 @@ struct ChatView: View {
             .sharedBackgroundVisibility(.hidden)
         }
         .inspector(isPresented: $model.showInspector) {
-            if let artifact = model.paddockArtifact {
-                PaddockView(artifact: artifact)
-                    .inspectorColumnWidth(min: 300, ideal: 480, max: 820)
-            } else {
-                InspectorView(session: session)
-                    .inspectorColumnWidth(min: 280, ideal: 320, max: 420)
+            Group {
+                if let artifact = model.paddockArtifact {
+                    PaddockView(artifact: artifact)
+                } else {
+                    InspectorView(session: session)
+                }
             }
+            .inspectorColumnWidth(min: 280, ideal: 380, max: 820)
         }
         .onAppear { composerFocused = true }
         .onChange(of: session.id) { _, _ in composerFocused = true }
