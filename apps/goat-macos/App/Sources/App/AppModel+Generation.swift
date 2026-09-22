@@ -173,7 +173,7 @@ extension AppModel: ShepherdEnvironment {
 
     func generationContext(for modelID: String) -> GenerationContext? {
         guard let profile = activeEngineProfile,
-            let model = models.first(where: { $0.id == modelID })
+            models.contains(where: { $0.id == modelID })
         else { return nil }
         let identity = ModelIdentity(engineProfileID: profile.id, modelID: modelID)
         let override =

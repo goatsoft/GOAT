@@ -196,7 +196,7 @@ extension AppModel {
             guard let self else { return }
             let inspection = await self.engine.inspectModel(model)
             guard !Task.isCancelled else { return }
-            await self.publishInspection(
+            self.publishInspection(
                 identity: identity, model: inspection.model, metadata: inspection.metadata,
                 configurationRevision: configurationRevision,
                 revision: revision)
