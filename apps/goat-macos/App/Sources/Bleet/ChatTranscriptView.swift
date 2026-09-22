@@ -177,13 +177,7 @@ struct ChatTranscriptView: View {
                 .overlay(alignment: .bottom) {
                     if !isScrolledToBottom {
                         Button {
-                            heldRange = nil
-                            autoFollow = true
-                            readerOwnsViewport = false
                             snapToBottom(using: proxy)
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                isScrolledToBottom = true
-                            }
                         } label: {
                             Image(systemName: "arrow.down")
                                 .font(.system(size: 13, weight: .semibold))
@@ -457,7 +451,20 @@ struct ChatTranscriptView: View {
         cancelPendingFollowScroll()
         resetPaging()
         followThrottle.reset()
-        requestFollowScroll(using: proxy)
+        reader.isScrolling = false
+        readerOwnsViewport = false
+        heldRange = nil
+        autoFollow = true
+        scrollToBottom(using: proxy)
+        pendingFollowScroll = Task { @MainActor in
+            for delay in [30, 80, 160] {
+                do { try await Task.sleep(for: .milliseconds(delay)) } catch { return }
+                guard autoFollow, !Task.isCancelled else { break }
+                scrollToBottom(using: proxy)
+                if reader.isAtBottom { break }
+            }
+            pendingFollowScroll = nil
+        }
     }
 
     private func scrollToBottom(using proxy: ScrollViewProxy) {
