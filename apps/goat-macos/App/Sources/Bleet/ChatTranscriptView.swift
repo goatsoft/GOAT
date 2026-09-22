@@ -171,7 +171,8 @@ struct ChatTranscriptView: View {
                     }
                     .scrollTargetLayout()
                     .padding(.horizontal, 24)
-                    .padding(.vertical, 16)
+                    .padding(.top, 16)
+                    .padding(.bottom, Caprine.Activity.doubleLineHeight)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .overlay(alignment: .bottom) {
