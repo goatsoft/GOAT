@@ -184,9 +184,27 @@ private struct ThinkingCodeText: View {
         let dark: Bool
     }
 
+    private var currentText: AttributedString {
+        let key = Key(code: code, language: language, dark: colorScheme == .dark)
+        if renderedKey == key, let rendered {
+            return rendered
+        }
+        if let rendered, let prevKey = renderedKey,
+            prevKey.language == language,
+            prevKey.dark == (colorScheme == .dark),
+            code.hasPrefix(prevKey.code)
+        {
+            var combined = rendered
+            let suffix = code.dropFirst(prevKey.code.count)
+            combined.append(AttributedString(suffix))
+            return combined
+        }
+        return rendered ?? AttributedString(code)
+    }
+
     var body: some View {
         let key = Key(code: code, language: language, dark: colorScheme == .dark)
-        Text(renderedKey == key ? (rendered ?? AttributedString(code)) : AttributedString(code))
+        Text(currentText)
             .fixedSize(horizontal: false, vertical: true)
             .task(id: key) {
                 do {

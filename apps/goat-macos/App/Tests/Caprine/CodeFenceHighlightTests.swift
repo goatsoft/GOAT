@@ -92,5 +92,22 @@ extension AppTests.Caprine {
             #expect(sections.map(\.text).joined() == source)
             #expect(sections.map(\.language) == ["xml", "css", "xml"])
         }
+
+        @Test func streamingPartialCodeHighlightsProgressively() async throws {
+            let renderer = CodeSyntaxHighlighter()
+            let partial = "func processStream() {\n    let partialToken = 42\n"
+            let output = try await renderer.render(partial, language: "swift", dark: false)
+            #expect(String(output.characters) == partial)
+            let funcRange = try #require(output.range(of: "func"))
+            #expect(output[funcRange].runs.contains { $0.appKit.foregroundColor != nil })
+            let letRange = try #require(output.range(of: "let"))
+            #expect(output[letRange].runs.contains { $0.appKit.foregroundColor != nil })
+
+            let extended = partial + "    return true\n}"
+            let extendedOutput = try await renderer.render(extended, language: "swift", dark: false)
+            #expect(String(extendedOutput.characters) == extended)
+            let returnRange = try #require(extendedOutput.range(of: "return"))
+            #expect(extendedOutput[returnRange].runs.contains { $0.appKit.foregroundColor != nil })
+        }
     }
 }

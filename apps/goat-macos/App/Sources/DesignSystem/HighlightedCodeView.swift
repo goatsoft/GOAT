@@ -39,9 +39,9 @@ struct HighlightedCodeView: View {
                         .textSelection(.disabled)
                         .accessibilityHidden(true)
                 }
-                // Highlighting is asynchronous. Growing fences stay plain until completion so
-                // each Markdown snapshot cannot alternate between plain and coloured source.
-                if permitsRichRendering && !isStreaming {
+                // Highlighting is progressive. Highlighting updates asynchronously while retaining
+                // previously highlighted prefixes, avoiding flash between plain and coloured text.
+                if permitsRichRendering {
                     highlightedText
                         .font(Font(ReadingFonts.nsFont(model.effectiveCodeFontID, size: fontSize, role: .code)))
                         .multilineTextAlignment(.leading)

@@ -123,11 +123,28 @@ struct VueCodeText: View {
         let dark: Bool
     }
 
+    private var currentText: AttributedString {
+        let key = Key(code: code, dark: colorScheme == .dark)
+        if renderedKey == key, let rendered {
+            return rendered
+        }
+        if let rendered, let prevKey = renderedKey,
+            prevKey.dark == (colorScheme == .dark),
+            code.hasPrefix(prevKey.code)
+        {
+            var combined = rendered
+            let suffix = code.dropFirst(prevKey.code.count)
+            combined.append(AttributedString(suffix))
+            return combined
+        }
+        return rendered ?? AttributedString(code)
+    }
+
     var body: some View {
         let key = Key(code: code, dark: colorScheme == .dark)
-        Text(renderedKey == key ? (rendered ?? AttributedString(code)) : AttributedString(code))
+        Text(currentText)
             .task(id: key) {
-                // Coalesce streaming updates; show current plain source while preparation is pending.
+                // Coalesce streaming updates while retaining any previously highlighted prefix.
                 do {
                     try await Task.sleep(for: .milliseconds(120))
                     let result = try await VueSyntaxHighlighter.shared.render(code, dark: key.dark)
@@ -135,7 +152,7 @@ struct VueCodeText: View {
                     rendered = result
                     renderedKey = key
                 } catch {
-                    // Keep the current plain source if highlighting fails or is superseded.
+                    // Keep the current source if highlighting fails or is superseded.
                 }
             }
     }
