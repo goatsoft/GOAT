@@ -184,6 +184,7 @@ struct ChatTranscriptView: View {
                                 reader.enclosingScrollView = scroll
                             }
                         )
+                        .frame(width: 0, height: 0)
                     )
                 }
                 .overlay(alignment: .bottom) {
@@ -558,6 +559,10 @@ struct ChatTranscriptView: View {
 private struct TranscriptScrollViewObserver: NSViewRepresentable {
     let onScrollChanged: (NSScrollView) -> Void
     let onResolve: (NSScrollView) -> Void
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSView, context: Context) -> CGSize? {
+        .zero
+    }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(onScrollChanged: onScrollChanged, onResolve: onResolve)

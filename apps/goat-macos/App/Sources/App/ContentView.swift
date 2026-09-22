@@ -57,7 +57,10 @@ struct ContentView: View {
         // no bar anywhere.
         .toolbarBackground(.hidden, for: .windowToolbar)
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
-        .background(WindowConfigurator(fullscreenBackdrop: model.theme.tokens.bg))
+        .background(
+            WindowConfigurator(fullscreenBackdrop: model.theme.tokens.bg)
+                .frame(width: 0, height: 0)
+        )
         .sheet(isPresented: $model.showNewPenSheet) {
             PenSheet(pen: nil)
         }

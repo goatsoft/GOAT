@@ -95,6 +95,7 @@ struct SidebarView: View {
             }
             .fixedSize(horizontal: false, vertical: true)
         }
+        .frame(minWidth: 200, maxWidth: .infinity)
         .onChange(of: model.selectedChatID) { _, _ in
             if let chat = model.currentSession, chat.hasDefaultTitle, chat.messages.isEmpty { filter = "" }
         }
@@ -439,7 +440,7 @@ private struct ChatRow: View {
                 .fill(rowFill)
         )
         .contentShape(RoundedRectangle(cornerRadius: 6))
-        // Double-click the row → rename in place (with text selected); single-click selects.
+        // Double-click the row -> rename in place (with text selected); single-click selects.
         .onTapGesture(count: 2) { startRename() }
         .onTapGesture { model.selectedChatID = chat.id }
         .padding(.leading, isPen ? 18 : 8)

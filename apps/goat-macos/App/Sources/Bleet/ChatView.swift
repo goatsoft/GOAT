@@ -129,6 +129,7 @@ struct ChatView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
+        .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
         .overlay {
             // 🏔️ Summit ("send it") blasts a rocket-goat diagonally across the whole chat, from
             // any effort source (capsule, model menu, ⌘4). Flies over everything, hit-transparent.
