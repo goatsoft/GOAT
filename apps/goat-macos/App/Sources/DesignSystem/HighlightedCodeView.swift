@@ -57,6 +57,7 @@ struct HighlightedCodeView: View {
             .fixedSize(horizontal: true, vertical: false)
             .frame(minWidth: 1, alignment: .leading)
         }
+        .frame(minWidth: 0, maxWidth: .infinity)
     }
     @ViewBuilder
     private var highlightedText: some View {

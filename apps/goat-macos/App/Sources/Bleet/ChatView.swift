@@ -193,6 +193,7 @@ struct ChatView: View {
                     InspectorView(session: session)
                 }
             }
+            .frame(minWidth: 280, maxWidth: 820)
             .inspectorColumnWidth(min: 280, ideal: 380, max: 820)
         }
         .onAppear { composerFocused = true }

@@ -56,6 +56,7 @@ struct PaddockView: View {
                 .clipShape(RoundedRectangle(cornerRadius: Caprine.Activity.radius))
         }
         .padding(12)
+        .frame(minWidth: 280, maxWidth: .infinity, maxHeight: .infinity)
         .background(model.theme.tokens.surface.opacity(controlsVisible ? 0.16 : 0))
         .contentShape(Rectangle())
         .onHover {
@@ -90,6 +91,7 @@ struct PaddockView: View {
                 .accessibilityHidden(showingSource)
             if showingSource { sourceView }
         }
+        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
     }
 
     @ViewBuilder
@@ -134,6 +136,7 @@ struct PaddockView: View {
             )
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .frame(minWidth: 0, maxWidth: .infinity)
     }
 
     private var sourceLanguage: String? {

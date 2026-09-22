@@ -122,6 +122,10 @@ private struct WebPreviewContent: NSViewRepresentable {
 
     private static let blankPage = "<!doctype html><meta charset=\"utf-8\"><title>Off-grid</title>"
 
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: WKWebView, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? 0, height: proposal.height ?? 0)
+    }
+
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
