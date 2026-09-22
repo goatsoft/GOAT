@@ -564,7 +564,7 @@ struct AppearanceSettings: View {
 
             Toggle(isOn: $model.showToolDiffs) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Tool diff presentation")
+                    Text("Tool diffs")
                     Text("Display structured unified diffs for file edits instead of raw JSON arguments.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
