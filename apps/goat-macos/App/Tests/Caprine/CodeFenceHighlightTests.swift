@@ -1,5 +1,5 @@
 import AppKit
-import HighlightSwift
+import HighlightKit
 import Testing
 
 @testable import GOAT
@@ -77,7 +77,8 @@ extension AppTests.Caprine {
 
         @Test func tsxHighlightsTypesAndJSXTags() async throws {
             let source = "const Card = (props: { title: string }) => <section>{props.title}</section>;"
-            let output = try await Highlight().attributedText(source, language: "tsx")
+            let renderer = CodeSyntaxHighlighter()
+            let output = try await renderer.render(source, language: "tsx", dark: false)
             #expect(String(output.characters) == source)
             for token in ["const", "string", "section"] {
                 let range = try #require(output.range(of: token))

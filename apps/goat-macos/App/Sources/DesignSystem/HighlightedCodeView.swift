@@ -1,9 +1,9 @@
 import SwiftUI
 
 /// Read-only highlighted code, one component for every preview surface (in-chat fenced
-/// blocks + the Paddock). Highlighting is highlight.js via HighlightSwift (runs in
-/// JavaScriptCore - offline, no new dependency). An optional monospaced line-number
-/// gutter rides alongside; both use the same font so rows line up without wrapping.
+/// blocks + the Paddock). Highlighting is pure Swift via HighlightKit (offline, no JavaScriptCore).
+/// An optional monospaced line-number gutter rides alongside; both use the same font so
+/// rows line up without wrapping.
 struct HighlightedCodeView: View {
     @Environment(AppModel.self) private var model
     nonisolated static let maximumHighlightedBytes = 256 * 1_024

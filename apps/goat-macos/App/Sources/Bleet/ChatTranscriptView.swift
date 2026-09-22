@@ -18,6 +18,12 @@ extension EnvironmentValues {
     }
 }
 
+private enum TranscriptPagingPhase: Equatable, Sendable {
+    case idle
+    case pagingEarlier
+    case pagingLater
+}
+
 /// Its owner keys this view by chat ID. A new chat gets fresh native scroll geometry,
 /// measured row layout and follow tasks instead of inheriting another transcript's viewport.
 struct ChatTranscriptView: View {
@@ -32,6 +38,8 @@ struct ChatTranscriptView: View {
     @State private var followThrottle = TranscriptFollowThrottle()
     @State private var pendingFollowScroll: Task<Void, Never>?
     @State private var pendingPreserveScroll: Task<Void, Never>?
+    @State private var pagingPhase: TranscriptPagingPhase = .idle
+    @State private var pagingTask: Task<Void, Never>?
 
     private static let bottomAnchor = UUID()
 
@@ -89,15 +97,19 @@ struct ChatTranscriptView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
                         if messageRange.lowerBound > 0 {
-                            Button("Earlier messages", systemImage: "chevron.up") {
-                                let previous = TranscriptWindow.earlier(
-                                    messageRange, count: session.messages.count, cost: displayCost)
-                                let anchor =
-                                    previous.contains(messageRange.lowerBound)
-                                    ? messageRange.lowerBound : previous.upperBound - 1
-                                page(to: previous, anchor: anchor)
+                            HStack {
+                                Spacer()
+                                GoatLoadingIndicator().controlSize(.mini)
+                                Spacer()
                             }
-                            .buttonStyle(SecondaryChipButtonStyle())
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .id("earlier-messages-loader")
+                            .onScrollVisibilityChange(threshold: 0.1) { visible in
+                                if visible {
+                                    loadEarlierMessages(using: proxy)
+                                }
+                            }
                         }
                         ForEach(TranscriptActivity.rows(session.messages[messageRange])) { row in
                             // Each message retains its identity and ancestry as tool events arrive.
@@ -131,22 +143,18 @@ struct ChatTranscriptView: View {
                         }
                         if messageRange.upperBound < session.messages.count {
                             HStack {
-                                Button("Later messages", systemImage: "chevron.down") {
-                                    let next = TranscriptWindow.later(
-                                        messageRange, count: session.messages.count, cost: displayCost)
-                                    let anchor =
-                                        next.contains(messageRange.upperBound - 1)
-                                        ? messageRange.upperBound - 1 : next.lowerBound
-                                    page(to: next, anchor: anchor)
-                                }
-                                Button("Latest", systemImage: "arrow.down.to.line") {
-                                    heldRange = nil
-                                    autoFollow = true
-                                    readerOwnsViewport = false
-                                    snapToBottom(using: proxy)
+                                Spacer()
+                                GoatLoadingIndicator().controlSize(.mini)
+                                Spacer()
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .id("later-messages-loader")
+                            .onScrollVisibilityChange(threshold: 0.1) { visible in
+                                if visible {
+                                    loadLaterMessages(using: proxy)
                                 }
                             }
-                            .buttonStyle(SecondaryChipButtonStyle())
                         }
                         if session.isStreaming && messageRange.upperBound == session.messages.count {
                             AgentProgressView(session: session)
@@ -233,6 +241,7 @@ struct ChatTranscriptView: View {
                         }
                     }
                     if session.messages.last?.role == .user {
+                        resetPaging()
                         heldRange = nil
                         autoFollow = true
                         readerOwnsViewport = false
@@ -246,6 +255,7 @@ struct ChatTranscriptView: View {
                 .onDisappear {
                     cancelPendingFollowScroll()
                     cancelPendingPreserveScroll()
+                    resetPaging()
                     reader.resumeTask?.cancel()
                     reader.resumeTask = nil
                 }
@@ -270,6 +280,65 @@ struct ChatTranscriptView: View {
         guard session.messages.indices.contains(anchor) else { return }
         readerAnchorID = session.messages[anchor].id
         visibleMessageID = readerAnchorID
+    }
+
+    private func loadEarlierMessages(using proxy: ScrollViewProxy) {
+        guard pagingPhase == .idle, pagingTask == nil, messageRange.lowerBound > 0 else { return }
+        pagingPhase = .pagingEarlier
+        pagingTask = Task { @MainActor in
+            do { try await Task.sleep(for: .milliseconds(80)) } catch {
+                resetPaging()
+                return
+            }
+            guard !Task.isCancelled, messageRange.lowerBound > 0 else {
+                resetPaging()
+                return
+            }
+            let previous = TranscriptWindow.earlier(
+                messageRange, count: session.messages.count, cost: displayCost)
+            let anchor =
+                previous.contains(messageRange.lowerBound)
+                ? messageRange.lowerBound : previous.upperBound - 1
+            page(to: previous, anchor: anchor)
+            do { try await Task.sleep(for: .milliseconds(150)) } catch {}
+            resetPaging()
+        }
+    }
+
+    private func loadLaterMessages(using proxy: ScrollViewProxy) {
+        guard pagingPhase == .idle, pagingTask == nil, messageRange.upperBound < session.messages.count else { return }
+        pagingPhase = .pagingLater
+        pagingTask = Task { @MainActor in
+            do { try await Task.sleep(for: .milliseconds(80)) } catch {
+                resetPaging()
+                return
+            }
+            guard !Task.isCancelled, messageRange.upperBound < session.messages.count else {
+                resetPaging()
+                return
+            }
+            let next = TranscriptWindow.later(
+                messageRange, count: session.messages.count, cost: displayCost)
+            if next.upperBound == session.messages.count {
+                heldRange = nil
+                autoFollow = true
+                readerOwnsViewport = false
+                snapToBottom(using: proxy)
+            } else {
+                let anchor =
+                    next.contains(messageRange.upperBound - 1)
+                    ? messageRange.upperBound - 1 : next.lowerBound
+                page(to: next, anchor: anchor)
+            }
+            do { try await Task.sleep(for: .milliseconds(150)) } catch {}
+            resetPaging()
+        }
+    }
+
+    private func resetPaging() {
+        pagingTask?.cancel()
+        pagingTask = nil
+        pagingPhase = .idle
     }
 
     private func claimViewport() {
@@ -332,6 +401,7 @@ struct ChatTranscriptView: View {
     private func snapToBottom(using proxy: ScrollViewProxy) {
         cancelPendingPreserveScroll()
         cancelPendingFollowScroll()
+        resetPaging()
         followThrottle.reset()
         requestFollowScroll(using: proxy)
     }

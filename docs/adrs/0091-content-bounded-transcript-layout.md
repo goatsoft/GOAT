@@ -1,6 +1,6 @@
 # ADR-0091: Content-bounded transcript layout
 
-Status: Accepted · 2026-09-20
+Status: Accepted · 2026-09-20 · Amended 2026-09-22
 
 Refines [ADR-0056](0056-bounded-rendering-and-responsive-io.md) and
 [ADR-0074](0074-grouped-transcript-tool-activity.md). Qualification is tracked in
@@ -64,3 +64,7 @@ Golden Gate qualification must be recorded separately before acceptance.
 - Truncate stored text. That loses user data and changes model context.
 - Hide an entire tool round behind a disclosure. That reverses ADR-0074's visible
   narration and independent chronological tool-detail decisions.
+
+## Amendment: Automatic scroll-observed endless scrolling (2026-09-22)
+
+Manual "Earlier messages", "Later messages", and "Latest" buttons are replaced with native SwiftUI scroll-visibility observations (`.onScrollVisibilityChange`) at the transcript boundaries. Approaching the top boundary automatically engages an inline loading indicator (`GoatLoadingIndicator`) and advances the window backward while preserving the user's visible anchor position. Approaching the bottom boundary automatically loads later messages, smoothly transitioning back to bottom following at the conversation floor. The underlying 40-message / 16 KiB display budget from ADR-0091 remains enforced.

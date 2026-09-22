@@ -326,17 +326,24 @@ struct PermissionSheet: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
-            JSONEditorView(
-                text: .constant(request.arguments),
-                tokens: model.theme.tokens,
-                isEditable: false
-            )
-            .frame(maxWidth: .infinity)
-            .frame(height: 140)
-            .clipped()
-            .accessibilityLabel("Tool call arguments")
-            .padding(8)
-            .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
+            if model.showToolDiffs, let diff = ToolDiffParser.parse(tool: request.tool, arguments: request.arguments) {
+                ToolDiffView(diff: diff, rawJSON: request.arguments, maxHeight: 180)
+                    .accessibilityLabel("Tool call diff")
+                    .padding(8)
+                    .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
+            } else {
+                JSONEditorView(
+                    text: .constant(request.arguments),
+                    tokens: model.theme.tokens,
+                    isEditable: false
+                )
+                .frame(maxWidth: .infinity)
+                .frame(height: 140)
+                .clipped()
+                .accessibilityLabel("Tool call arguments")
+                .padding(8)
+                .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
+            }
             HStack {
                 Button("Deny") {
                     model.mcp.resolvePermission(.deny, requestID: request.id)

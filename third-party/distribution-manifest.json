@@ -20,12 +20,12 @@
       }
     },
     {
-      "identity": "highlightswift",
+      "identity": "highlightkit",
       "kind": "remoteSourceControl",
-      "location": "https://github.com/appstefan/HighlightSwift",
+      "location": "https://github.com/goatsoft/HighlightKit",
       "state": {
-        "revision": "784ca3ccfc8a2cf724fbb2f06cb6ec3329424da3",
-        "version": "1.1.0"
+        "revision": "524c185b0553756498c1b6a1765e8d119c4623a6",
+        "version": "0.2.0"
       }
     },
     {

@@ -69,16 +69,37 @@ struct JSONEditorSheet: View {
 
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    /// Discrete operational phases of the JSON document editor.
+    private enum Phase: Equatable {
+        case loading
+        case loadFailed(String)
+        case validating
+        case invalid(String)
+        case valid
+        case saving
+
+        var isEditable: Bool {
+            switch self {
+            case .validating, .invalid, .valid: true
+            case .loading, .loadFailed, .saving: false
+            }
+        }
+
+        var isSaving: Bool {
+            self == .saving
+        }
+
+        var canSave: Bool {
+            self == .valid
+        }
+    }
+
     @State private var text = ""
-    @State private var parseError: String?
-    @State private var loadError: String?
-    @State private var isLoading = true
-    @State private var validationPending = true
-    @State private var isSaving = false
+    @State private var phase: Phase = .loading
     @State private var saveTask: Task<Void, Never>?
 
     var body: some View {
-        GOATDialogShell(closeAction: { dismiss() }, closeDisabled: isSaving, extraOpacity: 0.3) {
+        GOATDialogShell(closeAction: { dismiss() }, closeDisabled: phase.isSaving, extraOpacity: 0.3) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     Text(title).font(.title3.weight(.semibold))
@@ -89,7 +110,7 @@ struct JSONEditorSheet: View {
                 JSONEditorView(
                     text: $text,
                     tokens: model.theme.tokens,
-                    isEditable: !isLoading && !isSaving && loadError == nil
+                    isEditable: phase.isEditable
                 )
                 // Fill the available space so short documents remain aligned at the top.
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -109,22 +130,20 @@ struct JSONEditorSheet: View {
                     Button("Cancel") { dismiss() }
                         .buttonStyle(DialogCancelButtonStyle())
                         .keyboardShortcut(.cancelAction)
-                        .disabled(isSaving)
+                        .disabled(phase.isSaving)
                     Button("Save") { startSave() }
                         .keyboardShortcut(.defaultAction)
-                        .disabled(
-                            isLoading || validationPending || isSaving || loadError != nil
-                                || parseError != nil)
+                        .disabled(!phase.canSave)
                 }
             }
             .padding(18)
             .frame(width: 680, height: 560)
         }
-        .interactiveDismissDisabled(isSaving)
+        .interactiveDismissDisabled(phase.isSaving)
         .task(id: fileURL) { await load() }
         .task(id: text) { await validate() }
         .onDisappear {
-            if !isSaving {
+            if !phase.isSaving {
                 saveTask?.cancel()
                 saveTask = nil
             }
@@ -132,23 +151,32 @@ struct JSONEditorSheet: View {
     }
 
     @ViewBuilder private var validity: some View {
-        if isLoading || validationPending {
+        switch phase {
+        case .loading:
             HStack(spacing: 6) {
                 GoatLoadingIndicator().controlSize(.small)
-                Text(isLoading ? "Loading" : "Checking")
+                Text("Loading")
             }
             .font(.caption)
             .foregroundStyle(.secondary)
-        } else if let error = loadError ?? parseError {
+        case .validating:
+            HStack(spacing: 6) {
+                GoatLoadingIndicator().controlSize(.small)
+                Text("Checking")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        case .loadFailed(let error), .invalid(let error):
             Label(error, systemImage: "xmark.octagon.fill")
                 .font(.caption).foregroundStyle(.orange).lineLimit(1)
-        } else {
+        case .valid, .saving:
             Label("Valid JSON", systemImage: "checkmark.seal.fill")
                 .font(.caption).foregroundStyle(.green)
         }
     }
 
     private func load() async {
+        phase = .loading
         let result = await JSONFileWorker.shared.load(fileURL)
         guard !Task.isCancelled else { return }
         switch result {
@@ -157,30 +185,33 @@ struct JSONEditorSheet: View {
         case .loaded(let loaded):
             text = loaded
         case .failed(let error):
-            loadError = error
-            validationPending = false
+            phase = .loadFailed(error)
         }
-        isLoading = false
     }
 
     private func validate() async {
-        guard loadError == nil else { return }
-        validationPending = true
-        do {
-            try await Task.sleep(for: .milliseconds(120))
-        } catch {
+        guard case .loadFailed = phase else {
+            phase = .validating
+            do {
+                try await Task.sleep(for: .milliseconds(120))
+            } catch {
+                return
+            }
+            let error = await JSONFileWorker.shared.validationError(for: text)
+            guard !Task.isCancelled else { return }
+            if let error {
+                phase = .invalid(error)
+            } else {
+                phase = .valid
+            }
             return
         }
-        let error = await JSONFileWorker.shared.validationError(for: text)
-        guard !Task.isCancelled, loadError == nil else { return }
-        parseError = error
-        validationPending = false
     }
 
     private func startSave() {
-        guard !isSaving, loadError == nil, parseError == nil else { return }
+        guard phase.canSave else { return }
         saveTask?.cancel()
-        isSaving = true
+        phase = .saving
         let data = Data(text.utf8)
         saveTask = Task { @MainActor in
             await save(data)
@@ -190,9 +221,8 @@ struct JSONEditorSheet: View {
 
     private func save(_ data: Data) async {
         let error = await JSONFileWorker.shared.save(data, to: fileURL)
-        isSaving = false
         if let error {
-            parseError = error
+            phase = .invalid(error)
             return
         }
         onSaved()

@@ -562,6 +562,14 @@ struct AppearanceSettings: View {
                 }
             }
 
+            Toggle(isOn: $model.showToolDiffs) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Tool diff presentation")
+                    Text("Display structured unified diffs for file edits instead of raw JSON arguments.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+
             if model.presentation.isUnlocked {
                 Section("GOAT 1337") {
                     Toggle(

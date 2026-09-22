@@ -713,7 +713,11 @@ private struct ToolCallDetails: View {
         VStack(alignment: .leading, spacing: Caprine.Activity.compactSpacing) {
             if hasArguments {
                 labeled("Arguments")
-                JSONTreeView(raw: event.arguments)
+                if model.showToolDiffs, let diff = ToolDiffParser.parse(tool: event.tool, arguments: event.arguments) {
+                    ToolDiffView(diff: diff, rawJSON: event.arguments)
+                } else {
+                    JSONTreeView(raw: event.arguments)
+                }
             }
             if hasArguments && hasResult {
                 Divider().padding(.vertical, Caprine.Activity.ruleWidth)

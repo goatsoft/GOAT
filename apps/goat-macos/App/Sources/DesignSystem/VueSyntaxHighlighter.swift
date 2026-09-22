@@ -1,12 +1,11 @@
 import Foundation
-import HighlightSwift
+import HighlightKit
 import SwiftUI
 
 /// Highlight SFC sections without flattening TypeScript scripts into HTML or JavaScript.
 /// Source text is preserved exactly, including whitespace between independently coloured sections.
 actor VueSyntaxHighlighter {
     static let shared = VueSyntaxHighlighter()
-    private let highlight = Highlight()
     static let maximumBytes = 256 * 1_024
     private static let maximumSections = 128
 
@@ -77,22 +76,33 @@ actor VueSyntaxHighlighter {
 
     func render(_ source: String, dark: Bool) async throws -> AttributedString {
         guard source.utf8.count <= Self.maximumBytes else { return AttributedString(source) }
+        let theme: HighlightTheme = dark ? .xcodeDark : .xcodeLight
         var output = AttributedString()
         for section in Self.sections(in: source) {
             try Task.checkCancellation()
             let text = section.text
             let core = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !core.isEmpty, section.language != "plaintext",
-                let range = text.range(of: core),
-                let result = try? await highlight.attributedText(
-                    core, language: section.language, colors: dark ? .dark(.xcode) : .light(.xcode)),
-                String(result.characters) == core
+                let range = text.range(of: core)
             else {
                 output.append(AttributedString(text))
                 continue
             }
-            // HighlightSwift trims boundaries. Restore them explicitly, and reject any conversion
-            // that changes the source rather than risk losing code or misaligning line numbers.
+            let highlightResult = Highlighter.shared.highlight(core, as: section.language)
+            let ns = NSMutableAttributedString(string: core)
+            let fullLength = (core as NSString).length
+            for token in highlightResult.tokens {
+                guard let style = theme.style(for: token) else { continue }
+                guard token.range.location + token.range.length <= fullLength else { continue }
+                if let color = style.color {
+                    ns.addAttribute(.foregroundColor, value: color, range: token.range)
+                }
+            }
+            let result = AttributedString(ns)
+            guard String(result.characters) == core else {
+                output.append(AttributedString(text))
+                continue
+            }
             output.append(AttributedString(String(text[..<range.lowerBound])))
             output.append(result)
             output.append(AttributedString(String(text[range.upperBound...])))

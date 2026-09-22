@@ -1,12 +1,11 @@
 import Foundation
-import HighlightSwift
+import HighlightKit
 import SwiftUI
 
-/// HighlightSwift's CodeText uses a class-valued @Entry default that constructs a
-/// Highlight on every access. Own one runtime explicitly, independent of view updates.
+/// HighlightKit provides pure-Swift syntax highlighting on background tasks without
+/// JavaScriptCore, HTML round-tripping, or memory bloat.
 actor CodeSyntaxHighlighter {
     static let shared = CodeSyntaxHighlighter()
-    private let highlight = Highlight()
 
     func render(_ source: String, language: String?, dark: Bool) async throws -> AttributedString {
         try Task.checkCancellation()
@@ -15,19 +14,34 @@ actor CodeSyntaxHighlighter {
         }
         let core = source.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !core.isEmpty, let range = source.range(of: core) else { return AttributedString(source) }
-        let result: AttributedString
-        if let language {
-            result = try await highlight.attributedText(
-                core, language: language, colors: dark ? .dark(.xcode) : .light(.xcode))
+
+        let theme: HighlightTheme = dark ? .xcodeDark : .xcodeLight
+        let alias = language?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+
+        let result: HighlightResult
+        if let alias, !alias.isEmpty, !["text", "plain", "plaintext"].contains(alias) {
+            result = Highlighter.shared.highlight(core, as: alias)
         } else {
-            result = try await highlight.attributedText(core, colors: dark ? .dark(.xcode) : .light(.xcode))
+            result = await Highlighter.shared.highlightAuto(core)
         }
+
         try Task.checkCancellation()
-        // The library's HTML conversion trims boundaries. Preserve source and indentation,
-        // and reject a conversion that changes the actual code (as the Vue path does).
-        guard String(result.characters) == core else { return AttributedString(source) }
+
+        let ns = NSMutableAttributedString(string: core)
+        let fullLength = (core as NSString).length
+        for token in result.tokens {
+            guard let style = theme.style(for: token) else { continue }
+            guard token.range.location + token.range.length <= fullLength else { continue }
+            if let color = style.color {
+                ns.addAttribute(.foregroundColor, value: color, range: token.range)
+            }
+        }
+
+        let colored = AttributedString(ns)
+        guard String(colored.characters) == core else { return AttributedString(source) }
+
         var output = AttributedString(String(source[..<range.lowerBound]))
-        output.append(result)
+        output.append(colored)
         output.append(AttributedString(String(source[range.upperBound...])))
         return output
     }
