@@ -394,13 +394,14 @@ struct ChatTranscriptView: View {
     private func updateBottomVisibility(_ visible: Bool, using proxy: ScrollViewProxy) {
         // Visibility is input to the follower, not presentation state. Do not invalidate
         // SwiftUI layout synchronously from its own visibility callback.
-        reader.isAtBottom = visible
-        if isScrolledToBottom != visible {
+        let isAtTrueBottom = visible && messageRange.upperBound == session.messages.count
+        reader.isAtBottom = isAtTrueBottom
+        if isScrolledToBottom != isAtTrueBottom {
             withAnimation(.easeInOut(duration: 0.2)) {
-                isScrolledToBottom = visible
+                isScrolledToBottom = isAtTrueBottom
             }
         }
-        if visible, readerOwnsViewport, !reader.isScrolling {
+        if isAtTrueBottom, readerOwnsViewport, !reader.isScrolling {
             Task { @MainActor in
                 await Task.yield()
                 if readerOwnsViewport, !reader.isScrolling {
@@ -409,7 +410,7 @@ struct ChatTranscriptView: View {
             }
             return
         }
-        guard heldRange == nil, visible, !reader.isScrolling, !readerOwnsViewport, !autoFollow,
+        guard heldRange == nil, isAtTrueBottom, !reader.isScrolling, !readerOwnsViewport, !autoFollow,
             reader.resumeTask == nil
         else { return }
         reader.resumeTask = Task { @MainActor in
@@ -454,15 +455,27 @@ struct ChatTranscriptView: View {
         followThrottle.reset()
         reader.isScrolling = false
         readerOwnsViewport = false
+        readerAnchorID = nil
+        visibleMessageID = nil
+        let wasWindowed = heldRange != nil || messageRange.upperBound < session.messages.count
         heldRange = nil
         autoFollow = true
-        scrollToBottom(using: proxy)
+        reader.isAtBottom = false
+        isScrolledToBottom = false
+        if !wasWindowed {
+            scrollToBottom(using: proxy)
+        }
         pendingFollowScroll = Task { @MainActor in
-            for delay in [30, 80, 160] {
+            if wasWindowed {
+                await Task.yield()
+                try? await Task.sleep(for: .milliseconds(30))
+            }
+            scrollToBottom(using: proxy)
+            for delay in [50, 100, 200] {
                 do { try await Task.sleep(for: .milliseconds(delay)) } catch { return }
                 guard autoFollow, !Task.isCancelled else { break }
                 scrollToBottom(using: proxy)
-                if reader.isAtBottom { break }
+                if reader.isAtBottom && messageRange.upperBound == session.messages.count { break }
             }
             pendingFollowScroll = nil
         }
