@@ -174,57 +174,38 @@ struct ChatTranscriptView: View {
                     .padding(.vertical, 16)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .overlay(alignment: .top) {
-                    LinearGradient(
-                        colors: [tokens.bg, tokens.bg.opacity(0)],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                    .frame(height: Caprine.Activity.doubleLineHeight)
-                    .allowsHitTesting(false)
-                }
                 .overlay(alignment: .bottom) {
-                    ZStack(alignment: .bottom) {
-                        LinearGradient(
-                            colors: [tokens.bg.opacity(0), tokens.bg],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                        .frame(height: Caprine.Activity.doubleLineHeight)
-                        .allowsHitTesting(false)
-
-                        if !isScrolledToBottom {
-                            Button {
-                                heldRange = nil
-                                autoFollow = true
-                                readerOwnsViewport = false
-                                snapToBottom(using: proxy)
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    isScrolledToBottom = true
-                                }
-                            } label: {
-                                Image(systemName: "arrow.down")
-                                    .font(.system(size: 13, weight: .semibold))
-                                    .foregroundStyle(tokens.ink)
-                                    .frame(width: 32, height: 32)
-                                    .background(
-                                        tokens.surface.opacity(isHoveringScrollButton ? 1.0 : 0.92),
-                                        in: Circle()
-                                    )
-                                    .overlay(
-                                        Circle().strokeBorder(
-                                            tokens.muted.opacity(isHoveringScrollButton ? 0.6 : 0.35),
-                                            lineWidth: 1
-                                        )
-                                    )
-                                    .shadow(color: .black.opacity(0.25), radius: 4, y: 2)
+                    if !isScrolledToBottom {
+                        Button {
+                            heldRange = nil
+                            autoFollow = true
+                            readerOwnsViewport = false
+                            snapToBottom(using: proxy)
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                isScrolledToBottom = true
                             }
-                            .buttonStyle(.plain)
-                            .help("Scroll to bottom")
-                            .padding(.bottom, Caprine.Activity.inset)
-                            .onHover { isHoveringScrollButton = $0 }
-                            .transition(.opacity.combined(with: .scale(scale: 0.85)))
+                        } label: {
+                            Image(systemName: "arrow.down")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(tokens.ink)
+                                .frame(width: 32, height: 32)
+                                .background(
+                                    tokens.surface.opacity(isHoveringScrollButton ? 1.0 : 0.92),
+                                    in: Circle()
+                                )
+                                .overlay(
+                                    Circle().strokeBorder(
+                                        tokens.muted.opacity(isHoveringScrollButton ? 0.6 : 0.35),
+                                        lineWidth: 1
+                                    )
+                                )
+                                .shadow(color: .black.opacity(0.25), radius: 4, y: 2)
                         }
+                        .buttonStyle(.plain)
+                        .help("Scroll to bottom")
+                        .padding(.bottom, Caprine.Activity.inset)
+                        .onHover { isHoveringScrollButton = $0 }
+                        .transition(.opacity.combined(with: .scale(scale: 0.85)))
                     }
                 }
                 .environment(
