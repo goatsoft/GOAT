@@ -54,20 +54,19 @@ struct ChatTranscriptView: View {
         _visibleMessageID = State(initialValue: initialVisibleMessageID)
         _readerAnchorID = State(initialValue: initialVisibleMessageID)
         if !initiallyFollowing {
-            let start = initialVisibleMessageID.flatMap { id in
-                session.messages.firstIndex(where: { $0.id == id })
-            }
-            // The visible anchor starts the reader's window. Ending the window at that
-            // message leaves no content below it, so native restoration clamps to the bottom.
-            _heldRange = State(
-                initialValue: start.map { start in
-                    TranscriptWindow.range(count: session.messages.count, startingAt: start) {
-                        TranscriptWindow.displayCost(session.messages[$0])
-                    }
+            if session.messages.count <= TranscriptWindow.capacity {
+                _heldRange = State(initialValue: nil)
+            } else {
+                let start = initialVisibleMessageID.flatMap { id in
+                    session.messages.firstIndex(where: { $0.id == id })
                 }
-                    ?? TranscriptWindow.range(count: session.messages.count, end: nil) {
-                        TranscriptWindow.displayCost(session.messages[$0])
-                    })
+                _heldRange = State(
+                    initialValue: start.map { start in
+                        let lower = min(session.messages.count, max(0, start))
+                        let upper = min(session.messages.count, lower + TranscriptWindow.capacity)
+                        return lower..<upper
+                    } ?? max(0, session.messages.count - TranscriptWindow.capacity)..<session.messages.count)
+            }
         }
     }
 
@@ -98,14 +97,13 @@ struct ChatTranscriptView: View {
                     VStack(alignment: .leading, spacing: 0) {
                         if messageRange.lowerBound > 0 {
                             HStack {
-                                Spacer()
                                 GoatLoadingIndicator().controlSize(.mini)
                                 Spacer()
                             }
-                            .frame(maxWidth: .infinity)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.vertical, 8)
                             .id("earlier-messages-loader")
-                            .onScrollVisibilityChange(threshold: 0.1) { visible in
+                            .onScrollVisibilityChange(threshold: 0.01) { visible in
                                 if visible {
                                     loadEarlierMessages(using: proxy)
                                 }
@@ -143,14 +141,13 @@ struct ChatTranscriptView: View {
                         }
                         if messageRange.upperBound < session.messages.count {
                             HStack {
-                                Spacer()
                                 GoatLoadingIndicator().controlSize(.mini)
                                 Spacer()
                             }
-                            .frame(maxWidth: .infinity)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.vertical, 8)
                             .id("later-messages-loader")
-                            .onScrollVisibilityChange(threshold: 0.1) { visible in
+                            .onScrollVisibilityChange(threshold: 0.01) { visible in
                                 if visible {
                                     loadLaterMessages(using: proxy)
                                 }
@@ -264,43 +261,58 @@ struct ChatTranscriptView: View {
     }
 
     private var messageRange: Range<Int> {
-        if let heldRange {
-            return TranscriptWindow.clamped(heldRange, count: session.messages.count, cost: displayCost)
+        let count = session.messages.count
+        guard count > TranscriptWindow.capacity else {
+            return 0..<count
         }
-        return TranscriptWindow.range(count: session.messages.count, end: nil, cost: displayCost)
+        if let heldRange {
+            let upper = min(count, heldRange.upperBound)
+            let lower = min(heldRange.lowerBound, upper)
+            if lower == upper, upper > 0 {
+                return max(0, upper - TranscriptWindow.capacity)..<upper
+            }
+            return lower..<upper
+        }
+        return max(0, count - TranscriptWindow.capacity)..<count
     }
 
     private func displayCost(_ index: Int) -> Int {
         TranscriptWindow.displayCost(session.messages[index])
     }
 
-    private func page(to range: Range<Int>, anchor: Int) {
+    private func page(to range: Range<Int>, anchor: Int, scrollTarget: Int? = nil, using proxy: ScrollViewProxy? = nil)
+    {
         claimViewport()
         heldRange = range
         guard session.messages.indices.contains(anchor) else { return }
-        readerAnchorID = session.messages[anchor].id
-        visibleMessageID = readerAnchorID
+        let targetID =
+            scrollTarget.flatMap { session.messages.indices.contains($0) ? session.messages[$0].id : nil }
+            ?? session.messages[anchor].id
+        readerAnchorID = targetID
+        visibleMessageID = targetID
+        if let proxy {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                proxy.scrollTo(targetID, anchor: .top)
+            }
+        }
     }
 
     private func loadEarlierMessages(using proxy: ScrollViewProxy) {
         guard pagingPhase == .idle, pagingTask == nil, messageRange.lowerBound > 0 else { return }
         pagingPhase = .pagingEarlier
         pagingTask = Task { @MainActor in
-            do { try await Task.sleep(for: .milliseconds(80)) } catch {
-                resetPaging()
-                return
-            }
             guard !Task.isCancelled, messageRange.lowerBound > 0 else {
                 resetPaging()
                 return
             }
-            let previous = TranscriptWindow.earlier(
-                messageRange, count: session.messages.count, cost: displayCost)
-            let anchor =
-                previous.contains(messageRange.lowerBound)
-                ? messageRange.lowerBound : previous.upperBound - 1
-            page(to: previous, anchor: anchor)
-            do { try await Task.sleep(for: .milliseconds(150)) } catch {}
+            let previousLower = max(0, messageRange.lowerBound - TranscriptWindow.step)
+            let anchor = messageRange.lowerBound
+            let newUpper = min(session.messages.count, max(messageRange.upperBound, previousLower + 100))
+            let previous = previousLower..<newUpper
+            page(to: previous, anchor: anchor, scrollTarget: anchor, using: proxy)
+            do { try await Task.sleep(for: .milliseconds(100)) } catch {}
             resetPaging()
         }
     }
@@ -309,28 +321,23 @@ struct ChatTranscriptView: View {
         guard pagingPhase == .idle, pagingTask == nil, messageRange.upperBound < session.messages.count else { return }
         pagingPhase = .pagingLater
         pagingTask = Task { @MainActor in
-            do { try await Task.sleep(for: .milliseconds(80)) } catch {
-                resetPaging()
-                return
-            }
             guard !Task.isCancelled, messageRange.upperBound < session.messages.count else {
                 resetPaging()
                 return
             }
-            let next = TranscriptWindow.later(
-                messageRange, count: session.messages.count, cost: displayCost)
-            if next.upperBound == session.messages.count {
+            let nextUpper = min(session.messages.count, messageRange.upperBound + TranscriptWindow.step)
+            if nextUpper == session.messages.count {
                 heldRange = nil
                 autoFollow = true
                 readerOwnsViewport = false
                 snapToBottom(using: proxy)
             } else {
-                let anchor =
-                    next.contains(messageRange.upperBound - 1)
-                    ? messageRange.upperBound - 1 : next.lowerBound
-                page(to: next, anchor: anchor)
+                let anchor = messageRange.upperBound - 1
+                let newLower = max(0, min(messageRange.lowerBound, nextUpper - 100))
+                let next = newLower..<nextUpper
+                page(to: next, anchor: anchor, scrollTarget: anchor, using: proxy)
             }
-            do { try await Task.sleep(for: .milliseconds(150)) } catch {}
+            do { try await Task.sleep(for: .milliseconds(100)) } catch {}
             resetPaging()
         }
     }
