@@ -40,6 +40,8 @@ struct ChatTranscriptView: View {
     @State private var pendingPreserveScroll: Task<Void, Never>?
     @State private var pagingPhase: TranscriptPagingPhase = .idle
     @State private var pagingTask: Task<Void, Never>?
+    @State private var isScrolledToBottom: Bool
+    @State private var isHoveringScrollButton = false
 
     private static let bottomAnchor = UUID()
 
@@ -53,6 +55,7 @@ struct ChatTranscriptView: View {
         _readerOwnsViewport = State(initialValue: !initiallyFollowing)
         _visibleMessageID = State(initialValue: initialVisibleMessageID)
         _readerAnchorID = State(initialValue: initialVisibleMessageID)
+        _isScrolledToBottom = State(initialValue: initiallyFollowing)
         if !initiallyFollowing {
             if session.messages.count <= TranscriptWindow.capacity {
                 _heldRange = State(initialValue: nil)
@@ -171,6 +174,59 @@ struct ChatTranscriptView: View {
                     .padding(.vertical, 16)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .overlay(alignment: .top) {
+                    LinearGradient(
+                        colors: [tokens.bg, tokens.bg.opacity(0)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(height: Caprine.Activity.doubleLineHeight)
+                    .allowsHitTesting(false)
+                }
+                .overlay(alignment: .bottom) {
+                    ZStack(alignment: .bottom) {
+                        LinearGradient(
+                            colors: [tokens.bg.opacity(0), tokens.bg],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                        .frame(height: Caprine.Activity.doubleLineHeight)
+                        .allowsHitTesting(false)
+
+                        if !isScrolledToBottom {
+                            Button {
+                                heldRange = nil
+                                autoFollow = true
+                                readerOwnsViewport = false
+                                snapToBottom(using: proxy)
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    isScrolledToBottom = true
+                                }
+                            } label: {
+                                Image(systemName: "arrow.down")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(tokens.ink)
+                                    .frame(width: 32, height: 32)
+                                    .background(
+                                        tokens.surface.opacity(isHoveringScrollButton ? 1.0 : 0.92),
+                                        in: Circle()
+                                    )
+                                    .overlay(
+                                        Circle().strokeBorder(
+                                            tokens.muted.opacity(isHoveringScrollButton ? 0.6 : 0.35),
+                                            lineWidth: 1
+                                        )
+                                    )
+                                    .shadow(color: .black.opacity(0.25), radius: 4, y: 2)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Scroll to bottom")
+                            .padding(.bottom, Caprine.Activity.inset)
+                            .onHover { isHoveringScrollButton = $0 }
+                            .transition(.opacity.combined(with: .scale(scale: 0.85)))
+                        }
+                    }
+                }
                 .environment(
                     \.transcriptInspection,
                     TranscriptInspectionAction {
@@ -242,6 +298,9 @@ struct ChatTranscriptView: View {
                         heldRange = nil
                         autoFollow = true
                         readerOwnsViewport = false
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            isScrolledToBottom = true
+                        }
                         snapToBottom(using: proxy)
                     } else if autoFollow {
                         requestFollowScroll(using: proxy)
@@ -259,6 +318,8 @@ struct ChatTranscriptView: View {
             }
         }
     }
+
+    private var tokens: Caprine { model.theme.tokens }
 
     private var messageRange: Range<Int> {
         let count = session.messages.count
@@ -358,6 +419,11 @@ struct ChatTranscriptView: View {
         // Visibility is input to the follower, not presentation state. Do not invalidate
         // SwiftUI layout synchronously from its own visibility callback.
         reader.isAtBottom = visible
+        if isScrolledToBottom != visible {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isScrolledToBottom = visible
+            }
+        }
         if visible, readerOwnsViewport, !reader.isScrolling {
             Task { @MainActor in
                 await Task.yield()
