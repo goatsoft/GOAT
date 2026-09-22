@@ -43,7 +43,6 @@ struct ChatTranscriptView: View {
     @State private var pagingTask: Task<Void, Never>?
     @State private var isScrolledToBottom: Bool
     @State private var isHoveringScrollButton = false
-    @State private var enclosingScroll: NSScrollView?
 
     private static let bottomAnchor = UUID()
 
@@ -182,7 +181,7 @@ struct ChatTranscriptView: View {
                                 handleNativeScroll(scroll)
                             },
                             onResolve: { scroll in
-                                enclosingScroll = scroll
+                                reader.enclosingScrollView = scroll
                             }
                         )
                     )
@@ -487,7 +486,7 @@ struct ChatTranscriptView: View {
         }
 
         func applyDirectBottomScroll() {
-            if let scroll = enclosingScroll, let document = scroll.documentView {
+            if let scroll = reader.enclosingScrollView, let document = scroll.documentView {
                 let targetY = max(0, document.bounds.maxY - scroll.contentView.bounds.height)
                 scroll.contentView.scroll(to: NSPoint(x: 0, y: targetY))
                 scroll.reflectScrolledClipView(scroll.contentView)
@@ -553,6 +552,7 @@ struct ChatTranscriptView: View {
     var isAtBottom = true
     var isScrolling = false
     var resumeTask: Task<Void, Never>?
+    weak var enclosingScrollView: NSScrollView?
 }
 
 private struct TranscriptScrollViewObserver: NSViewRepresentable {
@@ -577,9 +577,11 @@ private struct TranscriptScrollViewObserver: NSViewRepresentable {
         context.coordinator.targetView = nsView
         context.coordinator.onScrollChanged = onScrollChanged
         context.coordinator.onResolve = onResolve
-        DispatchQueue.main.async { [weak nsView, weak coordinator = context.coordinator] in
-            guard let nsView, let coordinator, let scroll = nsView.enclosingScrollView else { return }
-            coordinator.attach(to: scroll)
+        if context.coordinator.observedScrollView == nil {
+            DispatchQueue.main.async { [weak nsView, weak coordinator = context.coordinator] in
+                guard let nsView, let coordinator, let scroll = nsView.enclosingScrollView else { return }
+                coordinator.attach(to: scroll)
+            }
         }
     }
 
@@ -591,7 +593,7 @@ private struct TranscriptScrollViewObserver: NSViewRepresentable {
         var onScrollChanged: (NSScrollView) -> Void
         var onResolve: (NSScrollView) -> Void
         weak var targetView: NSView?
-        private weak var observedScrollView: NSScrollView?
+        weak var observedScrollView: NSScrollView?
         private var observerToken: NSObjectProtocol?
 
         init(onScrollChanged: @escaping (NSScrollView) -> Void, onResolve: @escaping (NSScrollView) -> Void) {
@@ -600,11 +602,10 @@ private struct TranscriptScrollViewObserver: NSViewRepresentable {
         }
 
         func attach(to scroll: NSScrollView) {
-            onResolve(scroll)
-            onScrollChanged(scroll)
             guard observedScrollView !== scroll else { return }
             detach()
             observedScrollView = scroll
+            onResolve(scroll)
             scroll.contentView.postsBoundsChangedNotifications = true
             observerToken = NotificationCenter.default.addObserver(
                 forName: NSView.boundsDidChangeNotification,
