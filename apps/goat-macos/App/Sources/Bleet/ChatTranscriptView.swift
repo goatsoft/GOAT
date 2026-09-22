@@ -1,3 +1,4 @@
+import AppKit
 import Bleet
 import Caprine
 import Hoofprint
@@ -42,6 +43,7 @@ struct ChatTranscriptView: View {
     @State private var pagingTask: Task<Void, Never>?
     @State private var isScrolledToBottom: Bool
     @State private var isHoveringScrollButton = false
+    @State private var enclosingScroll: NSScrollView?
 
     private static let bottomAnchor = UUID()
 
@@ -174,6 +176,16 @@ struct ChatTranscriptView: View {
                     .padding(.top, 16)
                     .padding(.bottom, Caprine.Activity.doubleLineHeight)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        TranscriptScrollViewObserver(
+                            onScrollChanged: { scroll in
+                                handleNativeScroll(scroll)
+                            },
+                            onResolve: { scroll in
+                                enclosingScroll = scroll
+                            }
+                        )
+                    )
                 }
                 .overlay(alignment: .bottom) {
                     if !isScrolledToBottom {
@@ -198,6 +210,7 @@ struct ChatTranscriptView: View {
                         }
                         .buttonStyle(.plain)
                         .help("Scroll to bottom")
+                        .accessibilityIdentifier("chat-transcript-scroll-bottom-button")
                         .padding(.bottom, Caprine.Activity.inset)
                         .onHover { isHoveringScrollButton = $0 }
                         .transition(.opacity.combined(with: .scale(scale: 0.85)))
@@ -396,11 +409,6 @@ struct ChatTranscriptView: View {
         // SwiftUI layout synchronously from its own visibility callback.
         let isAtTrueBottom = visible && messageRange.upperBound == session.messages.count
         reader.isAtBottom = isAtTrueBottom
-        if isScrolledToBottom != isAtTrueBottom {
-            withAnimation(.easeInOut(duration: 0.2)) {
-                isScrolledToBottom = isAtTrueBottom
-            }
-        }
         if isAtTrueBottom, readerOwnsViewport, !reader.isScrolling {
             Task { @MainActor in
                 await Task.yield()
@@ -448,6 +456,20 @@ struct ChatTranscriptView: View {
         }
     }
 
+    private func handleNativeScroll(_ scroll: NSScrollView) {
+        guard let document = scroll.documentView, document.bounds.height > 0 else { return }
+        let distFromBottom = document.bounds.maxY - scroll.contentView.bounds.maxY
+        let atBottom = distFromBottom <= 50 && messageRange.upperBound == session.messages.count
+        reader.isAtBottom = atBottom
+        if isScrolledToBottom != atBottom {
+            DispatchQueue.main.async {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    isScrolledToBottom = atBottom
+                }
+            }
+        }
+    }
+
     private func snapToBottom(using proxy: ScrollViewProxy) {
         cancelPendingPreserveScroll()
         cancelPendingFollowScroll()
@@ -457,25 +479,30 @@ struct ChatTranscriptView: View {
         readerOwnsViewport = false
         readerAnchorID = nil
         visibleMessageID = nil
-        let wasWindowed = heldRange != nil || messageRange.upperBound < session.messages.count
         heldRange = nil
         autoFollow = true
-        reader.isAtBottom = false
-        isScrolledToBottom = false
-        if !wasWindowed {
-            scrollToBottom(using: proxy)
+        reader.isAtBottom = true
+        withAnimation(.easeInOut(duration: 0.2)) {
+            isScrolledToBottom = true
         }
-        pendingFollowScroll = Task { @MainActor in
-            if wasWindowed {
-                await Task.yield()
-                try? await Task.sleep(for: .milliseconds(30))
+
+        func applyDirectBottomScroll() {
+            if let scroll = enclosingScroll, let document = scroll.documentView {
+                let targetY = max(0, document.bounds.maxY - scroll.contentView.bounds.height)
+                scroll.contentView.scroll(to: NSPoint(x: 0, y: targetY))
+                scroll.reflectScrolledClipView(scroll.contentView)
             }
-            scrollToBottom(using: proxy)
-            for delay in [50, 100, 200] {
+        }
+
+        applyDirectBottomScroll()
+        scrollToBottom(using: proxy)
+
+        pendingFollowScroll = Task { @MainActor in
+            for delay in [30, 80, 160] {
                 do { try await Task.sleep(for: .milliseconds(delay)) } catch { return }
                 guard autoFollow, !Task.isCancelled else { break }
+                applyDirectBottomScroll()
                 scrollToBottom(using: proxy)
-                if reader.isAtBottom && messageRange.upperBound == session.messages.count { break }
             }
             pendingFollowScroll = nil
         }
@@ -526,4 +553,76 @@ struct ChatTranscriptView: View {
     var isAtBottom = true
     var isScrolling = false
     var resumeTask: Task<Void, Never>?
+}
+
+private struct TranscriptScrollViewObserver: NSViewRepresentable {
+    let onScrollChanged: (NSScrollView) -> Void
+    let onResolve: (NSScrollView) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onScrollChanged: onScrollChanged, onResolve: onResolve)
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        context.coordinator.targetView = view
+        DispatchQueue.main.async { [weak view, weak coordinator = context.coordinator] in
+            guard let view, let coordinator, let scroll = view.enclosingScrollView else { return }
+            coordinator.attach(to: scroll)
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.targetView = nsView
+        context.coordinator.onScrollChanged = onScrollChanged
+        context.coordinator.onResolve = onResolve
+        DispatchQueue.main.async { [weak nsView, weak coordinator = context.coordinator] in
+            guard let nsView, let coordinator, let scroll = nsView.enclosingScrollView else { return }
+            coordinator.attach(to: scroll)
+        }
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.detach()
+    }
+
+    @MainActor final class Coordinator: NSObject {
+        var onScrollChanged: (NSScrollView) -> Void
+        var onResolve: (NSScrollView) -> Void
+        weak var targetView: NSView?
+        private weak var observedScrollView: NSScrollView?
+        private var observerToken: NSObjectProtocol?
+
+        init(onScrollChanged: @escaping (NSScrollView) -> Void, onResolve: @escaping (NSScrollView) -> Void) {
+            self.onScrollChanged = onScrollChanged
+            self.onResolve = onResolve
+        }
+
+        func attach(to scroll: NSScrollView) {
+            onResolve(scroll)
+            onScrollChanged(scroll)
+            guard observedScrollView !== scroll else { return }
+            detach()
+            observedScrollView = scroll
+            scroll.contentView.postsBoundsChangedNotifications = true
+            observerToken = NotificationCenter.default.addObserver(
+                forName: NSView.boundsDidChangeNotification,
+                object: scroll.contentView,
+                queue: .main
+            ) { [weak self, weak scroll] _ in
+                guard let self, let scroll else { return }
+                self.onScrollChanged(scroll)
+            }
+        }
+
+        func detach() {
+            if let observerToken {
+                NotificationCenter.default.removeObserver(observerToken)
+                self.observerToken = nil
+            }
+            observedScrollView = nil
+        }
+
+    }
 }
