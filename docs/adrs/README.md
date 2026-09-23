@@ -102,4 +102,6 @@ Older records retain the package and type names used when accepted. [ADR-0054](0
 | [0093](0093-maintained-xcode-project.md) | Maintained Xcode project and build-time release identity | Proposed · supersedes project ownership in 0004 |
 | [0094](0094-pure-swift-syntax-highlighting-and-tool-diffs.md) | Pure-Swift syntax highlighting and tool diff presentation | Proposed · refines 0010, 0074 and 0091 |
 
+| [0095](0095-parallel-verification-and-preview-diagnostics.md) | Parallel verification and preview diagnostics | Accepted |
+
 New session? Start with **[../../AGENT.md](../../AGENT.md)**, then [the roadmap](../ROADMAP.md).
