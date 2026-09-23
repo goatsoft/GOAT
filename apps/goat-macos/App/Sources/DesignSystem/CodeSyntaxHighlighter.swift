@@ -1,12 +1,11 @@
 import Foundation
-import HighlightSwift
+import HighlightKit
 import SwiftUI
 
-/// HighlightSwift's CodeText uses a class-valued @Entry default that constructs a
-/// Highlight on every access. Own one runtime explicitly, independent of view updates.
+/// HighlightKit provides pure-Swift syntax highlighting on background tasks without
+/// JavaScriptCore, HTML round-tripping, or memory bloat.
 actor CodeSyntaxHighlighter {
     static let shared = CodeSyntaxHighlighter()
-    private let highlight = Highlight()
 
     func render(_ source: String, language: String?, dark: Bool) async throws -> AttributedString {
         try Task.checkCancellation()
@@ -15,19 +14,34 @@ actor CodeSyntaxHighlighter {
         }
         let core = source.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !core.isEmpty, let range = source.range(of: core) else { return AttributedString(source) }
-        let result: AttributedString
-        if let language {
-            result = try await highlight.attributedText(
-                core, language: language, colors: dark ? .dark(.xcode) : .light(.xcode))
+
+        let theme: HighlightTheme = dark ? .xcodeDark : .xcodeLight
+        let alias = language?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+
+        let result: HighlightResult
+        if let alias, !alias.isEmpty, !["text", "plain", "plaintext"].contains(alias) {
+            result = Highlighter.shared.highlight(core, as: alias)
         } else {
-            result = try await highlight.attributedText(core, colors: dark ? .dark(.xcode) : .light(.xcode))
+            result = await Highlighter.shared.highlightAuto(core)
         }
+
         try Task.checkCancellation()
-        // The library's HTML conversion trims boundaries. Preserve source and indentation,
-        // and reject a conversion that changes the actual code (as the Vue path does).
-        guard String(result.characters) == core else { return AttributedString(source) }
+
+        let ns = NSMutableAttributedString(string: core)
+        let fullLength = (core as NSString).length
+        for token in result.tokens {
+            guard let style = theme.style(for: token) else { continue }
+            guard token.range.location + token.range.length <= fullLength else { continue }
+            if let color = style.color {
+                ns.addAttribute(.foregroundColor, value: color, range: token.range)
+            }
+        }
+
+        let colored = AttributedString(ns)
+        guard String(colored.characters) == core else { return AttributedString(source) }
+
         var output = AttributedString(String(source[..<range.lowerBound]))
-        output.append(result)
+        output.append(colored)
         output.append(AttributedString(String(source[range.upperBound...])))
         return output
     }
@@ -38,17 +52,51 @@ struct PreparedCodeText: View {
     let language: String?
     @Environment(\.colorScheme) private var colorScheme
     @State private var rendered: AttributedString?
-    @State private var renderedKey: Key?
+    @State private var renderedKey: CacheKey?
 
-    private struct Key: Equatable {
+    struct CacheKey: Equatable {
         let code: String
         let language: String?
         let dark: Bool
     }
 
+    static func resolveText(
+        code: String,
+        language: String?,
+        dark: Bool,
+        rendered: AttributedString?,
+        renderedKey: CacheKey?
+    ) -> AttributedString {
+        let key = CacheKey(code: code, language: language, dark: dark)
+        if renderedKey == key, let rendered {
+            return rendered
+        }
+        if let rendered, let prevKey = renderedKey,
+            prevKey.language == language,
+            prevKey.dark == dark,
+            code.hasPrefix(prevKey.code)
+        {
+            var combined = rendered
+            let suffix = code.dropFirst(prevKey.code.count)
+            combined.append(AttributedString(suffix))
+            return combined
+        }
+        return AttributedString(code)
+    }
+
+    private var currentText: AttributedString {
+        Self.resolveText(
+            code: code,
+            language: language,
+            dark: colorScheme == .dark,
+            rendered: rendered,
+            renderedKey: renderedKey
+        )
+    }
+
     var body: some View {
-        let key = Key(code: code, language: language, dark: colorScheme == .dark)
-        Text(renderedKey == key ? (rendered ?? AttributedString(code)) : AttributedString(code))
+        let key = CacheKey(code: code, language: language, dark: colorScheme == .dark)
+        Text(currentText)
             .task(id: key) {
                 do {
                     let result = try await CodeSyntaxHighlighter.shared.render(

@@ -12,6 +12,7 @@ struct CodeBlockView: View {
     @State private var showingSource = false
     @State private var artifactID = UUID()
     @State private var hovering = false
+    @State private var wordWrap = false
     @FocusState private var keyboardFocused: Bool
     @State private var keyboardNavigation = false
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
@@ -54,21 +55,40 @@ struct CodeBlockView: View {
                     .allowsHitTesting(!showingSource)
                     .accessibilityHidden(showingSource)
                     if showingSource {
-                        ScrollView(.vertical) {
+                        ScrollView(.vertical, showsIndicators: false) {
                             HighlightedCodeView(
                                 code: code, fontSize: model.codeFontSize, showLineNumbers: true,
-                                language: kind == .mermaid ? "plaintext" : language)
+                                language: kind == .mermaid ? "plaintext" : language,
+                                wordWrap: wordWrap, externalHover: hovering
+                            )
                         }
+                        .scrollIndicators(.hidden)
                         .frame(height: kind == .mermaid ? 280 : 340)
                     }
                 }
                 .clipShape(RoundedRectangle(cornerRadius: Caprine.Activity.radius))
             } else {
                 HighlightedCodeView(
-                    code: code, fontSize: model.codeFontSize, language: language, isStreaming: isStreaming)
+                    code: code, fontSize: model.codeFontSize, language: language, isStreaming: isStreaming,
+                    wordWrap: wordWrap, externalHover: hovering
+                )
             }
             HStack(spacing: 16) {
                 Spacer()
+                Button {
+                    wordWrap.toggle()
+                } label: {
+                    Image(systemName: "arrow.turn.down.left")
+                        .padding(3)
+                        .background(
+                            wordWrap ? model.theme.tokens.tint.opacity(0.18) : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 4)
+                        )
+                }
+                .help(wordWrap ? "Disable word wrap" : "Enable word wrap")
+                .accessibilityLabel(wordWrap ? "Disable word wrap" : "Enable word wrap")
+                .foregroundStyle(wordWrap ? model.theme.tokens.tint : .secondary)
+
                 CopyButton(text: code)
                     .accessibilityLabel("Copy source")
                 Button("Save artifact", systemImage: "arrow.down.to.line") {

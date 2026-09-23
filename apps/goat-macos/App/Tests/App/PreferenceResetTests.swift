@@ -21,7 +21,7 @@ extension AppTests.App {
             ]
             let flags: [(ReferenceWritableKeyPath<AppModel, Bool>, Bool)] = [
                 (\.animationsEnabled, model.animationsEnabled), (\.automaticChatTitles, model.automaticChatTitles),
-                (\.settingsAlwaysOnTop, model.settingsAlwaysOnTop),
+                (\.settingsAlwaysOnTop, model.settingsAlwaysOnTop), (\.showToolDiffs, model.showToolDiffs),
             ]
             let effort = model.defaultEffort
             let icon = AppIconManager.current
@@ -44,6 +44,7 @@ extension AppTests.App {
             model.animationsEnabled = false
             model.automaticChatTitles = false
             model.settingsAlwaysOnTop = false
+            model.showToolDiffs = false
             defaults.set("list", forKey: "pens.overview.layout")
             let before = defaults.persistentDomain(forName: domain) ?? [:]
             let selectedChat = model.selectedChatID
@@ -58,7 +59,9 @@ extension AppTests.App {
             #expect(model.chatFontID == "theme" && model.codeFontID == "theme")
             #expect(model.chatFontSize == 14 && model.codeFontSize == 13)
             #expect(model.windowTransparency == CaprineBackground.defaultTransparency)
-            #expect(model.animationsEnabled && model.automaticChatTitles && model.settingsAlwaysOnTop)
+            #expect(
+                model.animationsEnabled && model.automaticChatTitles && model.settingsAlwaysOnTop && model.showToolDiffs
+            )
             #expect(model.defaultEffort == .trot)
             #expect(AppIconManager.current == .system)
             #expect(defaults.string(forKey: "pens.overview.layout") == "grid")
@@ -70,7 +73,7 @@ extension AppTests.App {
             #expect(model.presentation.isUnlocked == unlocked && !model.presentation.isEnabled)
             let resetKeys: Set<String> = [
                 "appearance.theme", "appearance.chatFont", "appearance.codeFont", "appearance.fontSize",
-                "appearance.codeFontSize", "appearance.transparency", "appearance.animations",
+                "appearance.codeFontSize", "appearance.transparency", "appearance.animations", "appearance.toolDiffs",
                 "chat.automaticTitles", "chat.defaultEffort", "settings.alwaysOnTop", "pens.overview.layout",
                 "chat.autoCompact", "chat.compactAtPercent", "experience.1337.enabled", "appIcon",
             ]

@@ -1,9 +1,52 @@
+import AppKit
 import Foundation
+import SwiftUI
 import Testing
 
 @testable import Caprine
 @testable import GOAT
 @testable import Paddock
+
+private actor MockJSONWorker: JSONDocumentWorker {
+    var loadDelayNanoseconds: UInt64 = 0
+    var loadResult: JSONFileWorker.LoadResult = .loaded("{\"status\": \"ok\"}")
+    var validationErrorResult: String? = nil
+    var saveResult: String? = nil
+
+    func setLoadDelay(milliseconds: UInt64) {
+        loadDelayNanoseconds = milliseconds * 1_000_000
+    }
+
+    func setLoadResult(_ result: JSONFileWorker.LoadResult) {
+        loadResult = result
+    }
+
+    func setValidationError(_ error: String?) {
+        validationErrorResult = error
+    }
+
+    func load(_ url: URL) async -> JSONFileWorker.LoadResult {
+        if loadDelayNanoseconds > 0 {
+            try? await Task.sleep(nanoseconds: loadDelayNanoseconds)
+        }
+        return loadResult
+    }
+
+    func validationError(for text: String) async -> String? {
+        if let validationErrorResult { return validationErrorResult }
+        guard let data = text.data(using: .utf8) else { return "Not UTF-8" }
+        do {
+            _ = try JSONSerialization.jsonObject(with: data)
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    func save(_ data: Data, to url: URL) async -> String? {
+        saveResult
+    }
+}
 
 extension AppTests.Caprine {
     @Suite struct PresentationPreferencesTests {
@@ -56,8 +99,7 @@ extension AppTests.Caprine {
             #expect(preferences.permitsTheme("pasture"))
             preferences.setEnabled(true)
             #expect(!preferences.isEnabled)
-            #expect(preferences.unlock())
-            #expect(preferences.isEnabled)
+            #expect(preferences.unlock() && preferences.isEnabled)
             #expect(!preferences.unlock())
             preferences.setEnabled(false)
             let restored = PresentationPreferences(defaults: defaults)
@@ -134,6 +176,172 @@ extension AppTests.Caprine {
                     }
                 }
             }
+        }
+
+        @MainActor
+        @Test func windowConfiguratorAlwaysOnTopTogglesBothDirectionsOnSameWindow() async throws {
+            struct HostView: View {
+                @Binding var alwaysOnTop: Bool
+                var body: some View {
+                    Color.clear
+                        .background(
+                            WindowConfigurator(
+                                alwaysOnTop: alwaysOnTop,
+                                showsAlwaysOnTopToggle: true,
+                                onAlwaysOnTopToggle: { alwaysOnTop.toggle() }
+                            )
+                        )
+                }
+            }
+
+            final class StateHolder: ObservableObject {
+                @Published var alwaysOnTop = false
+            }
+
+            struct Wrapper: View {
+                @ObservedObject var state: StateHolder
+                var body: some View {
+                    HostView(alwaysOnTop: $state.alwaysOnTop)
+                }
+            }
+
+            let state = StateHolder()
+            let controller = NSHostingController(rootView: Wrapper(state: state))
+            let window = NSWindow(contentViewController: controller)
+            window.isReleasedWhenClosed = false
+            window.setContentSize(NSSize(width: 400, height: 300))
+            window.orderFront(nil)
+            defer {
+                window.contentViewController = nil
+                window.close()
+            }
+
+            try await Task.sleep(for: .milliseconds(150))
+            #expect(window.level == .normal)
+
+            // Toggle on
+            state.alwaysOnTop = true
+            try await Task.sleep(for: .milliseconds(150))
+            #expect(window.level == .floating)
+
+            // Toggle off on the same window
+            state.alwaysOnTop = false
+            try await Task.sleep(for: .milliseconds(150))
+            #expect(window.level == .normal)
+        }
+    }
+
+    @Suite struct JSONEditorTests {
+
+        @Test @MainActor func delayedLoadFailureDisablesEditingAndPreventsValidationRace() async throws {
+            let worker = MockJSONWorker()
+            await worker.setLoadDelay(milliseconds: 100)
+            await worker.setLoadResult(.failed("Disk read timeout"))
+
+            let state = JSONEditorState()
+            let dummyURL = URL(fileURLWithPath: "/tmp/test.json")
+
+            let loadTask = Task { @MainActor in
+                await state.load(from: dummyURL, worker: worker)
+            }
+
+            // Immediately during load, state must be loading, and editor/save must be disabled
+            #expect(state.phase == .loading)
+            #expect(!state.phase.isEditable)
+            #expect(!state.phase.canSave)
+            #expect(!state.isDocumentReady)
+
+            // Triggering validation while load is pending must NOT overwrite .loading
+            await state.validate(worker: worker)
+            #expect(state.phase == .loading)
+            #expect(!state.phase.isEditable)
+            #expect(!state.phase.canSave)
+
+            // Wait for delayed load to complete
+            await loadTask.value
+
+            // Verify load failed state
+            #expect(state.phase == .loadFailed("Disk read timeout"))
+            #expect(!state.phase.isEditable)
+            #expect(!state.phase.canSave)
+            #expect(!state.isDocumentReady)
+
+            // Further validation attempts after failure must stay disabled and not overwrite phase
+            await state.validate(worker: worker)
+            #expect(state.phase == .loadFailed("Disk read timeout"))
+            #expect(!state.phase.isEditable)
+            #expect(!state.phase.canSave)
+        }
+
+        @Test @MainActor func successfulLoadDrivesValidationAndTracksGenerations() async throws {
+            let worker = MockJSONWorker()
+            await worker.setLoadResult(.loaded("{\"valid\": true}"))
+
+            let state = JSONEditorState()
+            let dummyURL = URL(fileURLWithPath: "/tmp/valid.json")
+
+            await state.load(from: dummyURL, worker: worker)
+
+            #expect(state.isDocumentReady)
+            #expect(state.text == "{\"valid\": true}")
+            #expect(state.phase == .valid)
+            #expect(state.phase.isEditable)
+            #expect(state.phase.canSave)
+
+            // User edits text to invalid JSON
+            state.text = "{\"valid\": true"
+            let validateTask = Task { @MainActor in
+                await state.validate(worker: worker)
+            }
+            await validateTask.value
+
+            #expect(state.phase.isEditable)
+            #expect(!state.phase.canSave)
+            if case .invalid = state.phase {
+                // Expected invalid JSON error
+            } else {
+                Issue.record("Expected phase to be .invalid, but got \(state.phase)")
+            }
+
+            // Restoring valid JSON enables Save
+            state.text = "{\"valid\": false}"
+            await state.validate(worker: worker)
+            #expect(state.phase == .valid)
+            #expect(state.phase.canSave)
+        }
+
+        @Test @MainActor func jsonEditorInstallsLineNumberRulerAndUpdatesThemeTokens() async throws {
+            struct HostView: View {
+                @State var text = "{\"key\": 123}"
+                var tokens: Caprine
+                var body: some View {
+                    JSONEditorView(text: $text, tokens: tokens, isEditable: true)
+                }
+            }
+
+            let initialView = HostView(tokens: ThemeCatalog.midnight.tokens)
+            let host = NSHostingView(rootView: initialView)
+            host.frame = NSRect(x: 0, y: 0, width: 400, height: 300)
+            host.layoutSubtreeIfNeeded()
+
+            func findScrollView(_ view: NSView) -> NSScrollView? {
+                if let sv = view as? NSScrollView { return sv }
+                return view.subviews.lazy.compactMap(findScrollView).first
+            }
+
+            let scroll = try #require(findScrollView(host))
+            #expect(scroll.hasVerticalRuler)
+            let ruler = try #require(scroll.verticalRulerView as? LineNumberRuler)
+            #expect(ruler.tv != nil)
+            let tv = try #require(scroll.documentView as? NSTextView)
+            #expect(tv.insertionPointColor == NSColor(ThemeCatalog.midnight.tokens.tint))
+
+            // Update to light theme
+            host.rootView = HostView(tokens: ThemeCatalog.light.tokens)
+            host.layoutSubtreeIfNeeded()
+
+            #expect(tv.insertionPointColor == NSColor(ThemeCatalog.light.tokens.tint))
+            #expect(ruler.tokens.ink == ThemeCatalog.light.tokens.ink)
         }
     }
 }

@@ -11,13 +11,13 @@ The [complete application notices](apps/goat-macos/App/Resources/Licenses/THIRD-
 | GRDB.swift | SQLite persistence | MIT |
 | MCP Swift SDK and EventSource | MCP transport and events | MIT |
 | MarkdownUI and NetworkImage | Markdown presentation | MIT |
-| HighlightSwift and bundled Highlight.js | Syntax highlighting | MIT / BSD-3-Clause |
+| HighlightKit | Syntax highlighting | MIT |
 | Swift Atomics, Collections, Log, NIO and System | Runtime support | Apache-2.0 with Swift exceptions where supplied |
 | swift-cmark | Markdown parsing | Its bundled COPYING notices, including BSD and MIT terms |
 | Mermaid and its dependency tree | Offline Paddock diagram rendering | MIT and the respective dependency licences |
 | Hindsight integration mark | Identify the optional Hindsight service | MIT, Vectorize AI, Inc. |
 
-Version and source-revision records are in the [distribution manifest](third-party/distribution-manifest.json). The notice collection includes nested licence files for Highlight.js and NIO’s llhttp code. Mermaid’s dependency list is deliberately inclusive; it also contains type packages and does not imply that every listed package executes in the application.
+Version and source-revision records are in the [distribution manifest](third-party/distribution-manifest.json). The notice collection includes nested licence files for NIO’s llhttp code. Mermaid’s dependency list is deliberately inclusive; it also contains type packages and does not imply that every listed package executes in the application.
 
 ## Website and documentation
 

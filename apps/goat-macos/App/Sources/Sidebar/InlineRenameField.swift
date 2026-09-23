@@ -11,6 +11,10 @@ struct InlineRenameField: NSViewRepresentable {
     var onCommit: () -> Void
     var onCancel: () -> Void
 
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSTextField, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? 120, height: proposal.height ?? 22)
+    }
+
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeNSView(context: Context) -> NSTextField {

@@ -290,6 +290,45 @@ final class PaddockWebRenderingTests: XCTestCase {
 
     }
 
+    func testPaddockViewInspectorLayoutStability() async throws {
+        let session = ChatSession(effort: .trot, modelID: nil)
+        let artifact = PaddockArtifact(
+            kind: .code(language: "typescript"),
+            content: """
+                export class SharedSurfaceManager {
+                  getOrCreateBindGroup(device: GPUDevice, surface: SharedSurface, bindGroupLayout: GPUBindGroupLayout): GPUBindGroup {
+                    return device.createBindGroup({ layout: bindGroupLayout, entries: [] })
+                  }
+                }
+                """)
+        let model = AppModel.shared
+        model.chats = [session]
+        model.selectedChatID = session.id
+        model.paddockArtifact = artifact
+        model.showInspector = true
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1000, height: 700),
+            styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let host = NSHostingView(rootView: ChatView(session: session).environment(model))
+        window.contentView = host
+        window.orderFront(nil)
+        defer {
+            window.contentView = nil
+            window.close()
+            model.paddockArtifact = nil
+            model.showInspector = false
+        }
+
+        for _ in 0..<5 {
+            window.updateConstraintsIfNeeded()
+            host.layoutSubtreeIfNeeded()
+            window.layoutIfNeeded()
+            try await Task.sleep(for: .milliseconds(20))
+        }
+    }
+
     private func findWebView(_ view: NSView) -> WKWebView? {
         if let web = view as? WKWebView { return web }
         return view.subviews.compactMap { findWebView($0) }.first

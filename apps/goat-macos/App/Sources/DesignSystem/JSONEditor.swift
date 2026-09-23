@@ -3,8 +3,14 @@ import Caprine
 import Herd
 import SwiftUI
 
-private actor JSONFileWorker {
-    enum LoadResult: Sendable {
+protocol JSONDocumentWorker: Sendable {
+    func load(_ url: URL) async -> JSONFileWorker.LoadResult
+    func validationError(for text: String) async -> String?
+    func save(_ data: Data, to url: URL) async -> String?
+}
+
+actor JSONFileWorker: JSONDocumentWorker {
+    enum LoadResult: Sendable, Equatable {
         case missing
         case loaded(String)
         case failed(String)
@@ -57,6 +63,118 @@ private actor JSONFileWorker {
     }
 }
 
+// MARK: - Editor state
+
+@Observable @MainActor final class JSONEditorState {
+    enum Phase: Equatable, Sendable {
+        case loading
+        case loadFailed(String)
+        case validating
+        case invalid(String)
+        case valid
+        case saving
+
+        var isEditable: Bool {
+            switch self {
+            case .validating, .invalid, .valid: true
+            case .loading, .loadFailed, .saving: false
+            }
+        }
+
+        var isSaving: Bool {
+            self == .saving
+        }
+
+        var canSave: Bool {
+            self == .valid
+        }
+    }
+
+    var text: String = ""
+    var phase: Phase = .loading
+    private(set) var isDocumentReady: Bool = false
+    private(set) var documentGeneration: Int = 0
+    private var saveTask: Task<Void, Never>?
+
+    func load(from fileURL: URL, seed: String = "[]", worker: any JSONDocumentWorker = JSONFileWorker.shared) async {
+        phase = .loading
+        isDocumentReady = false
+        documentGeneration += 1
+        let currentGen = documentGeneration
+        let result = await worker.load(fileURL)
+        guard !Task.isCancelled, currentGen == documentGeneration else { return }
+        switch result {
+        case .missing:
+            text = seed
+            isDocumentReady = true
+            await validateContent(seed, generation: currentGen, worker: worker)
+        case .loaded(let loaded):
+            text = loaded
+            isDocumentReady = true
+            await validateContent(loaded, generation: currentGen, worker: worker)
+        case .failed(let error):
+            phase = .loadFailed(error)
+            isDocumentReady = false
+        }
+    }
+
+    func validate(worker: any JSONDocumentWorker = JSONFileWorker.shared) async {
+        guard isDocumentReady, !phase.isSaving else { return }
+        documentGeneration += 1
+        let currentGen = documentGeneration
+        await validateContent(text, generation: currentGen, worker: worker)
+    }
+
+    private func validateContent(_ content: String, generation: Int, worker: any JSONDocumentWorker) async {
+        phase = .validating
+        do {
+            try await Task.sleep(for: .milliseconds(120))
+        } catch {
+            return
+        }
+        guard !Task.isCancelled, generation == documentGeneration, isDocumentReady else { return }
+        let error = await worker.validationError(for: content)
+        guard !Task.isCancelled, generation == documentGeneration, isDocumentReady else { return }
+        if let error {
+            phase = .invalid(error)
+        } else {
+            phase = .valid
+        }
+    }
+
+    func startSave(
+        to fileURL: URL,
+        onSaved: @escaping () -> Void,
+        dismiss: @escaping () -> Void,
+        worker: any JSONDocumentWorker = JSONFileWorker.shared
+    ) {
+        guard phase.canSave, isDocumentReady else { return }
+        saveTask?.cancel()
+        phase = .saving
+        let data = Data(text.utf8)
+        let currentGen = documentGeneration
+        saveTask = Task { @MainActor in
+            let error = await worker.save(data, to: fileURL)
+            guard !Task.isCancelled, currentGen == documentGeneration else { return }
+            if let error {
+                phase = .invalid(error)
+            } else {
+                phase = .valid
+                onSaved()
+                dismiss()
+            }
+            saveTask = nil
+        }
+    }
+
+    func cancelPendingSave() {
+        if !phase.isSaving {
+            saveTask?.cancel()
+            saveTask = nil
+        }
+    }
+}
+
 // MARK: - Editor sheet
 
 /// A lightweight in-app JSON editor - themed syntax highlighting, line numbers, brace match,
@@ -69,16 +187,10 @@ struct JSONEditorSheet: View {
 
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
-    @State private var text = ""
-    @State private var parseError: String?
-    @State private var loadError: String?
-    @State private var isLoading = true
-    @State private var validationPending = true
-    @State private var isSaving = false
-    @State private var saveTask: Task<Void, Never>?
+    @State private var state = JSONEditorState()
 
     var body: some View {
-        GOATDialogShell(closeAction: { dismiss() }, closeDisabled: isSaving, extraOpacity: 0.3) {
+        GOATDialogShell(closeAction: { dismiss() }, closeDisabled: state.phase.isSaving, extraOpacity: 0.3) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     Text(title).font(.title3.weight(.semibold))
@@ -87,9 +199,9 @@ struct JSONEditorSheet: View {
                 }
 
                 JSONEditorView(
-                    text: $text,
+                    text: $state.text,
                     tokens: model.theme.tokens,
-                    isEditable: !isLoading && !isSaving && loadError == nil
+                    isEditable: state.phase.isEditable
                 )
                 // Fill the available space so short documents remain aligned at the top.
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -109,94 +221,48 @@ struct JSONEditorSheet: View {
                     Button("Cancel") { dismiss() }
                         .buttonStyle(DialogCancelButtonStyle())
                         .keyboardShortcut(.cancelAction)
-                        .disabled(isSaving)
-                    Button("Save") { startSave() }
-                        .keyboardShortcut(.defaultAction)
-                        .disabled(
-                            isLoading || validationPending || isSaving || loadError != nil
-                                || parseError != nil)
+                        .disabled(state.phase.isSaving)
+                    Button("Save") {
+                        state.startSave(to: fileURL, onSaved: onSaved, dismiss: { dismiss() })
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!state.phase.canSave)
                 }
             }
             .padding(18)
             .frame(width: 680, height: 560)
         }
-        .interactiveDismissDisabled(isSaving)
-        .task(id: fileURL) { await load() }
-        .task(id: text) { await validate() }
+        .interactiveDismissDisabled(state.phase.isSaving)
+        .task(id: fileURL) { await state.load(from: fileURL, seed: seed) }
+        .task(id: state.text) { await state.validate() }
         .onDisappear {
-            if !isSaving {
-                saveTask?.cancel()
-                saveTask = nil
-            }
+            state.cancelPendingSave()
         }
     }
 
     @ViewBuilder private var validity: some View {
-        if isLoading || validationPending {
+        switch state.phase {
+        case .loading:
             HStack(spacing: 6) {
                 GoatLoadingIndicator().controlSize(.small)
-                Text(isLoading ? "Loading" : "Checking")
+                Text("Loading")
             }
             .font(.caption)
             .foregroundStyle(.secondary)
-        } else if let error = loadError ?? parseError {
+        case .validating:
+            HStack(spacing: 6) {
+                GoatLoadingIndicator().controlSize(.small)
+                Text("Checking")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        case .loadFailed(let error), .invalid(let error):
             Label(error, systemImage: "xmark.octagon.fill")
                 .font(.caption).foregroundStyle(.orange).lineLimit(1)
-        } else {
+        case .valid, .saving:
             Label("Valid JSON", systemImage: "checkmark.seal.fill")
                 .font(.caption).foregroundStyle(.green)
         }
-    }
-
-    private func load() async {
-        let result = await JSONFileWorker.shared.load(fileURL)
-        guard !Task.isCancelled else { return }
-        switch result {
-        case .missing:
-            text = seed
-        case .loaded(let loaded):
-            text = loaded
-        case .failed(let error):
-            loadError = error
-            validationPending = false
-        }
-        isLoading = false
-    }
-
-    private func validate() async {
-        guard loadError == nil else { return }
-        validationPending = true
-        do {
-            try await Task.sleep(for: .milliseconds(120))
-        } catch {
-            return
-        }
-        let error = await JSONFileWorker.shared.validationError(for: text)
-        guard !Task.isCancelled, loadError == nil else { return }
-        parseError = error
-        validationPending = false
-    }
-
-    private func startSave() {
-        guard !isSaving, loadError == nil, parseError == nil else { return }
-        saveTask?.cancel()
-        isSaving = true
-        let data = Data(text.utf8)
-        saveTask = Task { @MainActor in
-            await save(data)
-            saveTask = nil
-        }
-    }
-
-    private func save(_ data: Data) async {
-        let error = await JSONFileWorker.shared.save(data, to: fileURL)
-        isSaving = false
-        if let error {
-            parseError = error
-            return
-        }
-        onSaved()
-        dismiss()
     }
 }
 
@@ -272,10 +338,11 @@ struct JSONEditorView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSScrollView, context: Context) {
+        context.coordinator.parent = self
         let previous = context.coordinator.tokens
         let colorsChanged =
-            [previous.ink, previous.accent, previous.accent2, previous.glow].map { NSColor($0) }
-            != [tokens.ink, tokens.accent, tokens.accent2, tokens.glow].map { NSColor($0) }
+            [previous.ink, previous.accent, previous.accent2, previous.glow, previous.tint].map { NSColor($0) }
+            != [tokens.ink, tokens.accent, tokens.accent2, tokens.glow, tokens.tint].map { NSColor($0) }
         context.coordinator.tokens = tokens
         context.coordinator.ruler?.tokens = tokens
         guard let tv = context.coordinator.textView else { return }
@@ -285,8 +352,14 @@ struct JSONEditorView: NSViewRepresentable {
             .backgroundColor: NSColor(tokens.tint).withAlphaComponent(0.25),
             .foregroundColor: NSColor(tokens.ink),
         ]
-        if tv.string != text || colorsChanged {
+        if tv.string != text {
+            let selectedRanges = tv.selectedRanges
             tv.string = text
+            tv.selectedRanges = selectedRanges
+            context.coordinator.cancelPendingHighlight()
+            context.coordinator.highlight()
+            context.coordinator.updateRulerVisibility()
+        } else if colorsChanged {
             context.coordinator.cancelPendingHighlight()
             context.coordinator.highlight()
             context.coordinator.updateRulerVisibility()
@@ -308,7 +381,7 @@ struct JSONEditorView: NSViewRepresentable {
 
     @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
-        let parent: JSONEditorView
+        var parent: JSONEditorView
         var textView: NSTextView?
         var ruler: LineNumberRuler?
         var tokens: Caprine
@@ -367,7 +440,7 @@ struct JSONEditorView: NSViewRepresentable {
         func updateRulerVisibility() {
             guard let textView, let ruler else { return }
             ruler.scrollView?.rulersVisible =
-                (textView.textStorage?.length ?? 0) <= maximumHighlightedCharacters
+                (textView.textStorage?.length ?? 0) <= JSONEditorView.maximumHighlightedCharacters
         }
 
         func highlight() {
@@ -381,7 +454,7 @@ struct JSONEditorView: NSViewRepresentable {
                     .foregroundColor: NSColor(tokens.ink),
                 ], range: full)
             braceHighlightRanges.removeAll(keepingCapacity: true)
-            guard str.length <= maximumHighlightedCharacters else {
+            guard str.length <= JSONEditorView.maximumHighlightedCharacters else {
                 storage.endEditing()
                 return
             }
@@ -415,7 +488,7 @@ struct JSONEditorView: NSViewRepresentable {
                 storage.removeAttribute(.backgroundColor, range: range)
             }
             braceHighlightRanges.removeAll(keepingCapacity: true)
-            guard str.length <= maximumHighlightedCharacters else { return }
+            guard str.length <= JSONEditorView.maximumHighlightedCharacters else { return }
             let sel = tv.selectedRange()
             guard sel.length == 0, sel.location > 0, sel.location <= str.length else { return }
             let ch = str.substring(with: NSRange(location: sel.location - 1, length: 1))

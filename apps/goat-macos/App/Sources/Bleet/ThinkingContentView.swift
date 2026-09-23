@@ -1,5 +1,5 @@
 import Foundation
-import HighlightSwift
+import HighlightKit
 import SwiftUI
 
 /// Fences in reasoning are formatting, not interactive artifacts. Keep prose unchanged and
@@ -161,7 +161,6 @@ struct ThinkingContentView: View {
 
 actor ThinkingCodeHighlighter {
     static let shared = ThinkingCodeHighlighter()
-    private let highlight = Highlight()
 
     func render(_ code: String, language: String, dark: Bool) async throws -> AttributedString {
         let alias = language.split(whereSeparator: \.isWhitespace).first.map(String.init)?.lowercased() ?? ""
@@ -169,17 +168,7 @@ actor ThinkingCodeHighlighter {
             !["", "text", "plain", "plaintext"].contains(alias)
         else { return AttributedString(code) }
         if alias == "vue" { return try await VueSyntaxHighlighter.shared.render(code, dark: dark) }
-        let core = code.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !core.isEmpty, let range = code.range(of: core),
-            let colored = try? await highlight.attributedText(
-                core, language: alias, colors: dark ? .dark(.xcode) : .light(.xcode)),
-            String(colored.characters) == core
-        else { return AttributedString(code) }
-        try Task.checkCancellation()
-        var result = AttributedString(String(code[..<range.lowerBound]))
-        result.append(colored)
-        result.append(AttributedString(String(code[range.upperBound...])))
-        return result
+        return try await CodeSyntaxHighlighter.shared.render(code, language: alias, dark: dark)
     }
 }
 
@@ -195,9 +184,27 @@ private struct ThinkingCodeText: View {
         let dark: Bool
     }
 
+    private var currentText: AttributedString {
+        let key = Key(code: code, language: language, dark: colorScheme == .dark)
+        if renderedKey == key, let rendered {
+            return rendered
+        }
+        if let rendered, let prevKey = renderedKey,
+            prevKey.language == language,
+            prevKey.dark == (colorScheme == .dark),
+            code.hasPrefix(prevKey.code)
+        {
+            var combined = rendered
+            let suffix = code.dropFirst(prevKey.code.count)
+            combined.append(AttributedString(suffix))
+            return combined
+        }
+        return AttributedString(code)
+    }
+
     var body: some View {
         let key = Key(code: code, language: language, dark: colorScheme == .dark)
-        Text(renderedKey == key ? (rendered ?? AttributedString(code)) : AttributedString(code))
+        Text(currentText)
             .fixedSize(horizontal: false, vertical: true)
             .task(id: key) {
                 do {

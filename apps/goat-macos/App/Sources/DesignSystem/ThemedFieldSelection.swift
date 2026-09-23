@@ -7,6 +7,10 @@ struct ThemedFieldSelection: NSViewRepresentable {
     let tint: Color
     let ink: Color
 
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSView, context: Context) -> CGSize? {
+        .zero
+    }
+
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> NSView {

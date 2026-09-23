@@ -77,6 +77,10 @@ struct MarkdownComposerEditor: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSScrollView, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? 0, height: height)
+    }
+
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = ComposerScrollView()
         scrollView.widthChanged = { [weak coordinator = context.coordinator] in

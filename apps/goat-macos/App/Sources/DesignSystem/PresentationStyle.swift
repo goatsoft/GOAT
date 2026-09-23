@@ -7,7 +7,10 @@ struct PresentationStyle: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .background(ThemedFieldSelection(tint: model.theme.tokens.tint, ink: model.theme.tokens.ink))
+            .background(
+                ThemedFieldSelection(tint: model.theme.tokens.tint, ink: model.theme.tokens.ink)
+                    .frame(width: 0, height: 0)
+            )
             .tint(model.theme.tokens.tint)
             .accentColor(model.theme.tokens.tint)
             .preferredColorScheme(model.preferredColorScheme)

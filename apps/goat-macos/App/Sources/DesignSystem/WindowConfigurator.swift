@@ -23,6 +23,10 @@ struct WindowConfigurator: NSViewRepresentable {
     /// nil keeps the window non-opaque in fullscreen too (pre-existing behavior).
     var fullscreenBackdrop: Color? = nil
 
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSView, context: Context) -> CGSize? {
+        .zero
+    }
+
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
         context.coordinator.backdrop = fullscreenBackdrop
@@ -37,18 +41,24 @@ struct WindowConfigurator: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-        context.coordinator.backdrop = fullscreenBackdrop
-        context.coordinator.showsAlwaysOnTopToggle = showsAlwaysOnTopToggle
-        context.coordinator.onAlwaysOnTopToggle = onAlwaysOnTopToggle
-        if let window = nsView.window {
-            configure(window, coordinator: context.coordinator)
-            context.coordinator.attach(to: window)
+        let coordinator = context.coordinator
+        let backdropChanged = coordinator.backdrop != fullscreenBackdrop
+        coordinator.backdrop = fullscreenBackdrop
+        coordinator.showsAlwaysOnTopToggle = showsAlwaysOnTopToggle
+        coordinator.onAlwaysOnTopToggle = onAlwaysOnTopToggle
+        guard let window = nsView.window else {
+            DispatchQueue.main.async { [weak nsView] in
+                guard let window = nsView?.window else { return }
+                configure(window, coordinator: context.coordinator)
+                context.coordinator.attach(to: window)
+            }
             return
         }
-        DispatchQueue.main.async { [weak nsView] in
-            guard let window = nsView?.window else { return }
-            configure(window, coordinator: context.coordinator)
-            context.coordinator.attach(to: window)
+        configure(window, coordinator: coordinator)
+        if coordinator.window !== window {
+            coordinator.attach(to: window)
+        } else if backdropChanged {
+            coordinator.apply()
         }
     }
 
@@ -59,14 +69,23 @@ struct WindowConfigurator: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     private func configure(_ window: NSWindow, coordinator: Coordinator) {
-        window.titlebarAppearsTransparent = true
+        if !window.titlebarAppearsTransparent {
+            window.titlebarAppearsTransparent = true
+        }
         // Keep the toolbar below the titlebar so fullscreen's auto-hiding window controls
         // do not overlap the toolbar buttons.
         if hidesResizeButtons {
-            window.standardWindowButton(.miniaturizeButton)?.isHidden = true
-            window.standardWindowButton(.zoomButton)?.isHidden = true
+            if window.standardWindowButton(.miniaturizeButton)?.isHidden != true {
+                window.standardWindowButton(.miniaturizeButton)?.isHidden = true
+            }
+            if window.standardWindowButton(.zoomButton)?.isHidden != true {
+                window.standardWindowButton(.zoomButton)?.isHidden = true
+            }
         }
-        window.level = alwaysOnTop ? .floating : .normal
+        let targetLevel: NSWindow.Level = alwaysOnTop ? .floating : .normal
+        if window.level != targetLevel {
+            window.level = targetLevel
+        }
         coordinator.configureAlwaysOnTopToggle(in: window, isOn: alwaysOnTop, tint: controlTint.map { NSColor($0) })
     }
 
@@ -78,7 +97,7 @@ struct WindowConfigurator: NSViewRepresentable {
         var backdrop: Color?
         var showsAlwaysOnTopToggle = false
         var onAlwaysOnTopToggle: (() -> Void)?
-        private weak var window: NSWindow?
+        private(set) weak var window: NSWindow?
         private var pinAccessory: NSTitlebarAccessoryViewController?
         private var observers: [NSObjectProtocol] = []
 
@@ -189,16 +208,22 @@ struct WindowConfigurator: NSViewRepresentable {
                 })
         }
 
-        private func apply(fullscreenOverride: Bool? = nil) {
+        func apply(fullscreenOverride: Bool? = nil) {
             guard let window else { return }
-            RenderSignposts.event("WindowBackingChange")
             let isFullscreen = fullscreenOverride ?? window.styleMask.contains(.fullScreen)
             if isFullscreen, let backdrop {
-                window.isOpaque = true
-                window.backgroundColor = NSColor(backdrop)
+                let targetColor = NSColor(backdrop)
+                if !window.isOpaque || window.backgroundColor != targetColor {
+                    RenderSignposts.event("WindowBackingChange")
+                    window.isOpaque = true
+                    window.backgroundColor = targetColor
+                }
             } else {
-                window.isOpaque = false
-                window.backgroundColor = .clear
+                if window.isOpaque || window.backgroundColor != .clear {
+                    RenderSignposts.event("WindowBackingChange")
+                    window.isOpaque = false
+                    window.backgroundColor = .clear
+                }
             }
         }
     }

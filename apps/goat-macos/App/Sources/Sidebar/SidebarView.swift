@@ -439,7 +439,7 @@ private struct ChatRow: View {
                 .fill(rowFill)
         )
         .contentShape(RoundedRectangle(cornerRadius: 6))
-        // Double-click the row → rename in place (with text selected); single-click selects.
+        // Double-click the row -> rename in place (with text selected); single-click selects.
         .onTapGesture(count: 2) { startRename() }
         .onTapGesture { model.selectedChatID = chat.id }
         .padding(.leading, isPen ? 18 : 8)

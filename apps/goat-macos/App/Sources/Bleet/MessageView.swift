@@ -705,6 +705,12 @@ private struct ToolCallStateIndicator: View {
 private struct ToolCallDetails: View {
     @Environment(AppModel.self) private var model
     let event: ToolEventSnapshot
+    private let diff: ToolFileDiff?
+
+    init(event: ToolEventSnapshot) {
+        self.event = event
+        self.diff = ToolDiffParser.parse(tool: event.tool, arguments: event.arguments)
+    }
 
     private var hasArguments: Bool { ToolCallPayload.containsValue(event.arguments) }
     private var hasResult: Bool { ToolCallPayload.containsValue(event.result) }
@@ -713,7 +719,11 @@ private struct ToolCallDetails: View {
         VStack(alignment: .leading, spacing: Caprine.Activity.compactSpacing) {
             if hasArguments {
                 labeled("Arguments")
-                JSONTreeView(raw: event.arguments)
+                if model.showToolDiffs, let diff {
+                    ToolDiffView(diff: diff, rawJSON: event.arguments)
+                } else {
+                    JSONTreeView(raw: event.arguments)
+                }
             }
             if hasArguments && hasResult {
                 Divider().padding(.vertical, Caprine.Activity.ruleWidth)

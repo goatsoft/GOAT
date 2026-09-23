@@ -367,6 +367,10 @@ final class AppModel {
     var animationsEnabled: Bool {
         didSet { UserDefaults.standard.set(animationsEnabled, forKey: "appearance.animations") }
     }
+    /// When on, tool file modifications are presented as unified visual diffs (ADR-0094).
+    var showToolDiffs: Bool {
+        didSet { UserDefaults.standard.set(showToolDiffs, forKey: "appearance.toolDiffs") }
+    }
     /// When on, Paddock previews are restricted to local content (ADR-0015).
     var previewsOffGrid: Bool {
         didSet { UserDefaults.standard.set(previewsOffGrid, forKey: "paddock.offGrid") }
@@ -386,6 +390,7 @@ final class AppModel {
         codeFontSize = ReadingFontRole.code.normalizedSize(14 * 0.92)
         windowTransparency = CaprineBackground.defaultTransparency
         animationsEnabled = true
+        showToolDiffs = true
         automaticChatTitles = true
         autoCompactEnabled = true
         compactAtPercent = 80
@@ -449,6 +454,7 @@ final class AppModel {
         compactAtPercent = min(95, max(50, (d.object(forKey: "chat.compactAtPercent") as? Int) ?? 80))
         defaultEffort = Effort(rawValue: d.string(forKey: "chat.defaultEffort") ?? "") ?? .trot
         animationsEnabled = d.object(forKey: "appearance.animations") as? Bool ?? true
+        showToolDiffs = d.object(forKey: "appearance.toolDiffs") as? Bool ?? true
         previewsOffGrid = d.object(forKey: "paddock.offGrid") as? Bool ?? false
         settingsAlwaysOnTop = d.object(forKey: "settings.alwaysOnTop") as? Bool ?? true
         herdRootPath = d.string(forKey: "herd.defaultRoot") ?? HerdWorkspace.suggestedRoot.path

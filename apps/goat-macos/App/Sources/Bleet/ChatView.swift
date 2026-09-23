@@ -129,6 +129,7 @@ struct ChatView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay {
             // 🏔️ Summit ("send it") blasts a rocket-goat diagonally across the whole chat, from
             // any effort source (capsule, model menu, ⌘4). Flies over everything, hit-transparent.
@@ -186,13 +187,14 @@ struct ChatView: View {
             .sharedBackgroundVisibility(.hidden)
         }
         .inspector(isPresented: $model.showInspector) {
-            if let artifact = model.paddockArtifact {
-                PaddockView(artifact: artifact)
-                    .inspectorColumnWidth(min: 300, ideal: 480, max: 820)
-            } else {
-                InspectorView(session: session)
-                    .inspectorColumnWidth(min: 280, ideal: 320, max: 420)
+            Group {
+                if let artifact = model.paddockArtifact {
+                    PaddockView(artifact: artifact)
+                } else {
+                    InspectorView(session: session)
+                }
             }
+            .inspectorColumnWidth(min: 280, ideal: 380, max: 820)
         }
         .onAppear { composerFocused = true }
         .onChange(of: session.id) { _, _ in composerFocused = true }
@@ -326,17 +328,24 @@ struct PermissionSheet: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
-            JSONEditorView(
-                text: .constant(request.arguments),
-                tokens: model.theme.tokens,
-                isEditable: false
-            )
-            .frame(maxWidth: .infinity)
-            .frame(height: 140)
-            .clipped()
-            .accessibilityLabel("Tool call arguments")
-            .padding(8)
-            .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
+            if model.showToolDiffs, let diff = ToolDiffParser.parse(tool: request.tool, arguments: request.arguments) {
+                ToolDiffView(diff: diff, rawJSON: request.arguments, maxHeight: 180)
+                    .accessibilityLabel("Tool call diff")
+                    .padding(8)
+                    .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
+            } else {
+                JSONEditorView(
+                    text: .constant(request.arguments),
+                    tokens: model.theme.tokens,
+                    isEditable: false
+                )
+                .frame(maxWidth: .infinity)
+                .frame(height: 140)
+                .clipped()
+                .accessibilityLabel("Tool call arguments")
+                .padding(8)
+                .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
+            }
             HStack {
                 Button("Deny") {
                     model.mcp.resolvePermission(.deny, requestID: request.id)
