@@ -56,7 +56,7 @@ struct PaddockView: View {
                 .clipShape(RoundedRectangle(cornerRadius: Caprine.Activity.radius))
         }
         .padding(12)
-        .frame(minWidth: 280, maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(model.theme.tokens.surface.opacity(controlsVisible ? 0.16 : 0))
         .contentShape(Rectangle())
         .onHover {
@@ -132,7 +132,7 @@ struct PaddockView: View {
         ScrollView(.vertical) {
             HighlightedCodeView(
                 code: artifact.content, fontSize: model.codeFontSize, showLineNumbers: true,
-                language: sourceLanguage
+                language: sourceLanguage, showsIndicators: true
             )
             .frame(maxWidth: .infinity, alignment: .leading)
         }

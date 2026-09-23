@@ -1,5 +1,9 @@
 import AppKit
 import Bleet
+import Caprine
+import Inference
+import Paddock
+import Pens
 import SwiftUI
 import Testing
 
@@ -14,6 +18,7 @@ extension AppTests.App {
     @Suite struct SidebarLayoutTests {
 
         @Test @MainActor func sidebarDividerStaysWithinItsWidthLimits() async throws {
+            LayoutRecursionGuard.install()
             let model = AppModel.shared
             let previousPhase = model.startupPhase
             model.startupPhase = .ready
@@ -60,22 +65,60 @@ extension AppTests.App {
             #expect(sidebar.convert(sidebar.bounds, to: nil).minX >= 0)
         }
 
-        @Test @MainActor func sidebarDividerResizingWithActiveChatDoesNotTriggerLayoutRecursion() async throws {
+        @Test @MainActor func sidebarDividerResizingWithActiveChatAndInspectorDoesNotTriggerRecursion() async throws {
+            LayoutRecursionGuard.install()
             let model = AppModel.shared
             let previousPhase = model.startupPhase
             let previousChatID = model.selectedChatID
             let previousChats = model.chats
+            let previousPens = model.pens
+            let previousShowInspector = model.showInspector
+            let previousArtifact = model.paddockArtifact
+            let previousProfiles = model.engineProfiles
+            let previousActiveEngineID = model.activeEngineID
+
             model.startupPhase = .ready
+            let pen = Pen(name: "Test Pen", emoji: "🧪", instructions: "")
+            model.pens = [pen]
+
             let session = ChatSession(effort: .trot, modelID: nil)
-            session.title = "Layout Test Chat"
+            session.title = "Layout Test Chat With Messages"
+            session.projectID = pen.id
+            var messages: [ChatMessage] = []
+            for i in 1...20 {
+                let msg = ChatMessage(role: (i % 2 == 1) ? .user : .assistant)
+                msg.text =
+                    (i % 2 == 1)
+                    ? "User question number \(i) with some text to wrap around multiple lines in the layout"
+                    : "Assistant response number \(i) with ```swift\nlet x = \(i)\nprint(x)\n```\nAnd a paragraph of explanation that wraps to demonstrate responsive layout in the transcript."
+                msg.complete = true
+                messages.append(msg)
+            }
+            session.messages = messages
             session.messagesLoaded = true
+
+            let artifact = PaddockArtifact(
+                kind: .code(language: "swift"),
+                content: "struct Foo {\n  let id: UUID\n}\n")
+            model.paddockArtifact = artifact
+            model.showInspector = true
             model.chats = [session]
             model.selectedChatID = session.id
+            let profile = EngineProfile(id: "test-engine", name: "Local Engine", url: "http://127.0.0.1:11434")
+            model.engineProfiles = [profile]
+            model.activeEngineID = profile.id
+
             defer {
                 model.startupPhase = previousPhase
                 model.chats = previousChats
+                model.pens = previousPens
                 model.selectedChatID = previousChatID
+                model.showInspector = previousShowInspector
+                model.paddockArtifact = previousArtifact
+                model.engineProfiles = previousProfiles
+                model.activeEngineID = previousActiveEngineID
             }
+
             let controller = NSHostingController(
                 rootView: ContentView().environment(model).frame(minWidth: 880, minHeight: 560))
             let window = NSWindow(contentViewController: controller)
@@ -88,11 +131,33 @@ extension AppTests.App {
             }
             try await Task.sleep(for: .milliseconds(300))
             let split = try #require(findSidebarSplit(controller.view))
-            for width in [200.0, 250, 300, 350, 400, 450, 500, 550, 600, 200, 600, 300] {
+
+            // Test resizing with PaddockView displayed in inspector
+            for width in stride(from: 200.0, through: 600.0, by: 40.0) {
                 split.setPosition(width, ofDividerAt: 0)
                 try await Task.sleep(for: .milliseconds(16))
                 controller.view.layoutSubtreeIfNeeded()
             }
+            for width in stride(from: 600.0, through: 200.0, by: -40.0) {
+                split.setPosition(width, ofDividerAt: 0)
+                try await Task.sleep(for: .milliseconds(16))
+                controller.view.layoutSubtreeIfNeeded()
+            }
+
+            // Test resizing with InspectorView (NerdStatsView) displayed in inspector
+            model.paddockArtifact = nil
+            try await Task.sleep(for: .milliseconds(100))
+            for width in stride(from: 200.0, through: 600.0, by: 40.0) {
+                split.setPosition(width, ofDividerAt: 0)
+                try await Task.sleep(for: .milliseconds(16))
+                controller.view.layoutSubtreeIfNeeded()
+            }
+            for width in stride(from: 600.0, through: 200.0, by: -40.0) {
+                split.setPosition(width, ofDividerAt: 0)
+                try await Task.sleep(for: .milliseconds(16))
+                controller.view.layoutSubtreeIfNeeded()
+            }
+
             #expect(model.currentSession?.id == session.id)
         }
     }

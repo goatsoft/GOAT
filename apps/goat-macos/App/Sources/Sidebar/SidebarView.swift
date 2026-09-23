@@ -95,7 +95,6 @@ struct SidebarView: View {
             }
             .fixedSize(horizontal: false, vertical: true)
         }
-        .frame(minWidth: 200, maxWidth: .infinity)
         .onChange(of: model.selectedChatID) { _, _ in
             if let chat = model.currentSession, chat.hasDefaultTitle, chat.messages.isEmpty { filter = "" }
         }

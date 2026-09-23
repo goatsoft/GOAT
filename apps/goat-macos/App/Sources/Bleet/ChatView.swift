@@ -129,7 +129,7 @@ struct ChatView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay {
             // 🏔️ Summit ("send it") blasts a rocket-goat diagonally across the whole chat, from
             // any effort source (capsule, model menu, ⌘4). Flies over everything, hit-transparent.
@@ -194,7 +194,6 @@ struct ChatView: View {
                     InspectorView(session: session)
                 }
             }
-            .frame(minWidth: 280, maxWidth: 820)
             .inspectorColumnWidth(min: 280, ideal: 380, max: 820)
         }
         .onAppear { composerFocused = true }

@@ -1,5 +1,6 @@
 import AppKit
 import HighlightKit
+import SwiftUI
 import Testing
 
 @testable import GOAT
@@ -108,6 +109,39 @@ extension AppTests.Caprine {
             #expect(String(extendedOutput.characters) == extended)
             let returnRange = try #require(extendedOutput.range(of: "return"))
             #expect(extendedOutput[returnRange].runs.contains { $0.appKit.foregroundColor != nil })
+        }
+
+        @Test @MainActor func highlightedCodeViewHidesScrollIndicatorsByDefault() {
+            let view = HighlightedCodeView(code: "let x = 1").environment(AppModel.shared)
+            let host = NSHostingView(rootView: view)
+            host.frame = NSRect(x: 0, y: 0, width: 400, height: 200)
+            host.layoutSubtreeIfNeeded()
+            func findScrollView(_ view: NSView) -> NSScrollView? {
+                if let sv = view as? NSScrollView { return sv }
+                return view.subviews.lazy.compactMap(findScrollView).first
+            }
+            if let sv = findScrollView(host) {
+                #expect(sv.hasHorizontalScroller == false || sv.horizontalScroller?.isHidden == true)
+            }
+        }
+
+        @Test @MainActor func highlightedCodeViewSupportsWordWrapToggle() {
+            let wrapped = HighlightedCodeView(code: "let x = 1", wordWrap: true).environment(AppModel.shared)
+            let hostWrapped = NSHostingView(rootView: wrapped)
+            hostWrapped.frame = NSRect(x: 0, y: 0, width: 400, height: 200)
+            hostWrapped.layoutSubtreeIfNeeded()
+
+            func findScrollView(_ view: NSView) -> NSScrollView? {
+                if let sv = view as? NSScrollView { return sv }
+                return view.subviews.lazy.compactMap(findScrollView).first
+            }
+            #expect(findScrollView(hostWrapped) == nil)
+
+            let unwrapped = HighlightedCodeView(code: "let x = 1", wordWrap: false).environment(AppModel.shared)
+            let hostUnwrapped = NSHostingView(rootView: unwrapped)
+            hostUnwrapped.frame = NSRect(x: 0, y: 0, width: 400, height: 200)
+            hostUnwrapped.layoutSubtreeIfNeeded()
+            #expect(findScrollView(hostUnwrapped) != nil)
         }
     }
 }
