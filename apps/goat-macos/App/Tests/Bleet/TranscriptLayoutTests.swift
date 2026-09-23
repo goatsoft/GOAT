@@ -193,9 +193,67 @@ extension AppTests.Bleet {
                 #expect(current.count <= TranscriptWindow.capacity, "Message count is strictly bounded")
                 #expect(current.contains(result.anchor), "Visible anchor preserved across paging")
                 #expect(viewport.readerOwnsViewport == true, "Viewport still owned by reader upon reaching final page")
-                #expect(viewport.autoFollow == false, "Loading final page does NOT re-enable auto-follow or snap to bottom")
+                #expect(
+                    viewport.autoFollow == false,
+                    "Loading final page does NOT re-enable auto-follow or snap to bottom")
             }
             #expect(current.upperBound == session.messages.count, "Reached the latest message")
+        }
+
+        @Test @MainActor func sourceBudgetIsAppliedEvenBelowMessageCountLimit() async throws {
+            let session = ChatSession(effort: .trot, modelID: nil)
+            session.messagesLoaded = true
+            session.messages = (0..<20).map { index in
+                let msg = ChatMessage(role: index.isMultiple(of: 2) ? .user : .assistant)
+                msg.text = String(repeating: "a", count: 5_000)
+                msg.complete = true
+                return msg
+            }
+
+            let viewport = TranscriptViewport()
+            let cost: (Int) -> Int = { TranscriptWindow.displayCost(session.messages[$0]) }
+
+            let range = viewport.messageRange(count: session.messages.count, cost: cost)
+            #expect(range.count < 20, "Short chats with heavy messages must still be bounded by source budget")
+            let totalCost = range.reduce(0) { $0 + cost($1) }
+            #expect(totalCost <= TranscriptWindow.sourceBudget, "Total display cost must not exceed source budget")
+
+            let view = ChatTranscriptView(session: session, initiallyFollowing: false)
+            #expect(view.visibleMessageRange.count < 20)
+            let restoredCost = view.visibleMessageRange.reduce(0) { $0 + cost($1) }
+            #expect(restoredCost <= TranscriptWindow.sourceBudget)
+        }
+
+        @Test @MainActor func pagingAcrossNonOverlappingOversizedMessagesPreservesValidAnchor() async throws {
+            let count = 100
+            // 20,000 bytes per message exceeds sourceBudget (16,384), yielding 1-message non-overlapping pages
+            let cost: (Int) -> Int = { _ in 20_000 }
+            let viewport = TranscriptViewport()
+
+            let initial = viewport.messageRange(count: count, cost: cost)
+            #expect(initial == 99..<100)
+
+            // Paging earlier must produce 98..<99 and anchor 98 inside that new page
+            let earlier = try #require(viewport.pageEarlier(count: count, cost: cost))
+            #expect(earlier.range == 98..<99)
+            #expect(earlier.anchor == 98)
+            #expect(earlier.range.contains(earlier.anchor))
+            let restoredEarlier = viewport.messageRange(count: count, anchor: earlier.anchor, cost: cost)
+            #expect(restoredEarlier == 98..<99, "Restoring with anchor must not revert to previous page")
+
+            // Paging earlier again
+            let earlier2 = try #require(viewport.pageEarlier(count: count, cost: cost))
+            #expect(earlier2.range == 97..<98)
+            #expect(earlier2.anchor == 97)
+            #expect(earlier2.range.contains(earlier2.anchor))
+
+            // Paging later must produce 98..<99 and anchor 98 inside that new page
+            let later = try #require(viewport.pageLater(count: count, cost: cost))
+            #expect(later.range == 98..<99)
+            #expect(later.anchor == 98)
+            #expect(later.range.contains(later.anchor))
+            let restoredLater = viewport.messageRange(count: count, anchor: later.anchor, cost: cost)
+            #expect(restoredLater == 98..<99, "Restoring with anchor must not revert to previous page")
         }
     }
 }

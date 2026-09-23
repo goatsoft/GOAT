@@ -194,7 +194,8 @@ extension AppTests.Caprine {
         }
 
         @Test @MainActor func highlightedCodeViewSuppressesGutterWhenWrappedAtNarrowWidth() {
-            let longCode = "let extremelyLongLineThatWrapsManyTimes = Array(repeating: \"goat\", count: 80).joined()\nlet shortLine = 1\nlet secondShortLine = 2"
+            let longLine = "let extremelyLongLineThatWrapsManyTimes = Array(repeating: \"goat\", count: 80).joined()"
+            let longCode = "\(longLine)\nlet shortLine = 1\nlet secondShortLine = 2"
             let view = HighlightedCodeView(
                 code: longCode,
                 showLineNumbers: true,

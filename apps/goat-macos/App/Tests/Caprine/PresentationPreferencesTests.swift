@@ -309,5 +309,39 @@ extension AppTests.Caprine {
             #expect(state.phase == .valid)
             #expect(state.phase.canSave)
         }
+
+        @Test @MainActor func jsonEditorInstallsLineNumberRulerAndUpdatesThemeTokens() async throws {
+            struct HostView: View {
+                @State var text = "{\"key\": 123}"
+                var tokens: Caprine
+                var body: some View {
+                    JSONEditorView(text: $text, tokens: tokens, isEditable: true)
+                }
+            }
+
+            let initialView = HostView(tokens: ThemeCatalog.midnight.tokens)
+            let host = NSHostingView(rootView: initialView)
+            host.frame = NSRect(x: 0, y: 0, width: 400, height: 300)
+            host.layoutSubtreeIfNeeded()
+
+            func findScrollView(_ view: NSView) -> NSScrollView? {
+                if let sv = view as? NSScrollView { return sv }
+                return view.subviews.lazy.compactMap(findScrollView).first
+            }
+
+            let scroll = try #require(findScrollView(host))
+            #expect(scroll.hasVerticalRuler)
+            let ruler = try #require(scroll.verticalRulerView as? LineNumberRuler)
+            #expect(ruler.tv != nil)
+            let tv = try #require(scroll.documentView as? NSTextView)
+            #expect(tv.insertionPointColor == NSColor(ThemeCatalog.midnight.tokens.tint))
+
+            // Update to light theme
+            host.rootView = HostView(tokens: ThemeCatalog.light.tokens)
+            host.layoutSubtreeIfNeeded()
+
+            #expect(tv.insertionPointColor == NSColor(ThemeCatalog.light.tokens.tint))
+            #expect(ruler.tokens.ink == ThemeCatalog.light.tokens.ink)
+        }
     }
 }

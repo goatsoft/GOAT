@@ -40,9 +40,6 @@ private enum TranscriptPagingPhase: Equatable, Sendable {
     }
 
     func messageRange(count: Int, anchor: Int? = nil, cost: (Int) -> Int) -> Range<Int> {
-        guard count > TranscriptWindow.capacity else {
-            return 0..<count
-        }
         if let heldRange {
             return TranscriptWindow.clamped(heldRange, count: count, anchor: anchor, cost: cost)
         }
@@ -59,8 +56,8 @@ private enum TranscriptPagingPhase: Equatable, Sendable {
     func pageEarlier(count: Int, cost: (Int) -> Int) -> (range: Range<Int>, anchor: Int)? {
         let current = messageRange(count: count, cost: cost)
         guard current.lowerBound > 0 else { return nil }
-        let anchor = current.lowerBound
         let previous = TranscriptWindow.earlier(current, count: count, cost: cost)
+        let anchor = previous.contains(current.lowerBound) ? current.lowerBound : max(0, previous.upperBound - 1)
         claimViewport(currentRange: previous)
         heldRange = previous
         return (previous, anchor)
@@ -70,8 +67,9 @@ private enum TranscriptPagingPhase: Equatable, Sendable {
     func pageLater(count: Int, cost: (Int) -> Int) -> (range: Range<Int>, anchor: Int)? {
         let current = messageRange(count: count, cost: cost)
         guard current.upperBound < count else { return nil }
-        let anchor = max(0, current.upperBound - 1)
         let next = TranscriptWindow.later(current, count: count, cost: cost)
+        let oldAnchor = max(0, current.upperBound - 1)
+        let anchor = next.contains(oldAnchor) ? oldAnchor : next.lowerBound
         claimViewport(currentRange: next)
         heldRange = next
         return (next, anchor)
@@ -112,20 +110,20 @@ struct ChatTranscriptView: View {
         self.session = session
         let initialHeld: Range<Int>?
         if !initiallyFollowing {
-            if session.messages.count <= TranscriptWindow.capacity {
-                initialHeld = nil
-            } else {
-                let start = initialVisibleMessageID.flatMap { id in
-                    session.messages.firstIndex(where: { $0.id == id })
-                }
-                initialHeld = start.map { start in
-                    TranscriptWindow.range(
-                        count: session.messages.count, startingAt: start,
-                        cost: { TranscriptWindow.displayCost(session.messages[$0]) })
-                } ?? TranscriptWindow.range(
-                    count: session.messages.count, end: nil,
-                    cost: { TranscriptWindow.displayCost(session.messages[$0]) })
+            let start = initialVisibleMessageID.flatMap { id in
+                session.messages.firstIndex(where: { $0.id == id })
             }
+            initialHeld =
+                start.map { start in
+                    TranscriptWindow.range(
+                        count: session.messages.count,
+                        startingAt: start,
+                        cost: { TranscriptWindow.displayCost(session.messages[$0]) })
+                }
+                ?? TranscriptWindow.range(
+                    count: session.messages.count,
+                    end: nil,
+                    cost: { TranscriptWindow.displayCost(session.messages[$0]) })
         } else {
             initialHeld = nil
         }
@@ -453,13 +451,19 @@ struct ChatTranscriptView: View {
             }
             return
         }
-        guard viewport.heldRange == nil, isAtTrueBottom, !reader.isScrolling, !viewport.readerOwnsViewport, !viewport.autoFollow,
+        guard viewport.heldRange == nil,
+            isAtTrueBottom,
+            !reader.isScrolling,
+            !viewport.readerOwnsViewport,
+            !viewport.autoFollow,
             reader.resumeTask == nil
         else { return }
         reader.resumeTask = Task { @MainActor in
             do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
             reader.resumeTask = nil
-            if viewport.heldRange == nil && reader.isAtBottom && !reader.isScrolling { viewport.autoFollow = true }
+            if viewport.heldRange == nil && reader.isAtBottom && !reader.isScrolling {
+                viewport.autoFollow = true
+            }
         }
     }
 
