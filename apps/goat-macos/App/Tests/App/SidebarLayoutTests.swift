@@ -21,8 +21,16 @@ extension AppTests.App {
             LayoutRecursionGuard.install()
             let model = AppModel.shared
             let previousPhase = model.startupPhase
+            let previousShowInspector = model.showInspector
+            let previousArtifact = model.paddockArtifact
             model.startupPhase = .ready
-            defer { model.startupPhase = previousPhase }
+            model.showInspector = false
+            model.paddockArtifact = nil
+            defer {
+                model.startupPhase = previousPhase
+                model.showInspector = previousShowInspector
+                model.paddockArtifact = previousArtifact
+            }
             let controller = NSHostingController(
                 rootView: ContentView().environment(model).frame(minWidth: 880, minHeight: 560))
             let window = NSWindow(contentViewController: controller)
