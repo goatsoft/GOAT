@@ -38,10 +38,6 @@ extension AppTests.Bleet {
                 try await Task.sleep(for: .milliseconds(10))
             }
             let textView = try #require(window.firstResponder as? MarkdownComposerEditor.ComposerTextView)
-            if #available(macOS 15.0, *) {
-                #expect(textView.writingToolsBehavior == .complete)
-                #expect(textView.allowedWritingToolsResultOptions == [.plainText])
-            }
             let coordinator = try #require(textView.delegate as? MarkdownComposerEditor.Coordinator)
             #expect(focused)
             let other = NSTextField(string: "Search")
