@@ -1,4 +1,6 @@
+import AppKit
 import Foundation
+import SwiftUI
 import Testing
 
 @testable import Caprine
@@ -134,6 +136,58 @@ extension AppTests.Caprine {
                     }
                 }
             }
+        }
+
+        @MainActor
+        @Test func windowConfiguratorAlwaysOnTopTogglesBothDirectionsOnSameWindow() async throws {
+            struct HostView: View {
+                @Binding var alwaysOnTop: Bool
+                var body: some View {
+                    Color.clear
+                        .background(
+                            WindowConfigurator(
+                                alwaysOnTop: alwaysOnTop,
+                                showsAlwaysOnTopToggle: true,
+                                onAlwaysOnTopToggle: { alwaysOnTop.toggle() }
+                            )
+                        )
+                }
+            }
+
+            final class StateHolder: ObservableObject {
+                @Published var alwaysOnTop = false
+            }
+
+            struct Wrapper: View {
+                @ObservedObject var state: StateHolder
+                var body: some View {
+                    HostView(alwaysOnTop: $state.alwaysOnTop)
+                }
+            }
+
+            let state = StateHolder()
+            let controller = NSHostingController(rootView: Wrapper(state: state))
+            let window = NSWindow(contentViewController: controller)
+            window.isReleasedWhenClosed = false
+            window.setContentSize(NSSize(width: 400, height: 300))
+            window.orderFront(nil)
+            defer {
+                window.contentViewController = nil
+                window.close()
+            }
+
+            try await Task.sleep(for: .milliseconds(150))
+            #expect(window.level == .normal)
+
+            // Toggle on
+            state.alwaysOnTop = true
+            try await Task.sleep(for: .milliseconds(150))
+            #expect(window.level == .floating)
+
+            // Toggle off on the same window
+            state.alwaysOnTop = false
+            try await Task.sleep(for: .milliseconds(150))
+            #expect(window.level == .normal)
         }
     }
 }

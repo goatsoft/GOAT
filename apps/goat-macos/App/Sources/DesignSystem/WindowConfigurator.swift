@@ -43,7 +43,6 @@ struct WindowConfigurator: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {
         let coordinator = context.coordinator
         let backdropChanged = coordinator.backdrop != fullscreenBackdrop
-        let toggleChanged = coordinator.showsAlwaysOnTopToggle != showsAlwaysOnTopToggle
         coordinator.backdrop = fullscreenBackdrop
         coordinator.showsAlwaysOnTopToggle = showsAlwaysOnTopToggle
         coordinator.onAlwaysOnTopToggle = onAlwaysOnTopToggle
@@ -55,9 +54,11 @@ struct WindowConfigurator: NSViewRepresentable {
             }
             return
         }
-        if backdropChanged || toggleChanged || coordinator.window !== window {
-            configure(window, coordinator: coordinator)
+        configure(window, coordinator: coordinator)
+        if coordinator.window !== window {
             coordinator.attach(to: window)
+        } else if backdropChanged {
+            coordinator.apply()
         }
     }
 
@@ -207,7 +208,7 @@ struct WindowConfigurator: NSViewRepresentable {
                 })
         }
 
-        private func apply(fullscreenOverride: Bool? = nil) {
+        func apply(fullscreenOverride: Bool? = nil) {
             guard let window else { return }
             let isFullscreen = fullscreenOverride ?? window.styleMask.contains(.fullScreen)
             if isFullscreen, let backdrop {
