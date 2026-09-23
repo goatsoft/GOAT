@@ -199,7 +199,7 @@ private struct ThinkingCodeText: View {
             combined.append(AttributedString(suffix))
             return combined
         }
-        return rendered ?? AttributedString(code)
+        return AttributedString(code)
     }
 
     var body: some View {

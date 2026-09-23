@@ -52,22 +52,28 @@ struct PreparedCodeText: View {
     let language: String?
     @Environment(\.colorScheme) private var colorScheme
     @State private var rendered: AttributedString?
-    @State private var renderedKey: Key?
+    @State private var renderedKey: CacheKey?
 
-    private struct Key: Equatable {
+    struct CacheKey: Equatable {
         let code: String
         let language: String?
         let dark: Bool
     }
 
-    private var currentText: AttributedString {
-        let key = Key(code: code, language: language, dark: colorScheme == .dark)
+    static func resolveText(
+        code: String,
+        language: String?,
+        dark: Bool,
+        rendered: AttributedString?,
+        renderedKey: CacheKey?
+    ) -> AttributedString {
+        let key = CacheKey(code: code, language: language, dark: dark)
         if renderedKey == key, let rendered {
             return rendered
         }
         if let rendered, let prevKey = renderedKey,
             prevKey.language == language,
-            prevKey.dark == (colorScheme == .dark),
+            prevKey.dark == dark,
             code.hasPrefix(prevKey.code)
         {
             var combined = rendered
@@ -75,11 +81,21 @@ struct PreparedCodeText: View {
             combined.append(AttributedString(suffix))
             return combined
         }
-        return rendered ?? AttributedString(code)
+        return AttributedString(code)
+    }
+
+    private var currentText: AttributedString {
+        Self.resolveText(
+            code: code,
+            language: language,
+            dark: colorScheme == .dark,
+            rendered: rendered,
+            renderedKey: renderedKey
+        )
     }
 
     var body: some View {
-        let key = Key(code: code, language: language, dark: colorScheme == .dark)
+        let key = CacheKey(code: code, language: language, dark: colorScheme == .dark)
         Text(currentText)
             .task(id: key) {
                 do {

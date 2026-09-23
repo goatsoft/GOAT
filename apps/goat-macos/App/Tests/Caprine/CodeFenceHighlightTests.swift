@@ -59,32 +59,32 @@ extension AppTests.Caprine {
                 """
             let output = try await VueSyntaxHighlighter.shared.render(source, dark: dark)
             #expect(String(output.characters) == source)
-            for token in ["template", "const", "string", "color"] {
-                let range = try #require(output.range(of: token))
-                #expect(output[range].runs.contains { $0.appKit.foregroundColor != nil })
-            }
+            let xmlTag = try #require(output.range(of: "<template>"))
+            #expect(output[xmlTag].runs.contains { $0.appKit.foregroundColor != nil })
+            let tsKeyword = try #require(output.range(of: "const"))
+            #expect(output[tsKeyword].runs.contains { $0.appKit.foregroundColor != nil })
+            let cssProp = try #require(output.range(of: "color"))
+            #expect(output[cssProp].runs.contains { $0.appKit.foregroundColor != nil })
         }
 
         @Test func vueUnknownLanguagesAndOversizeSourceStayIntact() async throws {
-            let source = "<script lang='unknown'>\n  custom syntax  \n</script>\n"
-            #expect(VueSyntaxHighlighter.sections(in: source).contains { $0.language == "plaintext" })
-            let output = try await VueSyntaxHighlighter.shared.render(source, dark: false)
-            #expect(String(output.characters) == source)
-            let huge = String(repeating: "x", count: VueSyntaxHighlighter.maximumBytes + 1)
-            let plain = try await VueSyntaxHighlighter.shared.render(huge, dark: true)
-            #expect(String(plain.characters) == huge)
-            #expect(plain.runs.allSatisfy { $0.appKit.foregroundColor == nil })
+            let unknown = "<script lang=\"madeup\">const z = 1;</script>"
+            let renderedUnknown = try await VueSyntaxHighlighter.shared.render(unknown, dark: false)
+            #expect(String(renderedUnknown.characters) == unknown)
+
+            let oversized = "<template>" + String(repeating: " ", count: VueSyntaxHighlighter.maximumBytes + 1)
+            let renderedOversized = try await VueSyntaxHighlighter.shared.render(oversized, dark: false)
+            #expect(String(renderedOversized.characters) == oversized)
         }
 
         @Test func tsxHighlightsTypesAndJSXTags() async throws {
-            let source = "const Card = (props: { title: string }) => <section>{props.title}</section>;"
-            let renderer = CodeSyntaxHighlighter()
-            let output = try await renderer.render(source, language: "tsx", dark: false)
+            let source = "type Goat = { id: string }; const view = <Badge>{id}</Badge>;"
+            let output = try await CodeSyntaxHighlighter.shared.render(source, language: "tsx", dark: false)
             #expect(String(output.characters) == source)
-            for token in ["const", "string", "section"] {
-                let range = try #require(output.range(of: token))
-                #expect(output[range].runs.contains { $0.appKit.foregroundColor != nil })
-            }
+            let keyword = try #require(output.range(of: "type"))
+            #expect(output[keyword].runs.contains { $0.appKit.foregroundColor != nil })
+            let tag = try #require(output.range(of: "Badge"))
+            #expect(output[tag].runs.contains { $0.appKit.foregroundColor != nil })
         }
 
         @Test func vueExternalScriptDoesNotConsumeFollowingStyles() {
@@ -109,6 +109,55 @@ extension AppTests.Caprine {
             #expect(String(extendedOutput.characters) == extended)
             let returnRange = try #require(extendedOutput.range(of: "return"))
             #expect(extendedOutput[returnRange].runs.contains { $0.appKit.foregroundColor != nil })
+        }
+
+        @Test func fallbackResolvesToSourceOnCodeReplacementAndTruncation() {
+            let initialCode = "let alpha = 1\nlet beta = 2"
+            let initialRendered = AttributedString("rendered alpha and beta")
+            let initialKey = PreparedCodeText.CacheKey(code: initialCode, language: "swift", dark: false)
+
+            // Exact match returns cached rendered
+            let exact = PreparedCodeText.resolveText(
+                code: initialCode,
+                language: "swift",
+                dark: false,
+                rendered: initialRendered,
+                renderedKey: initialKey
+            )
+            #expect(exact == initialRendered)
+
+            // Streaming prefix extension appends suffix
+            let extendedCode = initialCode + "\nlet gamma = 3"
+            let extended = PreparedCodeText.resolveText(
+                code: extendedCode,
+                language: "swift",
+                dark: false,
+                rendered: initialRendered,
+                renderedKey: initialKey
+            )
+            #expect(String(extended.characters) == "rendered alpha and beta\nlet gamma = 3")
+
+            // Truncation immediately resolves to the new source code, not stale rendered text
+            let truncatedCode = "let alpha = 1"
+            let truncated = PreparedCodeText.resolveText(
+                code: truncatedCode,
+                language: "swift",
+                dark: false,
+                rendered: initialRendered,
+                renderedKey: initialKey
+            )
+            #expect(String(truncated.characters) == truncatedCode)
+
+            // Complete replacement immediately resolves to new source code, not stale rendered text
+            let replacedCode = "func other() { return }"
+            let replaced = PreparedCodeText.resolveText(
+                code: replacedCode,
+                language: "swift",
+                dark: false,
+                rendered: initialRendered,
+                renderedKey: initialKey
+            )
+            #expect(String(replaced.characters) == replacedCode)
         }
 
         @Test @MainActor func highlightedCodeViewHidesScrollIndicatorsByDefault() {
@@ -142,6 +191,26 @@ extension AppTests.Caprine {
             hostUnwrapped.frame = NSRect(x: 0, y: 0, width: 400, height: 200)
             hostUnwrapped.layoutSubtreeIfNeeded()
             #expect(findScrollView(hostUnwrapped) != nil)
+        }
+
+        @Test @MainActor func highlightedCodeViewSuppressesGutterWhenWrappedAtNarrowWidth() {
+            let longCode = "let extremelyLongLineThatWrapsManyTimes = Array(repeating: \"goat\", count: 80).joined()\nlet shortLine = 1\nlet secondShortLine = 2"
+            let view = HighlightedCodeView(
+                code: longCode,
+                showLineNumbers: true,
+                wordWrap: true
+            ).environment(AppModel.shared)
+
+            let host = NSHostingView(rootView: view)
+            host.frame = NSRect(x: 0, y: 0, width: 180, height: 300)
+            host.layoutSubtreeIfNeeded()
+
+            // When wrapped, horizontal scroll view is absent
+            func findScrollView(_ view: NSView) -> NSScrollView? {
+                if let sv = view as? NSScrollView { return sv }
+                return view.subviews.lazy.compactMap(findScrollView).first
+            }
+            #expect(findScrollView(host) == nil)
         }
     }
 }

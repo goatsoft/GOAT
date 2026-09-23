@@ -17,17 +17,20 @@ private struct CodeScrollGeometry: Equatable, Sendable {
 private final class ScrollerDisablingView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        disableScroller()
+        if window != nil {
+            DispatchQueue.main.async { [weak self] in
+                self?.disableScroller()
+            }
+        }
     }
 
     override func viewDidMoveToSuperview() {
         super.viewDidMoveToSuperview()
-        disableScroller()
-    }
-
-    override func layout() {
-        super.layout()
-        disableScroller()
+        if superview != nil {
+            DispatchQueue.main.async { [weak self] in
+                self?.disableScroller()
+            }
+        }
     }
 
     func disableScroller() {
@@ -54,7 +57,8 @@ private struct HideSystemScroller: NSViewRepresentable {
 /// Read-only highlighted code, one component for every preview surface (in-chat fenced
 /// blocks + the Paddock). Highlighting is pure Swift via HighlightKit (offline, no JavaScriptCore).
 /// An optional monospaced line-number gutter rides alongside; both use the same font so
-/// rows line up without wrapping.
+/// rows line up without wrapping. When word wrap is enabled, line numbers are suppressed so
+/// multi-line wrapped visual rows do not misalign with single-line gutter numbers.
 struct HighlightedCodeView: View {
     @Environment(AppModel.self) private var model
     nonisolated static let maximumHighlightedBytes = 256 * 1_024
@@ -98,15 +102,7 @@ struct HighlightedCodeView: View {
     }
 
     private var wrappedContent: some View {
-        HStack(alignment: .top, spacing: 12) {
-            if showLineNumbers && permitsRichRendering {
-                Text(gutter)
-                    .font(Font(ReadingFonts.nsFont(model.effectiveCodeFontID, size: fontSize, role: .code)))
-                    .foregroundStyle(.tertiary)
-                    .multilineTextAlignment(.trailing)
-                    .textSelection(.disabled)
-                    .accessibilityHidden(true)
-            }
+        Group {
             if permitsRichRendering {
                 highlightedText
                     .font(Font(ReadingFonts.nsFont(model.effectiveCodeFontID, size: fontSize, role: .code)))
