@@ -27,14 +27,60 @@ struct ToolFileDiff: Equatable, Sendable {
     let additionsCount: Int
     let deletionsCount: Int
     let lines: [DiffLine]
+    let isTruncated: Bool
+    let totalLinesCount: Int
+
+    init(
+        path: String,
+        kind: ChangeKind,
+        additionsCount: Int,
+        deletionsCount: Int,
+        lines: [DiffLine],
+        isTruncated: Bool = false,
+        totalLinesCount: Int? = nil
+    ) {
+        self.path = path
+        self.kind = kind
+        self.additionsCount = additionsCount
+        self.deletionsCount = deletionsCount
+        self.lines = lines
+        self.isTruncated = isTruncated
+        self.totalLinesCount = totalLinesCount ?? lines.count
+    }
 }
 
 /// Parses tool invocation arguments into a structured file diff.
-enum ToolDiffParser {
+@MainActor enum ToolDiffParser {
+    public static let maxDiffLines = 500
+    public static let maxLCSDimension = 500
+
+    private static let cache = NSCache<NSString, DiffCacheEntry>()
+
+    private final class DiffCacheEntry: @unchecked Sendable {
+        let arguments: String
+        let diff: ToolFileDiff?
+        init(arguments: String, diff: ToolFileDiff?) {
+            self.arguments = arguments
+            self.diff = diff
+        }
+    }
+
     static func parse(tool: String, arguments: String) -> ToolFileDiff? {
         guard tool == "pen_edit_file" || tool == "pen_write_file" else { return nil }
-        guard arguments.utf8.count <= 131_072,
-            let data = arguments.data(using: .utf8),
+        guard arguments.utf8.count <= 131_072 else { return nil }
+
+        let cacheKey = "\(tool):\(arguments.hashValue):\(arguments.count)" as NSString
+        if let entry = cache.object(forKey: cacheKey), entry.arguments == arguments {
+            return entry.diff
+        }
+
+        let parsed = parseUncached(tool: tool, arguments: arguments)
+        cache.setObject(DiffCacheEntry(arguments: arguments, diff: parsed), forKey: cacheKey)
+        return parsed
+    }
+
+    private static func parseUncached(tool: String, arguments: String) -> ToolFileDiff? {
+        guard let data = arguments.data(using: .utf8),
             let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let path = json["path"] as? String, !path.isEmpty
         else { return nil }
@@ -52,8 +98,12 @@ enum ToolDiffParser {
 
     private static func diffForCreation(path: String, content: String) -> ToolFileDiff {
         let rawLines = content.components(separatedBy: "\n")
+        let totalCount = rawLines.count
+        let isTruncated = totalCount > maxDiffLines
+        let slice = isTruncated ? Array(rawLines.prefix(maxDiffLines)) : rawLines
         var lines: [ToolFileDiff.DiffLine] = []
-        for (index, line) in rawLines.enumerated() {
+        lines.reserveCapacity(slice.count)
+        for (index, line) in slice.enumerated() {
             lines.append(
                 ToolFileDiff.DiffLine(
                     id: index,
@@ -66,9 +116,11 @@ enum ToolDiffParser {
         return ToolFileDiff(
             path: path,
             kind: .create,
-            additionsCount: lines.count,
+            additionsCount: totalCount,
             deletionsCount: 0,
-            lines: lines
+            lines: lines,
+            isTruncated: isTruncated,
+            totalLinesCount: totalCount
         )
     }
 
@@ -80,27 +132,35 @@ enum ToolDiffParser {
         let n = newLines.count
 
         // Guard against runaway LCS on exceptionally large text blocks
-        if m > 500 || n > 500 {
+        if m > maxLCSDimension || n > maxLCSDimension {
             var lines: [ToolFileDiff.DiffLine] = []
+            let total = m + n
+            let isTruncated = total > maxDiffLines
             var id = 0
             for (idx, line) in oldLines.enumerated() {
+                if id >= maxDiffLines { break }
                 lines.append(
                     ToolFileDiff.DiffLine(
                         id: id, kind: .deletion, text: line, oldLineNumber: idx + 1, newLineNumber: nil))
                 id += 1
             }
-            for (idx, line) in newLines.enumerated() {
-                lines.append(
-                    ToolFileDiff.DiffLine(
-                        id: id, kind: .addition, text: line, oldLineNumber: nil, newLineNumber: idx + 1))
-                id += 1
+            if id < maxDiffLines {
+                for (idx, line) in newLines.enumerated() {
+                    if id >= maxDiffLines { break }
+                    lines.append(
+                        ToolFileDiff.DiffLine(
+                            id: id, kind: .addition, text: line, oldLineNumber: nil, newLineNumber: idx + 1))
+                    id += 1
+                }
             }
             return ToolFileDiff(
                 path: path,
                 kind: .edit,
                 additionsCount: n,
                 deletionsCount: m,
-                lines: lines
+                lines: lines,
+                isTruncated: isTruncated,
+                totalLinesCount: total
             )
         }
 
@@ -149,8 +209,12 @@ enum ToolDiffParser {
         }
 
         temp.reverse()
+        let totalCount = temp.count
+        let isTruncated = totalCount > maxDiffLines
+        let slice = isTruncated ? Array(temp.prefix(maxDiffLines)) : temp
         var finalLines: [ToolFileDiff.DiffLine] = []
-        for (idx, var item) in temp.enumerated() {
+        finalLines.reserveCapacity(slice.count)
+        for (idx, var item) in slice.enumerated() {
             item.id = idx
             finalLines.append(item)
         }
@@ -160,7 +224,9 @@ enum ToolDiffParser {
             kind: .edit,
             additionsCount: additions,
             deletionsCount: deletions,
-            lines: finalLines
+            lines: finalLines,
+            isTruncated: isTruncated,
+            totalLinesCount: totalCount
         )
     }
 }
@@ -191,10 +257,10 @@ struct ToolDiffView: View {
         HStack(spacing: 8) {
             Image(systemName: diff.kind == .create ? "doc.badge.plus" : "doc.text")
                 .foregroundStyle(model.theme.tokens.muted)
-                .font(.system(size: 11))
+                .font(Caprine.Activity.badgeFont)
 
             Text(diff.path)
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .font(Caprine.Activity.monospaceFont.weight(.semibold))
                 .foregroundStyle(model.theme.tokens.ink)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -204,12 +270,12 @@ struct ToolDiffView: View {
             HStack(spacing: 6) {
                 if diff.additionsCount > 0 {
                     Text("+\(diff.additionsCount)")
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .font(Caprine.Activity.badgeFont.monospaced())
                         .foregroundStyle(Caprine.Semantic.success)
                 }
                 if diff.deletionsCount > 0 {
                     Text("-\(diff.deletionsCount)")
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .font(Caprine.Activity.badgeFont.monospaced())
                         .foregroundStyle(Caprine.Semantic.danger)
                 }
             }
@@ -219,7 +285,7 @@ struct ToolDiffView: View {
                     showRaw.toggle()
                 } label: {
                     Image(systemName: showRaw ? "doc.text.magnifyingglass" : "curlybraces")
-                        .font(.system(size: 10))
+                        .font(Caprine.Activity.badgeFont)
                         .foregroundStyle(model.theme.tokens.muted)
                 }
                 .buttonStyle(.plain)
@@ -238,6 +304,9 @@ struct ToolDiffView: View {
                 ForEach(diff.lines) { line in
                     diffRow(line)
                 }
+                if diff.isTruncated {
+                    truncationNotice
+                }
             }
             .padding(.vertical, 4)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -245,6 +314,24 @@ struct ToolDiffView: View {
         .frame(maxHeight: maxHeight)
         .background(model.theme.tokens.surface.opacity(0.3), in: RoundedRectangle(cornerRadius: 6))
         .textSelection(.enabled)
+    }
+
+    private var truncationNotice: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "ellipsis.circle")
+            Text("Diff truncated to first \(diff.lines.count) of \(diff.totalLinesCount) lines.")
+            if allowsRawToggle {
+                Button("Show raw") {
+                    showRaw = true
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(model.theme.tokens.tint)
+            }
+        }
+        .font(Caprine.Activity.badgeFont)
+        .foregroundStyle(model.theme.tokens.muted)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
     }
 
     @ViewBuilder
@@ -257,12 +344,12 @@ struct ToolDiffView: View {
                 Text(line.newLineNumber.map { String($0) } ?? "")
                     .frame(width: 24, alignment: .trailing)
             }
-            .font(.system(size: 10, design: .monospaced))
+            .font(Caprine.Activity.badgeFont.monospaced())
             .foregroundStyle(model.theme.tokens.muted.opacity(0.7))
 
             // Prefix (+, -, space)
             Text(line.kind == .addition ? "+" : (line.kind == .deletion ? "-" : " "))
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .font(Caprine.Activity.monospaceFont.weight(.bold))
                 .foregroundStyle(
                     line.kind == .addition
                         ? Caprine.Semantic.success
@@ -272,7 +359,7 @@ struct ToolDiffView: View {
 
             // Content text
             Text(line.text.isEmpty ? " " : line.text)
-                .font(.system(size: 11, design: .monospaced))
+                .font(Caprine.Activity.monospaceFont)
                 .foregroundStyle(model.theme.tokens.ink)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
