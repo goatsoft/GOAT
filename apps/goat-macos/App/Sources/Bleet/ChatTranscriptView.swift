@@ -25,14 +25,72 @@ private enum TranscriptPagingPhase: Equatable, Sendable {
     case pagingLater
 }
 
+/// Tracks the visible window and reader viewport ownership for a chat transcript.
+@MainActor @Observable final class TranscriptViewport {
+    var heldRange: Range<Int>?
+    var autoFollow: Bool
+    var readerOwnsViewport: Bool
+    var isScrolledToBottom: Bool
+
+    init(initiallyFollowing: Bool = true, initialHeldRange: Range<Int>? = nil) {
+        self.autoFollow = initiallyFollowing
+        self.readerOwnsViewport = !initiallyFollowing
+        self.isScrolledToBottom = initiallyFollowing
+        self.heldRange = initialHeldRange
+    }
+
+    func messageRange(count: Int, anchor: Int? = nil, cost: (Int) -> Int) -> Range<Int> {
+        guard count > TranscriptWindow.capacity else {
+            return 0..<count
+        }
+        if let heldRange {
+            return TranscriptWindow.clamped(heldRange, count: count, anchor: anchor, cost: cost)
+        }
+        return TranscriptWindow.range(count: count, end: nil, cost: cost)
+    }
+
+    func claimViewport(currentRange: Range<Int>) {
+        if heldRange == nil { heldRange = currentRange }
+        autoFollow = false
+        readerOwnsViewport = true
+    }
+
+    @discardableResult
+    func pageEarlier(count: Int, cost: (Int) -> Int) -> (range: Range<Int>, anchor: Int)? {
+        let current = messageRange(count: count, cost: cost)
+        guard current.lowerBound > 0 else { return nil }
+        let anchor = current.lowerBound
+        let previous = TranscriptWindow.earlier(current, count: count, cost: cost)
+        claimViewport(currentRange: previous)
+        heldRange = previous
+        return (previous, anchor)
+    }
+
+    @discardableResult
+    func pageLater(count: Int, cost: (Int) -> Int) -> (range: Range<Int>, anchor: Int)? {
+        let current = messageRange(count: count, cost: cost)
+        guard current.upperBound < count else { return nil }
+        let anchor = max(0, current.upperBound - 1)
+        let next = TranscriptWindow.later(current, count: count, cost: cost)
+        claimViewport(currentRange: next)
+        heldRange = next
+        return (next, anchor)
+    }
+
+    func snapToBottom() {
+        heldRange = nil
+        readerOwnsViewport = false
+        autoFollow = true
+        isScrolledToBottom = true
+    }
+}
+
 /// Its owner keys this view by chat ID. A new chat gets fresh native scroll geometry,
 /// measured row layout and follow tasks instead of inheriting another transcript's viewport.
 struct ChatTranscriptView: View {
     @Bindable var session: ChatSession
     @Environment(AppModel.self) private var model
-    @State private var heldRange: Range<Int>?
-    @State private var autoFollow = true
-    @State private var readerOwnsViewport = false
+    @State var viewport: TranscriptViewport
     @State private var reader = TranscriptReaderState()
     @State private var visibleMessageID: UUID?
     @State private var readerAnchorID: UUID?
@@ -41,7 +99,6 @@ struct ChatTranscriptView: View {
     @State private var pendingPreserveScroll: Task<Void, Never>?
     @State private var pagingPhase: TranscriptPagingPhase = .idle
     @State private var pagingTask: Task<Void, Never>?
-    @State private var isScrolledToBottom: Bool
     @State private var isHoveringScrollButton = false
 
     private static let bottomAnchor = UUID()
@@ -49,29 +106,37 @@ struct ChatTranscriptView: View {
     init(
         session: ChatSession,
         initiallyFollowing: Bool = true,
-        initialVisibleMessageID: UUID? = nil
+        initialVisibleMessageID: UUID? = nil,
+        viewport: TranscriptViewport? = nil
     ) {
         self.session = session
-        _autoFollow = State(initialValue: initiallyFollowing)
-        _readerOwnsViewport = State(initialValue: !initiallyFollowing)
-        _visibleMessageID = State(initialValue: initialVisibleMessageID)
-        _readerAnchorID = State(initialValue: initialVisibleMessageID)
-        _isScrolledToBottom = State(initialValue: initiallyFollowing)
+        let initialHeld: Range<Int>?
         if !initiallyFollowing {
             if session.messages.count <= TranscriptWindow.capacity {
-                _heldRange = State(initialValue: nil)
+                initialHeld = nil
             } else {
                 let start = initialVisibleMessageID.flatMap { id in
                     session.messages.firstIndex(where: { $0.id == id })
                 }
-                _heldRange = State(
-                    initialValue: start.map { start in
-                        let lower = min(session.messages.count, max(0, start))
-                        let upper = min(session.messages.count, lower + TranscriptWindow.capacity)
-                        return lower..<upper
-                    } ?? max(0, session.messages.count - TranscriptWindow.capacity)..<session.messages.count)
+                initialHeld = start.map { start in
+                    TranscriptWindow.range(
+                        count: session.messages.count, startingAt: start,
+                        cost: { TranscriptWindow.displayCost(session.messages[$0]) })
+                } ?? TranscriptWindow.range(
+                    count: session.messages.count, end: nil,
+                    cost: { TranscriptWindow.displayCost(session.messages[$0]) })
             }
+        } else {
+            initialHeld = nil
         }
+        _viewport = State(
+            initialValue: viewport
+                ?? TranscriptViewport(
+                    initiallyFollowing: initiallyFollowing,
+                    initialHeldRange: initialHeld
+                ))
+        _visibleMessageID = State(initialValue: initialVisibleMessageID)
+        _readerAnchorID = State(initialValue: initialVisibleMessageID)
     }
 
     var body: some View {
@@ -188,7 +253,7 @@ struct ChatTranscriptView: View {
                     )
                 }
                 .overlay(alignment: .bottom) {
-                    if !isScrolledToBottom {
+                    if !viewport.isScrolledToBottom {
                         Button {
                             snapToBottom(using: proxy)
                         } label: {
@@ -210,6 +275,7 @@ struct ChatTranscriptView: View {
                         }
                         .buttonStyle(.plain)
                         .help("Scroll to bottom")
+                        .accessibilityLabel("Scroll to bottom")
                         .accessibilityIdentifier("chat-transcript-scroll-bottom-button")
                         .padding(.bottom, Caprine.Activity.inset)
                         .onHover { isHoveringScrollButton = $0 }
@@ -219,7 +285,7 @@ struct ChatTranscriptView: View {
                 .environment(
                     \.transcriptInspection,
                     TranscriptInspectionAction {
-                        claimViewport()
+                        viewport.claimViewport(currentRange: messageRange)
                         cancelPendingFollowScroll()
                         cancelPendingPreserveScroll()
                     }
@@ -237,7 +303,7 @@ struct ChatTranscriptView: View {
                 .onScrollPhaseChange { _, phase in
                     if phase == .tracking || phase == .interacting || phase == .decelerating {
                         reader.isScrolling = true
-                        claimViewport()
+                        viewport.claimViewport(currentRange: messageRange)
                         cancelPendingFollowScroll()
                         cancelPendingPreserveScroll()
                     } else if phase == .idle {
@@ -250,11 +316,11 @@ struct ChatTranscriptView: View {
                         if readerFinishedScrolling && messageRange.upperBound == session.messages.count
                             && reader.isAtBottom
                         {
-                            readerOwnsViewport = false
-                            heldRange = nil
-                            autoFollow = true
-                        } else if readerOwnsViewport {
-                            autoFollow = false
+                            viewport.readerOwnsViewport = false
+                            viewport.heldRange = nil
+                            viewport.autoFollow = true
+                        } else if viewport.readerOwnsViewport {
+                            viewport.autoFollow = false
                         }
                     }
                 }
@@ -262,21 +328,19 @@ struct ChatTranscriptView: View {
                 // feed estimated transcript heights back into programmatic scroll commands.
                 // Chase streaming growth (text + thinking + new messages) while following.
                 .onChange(of: streamRevision) {
-                    if autoFollow {
+                    if viewport.autoFollow {
                         requestFollowScroll(using: proxy)
-                    } else if readerOwnsViewport {
+                    } else if viewport.readerOwnsViewport {
                         preserveReaderPosition(using: proxy)
                     }
                 }
                 // A newly sent turn always re-arms follow and snaps to the bottom.
                 .onChange(of: session.messages.count) { previousCount, count in
-                    if let heldRange, count < previousCount {
-                        let anchor = readerAnchorID.flatMap { id in
-                            session.messages.firstIndex(where: { $0.id == id })
-                        }
+                    if let heldRange = viewport.heldRange, count < previousCount {
+                        let anchor = readerAnchorIndex
                         let surviving = TranscriptWindow.clamped(
                             heldRange, count: count, anchor: anchor, cost: displayCost)
-                        self.heldRange = surviving
+                        viewport.heldRange = surviving
                         if anchor == nil {
                             self.readerAnchorID = surviving.first.map { session.messages[$0].id }
                             visibleMessageID = self.readerAnchorID
@@ -284,16 +348,13 @@ struct ChatTranscriptView: View {
                     }
                     if session.messages.last?.role == .user {
                         resetPaging()
-                        heldRange = nil
-                        autoFollow = true
-                        readerOwnsViewport = false
                         withAnimation(.easeInOut(duration: 0.2)) {
-                            isScrolledToBottom = true
+                            viewport.snapToBottom()
                         }
                         snapToBottom(using: proxy)
-                    } else if autoFollow {
+                    } else if viewport.autoFollow {
                         requestFollowScroll(using: proxy)
-                    } else if readerOwnsViewport {
+                    } else if viewport.readerOwnsViewport {
                         preserveReaderPosition(using: proxy)
                     }
                 }
@@ -310,34 +371,25 @@ struct ChatTranscriptView: View {
 
     private var tokens: Caprine { model.theme.tokens }
 
+    var visibleMessageRange: Range<Int> { messageRange }
+
+    private var readerAnchorIndex: Int? {
+        readerAnchorID.flatMap { id in
+            session.messages.firstIndex(where: { $0.id == id })
+        }
+    }
+
     private var messageRange: Range<Int> {
-        let count = session.messages.count
-        guard count > TranscriptWindow.capacity else {
-            return 0..<count
-        }
-        if let heldRange {
-            let upper = min(count, heldRange.upperBound)
-            let lower = min(heldRange.lowerBound, upper)
-            if lower == upper, upper > 0 {
-                return max(0, upper - TranscriptWindow.capacity)..<upper
-            }
-            return lower..<upper
-        }
-        return max(0, count - TranscriptWindow.capacity)..<count
+        viewport.messageRange(count: session.messages.count, anchor: readerAnchorIndex, cost: displayCost)
     }
 
     private func displayCost(_ index: Int) -> Int {
         TranscriptWindow.displayCost(session.messages[index])
     }
 
-    private func page(to range: Range<Int>, anchor: Int, scrollTarget: Int? = nil, using proxy: ScrollViewProxy? = nil)
-    {
-        claimViewport()
-        heldRange = range
+    private func scrollToPagingTarget(anchor: Int, using proxy: ScrollViewProxy?) {
         guard session.messages.indices.contains(anchor) else { return }
-        let targetID =
-            scrollTarget.flatMap { session.messages.indices.contains($0) ? session.messages[$0].id : nil }
-            ?? session.messages[anchor].id
+        let targetID = session.messages[anchor].id
         readerAnchorID = targetID
         visibleMessageID = targetID
         if let proxy {
@@ -357,11 +409,9 @@ struct ChatTranscriptView: View {
                 resetPaging()
                 return
             }
-            let previousLower = max(0, messageRange.lowerBound - TranscriptWindow.step)
-            let anchor = messageRange.lowerBound
-            let newUpper = min(session.messages.count, max(messageRange.upperBound, previousLower + 100))
-            let previous = previousLower..<newUpper
-            page(to: previous, anchor: anchor, scrollTarget: anchor, using: proxy)
+            if let result = viewport.pageEarlier(count: session.messages.count, cost: displayCost) {
+                scrollToPagingTarget(anchor: result.anchor, using: proxy)
+            }
             do { try await Task.sleep(for: .milliseconds(100)) } catch {}
             resetPaging()
         }
@@ -375,17 +425,8 @@ struct ChatTranscriptView: View {
                 resetPaging()
                 return
             }
-            let nextUpper = min(session.messages.count, messageRange.upperBound + TranscriptWindow.step)
-            if nextUpper == session.messages.count {
-                heldRange = nil
-                autoFollow = true
-                readerOwnsViewport = false
-                snapToBottom(using: proxy)
-            } else {
-                let anchor = messageRange.upperBound - 1
-                let newLower = max(0, min(messageRange.lowerBound, nextUpper - 100))
-                let next = newLower..<nextUpper
-                page(to: next, anchor: anchor, scrollTarget: anchor, using: proxy)
+            if let result = viewport.pageLater(count: session.messages.count, cost: displayCost) {
+                scrollToPagingTarget(anchor: result.anchor, using: proxy)
             }
             do { try await Task.sleep(for: .milliseconds(100)) } catch {}
             resetPaging()
@@ -398,33 +439,27 @@ struct ChatTranscriptView: View {
         pagingPhase = .idle
     }
 
-    private func claimViewport() {
-        if heldRange == nil { heldRange = messageRange }
-        autoFollow = false
-        readerOwnsViewport = true
-    }
-
     private func updateBottomVisibility(_ visible: Bool, using proxy: ScrollViewProxy) {
         // Visibility is input to the follower, not presentation state. Do not invalidate
         // SwiftUI layout synchronously from its own visibility callback.
         let isAtTrueBottom = visible && messageRange.upperBound == session.messages.count
         reader.isAtBottom = isAtTrueBottom
-        if isAtTrueBottom, readerOwnsViewport, !reader.isScrolling {
+        if isAtTrueBottom, viewport.readerOwnsViewport, !reader.isScrolling {
             Task { @MainActor in
                 await Task.yield()
-                if readerOwnsViewport, !reader.isScrolling {
+                if viewport.readerOwnsViewport, !reader.isScrolling {
                     preserveReaderPosition(using: proxy)
                 }
             }
             return
         }
-        guard heldRange == nil, isAtTrueBottom, !reader.isScrolling, !readerOwnsViewport, !autoFollow,
+        guard viewport.heldRange == nil, isAtTrueBottom, !reader.isScrolling, !viewport.readerOwnsViewport, !viewport.autoFollow,
             reader.resumeTask == nil
         else { return }
         reader.resumeTask = Task { @MainActor in
             do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
             reader.resumeTask = nil
-            if heldRange == nil && reader.isAtBottom && !reader.isScrolling { autoFollow = true }
+            if viewport.heldRange == nil && reader.isAtBottom && !reader.isScrolling { viewport.autoFollow = true }
         }
     }
 
@@ -445,7 +480,7 @@ struct ChatTranscriptView: View {
             } catch {
                 return
             }
-            guard autoFollow, !reader.isScrolling, !Task.isCancelled else {
+            guard viewport.autoFollow, !reader.isScrolling, !Task.isCancelled else {
                 pendingFollowScroll = nil
                 return
             }
@@ -461,10 +496,10 @@ struct ChatTranscriptView: View {
         let distFromBottom = document.bounds.maxY - scroll.contentView.bounds.maxY
         let atBottom = distFromBottom <= 50 && messageRange.upperBound == session.messages.count
         reader.isAtBottom = atBottom
-        if isScrolledToBottom != atBottom {
+        if viewport.isScrolledToBottom != atBottom {
             DispatchQueue.main.async {
                 withAnimation(.easeInOut(duration: 0.2)) {
-                    isScrolledToBottom = atBottom
+                    viewport.isScrolledToBottom = atBottom
                 }
             }
         }
@@ -476,14 +511,11 @@ struct ChatTranscriptView: View {
         resetPaging()
         followThrottle.reset()
         reader.isScrolling = false
-        readerOwnsViewport = false
         readerAnchorID = nil
         visibleMessageID = nil
-        heldRange = nil
-        autoFollow = true
         reader.isAtBottom = true
         withAnimation(.easeInOut(duration: 0.2)) {
-            isScrolledToBottom = true
+            viewport.snapToBottom()
         }
 
         func applyDirectBottomScroll() {
@@ -500,7 +532,7 @@ struct ChatTranscriptView: View {
         pendingFollowScroll = Task { @MainActor in
             for delay in [30, 80, 160] {
                 do { try await Task.sleep(for: .milliseconds(delay)) } catch { return }
-                guard autoFollow, !Task.isCancelled else { break }
+                guard viewport.autoFollow, !Task.isCancelled else { break }
                 applyDirectBottomScroll()
                 scrollToBottom(using: proxy)
             }
@@ -523,7 +555,7 @@ struct ChatTranscriptView: View {
             // The message mutation and its native scroll layout commit on different passes on
             // macOS 26. Restore after that pass instead of issuing a scroll against stale geometry.
             do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
-            guard readerOwnsViewport, !autoFollow, !reader.isScrolling, !Task.isCancelled else {
+            guard viewport.readerOwnsViewport, !viewport.autoFollow, !reader.isScrolling, !Task.isCancelled else {
                 pendingPreserveScroll = nil
                 return
             }

@@ -148,5 +148,54 @@ extension AppTests.Bleet {
                 reachedBottom,
                 "A single click on the scroll-to-bottom button must bring the viewport to the end of the transcript")
         }
+
+        @Test @MainActor func repeatedPagingBoundsMessageCountAndBudgetWhilePreservingReaderPosition() async throws {
+            let session = ChatSession(effort: .trot, modelID: nil)
+            session.messagesLoaded = true
+            session.messages = (0..<120).map { index in
+                let message = ChatMessage(role: index.isMultiple(of: 2) ? .user : .assistant)
+                message.text = "Message \(index)\n\n" + String(repeating: "- A transcript line.\n", count: 6)
+                message.complete = true
+                return message
+            }
+
+            let viewport = TranscriptViewport()
+            let view = ChatTranscriptView(session: session, viewport: viewport)
+            let cost: (Int) -> Int = { TranscriptWindow.displayCost(session.messages[$0]) }
+
+            // Initial window is at the bottom
+            var current = viewport.messageRange(count: session.messages.count, cost: cost)
+            #expect(current.upperBound == 120)
+            #expect(current.count <= TranscriptWindow.capacity)
+            #expect(view.visibleMessageRange == current)
+
+            // Page earlier all the way to index 0
+            while current.lowerBound > 0 {
+                let previous = current
+                let result = try #require(viewport.pageEarlier(count: session.messages.count, cost: cost))
+                current = result.range
+                #expect(current.lowerBound < previous.lowerBound, "Earlier page moves lower bound towards 0")
+                #expect(current.upperBound < previous.upperBound, "Earlier page evicts opposite edge (upper bound)")
+                #expect(current.count <= TranscriptWindow.capacity, "Message count is strictly bounded")
+                #expect(current.contains(result.anchor), "Visible anchor preserved across paging")
+                #expect(viewport.readerOwnsViewport == true, "Paging claims viewport ownership for reader")
+                #expect(viewport.autoFollow == false, "Auto-follow is disabled when reader pages")
+            }
+            #expect(current.lowerBound == 0, "Reached the earliest message in the transcript")
+
+            // Now page later all the way to the end
+            while current.upperBound < session.messages.count {
+                let previous = current
+                let result = try #require(viewport.pageLater(count: session.messages.count, cost: cost))
+                current = result.range
+                #expect(current.upperBound > previous.upperBound, "Later page moves upper bound towards end")
+                #expect(current.lowerBound > previous.lowerBound, "Later page evicts opposite edge (lower bound)")
+                #expect(current.count <= TranscriptWindow.capacity, "Message count is strictly bounded")
+                #expect(current.contains(result.anchor), "Visible anchor preserved across paging")
+                #expect(viewport.readerOwnsViewport == true, "Viewport still owned by reader upon reaching final page")
+                #expect(viewport.autoFollow == false, "Loading final page does NOT re-enable auto-follow or snap to bottom")
+            }
+            #expect(current.upperBound == session.messages.count, "Reached the latest message")
+        }
     }
 }
