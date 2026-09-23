@@ -1907,7 +1907,7 @@
     },
     {
       "path": "apps/goat-macos/GOAT.xcodeproj/project.pbxproj",
-      "sha256": "f191e06fe39be3d53f2806ea15ad6d193a79a644d4f2b2aed0e871ce3daf70d6"
+      "sha256": "c46a0d9a2773fa6a6088c36b09c4b3aa6b81b327781b85abdf75ee787cd66ab8"
     },
     {
       "path": "scripts/distribution-notices.py",
@@ -1949,7 +1949,7 @@
   "outputs": [
     {
       "path": "apps/goat-macos/App/Resources/Licenses/THIRD-PARTY-NOTICES.txt",
-      "sha256": "88b2e6b19940507bdb00ee9d4c94f1e691dcf36709caba5fa3ba2953cf3657e6"
+      "sha256": "94cdac7454189b520c8cd5ca286cee8aee07ae9df21b079868e8aa6059317b7e"
     },
     {
       "path": "apps/goat-macos/App/Resources/Licenses/LICENSE.txt",
