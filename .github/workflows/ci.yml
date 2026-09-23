@@ -49,31 +49,71 @@ jobs:
       - name: Lint
         run: make lint
 
-  # App tests require the deployment OS as well as a compatible SDK.
-  build-test:
-    needs: changes
-    if: ${{ !cancelled() && needs.changes.outputs.app != 'false' }}
+  # Keep optimised tests and the non-testable production build independent.
+  verification:
+    needs: [changes, lint]
+    if: ${{ !cancelled() && needs.changes.outputs.app != 'false' && needs.lint.result == 'success' }}
     runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix:
+        phase: [packages, app-tests, release-build]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Show toolchain
+      - name: Check toolchain and identify cache
+        id: toolchain
         run: |
           python3 scripts/check-release-host.py
           xcodebuild -version
           swift --version
-      - name: Release verification
-        run: make verify CONFIG=Release SWIFT_FLAGS='-c release'
-      - name: Preserve failed app test results
-        if: failure()
+          identity=$( { sw_vers -buildVersion; uname -m; xcodebuild -version; swift --version; } | shasum -a 256 | cut -d ' ' -f 1)
+          echo "identity=$identity" >> "$GITHUB_OUTPUT"
+      # Cache dependencies only. Build products contain absolute paths and test homes;
+      # each phase still compiles and executes against the current checkout.
+      - name: Restore dependencies
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            apps/goat-macos/Modules/.build/repositories
+            apps/goat-macos/Modules/.build/checkouts
+            apps/goat-macos/.build/DerivedData/SourcePackages
+          key: swift-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.identity }}-${{ matrix.phase }}-${{ hashFiles('**/Package.resolved') }}
+      - name: Verify ${{ matrix.phase }}
+        env:
+          PHASE: ${{ matrix.phase }}
+        run: |
+          started=$SECONDS
+          trap 'echo "### $PHASE: $((SECONDS - started)) seconds (exit $?)" >> "$GITHUB_STEP_SUMMARY"' EXIT
+          case "$PHASE" in
+            packages) make test-package SWIFT_FLAGS='-c release' ;;
+            app-tests) make test-app CONFIG=Release ;;
+            release-build) make build CONFIG=Release ;;
+            *) exit 1 ;;
+          esac
+      - name: Preserve app test diagnostics
+        if: ${{ always() && matrix.phase == 'app-tests' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: app-test-results
-          path: |
-            apps/goat-macos/.build/DerivedData/Logs/Test/*.xcresult
-            apps/goat-macos/.build/TestResults/**/*.xcresult
+          path: apps/goat-macos/.build/TestResults/
           include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 7
+
+  # Preserve the required check name and reject failed or unexpectedly skipped phases.
+  build-test:
+    needs: [changes, lint, verification]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Require complete verification
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: python3 scripts/ci-verification.py
 
   website:
     runs-on: ubuntu-latest
