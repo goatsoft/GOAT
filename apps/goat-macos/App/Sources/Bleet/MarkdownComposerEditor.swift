@@ -170,6 +170,10 @@ struct MarkdownComposerEditor: NSViewRepresentable {
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticSpellingCorrectionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
+        if #available(macOS 15.0, *) {
+            textView.writingToolsBehavior = .complete
+            textView.allowedWritingToolsResultOptions = [.plainText]
+        }
         textView.font = textFont
         textView.textColor = .labelColor
         textView.insertionPointColor = NSColor(tint)
