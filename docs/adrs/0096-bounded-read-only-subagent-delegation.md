@@ -13,17 +13,36 @@ investigation, repository searches, or documentation review, performing every in
 step directly in the parent conversation consumes substantial prompt budget, pollutes the chat
 transcript, and dilutes the model context with transient raw outputs.
 
-Unsloth's `--as-subagent` integration and native supervisor-subagent proposal (issue #10776)
-demonstrate the value of delegating bounded subtasks to local worker models. Key lessons include
-strict output size bounding, cooperative cancellation, hard timeouts, and read-only worker paths.
-GOAT adopts these conceptual patterns within its native Swift architecture while avoiding AGPL code
-and preserving repository invariants.
+### Unsloth Multi-Agent Orchestration Patterns
+Unsloth's `--as-subagent` integration and native supervisor-subagent proposal (issue unslothai/unsloth#10776)
+demonstrate the value of delegating bounded subtasks to local worker models. Key lessons include:
+1. **Supervisor and Subagent separation:** The primary coordinator focuses on high-level planning and user
+   interaction, while delegating narrow, bounded tasks (codebase searches, log analysis, batch review) to
+   specialized local subagent profiles.
+2. **Strict output bounding:** The supervisor never ingests the subagent's raw tool stream. Instead, the
+   child returns a compact, synthesized summary with citations.
+3. **Fail-closed timeouts and cooperative cancellation:** Delegated tasks must have hard wall-clock bounds
+   and respond to cancellation signals immediately.
+4. **Read-only execution path:** Unchecked subagent writes lead to state divergence and corruption. Bounded
+   read-only exploration must precede any write delegation.
 
-Furthermore, on macOS 26 and 27, Apple Intelligence provides system-level capabilities:
-1. Native Writing Tools in AppKit text editing, enabling zero-overhead prompt optimization and
-   rewording on the Apple Neural Engine without GPU VRAM impact.
-2. Lightweight on-device system models that can serve as auxiliary delegation targets alongside
-   the primary oMLX engine.
+GOAT adopts these conceptual patterns within its native Swift architecture while avoiding AGPL code and
+preserving all repository invariants.
+
+### Apple Intelligence and Siri as Local Subagents
+On macOS 26 and 27, Apple Intelligence introduces system-level foundation models and Siri updates that
+offer distinct architectural opportunities:
+1. **Zero-VRAM and Zero-Thrash Offloading:** Apple's on-device foundation models run on the Apple Neural
+   Engine (ANE) in system memory. Utilizing them for auxiliary tasks (such as prompt rewording, extraction,
+   or log summarization) consumes zero additional GPU memory from GOAT's primary oMLX coding engine.
+2. **Prompt Optimization and Rewording:** Prompts can be optimized and reworded at two distinct tiers:
+   - Direct in the composer: Native AppKit Apple Writing Tools integration (`NSWritingToolsCoordinator`)
+     for inline rewording, proofreading, and tone adjustment before submission.
+   - Programmatic task briefs: An automated prompt-refinement pass that converts ambiguous requests into
+     structured, bounded `SubagentTaskBrief` contracts with explicit search goals and output criteria.
+3. **Bidirectional Siri and App Intent Integration:**
+   - GOAT to Siri: Delegating system-level queries or lightweight summarization to on-device system models.
+   - Siri to GOAT: Exposing App Intents so Siri can delegate specialized coding and repository tasks to GOAT.
 
 ## Decision
 
@@ -37,6 +56,7 @@ Furthermore, on macOS 26 and 27, Apple Intelligence provides system-level capabi
   - `subagentsEnabled: Bool` (default true).
   - `subagentMaxRounds: Int` (default 5, ceiling 10).
   - `subagentTimeout: Int` (default 90 seconds, range 10..180 seconds).
+  - `subagentPreferredBackend: SubagentBackendID` (default .localEngine).
 
 ### 2. Single-Active-Turn Invariant and Child Execution Model
 - Preserves the Shepherd single-active-turn invariant (ADR-0006 and ADR-0023): the parent turn
@@ -58,7 +78,7 @@ public protocol SubagentBackend: Sendable {
     ) async throws -> SubagentResult
 }
 ```
-Two backends are defined:
+Two backends are established:
 - **Local Engine Backend (macOS 26+ baseline):** Targets the currently loaded model on the active
   oMLX or local engine endpoint. This eliminates model switching latency and allocates zero
   additional GPU memory on unified memory hardware. If an alternate model is requested, memory
@@ -68,11 +88,13 @@ Two backends are defined:
   Apple Neural Engine, keeping the primary GPU engine completely undisturbed.
 
 ### 4. Native Prompt Optimization via Apple Writing Tools
-- Enable Apple Writing Tools in the composer editor (`MarkdownComposerEditor.swift`) by setting
+- Enable Apple Writing Tools in the composer editor (`MarkdownComposerEditor.swift`) by configuring
   `writingToolsBehavior = .complete` and `allowedWritingToolsResultOptions = [.plainText]`
   on `ComposerTextView`.
 - This provides instant inline prompt rewording, proofreading, and optimization directly within
   the UI, running entirely on the Apple Neural Engine with zero network traffic or VRAM overhead.
+- In addition, task briefs passed to `subagent_delegate` can undergo optional on-device prompt
+  refinement to ensure child models receive concise, deterministic search constraints.
 
 ### 5. Permission Inheritance and Zero-Widening Read-Only Fence
 - The child subagent inherits the parent Pen workspace boundary and cannot access files outside it.
@@ -85,7 +107,8 @@ Two backends are defined:
 - **Unattended Fail-Closed Policy:** Any operation requiring interactive user approval is denied
   immediately with a structured diagnostic, as child subagents run without user interaction.
 - **The Herd Guarantee:** Subagents strictly adhere to GOAT's zero-telemetry invariant. No analytics,
-  no update checks, and no unsolicited network calls.
+  no update checks, and no unsolicited network calls. Apple Intelligence integrations must run
+  strictly on-device.
 
 ### 6. Dual-Layer Transcript Persistence and Bounded Results
 - **Parent Transcript:** Receives a compact, structured JSON receipt (capped at 16 KiB) containing:
@@ -113,7 +136,7 @@ Two backends are defined:
 
 - Bounded research tasks run without bloating the parent chat context or degrading prompt efficiency.
 - Preserves all architectural invariants: single active turn, Herd Guarantee, and strict permission boundaries.
-- Users gain immediate access to Apple Writing Tools in the composer on macOS 26 and 27.
+- Users gain access to Apple Writing Tools in the composer on macOS 26 and 27.
 - Establishes a verified read-only foundation before introducing write delegation in Stage 2.
 
 ## Alternatives Considered
@@ -123,3 +146,5 @@ Two backends are defined:
 - **Unrestricted child tool execution:** Allowing writes in subagents creates race conditions and
   unapproved workspace mutations; postponed to Stage 2 with explicit diff reviews and worktrees.
 - **Recursive subagent delegation:** Increases unpredictability and context explosion; explicitly forbidden.
+- **Direct Siri execution without backend abstraction:** Couplings to specific OS versions break macOS 26
+  compatibility; pluggable backends isolate platform dependencies cleanly.
