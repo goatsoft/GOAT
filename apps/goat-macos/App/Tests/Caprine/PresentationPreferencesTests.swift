@@ -7,6 +7,47 @@ import Testing
 @testable import GOAT
 @testable import Paddock
 
+private actor MockJSONWorker: JSONDocumentWorker {
+    var loadDelayNanoseconds: UInt64 = 0
+    var loadResult: JSONFileWorker.LoadResult = .loaded("{\"status\": \"ok\"}")
+    var validationErrorResult: String? = nil
+    var saveResult: String? = nil
+
+    func setLoadDelay(milliseconds: UInt64) {
+        loadDelayNanoseconds = milliseconds * 1_000_000
+    }
+
+    func setLoadResult(_ result: JSONFileWorker.LoadResult) {
+        loadResult = result
+    }
+
+    func setValidationError(_ error: String?) {
+        validationErrorResult = error
+    }
+
+    func load(_ url: URL) async -> JSONFileWorker.LoadResult {
+        if loadDelayNanoseconds > 0 {
+            try? await Task.sleep(nanoseconds: loadDelayNanoseconds)
+        }
+        return loadResult
+    }
+
+    func validationError(for text: String) async -> String? {
+        if let validationErrorResult { return validationErrorResult }
+        guard let data = text.data(using: .utf8) else { return "Not UTF-8" }
+        do {
+            _ = try JSONSerialization.jsonObject(with: data)
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    func save(_ data: Data, to url: URL) async -> String? {
+        saveResult
+    }
+}
+
 extension AppTests.Caprine {
     @Suite struct PresentationPreferencesTests {
 
@@ -58,8 +99,7 @@ extension AppTests.Caprine {
             #expect(preferences.permitsTheme("pasture"))
             preferences.setEnabled(true)
             #expect(!preferences.isEnabled)
-            #expect(preferences.unlock())
-            #expect(preferences.isEnabled)
+            #expect(preferences.unlock() && preferences.isEnabled)
             #expect(!preferences.unlock())
             preferences.setEnabled(false)
             let restored = PresentationPreferences(defaults: defaults)
@@ -188,6 +228,86 @@ extension AppTests.Caprine {
             state.alwaysOnTop = false
             try await Task.sleep(for: .milliseconds(150))
             #expect(window.level == .normal)
+        }
+    }
+
+    @Suite struct JSONEditorTests {
+
+        @Test @MainActor func delayedLoadFailureDisablesEditingAndPreventsValidationRace() async throws {
+            let worker = MockJSONWorker()
+            await worker.setLoadDelay(milliseconds: 100)
+            await worker.setLoadResult(.failed("Disk read timeout"))
+
+            let state = JSONEditorState()
+            let dummyURL = URL(fileURLWithPath: "/tmp/test.json")
+
+            let loadTask = Task { @MainActor in
+                await state.load(from: dummyURL, worker: worker)
+            }
+
+            // Immediately during load, state must be loading, and editor/save must be disabled
+            #expect(state.phase == .loading)
+            #expect(!state.phase.isEditable)
+            #expect(!state.phase.canSave)
+            #expect(!state.isDocumentReady)
+
+            // Triggering validation while load is pending must NOT overwrite .loading
+            await state.validate(worker: worker)
+            #expect(state.phase == .loading)
+            #expect(!state.phase.isEditable)
+            #expect(!state.phase.canSave)
+
+            // Wait for delayed load to complete
+            await loadTask.value
+
+            // Verify load failed state
+            #expect(state.phase == .loadFailed("Disk read timeout"))
+            #expect(!state.phase.isEditable)
+            #expect(!state.phase.canSave)
+            #expect(!state.isDocumentReady)
+
+            // Further validation attempts after failure must stay disabled and not overwrite phase
+            await state.validate(worker: worker)
+            #expect(state.phase == .loadFailed("Disk read timeout"))
+            #expect(!state.phase.isEditable)
+            #expect(!state.phase.canSave)
+        }
+
+        @Test @MainActor func successfulLoadDrivesValidationAndTracksGenerations() async throws {
+            let worker = MockJSONWorker()
+            await worker.setLoadResult(.loaded("{\"valid\": true}"))
+
+            let state = JSONEditorState()
+            let dummyURL = URL(fileURLWithPath: "/tmp/valid.json")
+
+            await state.load(from: dummyURL, worker: worker)
+
+            #expect(state.isDocumentReady)
+            #expect(state.text == "{\"valid\": true}")
+            #expect(state.phase == .valid)
+            #expect(state.phase.isEditable)
+            #expect(state.phase.canSave)
+
+            // User edits text to invalid JSON
+            state.text = "{\"valid\": true"
+            let validateTask = Task { @MainActor in
+                await state.validate(worker: worker)
+            }
+            await validateTask.value
+
+            #expect(state.phase.isEditable)
+            #expect(!state.phase.canSave)
+            if case .invalid = state.phase {
+                // Expected invalid JSON error
+            } else {
+                Issue.record("Expected phase to be .invalid, but got \(state.phase)")
+            }
+
+            // Restoring valid JSON enables Save
+            state.text = "{\"valid\": false}"
+            await state.validate(worker: worker)
+            #expect(state.phase == .valid)
+            #expect(state.phase.canSave)
         }
     }
 }
