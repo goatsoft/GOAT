@@ -37,6 +37,9 @@ struct NerdStatsView: View {
                 Label("Stats", systemImage: "waveform.path.ecg")
                     .font(.headline)
                 Spacer()
+                Text("\(session.messages.count) messages")
+                    .font(Caprine.Activity.font)
+                    .foregroundStyle(tokens.muted)
                 if session.isStreaming {
                     Text("Live")
                         .font(.caption2.weight(.medium))

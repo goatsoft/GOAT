@@ -21,6 +21,14 @@ struct InspectorView: View {
                 }
                 inspectorSection("Model") {
                     Text(modelName)
+                    if let ref = model.models.first(where: { $0.id == model.resolvedModelID(for: session) }) {
+                        VStack(alignment: .leading, spacing: Caprine.Activity.compactSpacing) {
+                            capabilityRow("Tools", claim: ref.capabilities.tools)
+                            capabilityRow("Vision", claim: ref.capabilities.vision)
+                            capabilityRow("Reasoning", claim: ref.capabilities.reasoning)
+                        }
+                        .font(Caprine.Activity.font)
+                    }
                     LabeledContent("Effort") {
                         HStack(spacing: 6) {
                             if model.presentation.isEnabled { GoatieView(pose: session.effort.goatie, size: 18) }
@@ -28,11 +36,16 @@ struct InspectorView: View {
                                 session.effort.presentationColor(in: model.theme))
                         }
                     }
-                    LabeledContent("Messages", value: "\(session.messages.count)")
                 }
                 inspectorSection("Subagent") {
                     SubagentModelMenu(
-                        model: model, parentModelID: model.resolvedModelID(for: session), showsSelection: true)
+                        model: model, parentModelID: model.resolvedModelID(for: session), showsSelection: true
+                    )
+                    .menuStyle(.borderlessButton)
+                    .buttonStyle(.plain)
+                    .tint(model.theme.tokens.muted)
+                    .foregroundStyle(model.theme.tokens.muted)
+                    .fixedSize(horizontal: false, vertical: true)
                     if model.selectedSubagentModelID != nil {
                         DisclosureGroup("Options") {
                             SubagentBudgetControls(model: model)
@@ -78,6 +91,19 @@ struct InspectorView: View {
                 .padding(12)
                 .background(model.theme.tokens.surface.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
         }
+    }
+
+    private func capabilityRow(_ title: String, claim: CapabilityClaim) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Text(
+                claim.isConflict
+                    ? "Conflicting reports"
+                    : claim.support == .supported
+                        ? "Supported" : claim.support == .unsupported ? "Unsupported" : "Unknown")
+        }
+        .foregroundStyle(model.theme.tokens.muted)
     }
 
     private var connectedMCPServers: [(name: String, toolCount: Int)] {

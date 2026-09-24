@@ -18,7 +18,9 @@ The Engine section sits above Model and groups the active engine identity with i
 memory use and ceiling, request counts, and selected-model load state. Runtime values refresh
 only while the inspector is visible and the app is active.
 
-The Model section shows the parent model, followed by Effort and Messages. A separate Subagent
+The Model section shows the parent model, reported Tools, Vision and Reasoning capabilities,
+and Effort. Unknown or conflicting capability reports remain explicit. The message count sits
+in the Stats header. A separate Subagent
 section shows the selected worker (or None) in its dropdown. The Subagent menu contains
 only None and the worker models. None clears this engine's worker selection and stops delegation
 without disabling the Subagents extension. Advanced options stay in Settings → Extensions →
