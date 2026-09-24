@@ -41,11 +41,7 @@ struct InspectorView: View {
                     SubagentModelMenu(
                         model: model, parentModelID: model.resolvedModelID(for: session), showsSelection: true
                     )
-                    .menuStyle(.borderlessButton)
-                    .buttonStyle(.plain)
-                    .tint(model.theme.tokens.muted)
-                    .foregroundStyle(model.theme.tokens.muted)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .caprineSecondaryMenu(color: model.theme.tokens.muted)
                     if model.selectedSubagentModelID != nil {
                         DisclosureGroup("Options") {
                             SubagentBudgetControls(model: model)

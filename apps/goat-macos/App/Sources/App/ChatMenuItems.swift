@@ -199,30 +199,38 @@ struct SubagentBudgetControls: View {
         let settings = model.memory.builtInSettings
         let budget = settings.subagentConfiguration.tokenBudget
         VStack(alignment: .leading, spacing: Caprine.Activity.spacing) {
-            Picker(
-                "Budget",
-                selection: Binding(
-                    get: { settings.subagentAutomaticBudget },
-                    set: { if !locked { settings.setSubagentAutomaticBudget($0) } })
-            ) {
-                Text("Auto").tag(true)
-                Text("Custom").tag(false)
+            HStack(spacing: Caprine.Activity.spacing) {
+                Text("Budget")
+                Menu(settings.subagentAutomaticBudget ? "Auto" : "Custom") {
+                    Toggle(
+                        "Auto",
+                        isOn: Binding(
+                            get: { settings.subagentAutomaticBudget },
+                            set: { if !locked, $0 { settings.setSubagentAutomaticBudget(true) } }))
+                    Toggle(
+                        "Custom",
+                        isOn: Binding(
+                            get: { !settings.subagentAutomaticBudget },
+                            set: { if !locked, $0 { settings.setSubagentAutomaticBudget(false) } }))
+                }
+                .caprineSecondaryMenu(color: model.theme.tokens.muted)
+                .accessibilityLabel("Subagent budget")
             }
             if !settings.subagentAutomaticBudget {
-                Stepper(
+                CaprineCompactStepper(
                     "Processing tokens: \(settings.subagentCustomTokenBudget.formatted())",
                     value: Binding(
                         get: { settings.subagentCustomTokenBudget },
                         set: { if !locked { settings.setSubagentCustomTokenBudget($0) } }),
                     in: 32_768...131_072, step: 8_192)
             }
-            Stepper(
+            CaprineCompactStepper(
                 "Maximum rounds: \(settings.subagentMaxRounds)",
                 value: Binding(
                     get: { settings.subagentMaxRounds },
                     set: { if !locked { settings.setSubagentMaxRounds($0) } }),
                 in: 1...10)
-            Stepper(
+            CaprineCompactStepper(
                 "Time limit: \(settings.subagentTimeoutSeconds)s",
                 value: Binding(
                     get: { settings.subagentTimeoutSeconds },
