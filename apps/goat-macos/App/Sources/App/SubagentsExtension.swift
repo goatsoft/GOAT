@@ -62,7 +62,7 @@ public actor SubagentsProvider: ModelToolProvider, TurnObserver {
 
     private var activeWorker: SubagentWorker?
     private var activeLease: SubagentCapabilityLease?
-    private var isQuarantined = false
+    private let quarantine: SubagentTransportQuarantine
 
     public init(
         turnID: UUID,
@@ -73,7 +73,8 @@ public actor SubagentsProvider: ModelToolProvider, TurnObserver {
         modelID: String? = nil,
         configuration: SubagentConfiguration,
         database: ChatDatabase? = nil,
-        accounting: SubagentTurnTokenAccounting = SubagentTurnTokenAccounting()
+        accounting: SubagentTurnTokenAccounting = SubagentTurnTokenAccounting(),
+        quarantine: SubagentTransportQuarantine = SubagentTransportQuarantine()
     ) {
         self.turnID = turnID
         self.fileTools = fileTools
@@ -84,12 +85,14 @@ public actor SubagentsProvider: ModelToolProvider, TurnObserver {
         self.configuration = configuration
         self.database = database
         self.accounting = accounting
+        self.quarantine = quarantine
     }
 
     public func tools(for context: ExtensionContext) async throws -> [ToolSchema] {
         guard context.turnID == turnID else { return [] }
         guard configuration.enabled else { return [] }
-        guard !isQuarantined else { return [] }
+        let quarantined = await quarantine.isQuarantined
+        guard !quarantined else { return [] }
         guard accounting.canDelegate else { return [] }
         return [Self.toolSchema]
     }
@@ -100,7 +103,8 @@ public actor SubagentsProvider: ModelToolProvider, TurnObserver {
         guard configuration.enabled else {
             return ToolResult(content: "Subagents are disabled in settings.", isError: true)
         }
-        guard !isQuarantined else {
+        let quarantined = await quarantine.isQuarantined
+        guard !quarantined else {
             return ToolResult(content: "Subagent engine reservation is quarantined.", isError: true)
         }
         guard accounting.delegationsCount < SubagentLimits.maxDelegationsPerTurn else {
@@ -152,7 +156,8 @@ public actor SubagentsProvider: ModelToolProvider, TurnObserver {
             timeoutSeconds: configuration.timeoutSeconds,
             database: database,
             turnTokenAccounting: accounting,
-            lease: lease
+            lease: lease,
+            quarantine: quarantine
         )
 
         let worker = SubagentWorker(task: taskBrief, context: executionContext)
@@ -165,7 +170,7 @@ public actor SubagentsProvider: ModelToolProvider, TurnObserver {
         let backend: any SubagentBackend
         switch configuration.preferredBackend {
         case .localEngine:
-            backend = LocalEngineBackend()
+            backend = LocalEngineBackend(worker: worker)
         case .systemLanguageModel:
             backend = SystemLanguageModelBackend()
         }
@@ -202,18 +207,11 @@ public actor SubagentsProvider: ModelToolProvider, TurnObserver {
 
     public func turnDidEnd(_ context: ExtensionContext, outcome: TurnOutcome) async throws {
         guard context.turnID == turnID else { return }
-
-        if let lease = activeLease {
-            lease.revoke()
-        }
-
-        if activeWorker != nil {
-            let shutdownTask = Task {
-                try? await Task.sleep(for: .seconds(SubagentLimits.cancellationGracePeriodSeconds))
-            }
+        activeLease?.revoke()
+        if let worker = activeWorker {
+            await worker.cancel()
             activeWorker = nil
-            activeLease = nil
-            shutdownTask.cancel()
         }
+        activeLease = nil
     }
 }

@@ -160,11 +160,13 @@ public actor SubagentCapabilityFence {
         for citation in claimed {
             // Strictly check for positive, ordered line bounds
             guard citation.startLine >= 1, citation.endLine >= citation.startLine else {
+                let detailMsg =
+                    "Invalid line range \(citation.startLine)-\(citation.endLine) for '\(citation.path)'."
                 unresolved.append(
                     SubagentUnresolvedItem(
                         path: citation.path,
                         reason: "unverifiedCitation",
-                        detail: "Invalid or inverted line range \(citation.startLine)-\(citation.endLine) for '\(citation.path)'."
+                        detail: detailMsg
                     )
                 )
                 continue
@@ -187,7 +189,8 @@ public actor SubagentCapabilityFence {
             for span in spans {
                 if citation.startLine >= span.startLine && citation.endLine <= span.endLine {
                     let relativeStart = citation.startLine - span.startLine
-                    let (relativeCount, overflowCount) = (citation.endLine - citation.startLine).addingReportingOverflow(1)
+                    let diff = citation.endLine - citation.startLine
+                    let (relativeCount, overflowCount) = diff.addingReportingOverflow(1)
                     if !overflowCount && relativeStart >= 0 && relativeCount > 0 {
                         let (endIndex, overflowEnd) = relativeStart.addingReportingOverflow(relativeCount)
                         if !overflowEnd && endIndex <= span.lines.count {

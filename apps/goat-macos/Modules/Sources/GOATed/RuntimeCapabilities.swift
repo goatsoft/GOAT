@@ -77,6 +77,10 @@ extension ExtensionRuntime {
         for entry in Array(skillProviders.values) where entry.token.scope == scope { try? unregister(entry.token) }
     }
 
+    public func isRegistered(_ token: Registration) -> Bool {
+        entries[token.id] != nil && !quarantined.contains(token.extensionID)
+    }
+
     public func activeExtensions() -> [ExtensionManifest] {
         entries.values.sorted { $0.manifest.id.rawValue < $1.manifest.id.rawValue }.map(\.manifest)
     }

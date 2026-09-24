@@ -788,7 +788,9 @@ private struct SubagentTranscriptAffordance: View {
                     Text("Subagent Run Details")
                         .font(Caprine.Activity.badgeFont)
                     if let record {
-                        Text("(\(record.status) \u{00b7} \(record.roundsExecuted) rounds \u{00b7} \(record.totalTokens) tokens)")
+                        let statsLabel =
+                            "(\(record.status) \u{00b7} \(record.roundsExecuted) rounds \u{00b7} \(record.totalTokens) tokens)"
+                        Text(statsLabel)
                             .font(Caprine.Activity.badgeFont)
                             .foregroundStyle(model.theme.tokens.muted)
                     }

@@ -232,19 +232,23 @@ final class AppToolRouter: ShepherdToolSource {
                         let isLoopback = isEngineLoopback()
                         let subagentEngine = isLoopback ? engineProvider() : nil
                         let authority = SubagentTurnAuthority { [weak self] in
-                            try await MainActor.run {
-                                guard let self else { throw CapabilityError.revoked }
-                                guard self.memory.builtInSettings.subagentsEnabled else {
-                                    throw CapabilityError.unauthorized
-                                }
-                                guard let session = self.subagentSession, session.turnID == turnID else {
-                                    throw CapabilityError.revoked
-                                }
-                                guard self.workspaceForProject(projectID) == workspace else {
-                                    throw CapabilityError.revoked
-                                }
-                                return files
+                            guard let self else { throw CapabilityError.revoked }
+                            let (sessionTurnID, sessionReg, isEnabled, currentWorkspace) = await MainActor.run {
+                                let session = self.subagentSession
+                                return (
+                                    session?.turnID, session?.registration,
+                                    self.memory.builtInSettings.subagentsEnabled, self.workspaceForProject(projectID)
+                                )
                             }
+                            guard isEnabled else { throw CapabilityError.unauthorized }
+                            guard let sessionTurnID, sessionTurnID == turnID, let sessionReg else {
+                                throw CapabilityError.revoked
+                            }
+                            guard currentWorkspace == workspace else { throw CapabilityError.revoked }
+                            guard await self.extensions.isRegistered(sessionReg) else {
+                                throw CapabilityError.revoked
+                            }
+                            return files
                         }
                         let subagentProvider = SubagentsProvider(
                             turnID: turnID,
@@ -296,6 +300,11 @@ final class AppToolRouter: ShepherdToolSource {
     }
 
     func turnDidEnd(turnID: UUID, cancelled: Bool) async {
+        let outcome: TurnOutcome = cancelled ? .cancelled : (turnPersisted ? .completed : .failed)
+        let runtime = extensions
+        // Cleanup has its own bounded lifetime and must run even when the generation task was cancelled.
+        await Task.detached { await runtime.endTurn(turnID, outcome: outcome) }.value
+
         if let session = penFileSession, session.turnID == turnID {
             penFileSession = nil
             await session.provider.stopCommands()
@@ -305,10 +314,6 @@ final class AppToolRouter: ShepherdToolSource {
             subagentSession = nil
             try? await extensions.unregister(session.registration)
         }
-        let outcome: TurnOutcome = cancelled ? .cancelled : (turnPersisted ? .completed : .failed)
-        let runtime = extensions
-        // Cleanup has its own bounded lifetime and must run even when the generation task was cancelled.
-        await Task.detached { await runtime.endTurn(turnID, outcome: outcome) }.value
         if let snapshot = turnSnapshot { skillToolSessions.removeValue(forKey: snapshot.context.view.chatID) }
         turnSnapshot = nil
         turnMemoryConfiguration = nil

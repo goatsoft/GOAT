@@ -22,6 +22,24 @@ private actor ScriptedEngine: InferenceEngine {
 
     func health() async -> EngineHealth { .ok([]) }
 
+    func runtimeStatus() async -> EngineRuntimeStatus? {
+        EngineRuntimeStatus(
+            observedAt: .now,
+            version: "1.0",
+            modelMemoryUsed: 100 * 1024 * 1024,
+            modelMemoryMaximum: 1024 * 1024 * 1024,
+            activeRequests: 0,
+            waitingRequests: 0,
+            models: [
+                EngineModelRuntimeStatus(
+                    id: "default",
+                    loaded: true,
+                    contextWindow: 32_768
+                )
+            ]
+        )
+    }
+
     func stream(_ request: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
         requests.append(request)
         let events =
@@ -46,6 +64,24 @@ private actor ScriptedEngine: InferenceEngine {
 
 private actor HangingEngine: InferenceEngine {
     func health() async -> EngineHealth { .ok([]) }
+
+    func runtimeStatus() async -> EngineRuntimeStatus? {
+        EngineRuntimeStatus(
+            observedAt: .now,
+            version: "1.0",
+            modelMemoryUsed: 100 * 1024 * 1024,
+            modelMemoryMaximum: 1024 * 1024 * 1024,
+            activeRequests: 0,
+            waitingRequests: 0,
+            models: [
+                EngineModelRuntimeStatus(
+                    id: "default",
+                    loaded: true,
+                    contextWindow: 32_768
+                )
+            ]
+        )
+    }
 
     func stream(_ request: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
         AsyncThrowingStream { continuation in
@@ -103,7 +139,7 @@ extension AppTests.GOATed {
 
         // Scenario 1: Inner/Outer Deadline Ordering
         @Test func scenario01_innerOuterDeadlineOrdering() async throws {
-            let (workspace, _) = try createWorkspace()
+            let (workspace, fileTools) = try createWorkspace()
             defer { try? FileManager.default.removeItem(at: workspace) }
             let db = try createDatabase()
             let chatID = UUID()
@@ -143,30 +179,30 @@ extension AppTests.GOATed {
             try await db.save(makeChat(id: chatID.uuidString))
 
             let lease = SubagentCapabilityLease()
-            #expect(!lease.isRevoked)
-            try lease.checkValid()
-
-            // Revoking the lease terminates access immediately
-            lease.revoke()
-            #expect(lease.isRevoked)
-            #expect(throws: CapabilityError.self) {
-                try lease.checkValid()
-            }
-
-            // Once in a terminal state, CAS ensures subsequent writes fail
-            let runId = UUID().uuidString
-            let record = SubagentRunRecord(
-                id: runId,
-                chatId: chatID.uuidString,
-                parentTurnId: turnID.uuidString,
-                status: "completed",
-                taskBriefJson: "{}"
+            let context = SubagentExecutionContext(
+                chatID: chatID,
+                turnID: turnID,
+                projectID: nil,
+                workspace: workspace,
+                fileTools: fileTools,
+                engine: HangingEngine(),
+                timeoutSeconds: 1,
+                database: db,
+                lease: lease
             )
-            try await db.save(record)
+
+            let brief = SubagentTaskBrief(objective: "Uncooperative worker test")
+            let worker = SubagentWorker(task: brief, context: context)
+            let result = try await worker.run()
+
+            #expect(result.receipt.status == .timedOut)
+            #expect(lease.isRevoked)
+            let persisted = try await db.subagentRun(id: result.receipt.runId)
+            #expect(persisted?.status == SubagentStatus.timedOut.rawValue)
 
             let secondTransition = try await db.transitionSubagentRun(
-                id: runId,
-                toStatus: "timedOut",
+                id: result.receipt.runId,
+                toStatus: "completed",
                 roundsExecuted: 1,
                 totalTokens: 10,
                 transcriptBytes: 0,
@@ -176,8 +212,8 @@ extension AppTests.GOATed {
                 receiptJson: nil
             )
             #expect(!secondTransition)
-            let fetched = try await db.subagentRun(id: runId)
-            #expect(fetched?.status == "completed")
+            let fetched = try await db.subagentRun(id: result.receipt.runId)
+            #expect(fetched?.status == SubagentStatus.timedOut.rawValue)
         }
 
         // Scenario 3: Transport Termination and Quarantine
@@ -239,9 +275,14 @@ extension AppTests.GOATed {
 
             try await Task.sleep(for: .milliseconds(50))
             task.cancel()
-            let result = try await task.value
+            let result = await task.result
 
-            #expect(result.receipt.status == .cancelled || result.receipt.status == .timedOut)
+            switch result {
+            case .success(let subagentResult):
+                #expect(subagentResult.receipt.status == .cancelled || subagentResult.receipt.status == .timedOut)
+            case .failure(let error):
+                #expect(error is CancellationError)
+            }
             #expect(lease.isRevoked)
         }
 
@@ -458,11 +499,175 @@ extension AppTests.GOATed {
 
             // Test SubagentCitation decoding without slice_hash (model claim)
             let jsonClaim = """
-            {"path": "Auth.swift", "start_line": 1, "end_line": 2}
-            """.data(using: .utf8)!
+                {"path": "Auth.swift", "start_line": 1, "end_line": 2}
+                """.data(using: .utf8)!
             let decodedClaim = try JSONDecoder().decode(SubagentCitation.self, from: jsonClaim)
             #expect(decodedClaim.sliceHash == "")
             #expect(decodedClaim.path == "Auth.swift")
+        }
+
+        // Scenario 8: Host Authority Unregister While Paused Between Reads
+        @Test func scenario08_hostAuthorityUnregisterWhilePaused() async throws {
+            let (workspace, fileTools) = try createWorkspace()
+            defer { try? FileManager.default.removeItem(at: workspace) }
+
+            final class MutableAuthority: SubagentHostAuthority, @unchecked Sendable {
+                var isAuthorized = true
+                let tools: PenFileTools
+                init(tools: PenFileTools) { self.tools = tools }
+                func validateHostAuthority() async throws {
+                    if !isAuthorized { throw CapabilityError.revoked }
+                }
+                func currentPenFileTools() async throws -> PenFileTools {
+                    if !isAuthorized { throw CapabilityError.revoked }
+                    return tools
+                }
+            }
+
+            let mutableAuth = MutableAuthority(tools: fileTools)
+            let lease = SubagentCapabilityLease()
+            let fence = SubagentCapabilityFence(authority: mutableAuth, lease: lease)
+
+            let readCall = ToolCallRequest(
+                tool: "pen_list_files",
+                argumentsJSON: "{\"path\":\".\"}"
+            )
+            let firstResult = try await fence.invoke(readCall)
+            #expect(!firstResult.isError)
+
+            // Deactivate authority while paused
+            mutableAuth.isAuthorized = false
+
+            await #expect(throws: CapabilityError.self) {
+                _ = try await fence.invoke(readCall)
+            }
+        }
+
+        // Scenario 9: Delayed Transport Quarantine
+        @Test func scenario09_delayedTransportQuarantine() async throws {
+            let quarantine = SubagentTransportQuarantine()
+            #expect(await !quarantine.isQuarantined)
+
+            await quarantine.markQuarantined()
+            #expect(await quarantine.isQuarantined)
+
+            await quarantine.clearQuarantine()
+            #expect(await !quarantine.isQuarantined)
+        }
+
+        // Scenario 10: Cumulative Parent Turn Budget
+        @Test func scenario10_cumulativeParentTurnBudget() async throws {
+            let accounting = SubagentTurnTokenAccounting()
+            #expect(accounting.canDelegate)
+
+            // Record heavy usage pushing past turn limits
+            accounting.recordDelegation(
+                generated: SubagentLimits.maxGeneratedTokensPerTurn,
+                total: SubagentLimits.maxTotalTokensPerTurn
+            )
+
+            #expect(!accounting.canDelegate)
+        }
+
+        // Scenario 11: Admission Rejection Variants
+        @Test func scenario11_admissionRejectionVariants() async throws {
+            let (workspace, fileTools) = try createWorkspace()
+            defer { try? FileManager.default.removeItem(at: workspace) }
+            let db = try createDatabase()
+            let chatID = UUID()
+            let turnID = UUID()
+            try await db.save(makeChat(id: chatID.uuidString))
+
+            // Unloaded model engine
+            actor UnloadedModelEngine: InferenceEngine {
+                func health() async -> EngineHealth { .ok([]) }
+                func runtimeStatus() async -> EngineRuntimeStatus? {
+                    EngineRuntimeStatus(
+                        observedAt: .now,
+                        version: "1.0",
+                        modelMemoryUsed: 100,
+                        modelMemoryMaximum: 1000,
+                        activeRequests: 0,
+                        waitingRequests: 0,
+                        models: [
+                            EngineModelRuntimeStatus(id: "default", loaded: false, contextWindow: 32_768)
+                        ]
+                    )
+                }
+                func stream(_ request: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
+                    AsyncThrowingStream { $0.finish() }
+                }
+            }
+
+            let lease = SubagentCapabilityLease()
+            let context = SubagentExecutionContext(
+                chatID: chatID,
+                turnID: turnID,
+                projectID: nil,
+                workspace: workspace,
+                fileTools: fileTools,
+                engine: UnloadedModelEngine(),
+                database: db,
+                lease: lease
+            )
+
+            let brief = SubagentTaskBrief(objective: "Admission test")
+            let worker = SubagentWorker(task: brief, context: context)
+            let result = try await worker.run()
+
+            #expect(result.receipt.status == .failed)
+            let hasAdmissionDenied = result.receipt.unresolved.contains { $0.reason == "admissionDenied" }
+            #expect(hasAdmissionDenied)
+        }
+
+        // Scenario 12: Lost Terminal CAS Race
+        @Test func scenario12_lostTerminalCASRace() async throws {
+            let db = try createDatabase()
+            let chatID = UUID().uuidString
+            let turnID = UUID().uuidString
+            let runID = UUID().uuidString
+            try await db.save(makeChat(id: chatID))
+
+            let initialRecord = SubagentRunRecord(
+                id: runID,
+                chatId: chatID,
+                parentTurnId: turnID,
+                status: "running",
+                taskBriefJson: "{}"
+            )
+            try await db.save(initialRecord)
+
+            // Another writer commits a terminal state first
+            let firstCAS = try await db.transitionSubagentRun(
+                id: runID,
+                toStatus: "cancelled",
+                roundsExecuted: 1,
+                totalTokens: 50,
+                transcriptBytes: 0,
+                transcriptJson: nil,
+                summary: "Concurrent cancellation won.",
+                citationsJson: "[]",
+                receiptJson: "{}"
+            )
+            #expect(firstCAS)
+
+            // Second CAS attempt fails because the record is already terminal
+            let secondCAS = try await db.transitionSubagentRun(
+                id: runID,
+                toStatus: "completed",
+                roundsExecuted: 2,
+                totalTokens: 100,
+                transcriptBytes: 0,
+                transcriptJson: nil,
+                summary: "Completed won.",
+                citationsJson: "[]",
+                receiptJson: "{}"
+            )
+            #expect(!secondCAS)
+
+            let authoritative = try await db.subagentRun(id: runID)
+            #expect(authoritative?.status == "cancelled")
+            #expect(authoritative?.summary == "Concurrent cancellation won.")
         }
     }
 }

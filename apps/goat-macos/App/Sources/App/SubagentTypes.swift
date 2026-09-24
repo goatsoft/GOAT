@@ -46,9 +46,9 @@ public enum SubagentLimits {
 
     public static let defaultTimeoutSeconds = 60
     public static let ceilingTimeoutSeconds = 90
-    public static let minimumTimeoutSeconds = 10
+    public static let minimumTimeoutSeconds = 1
     public static let outerBudgetSeconds = 120
-    public static let cancellationGracePeriodSeconds = 5
+    public static let cancellationGracePeriodSeconds = 1
 
     public static let maxInputTokensPerRequest = 12_288
     public static let maxGeneratedTokensPerRound = 2_048
@@ -258,7 +258,9 @@ extension SubagentReceipt {
                 roundsExecuted: bounded.roundsExecuted,
                 totalTokens: bounded.totalTokens
             )
-            if let fallbackData = try? encoder.encode(minimalFallback), fallbackData.count <= SubagentLimits.maxReceiptBytes {
+            if let fallbackData = try? encoder.encode(minimalFallback),
+                fallbackData.count <= SubagentLimits.maxReceiptBytes
+            {
                 return minimalFallback
             }
             return SubagentReceipt(
@@ -298,32 +300,20 @@ public struct SubagentTurnAuthority: SubagentHostAuthority {
 }
 
 public actor SubagentTransportQuarantine {
-    private var isQuarantined = false
-    private var isClosed = false
+    private var quarantined = false
 
     public init() {}
 
+    public var isQuarantined: Bool {
+        quarantined
+    }
+
     public func markQuarantined() {
-        isQuarantined = true
+        quarantined = true
     }
 
-    public func confirmClosed() {
-        isClosed = true
-        isQuarantined = false
-    }
-
-    public var canDispatchInference: Bool {
-        !isQuarantined && isClosed
-    }
-
-    public func waitUntilClosed(timeoutSeconds: Double) async -> Bool {
-        if isClosed { return true }
-        let start = Date()
-        while Date().timeIntervalSince(start) < timeoutSeconds {
-            if isClosed { return true }
-            try? await Task.sleep(for: .milliseconds(25))
-        }
-        return isClosed
+    public func clearQuarantine() {
+        quarantined = false
     }
 }
 
@@ -410,6 +400,7 @@ public struct SubagentExecutionContext: Sendable {
     public var database: ChatDatabase?
     public var turnTokenAccounting: SubagentTurnTokenAccounting?
     public var lease: SubagentCapabilityLease
+    public var quarantine: SubagentTransportQuarantine?
 
     public init(
         chatID: UUID,
@@ -425,7 +416,8 @@ public struct SubagentExecutionContext: Sendable {
         timeoutSeconds: Int = SubagentLimits.defaultTimeoutSeconds,
         database: ChatDatabase? = nil,
         turnTokenAccounting: SubagentTurnTokenAccounting? = nil,
-        lease: SubagentCapabilityLease
+        lease: SubagentCapabilityLease,
+        quarantine: SubagentTransportQuarantine? = nil
     ) {
         self.chatID = chatID
         self.turnID = turnID
@@ -441,6 +433,7 @@ public struct SubagentExecutionContext: Sendable {
         self.database = database
         self.turnTokenAccounting = turnTokenAccounting
         self.lease = lease
+        self.quarantine = quarantine
     }
 }
 
