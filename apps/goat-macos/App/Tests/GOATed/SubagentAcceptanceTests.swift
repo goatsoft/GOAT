@@ -1884,5 +1884,117 @@ extension AppTests.GOATed {
             let jsonObject = try? JSONSerialization.jsonObject(with: data)
             #expect(jsonObject != nil, "Serialized transcript must be valid JSON")
         }
+
+        // Transport closure handle cancellation-before-registration returns promptly without hanging
+        @Test func generationTransportClosureHandle_alreadyCancelledReturnsPromptly() async throws {
+            let handle = GenerationTransportClosureHandle()
+
+            let task = Task {
+                await Task.yield()
+                return await handle.waitForClosure(timeoutSeconds: 5)
+            }
+            task.cancel()
+
+            let start = ContinuousClock.now
+            let result = await task.value
+            let elapsed = ContinuousClock.now - start
+
+            #expect(result == false)
+            #expect(elapsed < .seconds(1))
+        }
+
+        // Transport closure handle cancellation while waiting returns promptly without hanging
+        @Test func generationTransportClosureHandle_cancelledDuringWaitReturnsPromptly() async throws {
+            let handle = GenerationTransportClosureHandle()
+
+            let task = Task {
+                await handle.waitForClosure(timeoutSeconds: 5)
+            }
+
+            try await Task.sleep(for: .milliseconds(50))
+            task.cancel()
+
+            let start = ContinuousClock.now
+            let result = await task.value
+            let elapsed = ContinuousClock.now - start
+
+            #expect(result == false)
+            #expect(elapsed < .seconds(1))
+        }
+
+        // Test a full buffer where the overflowing event is .done through the worker
+        @Test func streamBuffer_overflowOnDoneFailsRatherThanReturningCompletedWithDroppedOutput() async throws {
+            let (workspace, fileTools) = try createWorkspace()
+            defer { try? FileManager.default.removeItem(at: workspace) }
+            let db = try createDatabase()
+            let chatID = UUID()
+            let turnID = UUID()
+            try await db.save(makeChat(id: chatID.uuidString))
+
+            actor FullBufferDoneEngine: InferenceEngine {
+                func health() async -> EngineHealth { .ok([]) }
+                func runtimeStatus() async -> EngineRuntimeStatus? {
+                    EngineRuntimeStatus(
+                        observedAt: .now,
+                        version: "1.0",
+                        modelMemoryUsed: 100 * 1024 * 1024,
+                        modelMemoryMaximum: 16 * 1024 * 1024 * 1024,
+                        activeRequests: 0,
+                        waitingRequests: 0,
+                        models: [
+                            EngineModelRuntimeStatus(id: "qwen2.5-7b-instruct", loaded: true, contextWindow: 32_768)
+                        ]
+                    )
+                }
+
+                func stream(_ request: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
+                    let (stream, continuation) = AsyncThrowingStream<GenerationEvent, Error>.makeStream(
+                        bufferingPolicy: .bufferingNewest(32)
+                    )
+                    // Enqueue 32 token events (filling SubagentLimits.streamBufferCapacity = 32),
+                    // then yield .done with stats. Under bufferingNewest(32), yielding .done drops
+                    // the oldest token and queues .done. The worker must fail with streamBufferOverflow
+                    // rather than returning completed with dropped output.
+                    for i in 1...32 {
+                        continuation.yield(.token("Token_\(i) "))
+                    }
+                    let stats = GenStats(ttft: nil, tokens: 32, duration: 0.05)
+                    switch continuation.yield(.done(stats)) {
+                    case .enqueued:
+                        continuation.finish()
+                    case .dropped:
+                        continuation.finish(throwing: EngineError.streamBufferOverflow)
+                    case .terminated:
+                        break
+                    @unknown default:
+                        break
+                    }
+                    return stream
+                }
+            }
+
+            let engine = FullBufferDoneEngine()
+            let context = SubagentExecutionContext(
+                chatID: chatID,
+                turnID: turnID,
+                projectID: nil,
+                workspace: workspace,
+                fileTools: fileTools,
+                engine: engine,
+                database: db,
+                lease: SubagentCapabilityLease()
+            )
+
+            let worker = SubagentWorker(
+                task: SubagentTaskBrief(objective: "Test buffer overflow on done"),
+                context: context
+            )
+
+            let result = try await worker.run()
+
+            // Must fail with streamBufferOverflow rather than returning .completed
+            #expect(result.receipt.status == .failed)
+            #expect(result.receipt.unresolved.contains { $0.reason == "streamBufferOverflow" })
+        }
     }
 }

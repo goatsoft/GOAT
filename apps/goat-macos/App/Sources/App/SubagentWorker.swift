@@ -30,6 +30,33 @@ private final class QueuedByteTracker: @unchecked Sendable {
     }
 }
 
+final class StreamOverflowState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var overflowError: Error?
+
+    func recordOverflow(_ error: Error) {
+        lock.lock()
+        defer { lock.unlock() }
+        if overflowError == nil {
+            overflowError = error
+        }
+    }
+
+    func checkOverflow() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        if let error = overflowError {
+            throw error
+        }
+    }
+
+    var hasOverflow: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return overflowError != nil
+    }
+}
+
 #if canImport(FoundationModels)
 import FoundationModels
 #endif
@@ -44,6 +71,16 @@ enum SubagentWorkerError: LocalizedError {
                 "Subagent stream buffer capacity exceeded: producer generated events faster than consumer could process."
         }
     }
+}
+
+private func isStreamBufferOverflow(_ error: Error) -> Bool {
+    if case .streamBufferOverflow = error as? SubagentWorkerError {
+        return true
+    }
+    if case .streamBufferOverflow = error as? EngineError {
+        return true
+    }
+    return false
 }
 
 actor WorkerCompletionBridge {
@@ -208,7 +245,7 @@ public actor SubagentWorker {
                         totalTokens: currentTotalTokens,
                         transcriptJSON: encodeTranscript(currentTranscript)
                     )
-                } else if case .streamBufferOverflow = error as? SubagentWorkerError {
+                } else if isStreamBufferOverflow(error) {
                     return try await finalizeTerminal(
                         status: .failed,
                         summary:
@@ -770,20 +807,16 @@ public actor SubagentWorker {
             let producerStream = await engine.stream(request)
 
             let queuedByteTracker = QueuedByteTracker()
+            let overflowState = StreamOverflowState()
             let (consumerStream, continuation) =
                 AsyncThrowingStream<GenerationEvent, Error>.makeStream(
                     bufferingPolicy: .bufferingNewest(SubagentLimits.streamBufferCapacity)
                 )
             let forwarderTask = Task {
-                defer {
-                    if Task.isCancelled {
-                        continuation.finish(throwing: CancellationError())
-                    } else {
-                        continuation.finish()
-                    }
-                }
                 do {
                     forwarderLoop: for try await event in producerStream {
+                        try Task.checkCancellation()
+
                         let eventBytes: Int
                         switch event {
                         case .token(let chunk):
@@ -801,12 +834,14 @@ public actor SubagentWorker {
                         }
 
                         if eventBytes > SubagentLimits.maxStreamEventBytes {
+                            overflowState.recordOverflow(SubagentWorkerError.streamBufferOverflow)
                             continuation.finish(throwing: SubagentWorkerError.streamBufferOverflow)
                             break forwarderLoop
                         }
 
                         let currentlyQueued = queuedByteTracker.add(eventBytes)
                         if currentlyQueued > SubagentLimits.maxStreamBufferBytes {
+                            overflowState.recordOverflow(SubagentWorkerError.streamBufferOverflow)
                             continuation.finish(throwing: SubagentWorkerError.streamBufferOverflow)
                             break forwarderLoop
                         }
@@ -815,6 +850,7 @@ public actor SubagentWorker {
                         case .enqueued:
                             break
                         case .dropped:
+                            overflowState.recordOverflow(SubagentWorkerError.streamBufferOverflow)
                             continuation.finish(throwing: SubagentWorkerError.streamBufferOverflow)
                             break forwarderLoop
                         case .terminated:
@@ -823,7 +859,13 @@ public actor SubagentWorker {
                             break
                         }
                     }
+                    if !overflowState.hasOverflow {
+                        continuation.finish()
+                    }
                 } catch {
+                    if isStreamBufferOverflow(error) {
+                        overflowState.recordOverflow(SubagentWorkerError.streamBufferOverflow)
+                    }
                     continuation.finish(throwing: error)
                 }
             }
@@ -832,6 +874,7 @@ public actor SubagentWorker {
                 streamLoop: for try await event in consumerStream {
                     try Task.checkCancellation()
                     try context.lease.checkValid()
+                    try overflowState.checkOverflow()
 
                     let dequeuedBytes: Int
                     switch event {
@@ -923,10 +966,13 @@ public actor SubagentWorker {
                         }
                     case .done(let stats):
                         reportedStats = stats
-                        break streamLoop
+                        try overflowState.checkOverflow()
+                    // Do not break early: continue draining consumerStream so any pending streamBufferOverflow
+                    // error queued after dropped events is thrown rather than silently masked by .done.
                     }
                 }
                 try Task.checkCancellation()
+                try overflowState.checkOverflow()
             } catch {
                 forwarderTask.cancel()
                 if let quarantine {

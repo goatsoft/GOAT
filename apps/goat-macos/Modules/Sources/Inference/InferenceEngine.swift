@@ -195,11 +195,55 @@ public struct ToolCallEvent: Sendable, Equatable {
     }
 }
 
+public final class GenerationTransportClosureRegistration: @unchecked Sendable {
+    public let id = UUID()
+    private let lock = NSLock()
+    private var isCancelled = false
+    private var isResumed = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    public init() {}
+
+    public func setContinuation(_ cont: CheckedContinuation<Void, Never>) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if isCancelled || isResumed {
+            return false
+        }
+        self.continuation = cont
+        return true
+    }
+
+    public func cancel() -> CheckedContinuation<Void, Never>? {
+        lock.lock()
+        defer { lock.unlock() }
+        isCancelled = true
+        guard !isResumed else { return nil }
+        isResumed = true
+        let cont = continuation
+        continuation = nil
+        return cont
+    }
+
+    public func resume() {
+        lock.lock()
+        guard !isResumed else {
+            lock.unlock()
+            return
+        }
+        isResumed = true
+        let cont = continuation
+        continuation = nil
+        lock.unlock()
+        cont?.resume()
+    }
+}
+
 public final class GenerationTransportClosureHandle: @unchecked Sendable {
     private let lock = NSLock()
     private var isAcknowledged = false
     private var onAcknowledgeCallbacks: [@Sendable () -> Void] = []
-    private var waiters: [UUID: CheckedContinuation<Void, Never>] = [:]
+    private var waiters: [UUID: GenerationTransportClosureRegistration] = [:]
 
     public init() {}
 
@@ -247,39 +291,46 @@ public final class GenerationTransportClosureHandle: @unchecked Sendable {
         return isAcknowledged
     }
 
-    private func addWaiter(id: UUID, continuation: CheckedContinuation<Void, Never>) -> Bool {
+    private func registerWaiter(_ registration: GenerationTransportClosureRegistration) -> Bool {
         lock.lock()
         defer { lock.unlock() }
         if isAcknowledged {
             return false
         }
-        waiters[id] = continuation
+        waiters[registration.id] = registration
         return true
     }
 
-    private func removeWaiter(id: UUID) -> CheckedContinuation<Void, Never>? {
+    private func removeWaiter(id: UUID) {
         lock.lock()
         defer { lock.unlock() }
-        return waiters.removeValue(forKey: id)
+        waiters.removeValue(forKey: id)
     }
 
     public func waitForClosure(timeoutSeconds: Int = 5) async -> Bool {
         if checkClosed() { return true }
-        if timeoutSeconds <= 0 { return false }
+        if timeoutSeconds <= 0 || Task.isCancelled { return false }
 
-        let waiterID = UUID()
         return await withTaskGroup(of: Bool.self) { group in
             group.addTask {
+                if Task.isCancelled { return self.checkClosed() }
+                let registration = GenerationTransportClosureRegistration()
+                let shouldWait = self.registerWaiter(registration)
+                if !shouldWait {
+                    return self.checkClosed()
+                }
+
                 await withTaskCancellationHandler {
-                    await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-                        let added = self.addWaiter(id: waiterID, continuation: cont)
-                        if !added {
+                    await withCheckedContinuation { cont in
+                        let inserted = registration.setContinuation(cont)
+                        if !inserted {
                             cont.resume()
                         }
                     }
                 } onCancel: {
-                    let waiter = self.removeWaiter(id: waiterID)
-                    waiter?.resume()
+                    self.removeWaiter(id: registration.id)
+                    let waiterCont = registration.cancel()
+                    waiterCont?.resume()
                 }
                 return self.checkClosed()
             }
@@ -399,7 +450,7 @@ public enum GenerationEvent: Sendable {
     case done(GenStats)
 }
 
-public enum EngineError: LocalizedError, Sendable {
+public enum EngineError: LocalizedError, Sendable, Equatable {
     case http(Int)
     case httpDetail(Int, String, retryAfter: TimeInterval?)
     case notConfigured
