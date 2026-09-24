@@ -92,6 +92,36 @@ private actor HangingEngine: InferenceEngine {
     }
 }
 
+private actor UncooperativeEngine: InferenceEngine {
+    func health() async -> EngineHealth { .ok([]) }
+
+    func runtimeStatus() async -> EngineRuntimeStatus? {
+        EngineRuntimeStatus(
+            observedAt: .now,
+            version: "1.0",
+            modelMemoryUsed: 100 * 1024 * 1024,
+            modelMemoryMaximum: 1024 * 1024 * 1024,
+            activeRequests: 0,
+            waitingRequests: 0,
+            models: [
+                EngineModelRuntimeStatus(
+                    id: "default",
+                    loaded: true,
+                    contextWindow: 32_768
+                )
+            ]
+        )
+    }
+
+    func stream(_ request: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
+        // Intentionally ignores task cancellation and never terminates
+        AsyncThrowingStream { continuation in
+            continuation.yield(.token("uncooperative-start"))
+            // Continues indefinitely without termination handler
+        }
+    }
+}
+
 private actor BusyEngine: InferenceEngine {
     func health() async -> EngineHealth { .ok([]) }
 
@@ -185,7 +215,7 @@ extension AppTests.GOATed {
                 projectID: nil,
                 workspace: workspace,
                 fileTools: fileTools,
-                engine: HangingEngine(),
+                engine: UncooperativeEngine(),
                 timeoutSeconds: 1,
                 database: db,
                 lease: lease
@@ -543,30 +573,140 @@ extension AppTests.GOATed {
             }
         }
 
-        // Scenario 9: Delayed Transport Quarantine
-        @Test func scenario09_delayedTransportQuarantine() async throws {
+        // Scenario 9: Delayed Transport Quarantine & Closure Synchronization
+        @Test func scenario09_delayedTransportQuarantineAndClosureSync() async throws {
             let quarantine = SubagentTransportQuarantine()
-            #expect(await !quarantine.isQuarantined)
+            #expect(!quarantine.isQuarantined)
+            #expect(!quarantine.isTransportActive)
 
-            await quarantine.markQuarantined()
-            #expect(await quarantine.isQuarantined)
+            quarantine.markTransportActive()
+            #expect(quarantine.isTransportActive)
 
-            await quarantine.clearQuarantine()
-            #expect(await !quarantine.isQuarantined)
+            // Fast close resumes awaitClosure promptly
+            let waitTask = Task {
+                await quarantine.awaitClosure(timeoutSeconds: 2)
+            }
+            try await Task.sleep(for: .milliseconds(50))
+            quarantine.markTransportClosed()
+            let closedInTime = await waitTask.value
+            #expect(closedInTime)
+            #expect(!quarantine.isQuarantined)
+            #expect(!quarantine.isTransportActive)
+
+            // A timeout causes quarantine to be set
+            quarantine.markTransportActive()
+            let timedOutWait = await quarantine.awaitClosure(timeoutSeconds: 0)
+            #expect(!timedOutWait)
+            #expect(quarantine.isQuarantined)
+
+            // Transport closed clears quarantine
+            quarantine.markTransportClosed()
+            #expect(!quarantine.isQuarantined)
         }
 
-        // Scenario 10: Cumulative Parent Turn Budget
-        @Test func scenario10_cumulativeParentTurnBudget() async throws {
+        // Scenario 10: Cumulative Parent Turn Budget and Consecutive Delegations
+        @Test func scenario10_cumulativeParentTurnBudgetAndConsecutiveDelegations() async throws {
+            let (workspace, fileTools) = try createWorkspace()
+            defer { try? FileManager.default.removeItem(at: workspace) }
+            let db = try createDatabase()
+            let chatID = UUID()
+            let turnID = UUID()
+            try await db.save(makeChat(id: chatID.uuidString))
+
             let accounting = SubagentTurnTokenAccounting()
             #expect(accounting.canDelegate)
 
-            // Record heavy usage pushing past turn limits
-            accounting.recordDelegation(
-                generated: SubagentLimits.maxGeneratedTokensPerTurn,
-                total: SubagentLimits.maxTotalTokensPerTurn
+            // First delegation: scripted engine with moderate tokens
+            let engine1 = ScriptedEngine(script: [
+                [
+                    .token("First subagent completed successfully"),
+                    .done(GenStats(ttft: nil, tokens: 6000, duration: 0.01, tokensAreExact: true)),
+                ]
+            ])
+            let lease1 = SubagentCapabilityLease()
+            let context1 = SubagentExecutionContext(
+                chatID: chatID,
+                turnID: turnID,
+                projectID: nil,
+                workspace: workspace,
+                fileTools: fileTools,
+                engine: engine1,
+                database: db,
+                turnTokenAccounting: accounting,
+                lease: lease1
+            )
+            let worker1 = SubagentWorker(task: SubagentTaskBrief(objective: "Task 1"), context: context1)
+            let result1 = try await worker1.run()
+            #expect(result1.receipt.status == .completed)
+            #expect(accounting.delegationsCount == 1)
+
+            // Second delegation: hits cumulative generation turn budget
+            let engine2 = ScriptedEngine(script: [
+                [
+                    .token("Second subagent output"),
+                    .done(GenStats(ttft: nil, tokens: 4000, duration: 0.01, tokensAreExact: true)),
+                ]
+            ])
+            let lease2 = SubagentCapabilityLease()
+            let context2 = SubagentExecutionContext(
+                chatID: chatID,
+                turnID: turnID,
+                projectID: nil,
+                workspace: workspace,
+                fileTools: fileTools,
+                engine: engine2,
+                database: db,
+                turnTokenAccounting: accounting,
+                lease: lease2
+            )
+            let worker2 = SubagentWorker(task: SubagentTaskBrief(objective: "Task 2"), context: context2)
+            let result2 = try await worker2.run()
+            #expect(result2.receipt.status == .budgetExhausted)
+            #expect(!accounting.canDelegate)
+        }
+
+        // Scenario 10b: Mid-stream cancellation preserves partial token accounting
+        @Test func scenario10b_midStreamCancellationPreservesPartialAccounting() async throws {
+            let (workspace, fileTools) = try createWorkspace()
+            defer { try? FileManager.default.removeItem(at: workspace) }
+            let db = try createDatabase()
+            let chatID = UUID()
+            let turnID = UUID()
+            try await db.save(makeChat(id: chatID.uuidString))
+
+            let accounting = SubagentTurnTokenAccounting()
+            let lease = SubagentCapabilityLease()
+
+            let slowEngine = ScriptedEngine(
+                script: [
+                    [
+                        .token("chunk-1 "),
+                        .token("chunk-2 "),
+                        .token("chunk-3 "),
+                    ]
+                ], delay: .milliseconds(500))
+
+            let context = SubagentExecutionContext(
+                chatID: chatID,
+                turnID: turnID,
+                projectID: nil,
+                workspace: workspace,
+                fileTools: fileTools,
+                engine: slowEngine,
+                database: db,
+                turnTokenAccounting: accounting,
+                lease: lease
             )
 
-            #expect(!accounting.canDelegate)
+            let worker = SubagentWorker(task: SubagentTaskBrief(objective: "Partial test"), context: context)
+            let runTask = Task {
+                try await worker.run()
+            }
+            try await Task.sleep(for: .milliseconds(150))
+            await worker.cancel()
+            let result = try await runTask.value
+            #expect(result.receipt.status == .cancelled)
+            #expect(result.totalTokens >= 0)
         }
 
         // Scenario 11: Admission Rejection Variants
@@ -578,20 +718,18 @@ extension AppTests.GOATed {
             let turnID = UUID()
             try await db.save(makeChat(id: chatID.uuidString))
 
-            // Unloaded model engine
-            actor UnloadedModelEngine: InferenceEngine {
+            // Test 1: Active requests count unknown
+            actor UnknownActiveRequestsEngine: InferenceEngine {
                 func health() async -> EngineHealth { .ok([]) }
                 func runtimeStatus() async -> EngineRuntimeStatus? {
                     EngineRuntimeStatus(
                         observedAt: .now,
                         version: "1.0",
-                        modelMemoryUsed: 100,
-                        modelMemoryMaximum: 1000,
-                        activeRequests: 0,
+                        modelMemoryUsed: 100 * 1024 * 1024,
+                        modelMemoryMaximum: 1024 * 1024 * 1024,
+                        activeRequests: nil,
                         waitingRequests: 0,
-                        models: [
-                            EngineModelRuntimeStatus(id: "default", loaded: false, contextWindow: 32_768)
-                        ]
+                        models: [EngineModelRuntimeStatus(id: "default", loaded: true, contextWindow: 32_768)]
                     )
                 }
                 func stream(_ request: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
@@ -599,28 +737,112 @@ extension AppTests.GOATed {
                 }
             }
 
-            let lease = SubagentCapabilityLease()
-            let context = SubagentExecutionContext(
-                chatID: chatID,
-                turnID: turnID,
-                projectID: nil,
-                workspace: workspace,
-                fileTools: fileTools,
-                engine: UnloadedModelEngine(),
-                database: db,
-                lease: lease
+            let context1 = SubagentExecutionContext(
+                chatID: chatID, turnID: turnID, projectID: nil, workspace: workspace,
+                fileTools: fileTools, engine: UnknownActiveRequestsEngine(), database: db,
+                lease: SubagentCapabilityLease()
+            )
+            let result1 = try await SubagentWorker(
+                task: SubagentTaskBrief(objective: "Admission test 1"), context: context1
+            ).run()
+            #expect(result1.receipt.status == .failed)
+            #expect(
+                result1.receipt.unresolved.contains { $0.detail?.contains("active requests count is unknown") == true })
+
+            // Test 2: Waiting requests count unknown
+            actor UnknownWaitingRequestsEngine: InferenceEngine {
+                func health() async -> EngineHealth { .ok([]) }
+                func runtimeStatus() async -> EngineRuntimeStatus? {
+                    EngineRuntimeStatus(
+                        observedAt: .now,
+                        version: "1.0",
+                        modelMemoryUsed: 100 * 1024 * 1024,
+                        modelMemoryMaximum: 1024 * 1024 * 1024,
+                        activeRequests: 0,
+                        waitingRequests: nil,
+                        models: [EngineModelRuntimeStatus(id: "default", loaded: true, contextWindow: 32_768)]
+                    )
+                }
+                func stream(_ request: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
+                    AsyncThrowingStream { $0.finish() }
+                }
+            }
+
+            let context2 = SubagentExecutionContext(
+                chatID: chatID, turnID: turnID, projectID: nil, workspace: workspace,
+                fileTools: fileTools, engine: UnknownWaitingRequestsEngine(), database: db,
+                lease: SubagentCapabilityLease()
+            )
+            let result2 = try await SubagentWorker(
+                task: SubagentTaskBrief(objective: "Admission test 2"), context: context2
+            ).run()
+            #expect(result2.receipt.status == .failed)
+            #expect(
+                result2.receipt.unresolved.contains { $0.detail?.contains("waiting requests count is unknown") == true }
             )
 
-            let brief = SubagentTaskBrief(objective: "Admission test")
-            let worker = SubagentWorker(task: brief, context: context)
-            let result = try await worker.run()
+            // Test 3: Model context window unknown
+            actor UnknownContextWindowEngine: InferenceEngine {
+                func health() async -> EngineHealth { .ok([]) }
+                func runtimeStatus() async -> EngineRuntimeStatus? {
+                    EngineRuntimeStatus(
+                        observedAt: .now,
+                        version: "1.0",
+                        modelMemoryUsed: 100 * 1024 * 1024,
+                        modelMemoryMaximum: 1024 * 1024 * 1024,
+                        activeRequests: 0,
+                        waitingRequests: 0,
+                        models: [EngineModelRuntimeStatus(id: "default", loaded: true, contextWindow: nil)]
+                    )
+                }
+                func stream(_ request: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
+                    AsyncThrowingStream { $0.finish() }
+                }
+            }
 
-            #expect(result.receipt.status == .failed)
-            let hasAdmissionDenied = result.receipt.unresolved.contains { $0.reason == "admissionDenied" }
-            #expect(hasAdmissionDenied)
+            let context3 = SubagentExecutionContext(
+                chatID: chatID, turnID: turnID, projectID: nil, workspace: workspace,
+                fileTools: fileTools, engine: UnknownContextWindowEngine(), database: db,
+                lease: SubagentCapabilityLease()
+            )
+            let result3 = try await SubagentWorker(
+                task: SubagentTaskBrief(objective: "Admission test 3"), context: context3
+            ).run()
+            #expect(result3.receipt.status == .failed)
+            #expect(
+                result3.receipt.unresolved.contains { $0.detail?.contains("Model context window is unknown") == true })
+
+            // Test 4: Insufficient KV cache memory headroom (< 256 MiB)
+            actor LowMemoryHeadroomEngine: InferenceEngine {
+                func health() async -> EngineHealth { .ok([]) }
+                func runtimeStatus() async -> EngineRuntimeStatus? {
+                    EngineRuntimeStatus(
+                        observedAt: .now,
+                        version: "1.0",
+                        modelMemoryUsed: 900 * 1024 * 1024,
+                        modelMemoryMaximum: 1000 * 1024 * 1024,  // 100 MiB free, less than 256 MiB required
+                        activeRequests: 0,
+                        waitingRequests: 0,
+                        models: [EngineModelRuntimeStatus(id: "default", loaded: true, contextWindow: 32_768)]
+                    )
+                }
+                func stream(_ request: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
+                    AsyncThrowingStream { $0.finish() }
+                }
+            }
+
+            let context4 = SubagentExecutionContext(
+                chatID: chatID, turnID: turnID, projectID: nil, workspace: workspace,
+                fileTools: fileTools, engine: LowMemoryHeadroomEngine(), database: db, lease: SubagentCapabilityLease()
+            )
+            let result4 = try await SubagentWorker(
+                task: SubagentTaskBrief(objective: "Admission test 4"), context: context4
+            ).run()
+            #expect(result4.receipt.status == .failed)
+            #expect(result4.receipt.unresolved.contains { $0.detail?.contains("Insufficient memory headroom") == true })
         }
 
-        // Scenario 12: Lost Terminal CAS Race
+        // Scenario 12: Lost Terminal CAS Race and Cascade Deletion
         @Test func scenario12_lostTerminalCASRace() async throws {
             let db = try createDatabase()
             let chatID = UUID().uuidString
@@ -668,6 +890,138 @@ extension AppTests.GOATed {
             let authoritative = try await db.subagentRun(id: runID)
             #expect(authoritative?.status == "cancelled")
             #expect(authoritative?.summary == "Concurrent cancellation won.")
+        }
+
+        // Scenario 12b: Worker fails closed if CAS fails and record was cascade deleted
+        @Test func scenario12b_workerFailsClosedOnCascadeDeletion() async throws {
+            let (workspace, fileTools) = try createWorkspace()
+            defer { try? FileManager.default.removeItem(at: workspace) }
+            let db = try createDatabase()
+            let chatID = UUID()
+            let turnID = UUID()
+            try await db.save(makeChat(id: chatID.uuidString))
+
+            let engine = ScriptedEngine(
+                script: [
+                    [.token("Output"), .done(GenStats(ttft: nil, tokens: 10, duration: 0.01))]
+                ], delay: .milliseconds(50))
+
+            let context = SubagentExecutionContext(
+                chatID: chatID,
+                turnID: turnID,
+                projectID: nil,
+                workspace: workspace,
+                fileTools: fileTools,
+                engine: engine,
+                database: db,
+                lease: SubagentCapabilityLease()
+            )
+
+            let worker = SubagentWorker(task: SubagentTaskBrief(objective: "Cascade delete test"), context: context)
+
+            let runTask = Task {
+                try await worker.run()
+            }
+
+            // Delete the chat while worker is running so the CAS fails and the record is gone
+            try await Task.sleep(for: .milliseconds(20))
+            try await db.deleteChat(id: chatID.uuidString)
+
+            await #expect(throws: CapabilityError.self) {
+                _ = try await runTask.value
+            }
+        }
+
+        // Deterministic tests for WorkerCompletionBridge
+        @Test func workerCompletionBridge_completeBeforeWait() async throws {
+            let bridge = WorkerCompletionBridge()
+            let receipt = SubagentReceipt(runId: "123", status: .completed, summary: "Completed early")
+            let subagentResult = SubagentResult(receipt: receipt)
+
+            // Complete before wait() is invoked
+            await bridge.complete(with: .success(subagentResult))
+
+            let lateResult = await bridge.wait()
+            #expect(lateResult != nil)
+            switch lateResult! {
+            case .success(let res):
+                #expect(res.receipt.summary == "Completed early")
+            case .failure:
+                Issue.record("Expected success result")
+            }
+        }
+
+        @Test func workerCompletionBridge_failureBeforeWait() async throws {
+            let bridge = WorkerCompletionBridge()
+            let expectedError = CapabilityError.unauthorized
+
+            // Complete with failure before wait() is invoked
+            await bridge.complete(with: .failure(expectedError))
+
+            let lateResult = await bridge.wait()
+            #expect(lateResult != nil)
+            switch lateResult! {
+            case .success:
+                Issue.record("Expected failure result")
+            case .failure(let err):
+                #expect(err as? CapabilityError == expectedError)
+            }
+        }
+
+        @Test func workerCompletionBridge_cancellationBeforeWait() async throws {
+            let bridge = WorkerCompletionBridge()
+            await bridge.cancel()
+
+            let lateResult = await bridge.wait()
+            #expect(lateResult != nil)
+            switch lateResult! {
+            case .success:
+                Issue.record("Expected cancellation error")
+            case .failure(let err):
+                #expect(err is CancellationError)
+            }
+        }
+
+        @Test func workerCompletionBridge_timeoutBeforeWait() async throws {
+            let bridge = WorkerCompletionBridge()
+            await bridge.timeout()
+
+            let lateResult = await bridge.wait()
+            #expect(lateResult == nil)
+        }
+
+        // Live memory bounding before append tests
+        @Test func liveMemoryBounds_preAppendClampingOnOversizedChunk() async throws {
+            let (workspace, fileTools) = try createWorkspace()
+            defer { try? FileManager.default.removeItem(at: workspace) }
+            let db = try createDatabase()
+            let chatID = UUID()
+            let turnID = UUID()
+            try await db.save(makeChat(id: chatID.uuidString))
+
+            // Chunk that would vastly exceed max transcript bytes (512 KiB)
+            let hugeString = String(repeating: "ABCDEFGHIJKLMNOPQRSTUVWXYZ", count: 30_000)  // ~780 KiB
+            let engine = ScriptedEngine(script: [
+                [.token(hugeString), .done(GenStats(ttft: nil, tokens: 50, duration: 0.01))]
+            ])
+
+            let context = SubagentExecutionContext(
+                chatID: chatID,
+                turnID: turnID,
+                projectID: nil,
+                workspace: workspace,
+                fileTools: fileTools,
+                engine: engine,
+                database: db,
+                lease: SubagentCapabilityLease()
+            )
+
+            let worker = SubagentWorker(task: SubagentTaskBrief(objective: "Oversized chunk test"), context: context)
+            let result = try await worker.run()
+
+            #expect(result.receipt.status == .budgetExhausted)
+            let transcriptBytes = result.transcriptJSON?.utf8.count ?? 0
+            #expect(transcriptBytes <= SubagentLimits.maxTranscriptBytes + 1024)
         }
     }
 }

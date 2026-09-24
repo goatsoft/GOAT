@@ -21,6 +21,7 @@ extension AppModel {
         else { return nil }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !attachments.isEmpty || !documents.isEmpty else { return nil }
+        guard !toolRouter.isEngineQuarantined else { return nil }
         guard let turnID = shepherd.reserve(in: session) else { return nil }
         let user = ChatMessage(role: .user)
         user.text = trimmed.isEmpty ? (documents.isEmpty ? "What do you see?" : "Review the attached files.") : trimmed
@@ -133,7 +134,9 @@ extension AppModel {
             message.role == .assistant ? message : nil
         }
         let precedingRole = assistant == nil ? session.messages.last?.role : session.messages.dropLast().last?.role
-        guard precedingRole == .user, let turnID = shepherd.reserve(in: session) else { return }
+        guard !toolRouter.isEngineQuarantined, precedingRole == .user, let turnID = shepherd.reserve(in: session) else {
+            return
+        }
 
         if let assistant {
             do {

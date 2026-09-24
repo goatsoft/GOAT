@@ -48,7 +48,7 @@ public enum SubagentLimits {
     public static let ceilingTimeoutSeconds = 90
     public static let minimumTimeoutSeconds = 1
     public static let outerBudgetSeconds = 120
-    public static let cancellationGracePeriodSeconds = 1
+    public static let cancellationGracePeriodSeconds = 5
 
     public static let maxInputTokensPerRequest = 12_288
     public static let maxGeneratedTokensPerRound = 2_048
@@ -299,21 +299,117 @@ public struct SubagentTurnAuthority: SubagentHostAuthority {
     }
 }
 
-public actor SubagentTransportQuarantine {
+public final class SubagentTransportQuarantine: @unchecked Sendable {
+    private let lock = NSLock()
     private var quarantined = false
+    private var transportActive = false
+    private var nextWaiterId = 0
+    private var closureWaiters: [Int: CheckedContinuation<Void, Never>] = [:]
 
     public init() {}
 
     public var isQuarantined: Bool {
-        quarantined
+        lock.lock()
+        defer { lock.unlock() }
+        return quarantined
+    }
+
+    public var isTransportActive: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return transportActive
+    }
+
+    public func markTransportActive() {
+        lock.lock()
+        defer { lock.unlock() }
+        transportActive = true
+    }
+
+    public func markTransportClosed() {
+        lock.lock()
+        transportActive = false
+        if quarantined {
+            quarantined = false
+        }
+        let waiters = Array(closureWaiters.values)
+        closureWaiters.removeAll()
+        lock.unlock()
+
+        for waiter in waiters {
+            waiter.resume()
+        }
     }
 
     public func markQuarantined() {
+        lock.lock()
+        defer { lock.unlock() }
         quarantined = true
     }
 
     public func clearQuarantine() {
+        lock.lock()
+        defer { lock.unlock() }
         quarantined = false
+    }
+
+    public func waitForClosure() async {
+        let shouldWait: Bool = {
+            lock.lock()
+            defer { lock.unlock() }
+            return transportActive
+        }()
+        guard shouldWait else { return }
+
+        var myId = 0
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { cont in
+                lock.lock()
+                if !transportActive {
+                    lock.unlock()
+                    cont.resume()
+                } else {
+                    nextWaiterId += 1
+                    myId = nextWaiterId
+                    closureWaiters[myId] = cont
+                    lock.unlock()
+                }
+            }
+        } onCancel: {
+            lock.lock()
+            let waiter = closureWaiters.removeValue(forKey: myId)
+            lock.unlock()
+            waiter?.resume()
+        }
+    }
+
+    public func awaitClosure(timeoutSeconds: Int) async -> Bool {
+        let active: Bool = {
+            lock.lock()
+            defer { lock.unlock() }
+            return transportActive
+        }()
+        guard active else { return true }
+
+        let result = await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                await self.waitForClosure()
+                return true
+            }
+            group.addTask {
+                if timeoutSeconds > 0 {
+                    try? await Task.sleep(for: .seconds(timeoutSeconds))
+                }
+                return false
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
+        }
+        if !result {
+            markQuarantined()
+        }
+        return result
     }
 }
 

@@ -518,6 +518,13 @@ final class AppToolRouter: ShepherdToolSource {
         }
     }
 
+    var isEngineQuarantined: Bool {
+        if let session = subagentSession {
+            return session.provider.quarantine.isQuarantined
+        }
+        return false
+    }
+
     func cancelPendingPermission() { mcp.cancelPendingPermission() }
 
     private func skillToolProvider(forChatID chatID: UUID, projectID: UUID?) async -> SkillToolProvider {

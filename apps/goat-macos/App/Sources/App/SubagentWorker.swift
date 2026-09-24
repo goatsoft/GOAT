@@ -10,15 +10,19 @@ import Tools
 import FoundationModels
 #endif
 
-private actor WorkerCompletionBridge {
+actor WorkerCompletionBridge {
     private var continuation: CheckedContinuation<Result<SubagentResult, Error>?, Never>?
     private var isSettled = false
     private var isWorkFinished = false
+    private var storedResult: Result<SubagentResult, Error>?
+    private var isTimedOut = false
+    private var isCancelled = false
 
     func complete(with result: Result<SubagentResult, Error>) {
         isWorkFinished = true
         guard !isSettled else { return }
         isSettled = true
+        storedResult = result
         continuation?.resume(returning: result)
         continuation = nil
     }
@@ -26,12 +30,29 @@ private actor WorkerCompletionBridge {
     func timeout() {
         guard !isSettled else { return }
         isSettled = true
+        isTimedOut = true
         continuation?.resume(returning: nil)
         continuation = nil
     }
 
+    func cancel() {
+        guard !isSettled else { return }
+        isSettled = true
+        isCancelled = true
+        continuation?.resume(returning: .failure(CancellationError()))
+        continuation = nil
+    }
+
     func wait() async -> Result<SubagentResult, Error>? {
-        if isSettled { return nil }
+        if let stored = storedResult {
+            return stored
+        }
+        if isTimedOut {
+            return nil
+        }
+        if isCancelled {
+            return .failure(CancellationError())
+        }
         return await withCheckedContinuation { cont in
             self.continuation = cont
         }
@@ -57,6 +78,7 @@ public actor SubagentWorker {
     private var currentClaimedUnresolved: [SubagentUnresolvedItem] = []
     private var currentSummary = ""
     private var runningWorkTask: Task<Void, Never>?
+    private let bridge = WorkerCompletionBridge()
 
     public init(id: UUID = UUID(), task: SubagentTaskBrief, context: SubagentExecutionContext) {
         self.id = id
@@ -72,33 +94,15 @@ public actor SubagentWorker {
     public func cancel() {
         context.lease.revoke()
         runningWorkTask?.cancel()
+        Task {
+            await bridge.cancel()
+        }
     }
 
     public func run() async throws -> SubagentResult {
         try context.lease.checkValid()
 
-        // 1. Persist initial running state in database (fail-closed if durable write fails)
-        if let db = context.database {
-            let taskJson = (try? String(data: JSONEncoder().encode(task), encoding: .utf8)) ?? "{}"
-            let initialRecord = SubagentRunRecord(
-                id: id.uuidString,
-                chatId: context.chatID.uuidString,
-                parentTurnId: context.turnID.uuidString,
-                status: SubagentStatus.running.rawValue,
-                taskBriefJson: taskJson,
-                roundsExecuted: 0,
-                totalTokens: 0,
-                transcriptBytes: 0,
-                createdAt: .now
-            )
-            do {
-                try await db.save(initialRecord)
-            } catch {
-                throw CapabilityError.unavailable
-            }
-        }
-
-        // 2. Absolute deadline established before admission and encompassing entire execution
+        // Absolute deadline established before initial database insert and admission
         let timeoutSeconds = min(
             max(context.timeoutSeconds, SubagentLimits.minimumTimeoutSeconds),
             SubagentLimits.ceilingTimeoutSeconds
@@ -106,32 +110,34 @@ public actor SubagentWorker {
         let deadline = ContinuousClock.now + .seconds(timeoutSeconds)
         let lease = context.lease
 
-        let bridge = WorkerCompletionBridge()
-
         // Independent watchdog task: revokes lease immediately upon deadline expiry
-        let watchdog = Task {
+        let watchdog = Task { [weak self] in
             try? await Task.sleep(until: deadline, clock: .continuous)
             lease.revoke()
-            await bridge.timeout()
+            if let self {
+                await self.bridge.timeout()
+            }
         }
 
         let workTask = Task { [self] () -> Void in
             do {
                 let res = try await self.executeInternal(deadline: deadline)
-                await bridge.complete(with: .success(res))
+                await self.bridge.complete(with: .success(res))
             } catch {
-                await bridge.complete(with: .failure(error))
+                await self.bridge.complete(with: .failure(error))
             }
         }
         self.runningWorkTask = workTask
 
         let maybeResult: Result<SubagentResult, Error>? = await withTaskCancellationHandler {
-            await bridge.wait()
+            await self.bridge.wait()
         } onCancel: {
             lease.revoke()
             workTask.cancel()
-            Task {
-                await bridge.complete(with: .failure(CancellationError()))
+            Task { [weak self] in
+                if let self {
+                    await self.bridge.cancel()
+                }
             }
         }
 
@@ -144,6 +150,12 @@ public actor SubagentWorker {
             case .failure(let error):
                 lease.revoke()
                 workTask.cancel()
+                if let q = context.quarantine {
+                    let closed = await q.awaitClosure(timeoutSeconds: SubagentLimits.cancellationGracePeriodSeconds)
+                    if !closed {
+                        q.markQuarantined()
+                    }
+                }
                 if error is CancellationError {
                     return try await finalizeTerminal(
                         status: .cancelled,
@@ -180,36 +192,24 @@ public actor SubagentWorker {
             }
         }
 
-        // Timeout expired: revoke lease immediately and cancel child
+        // Timeout path
         lease.revoke()
         workTask.cancel()
-
-        let graceDeadline =
-            ContinuousClock.now + .seconds(SubagentLimits.cancellationGracePeriodSeconds)
-        var cleanShutdown = false
-        while ContinuousClock.now < graceDeadline {
-            if await bridge.isFinished() {
-                cleanShutdown = true
-                break
+        if let q = context.quarantine {
+            let closed = await q.awaitClosure(timeoutSeconds: SubagentLimits.cancellationGracePeriodSeconds)
+            if !closed {
+                q.markQuarantined()
             }
-            try? await Task.sleep(for: .milliseconds(50))
         }
-
-        if !cleanShutdown {
-            await context.quarantine?.markQuarantined()
-        }
-
-        let detail =
-            cleanShutdown
-            ? "Subagent delegation timed out before completing synthesis."
-            : "Worker was uncooperative; engine transport quarantined."
-
         return try await finalizeTerminal(
             status: .timedOut,
-            summary: currentSummary.isEmpty ? detail : currentSummary,
+            summary: "Subagent execution timed out after \(timeoutSeconds) seconds.",
             citations: (await fence.verifyCitations(claimed: currentClaimedCitations)).verified,
             unresolved: currentClaimedUnresolved + [
-                SubagentUnresolvedItem(reason: "timedOut", detail: detail)
+                SubagentUnresolvedItem(
+                    reason: "timeout",
+                    detail: "Subagent execution exceeded the deadline of \(timeoutSeconds) seconds."
+                )
             ],
             roundsExecuted: currentRoundsExecuted,
             generatedTokens: currentGeneratedTokens,
@@ -219,7 +219,28 @@ public actor SubagentWorker {
     }
 
     private func executeInternal(deadline: ContinuousClock.Instant) async throws -> SubagentResult {
-        // Admission checks: engine idle, loaded model, and memory headroom
+        // 1. Persist initial running state in database (fail-closed if durable write fails)
+        if let db = context.database {
+            let taskJson = (try? String(data: JSONEncoder().encode(task), encoding: .utf8)) ?? "{}"
+            let initialRecord = SubagentRunRecord(
+                id: id.uuidString,
+                chatId: context.chatID.uuidString,
+                parentTurnId: context.turnID.uuidString,
+                status: SubagentStatus.running.rawValue,
+                taskBriefJson: taskJson,
+                roundsExecuted: 0,
+                totalTokens: 0,
+                transcriptBytes: 0,
+                createdAt: .now
+            )
+            do {
+                try await db.save(initialRecord)
+            } catch {
+                throw CapabilityError.unavailable
+            }
+        }
+
+        // 2. Admission checks: engine idle, loaded model, context window, and memory headroom
         if let rejectionReason = await checkAdmission() {
             return try await finalizeTerminal(
                 status: .failed,
@@ -250,11 +271,17 @@ public actor SubagentWorker {
             return "Engine runtime status is unavailable."
         }
 
-        if let active = status.activeRequests, active > 0 {
-            return "Engine is busy (\(active) active requests)."
+        guard let active = status.activeRequests, active == 0 else {
+            if let active = status.activeRequests, active > 0 {
+                return "Engine is busy (\(active) active requests)."
+            }
+            return "Engine active requests count is unknown."
         }
-        if let waiting = status.waitingRequests, waiting > 0 {
-            return "Engine is busy (\(waiting) waiting requests)."
+        guard let waiting = status.waitingRequests, waiting == 0 else {
+            if let waiting = status.waitingRequests, waiting > 0 {
+                return "Engine is busy (\(waiting) waiting requests)."
+            }
+            return "Engine waiting requests count is unknown."
         }
 
         let requestedModelID = context.modelID
@@ -272,7 +299,10 @@ public actor SubagentWorker {
 
         let requiredBudgetTokens =
             SubagentLimits.maxInputTokensPerRequest + SubagentLimits.maxGeneratedTokensPerRound
-        if let contextWindow = loadedModel.contextWindow, contextWindow < requiredBudgetTokens {
+        guard let contextWindow = loadedModel.contextWindow else {
+            return "Model context window is unknown."
+        }
+        if contextWindow < requiredBudgetTokens {
             return
                 "Model context window (\(contextWindow)) is smaller than requested subagent context budget (\(requiredBudgetTokens))."
         }
@@ -281,14 +311,31 @@ public actor SubagentWorker {
             return "Engine memory statistics are unavailable."
         }
 
+        // Conservative KV-cache headroom calculation per ADR-0096:
+        // 16k context * 32 layers * 2 (K+V) * 128 head dim * 2 bytes (fp16) = ~134 MiB base KV buffer,
+        // plus ~122 MiB for runtime intermediate activations and tool dispatch, requiring 256 MiB minimum free headroom.
         let freeMemoryBytes = maxMem - usedMem
-        let minimumRequiredHeadroomBytes: Int64 = 256 * 1024 * 1024  // 256 MiB KV-cache headroom
+        let minimumRequiredHeadroomBytes: Int64 = 256 * 1024 * 1024
         if freeMemoryBytes < minimumRequiredHeadroomBytes {
-            let freeMB = freeMemoryBytes / (1024 * 1024)
+            let freeMB = max(0, freeMemoryBytes / (1024 * 1024))
             return "Insufficient memory headroom: \(freeMB) MiB free, minimum 256 MiB required."
         }
 
         return nil
+    }
+
+    private func clampUTF8Prefix(_ str: String, maxBytes: Int) -> String {
+        guard str.utf8.count > maxBytes else { return str }
+        guard maxBytes > 0 else { return "" }
+        var count = 0
+        var endIdx = str.startIndex
+        for idx in str.indices {
+            let charBytes = String(str[idx]).utf8.count
+            if count + charBytes > maxBytes { break }
+            count += charBytes
+            endIdx = str.index(after: idx)
+        }
+        return String(str[..<endIdx])
     }
 
     private func estimateInputTokens(turns: [ChatTurn], tools: [ToolSpec]) -> Int {
@@ -358,15 +405,17 @@ public actor SubagentWorker {
             """
         if let filter = task.pathFilter, !filter.isEmpty {
             systemPrompt +=
-                "\nScope filter: constrain searches to paths matching: \(filter.joined(separator: ", "))"
+                "\nScope limited strictly to these paths/patterns: \(filter.joined(separator: ", "))"
         }
         if let schema = task.returnSchema, !schema.isEmpty {
-            systemPrompt += "\nExpected result schema: \(schema)"
+            systemPrompt += "\nRequired return schema: \(schema)"
         }
 
-        let userPrompt = "Execute the task: \(task.objective)"
         transcript.append(ChatTurn(role: .system, text: systemPrompt))
+        let userPrompt = "Investigate and report back: \(task.objective)"
         transcript.append(ChatTurn(role: .user, text: userPrompt))
+
+        self.currentTranscript = transcript
 
         var transcriptBytes = systemPrompt.utf8.count + userPrompt.utf8.count
         var finalSummary = ""
@@ -495,31 +544,85 @@ public actor SubagentWorker {
             var toolCalls: [ToolCallEvent] = []
             var roundStreamTokens = 0
             var reportedStats: GenStats?
+            var streamTruncatedDueToBudget = false
+
+            context.quarantine?.markTransportActive()
 
             let stream = await engine.stream(request)
-            streamLoop: for try await event in stream {
-                try Task.checkCancellation()
-                try context.lease.checkValid()
+            do {
+                streamLoop: for try await event in stream {
+                    try Task.checkCancellation()
+                    try context.lease.checkValid()
 
-                switch event {
-                case .token(let chunk):
-                    assistantText += chunk
-                    roundStreamTokens += max(1, chunk.utf8.count / 4)
-                    if roundStreamTokens >= maxGenAllowed
-                        || (transcriptBytes + assistantText.utf8.count > SubagentLimits.maxTranscriptBytes)
-                    {
+                    switch event {
+                    case .token(let chunk):
+                        let currentTotalTranscriptBytes = transcriptBytes + assistantText.utf8.count
+                        let remainingBytes = max(0, SubagentLimits.maxTranscriptBytes - currentTotalTranscriptBytes)
+                        if remainingBytes <= 0 {
+                            streamTruncatedDueToBudget = true
+                            break streamLoop
+                        }
+                        let chunkToAppend: String
+                        if chunk.utf8.count > remainingBytes {
+                            chunkToAppend = clampUTF8Prefix(chunk, maxBytes: remainingBytes)
+                            streamTruncatedDueToBudget = true
+                        } else {
+                            chunkToAppend = chunk
+                        }
+                        assistantText += chunkToAppend
+                        roundStreamTokens += max(1, chunkToAppend.utf8.count / 4)
+
+                        self.currentGeneratedTokens = generatedTokens + roundStreamTokens
+                        self.currentTotalTokens = totalTokens + roundStreamTokens
+                        self.currentTranscript =
+                            transcript + [ChatTurn(role: .assistant, text: assistantText, toolCalls: toolCalls)]
+
+                        if streamTruncatedDueToBudget || roundStreamTokens >= maxGenAllowed {
+                            streamTruncatedDueToBudget = true
+                            break streamLoop
+                        }
+                    case .thinking:
+                        break
+                    case .toolInput(let bytes):
+                        roundStreamTokens += max(1, bytes / 4)
+                        self.currentGeneratedTokens = generatedTokens + roundStreamTokens
+                        self.currentTotalTokens = totalTokens + roundStreamTokens
+                    case .toolCalls(let calls):
+                        for call in calls {
+                            var callToAppend = call
+                            let callBytes = call.name.utf8.count + call.argumentsJSON.utf8.count
+                            let remainingBytes = max(
+                                0, SubagentLimits.maxTranscriptBytes - (transcriptBytes + assistantText.utf8.count))
+                            if callBytes > remainingBytes {
+                                let clampedArgs = clampUTF8Prefix(
+                                    call.argumentsJSON, maxBytes: max(0, remainingBytes - call.name.utf8.count))
+                                callToAppend = ToolCallEvent(id: call.id, name: call.name, argumentsJSON: clampedArgs)
+                                streamTruncatedDueToBudget = true
+                            }
+                            toolCalls.append(callToAppend)
+                            roundStreamTokens += max(
+                                1, (callToAppend.name.utf8.count + callToAppend.argumentsJSON.utf8.count) / 4)
+                        }
+                        self.currentGeneratedTokens = generatedTokens + roundStreamTokens
+                        self.currentTotalTokens = totalTokens + roundStreamTokens
+                        self.currentTranscript =
+                            transcript + [ChatTurn(role: .assistant, text: assistantText, toolCalls: toolCalls)]
+
+                        if streamTruncatedDueToBudget || roundStreamTokens >= maxGenAllowed {
+                            streamTruncatedDueToBudget = true
+                            break streamLoop
+                        }
+                    case .done(let stats):
+                        reportedStats = stats
                         break streamLoop
                     }
-                case .thinking:
-                    break
-                case .toolInput:
-                    break
-                case .toolCalls(let calls):
-                    toolCalls.append(contentsOf: calls)
-                case .done(let stats):
-                    reportedStats = stats
                 }
+            } catch {
+                context.quarantine?.markTransportClosed()
+                throw error
             }
+
+            context.quarantine?.markTransportClosed()
 
             let actualGen: Int
             if let stats = reportedStats, stats.tokensAreExact, stats.tokens > 0 {
@@ -558,6 +661,25 @@ public actor SubagentWorker {
                 self.currentTranscript = transcript
             }
 
+            if streamTruncatedDueToBudget {
+                return try await finalizeTerminal(
+                    status: .budgetExhausted,
+                    summary: finalSummary.isEmpty
+                        ? "Subagent reached budget limit during streaming." : finalSummary,
+                    citations: (await fence.verifyCitations(claimed: claimedCitations)).verified,
+                    unresolved: claimedUnresolved + [
+                        SubagentUnresolvedItem(
+                            reason: "budgetExhausted",
+                            detail: "Generation was truncated due to budget limit."
+                        )
+                    ],
+                    roundsExecuted: roundsExecuted,
+                    generatedTokens: generatedTokens,
+                    totalTokens: totalTokens,
+                    transcriptJSON: encodeTranscript(transcript)
+                )
+            }
+
             if isSynthesisPass || toolCalls.isEmpty {
                 let parsed = parseModelResponse(assistantText)
                 finalSummary = parsed.summary
@@ -578,7 +700,19 @@ public actor SubagentWorker {
                     argumentsJSON: call.argumentsJSON
                 )
                 let toolResult = try await fence.invoke(callRequest)
-                let resultContent = toolResult.content
+                var resultContent = toolResult.content
+                if resultContent.utf8.count > 32 * 1024 {
+                    resultContent = clampUTF8Prefix(resultContent, maxBytes: 32 * 1024)
+                }
+
+                if transcriptBytes + resultContent.utf8.count > SubagentLimits.maxTranscriptBytes {
+                    transcript = pruneTranscript(transcript)
+                    transcriptBytes = transcript.reduce(0) { $0 + $1.text.utf8.count }
+                }
+                let remaining = max(0, SubagentLimits.maxTranscriptBytes - transcriptBytes)
+                if resultContent.utf8.count > remaining {
+                    resultContent = clampUTF8Prefix(resultContent, maxBytes: remaining)
+                }
 
                 transcript.append(
                     ChatTurn(
@@ -601,8 +735,11 @@ public actor SubagentWorker {
         let verified = await fence.verifyCitations(claimed: claimedCitations)
 
         // Strict limit check: do not return completed if token ceiling was exceeded
+        let parentGen = context.turnTokenAccounting?.cumulativeGeneratedTokens ?? 0
+        let parentTotal = context.turnTokenAccounting?.cumulativeTotalTokens ?? 0
         if totalTokens > SubagentLimits.maxTokensPerDelegation
-            || generatedTokens > SubagentLimits.maxGeneratedTokensPerTurn
+            || (parentGen + generatedTokens) > SubagentLimits.maxGeneratedTokensPerTurn
+            || (parentTotal + totalTokens) > SubagentLimits.maxTotalTokensPerTurn
         {
             return try await finalizeTerminal(
                 status: .budgetExhausted,
@@ -706,6 +843,9 @@ public actor SubagentWorker {
                         roundsExecuted: committed.roundsExecuted,
                         totalTokens: committed.totalTokens
                     )
+                } else {
+                    // Chat cascade deletion or missing row: fail closed
+                    throw CapabilityError.revoked
                 }
             }
         }
@@ -729,10 +869,7 @@ public actor SubagentWorker {
             if pruned[i].role == .tool && pruned[i].text.utf8.count > 1024 {
                 pruned[i] = ChatTurn(
                     role: .tool,
-                    text: UTF8BoundaryTruncator.truncate(
-                        pruned[i].text, maxBytes: 1024, notice: "\n[earlier tool output pruned]"
-                    ),
-                    toolCalls: pruned[i].toolCalls,
+                    text: UTF8BoundaryTruncator.truncate(pruned[i].text, maxBytes: 1024),
                     toolCallID: pruned[i].toolCallID
                 )
             }
@@ -740,113 +877,71 @@ public actor SubagentWorker {
         return pruned
     }
 
-    private struct PersistedToolCall: Codable, Sendable {
-        let id: String
-        let name: String
-        let argumentsJSON: String
-    }
+    private func parseModelResponse(_ text: String) -> (
+        summary: String,
+        citations: [SubagentCitationClaim],
+        unresolved: [SubagentUnresolvedItem]
+    ) {
+        struct ModelOutputEnvelope: Codable {
+            var summary: String?
+            var citations: [SubagentCitationClaim]?
+            var unresolved: [SubagentUnresolvedItem]?
+        }
 
-    private struct PersistedTranscriptTurn: Codable, Sendable {
-        let role: String
-        let text: String
-        let toolCalls: [PersistedToolCall]?
-        let toolCallID: String?
+        let decoder = JSONDecoder()
+
+        if let data = text.data(using: .utf8),
+            let decoded = try? decoder.decode(ModelOutputEnvelope.self, from: data)
+        {
+            return (
+                summary: decoded.summary ?? text,
+                citations: decoded.citations ?? [],
+                unresolved: decoded.unresolved ?? []
+            )
+        }
+
+        if let start = text.range(of: "{"),
+            let end = text.range(of: "}", options: .backwards)
+        {
+            let jsonSubstring = text[start.lowerBound...end.upperBound]
+            if let data = jsonSubstring.data(using: .utf8),
+                let decoded = try? decoder.decode(ModelOutputEnvelope.self, from: data)
+            {
+                return (
+                    summary: decoded.summary ?? text,
+                    citations: decoded.citations ?? [],
+                    unresolved: decoded.unresolved ?? []
+                )
+            }
+        }
+
+        return (
+            summary: text,
+            citations: [],
+            unresolved: []
+        )
     }
 
     private func encodeTranscript(_ turns: [ChatTurn]) -> String? {
-        var currentTurns = turns
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-
-        while !currentTurns.isEmpty {
-            let simplified = currentTurns.map { turn in
-                PersistedTranscriptTurn(
-                    role: turn.role.rawValue,
-                    text: turn.text,
-                    toolCalls: turn.toolCalls.isEmpty
-                        ? nil
-                        : turn.toolCalls.map {
-                            PersistedToolCall(
-                                id: $0.id,
-                                name: $0.name,
-                                argumentsJSON: $0.argumentsJSON
-                            )
-                        },
-                    toolCallID: turn.toolCallID
-                )
-            }
-            if let data = try? encoder.encode(simplified) {
-                if data.count <= SubagentLimits.maxTranscriptBytes {
-                    return String(data: data, encoding: .utf8)
-                }
-            }
-
-            var prunedAny = false
-            for i in 0..<currentTurns.count {
-                if currentTurns[i].role == .tool && currentTurns[i].text.utf8.count > 256 {
-                    currentTurns[i] = ChatTurn(
-                        role: .tool,
-                        text: UTF8BoundaryTruncator.truncate(
-                            currentTurns[i].text, maxBytes: 256,
-                            notice: "\n[pruned for disk limit]"
-                        ),
-                        toolCalls: currentTurns[i].toolCalls,
-                        toolCallID: currentTurns[i].toolCallID
-                    )
-                    prunedAny = true
-                    break
-                }
-            }
-            if !prunedAny {
-                if currentTurns.count > 2 {
-                    currentTurns.remove(at: 1)
-                } else {
-                    break
-                }
-            }
+        struct SimpleTurn: Codable {
+            let role: String
+            let text: String
         }
 
-        let fallback = [
-            PersistedTranscriptTurn(
-                role: "system",
-                text: "[transcript pruned to stay within 512 KiB limit]",
-                toolCalls: nil,
-                toolCallID: nil
-            )
-        ]
-        return (try? encoder.encode(fallback)).flatMap { String(data: $0, encoding: .utf8) }
-    }
-
-    private func parseModelResponse(
-        _ text: String
-    ) -> (summary: String, citations: [SubagentCitationClaim], unresolved: [SubagentUnresolvedItem]) {
-        if let jsonRange = text.range(of: "\\{[\\s\\S]*\\}", options: .regularExpression) {
-            let jsonString = String(text[jsonRange])
-            if let data = jsonString.data(using: .utf8) {
-                struct ParsedFormat: Codable {
-                    let summary: String?
-                    let citations: [SubagentCitationClaim]?
-                    let unresolved: [SubagentUnresolvedItem]?
-                }
-                if let parsed = try? JSONDecoder().decode(ParsedFormat.self, from: data) {
-                    return (
-                        summary: parsed.summary ?? text,
-                        citations: parsed.citations ?? [],
-                        unresolved: parsed.unresolved ?? []
-                    )
-                }
-            }
+        let simplified = turns.map {
+            SimpleTurn(role: $0.role.rawValue, text: $0.text)
         }
-        return (summary: text, citations: [], unresolved: [])
+        guard let data = try? JSONEncoder().encode(simplified) else { return nil }
+        return String(data: data, encoding: .utf8)
     }
 }
 
 public struct LocalEngineBackend: SubagentBackend {
-    public let id = "localEngine"
-    public let displayName = "Local Engine"
-    private let worker: SubagentWorker?
+    public let id: String = "local_engine"
+    public let displayName: String = "Local Engine"
+    private let worker: SubagentWorker
 
-    public init(worker: SubagentWorker? = nil) {
+    public init(worker: SubagentWorker) {
         self.worker = worker
     }
 
@@ -854,17 +949,13 @@ public struct LocalEngineBackend: SubagentBackend {
         task: SubagentTaskBrief,
         context: SubagentExecutionContext
     ) async throws -> SubagentResult {
-        if let worker {
-            return try await worker.run()
-        }
-        let freshWorker = SubagentWorker(task: task, context: context)
-        return try await freshWorker.run()
+        try await worker.run()
     }
 }
 
 public struct SystemLanguageModelBackend: SubagentBackend {
-    public let id = "systemLanguageModel"
-    public let displayName = "Apple System Language Model"
+    public let id: String = "system_language_model"
+    public let displayName: String = "Apple System Language Model"
 
     public init() {}
 

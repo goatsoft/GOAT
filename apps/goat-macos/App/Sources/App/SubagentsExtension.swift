@@ -59,10 +59,10 @@ public actor SubagentsProvider: ModelToolProvider, TurnObserver {
     private let configuration: SubagentConfiguration
     private let database: ChatDatabase?
     private let accounting: SubagentTurnTokenAccounting
+    nonisolated public let quarantine: SubagentTransportQuarantine
 
     private var activeWorker: SubagentWorker?
     private var activeLease: SubagentCapabilityLease?
-    private let quarantine: SubagentTransportQuarantine
 
     public init(
         turnID: UUID,
@@ -71,7 +71,7 @@ public actor SubagentsProvider: ModelToolProvider, TurnObserver {
         authority: (any SubagentHostAuthority)? = nil,
         engine: (any InferenceEngine)? = nil,
         modelID: String? = nil,
-        configuration: SubagentConfiguration,
+        configuration: SubagentConfiguration = SubagentConfiguration(),
         database: ChatDatabase? = nil,
         accounting: SubagentTurnTokenAccounting = SubagentTurnTokenAccounting(),
         quarantine: SubagentTransportQuarantine = SubagentTransportQuarantine()
@@ -91,8 +91,8 @@ public actor SubagentsProvider: ModelToolProvider, TurnObserver {
     public func tools(for context: ExtensionContext) async throws -> [ToolSchema] {
         guard context.turnID == turnID else { return [] }
         guard configuration.enabled else { return [] }
-        let quarantined = await quarantine.isQuarantined
-        guard !quarantined else { return [] }
+        guard !quarantine.isQuarantined else { return [] }
+        guard !quarantine.isTransportActive else { return [] }
         guard accounting.canDelegate else { return [] }
         return [Self.toolSchema]
     }
@@ -103,9 +103,13 @@ public actor SubagentsProvider: ModelToolProvider, TurnObserver {
         guard configuration.enabled else {
             return ToolResult(content: "Subagents are disabled in settings.", isError: true)
         }
-        let quarantined = await quarantine.isQuarantined
-        guard !quarantined else {
+        guard !quarantine.isQuarantined else {
             return ToolResult(content: "Subagent engine reservation is quarantined.", isError: true)
+        }
+        guard !quarantine.isTransportActive else {
+            return ToolResult(
+                content: "Subagent engine reservation denied: subagent engine transport is currently busy.",
+                isError: true)
         }
         guard accounting.delegationsCount < SubagentLimits.maxDelegationsPerTurn else {
             return ToolResult(
@@ -212,6 +216,7 @@ public actor SubagentsProvider: ModelToolProvider, TurnObserver {
             await worker.cancel()
             activeWorker = nil
         }
+        _ = await quarantine.awaitClosure(timeoutSeconds: SubagentLimits.cancellationGracePeriodSeconds)
         activeLease = nil
     }
 }
