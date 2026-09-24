@@ -13,15 +13,14 @@ struct InspectorView: View {
                 ChatMetricsReveal(hasStarted: !session.messages.isEmpty) {
                     NerdStatsView(session: session)
                 }
-                inspectorSection("Model") {
-                    LabeledContent("Model") {
-                        VStack(alignment: .leading, spacing: Caprine.ModelMenu.rowDetailSpacing) {
-                            Text(modelName)
-                            if let worker = model.selectedSubagentModelID {
-                                SubagentModelLabel(modelID: worker)
-                            }
-                        }
+                inspectorSection("Engine") {
+                    EngineStatusSummary()
+                    if model.enginePreset.metadataDialect == .omlx {
+                        InspectorEngineRuntimeDetails(session: session)
                     }
+                }
+                inspectorSection("Model") {
+                    Text(modelName)
                     LabeledContent("Effort") {
                         HStack(spacing: 6) {
                             if model.presentation.isEnabled { GoatieView(pose: session.effort.goatie, size: 18) }
@@ -29,18 +28,16 @@ struct InspectorView: View {
                                 session.effort.presentationColor(in: model.theme))
                         }
                     }
-                    Divider()
-                    SubagentModelMenu(model: model, parentModelID: model.resolvedModelID(for: session))
+                    LabeledContent("Messages", value: "\(session.messages.count)")
+                }
+                inspectorSection("Subagent") {
+                    SubagentModelMenu(
+                        model: model, parentModelID: model.resolvedModelID(for: session), showsSelection: true)
                     if model.selectedSubagentModelID != nil {
-                        DisclosureGroup("Subagent budget") {
+                        DisclosureGroup("Options") {
                             SubagentBudgetControls(model: model)
                         }
                     }
-                    LabeledContent("Messages", value: "\(session.messages.count)")
-
-                }
-                inspectorSection("Engine") {
-                    EngineStatusSummary()
                 }
                 inspectorSection("MCP") {
                     if connectedMCPServers.isEmpty {

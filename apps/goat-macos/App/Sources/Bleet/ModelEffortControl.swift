@@ -34,30 +34,34 @@ struct ModelEffortControl: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Caprine.ModelMenu.rowDetailSpacing) {
-            Menu {
-                nativeMenuContent
-            } label: {
-                Text(nativeMenuLabel)
-                    .font(Caprine.ModelMenu.labelFont)
-                    .foregroundStyle(model.theme.tokens.ink)
+        Menu {
+            nativeMenuContent
+        } label: {
+            VStack(alignment: .leading, spacing: Caprine.ModelMenu.rowDetailSpacing) {
+                HStack(spacing: Caprine.ModelMenu.spacing) {
+                    Text(nativeMenuLabel)
+                        .font(Caprine.ModelMenu.labelFont)
+                    Image(systemName: "chevron.down")
+                        .font(Caprine.ModelMenu.rowDetailFont)
+                }
+                if let worker = model.selectedSubagentModelID {
+                    SubagentModelLabel(modelID: worker)
+                        .accessibilityHidden(true)
+                }
             }
-            .menuStyle(.borderlessButton)
-            .buttonStyle(.plain)
-            .tint(Caprine.Semantic.onAccent)
-            .foregroundStyle(Caprine.Semantic.onAccent)
-            .accessibilityLabel("Model and effort")
-            .accessibilityValue(
-                "\(projection.selectedDisplayName), \(projection.selectedAvailability), \(session.effort.label)"
-                    + (model.selectedSubagentModelID.map { ", Subagent: \(ModelRef(id: $0).displayName)" } ?? "")
-            )
-            .help("Model and effort - \(session.effort.blurb) (Command-1 through Command-4)")
-            if let worker = model.selectedSubagentModelID {
-                SubagentModelLabel(modelID: worker)
-                    .accessibilityHidden(true)
-            }
+            .fixedSize(horizontal: false, vertical: true)
+            .contentShape(Rectangle())
         }
-        .fixedSize(horizontal: false, vertical: true)
+        .menuStyle(.button)
+        .menuIndicator(.hidden)
+        .buttonStyle(.plain)
+        .foregroundStyle(Caprine.Semantic.onAccent)
+        .accessibilityLabel("Model and effort")
+        .accessibilityValue(
+            "\(projection.selectedDisplayName), \(projection.selectedAvailability), \(session.effort.label)"
+                + (model.selectedSubagentModelID.map { ", Subagent: \(ModelRef(id: $0).displayName)" } ?? "")
+        )
+        .help("Model and effort - \(session.effort.blurb) (Command-1 through Command-4)")
     }
 
     @ViewBuilder
@@ -71,9 +75,6 @@ struct ModelEffortControl: View {
                     selected, favourite: projection.favourites.contains { $0.id == selected.id }
                 )
                 .disabled(model.shepherd.hasActiveTurn || model.engineTransitioning)
-                if let worker = model.selectedSubagentModelID {
-                    SubagentMenuSummary(modelID: worker)
-                }
             }
             ForEach(favourites) { ref in
                 systemModelRow(ref, favourite: true)
@@ -129,25 +130,21 @@ struct ModelEffortControl: View {
     private func systemModelRow(
         _ ref: ModelRef, favourite: Bool = false, subtitle: String? = nil
     ) -> some View {
-        Button {
-            guard !model.shepherd.hasActiveTurn, !model.engineTransitioning else { return }
-            model.selectModel(ref.id, in: session)
-        } label: {
-            HStack(spacing: Caprine.ModelMenu.systemRowSpacing) {
-                Image(systemName: ref.menuTypeSymbol)
-                    .foregroundStyle(Caprine.Semantic.onAccent)
-                Text("\(ref.displayName) · \(subtitle ?? self.subtitle(for: ref))")
-                Spacer(minLength: Caprine.ModelMenu.selectedRowSpacer)
-                if favourite {
-                    Image(systemName: "star.fill").foregroundStyle(Caprine.Semantic.favourite)
-                }
-                if ref.id == activeModelID {
-                    Image(systemName: "checkmark").foregroundStyle(Caprine.Semantic.onAccent)
-                }
+        Toggle(
+            isOn: Binding(
+                get: { activeModelID == ref.id },
+                set: { selected in
+                    guard selected, !model.shepherd.hasActiveTurn, !model.engineTransitioning else { return }
+                    model.selectModel(ref.id, in: session)
+                })
+        ) {
+            Text("\(ref.displayName) · \(subtitle ?? self.subtitle(for: ref))")
+            if activeModelID == ref.id, let worker = model.selectedSubagentModelID {
+                Text("└─ " + ModelRef(id: worker).displayName)
             }
+            Image(systemName: favourite ? "star.fill" : ref.menuTypeSymbol)
         }
     }
-
     private var menuContent: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("MODEL")

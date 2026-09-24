@@ -29,9 +29,6 @@ struct ModelMenuItems: View {
             if let selected {
                 modelRow(selected, favourite: projection.favourites.contains { $0.id == selected.id })
                     .disabled(model.shepherd.hasActiveTurn || model.engineTransitioning)
-                if let worker = model.selectedSubagentModelID {
-                    SubagentMenuSummary(modelID: worker)
-                }
             }
             ForEach(favourites) { ref in
                 modelRow(ref, favourite: true)
@@ -78,23 +75,22 @@ struct ModelMenuItems: View {
     }
 
     private func modelRow(_ ref: ModelRef, favourite: Bool) -> some View {
-        Button {
-            model.selectModel(ref.id, in: model.currentSession)
-        } label: {
-            HStack(spacing: Caprine.ModelMenu.systemRowSpacing) {
-                Image(systemName: ref.menuTypeSymbol)
-                    .foregroundStyle(Caprine.Semantic.onAccent)
-                Text("\(ref.displayName) - \(subtitle(for: ref))")
-                Spacer(minLength: Caprine.ModelMenu.rowSpacer)
-                if favourite {
-                    Image(systemName: "star.fill").foregroundStyle(Caprine.Semantic.favourite)
-                }
-                if activeID == ref.id {
-                    Image(systemName: "checkmark").foregroundStyle(Caprine.Semantic.onAccent)
-                }
+        Toggle(
+            isOn: Binding(
+                get: { activeID == ref.id },
+                set: { selected in
+                    guard selected, !model.shepherd.hasActiveTurn, !model.engineTransitioning else { return }
+                    model.selectModel(ref.id, in: model.currentSession)
+                })
+        ) {
+            Text("\(ref.displayName) - \(subtitle(for: ref))")
+            if activeID == ref.id, let worker = model.selectedSubagentModelID {
+                Text("└─ " + ModelRef(id: worker).displayName)
             }
+            Image(systemName: favourite ? "star.fill" : ref.menuTypeSymbol)
         }
     }
+
 }
 
 /// The effort levels as checkable rows (⌘1-⌘n) - the effort goatie + "name - blurb".
@@ -134,6 +130,7 @@ struct EffortMenuItems: View {
 struct SubagentModelMenu: View {
     @Bindable var model: AppModel
     let parentModelID: String?
+    var showsSelection = false
     private var selectionLocked: Bool {
         model.shepherd.hasActiveTurn || model.engineTransitioning || model.extensionsChanging
     }
@@ -142,7 +139,7 @@ struct SubagentModelMenu: View {
         let projection = SubagentMenuProjection(
             models: model.models, parentModelID: parentModelID, hasLocalEngine: model.toolRouter.isEngineLocal())
         let selected = model.selectedSubagentModelID
-        Menu("Subagent") {
+        Menu(showsSelection ? selected.map { ModelRef(id: $0).displayName } ?? "None" : "Subagent") {
             Toggle("None", isOn: selection(for: nil))
                 .disabled(selectionLocked || model.activeEngineProfile == nil)
             ForEach(projection.workers) { worker in
@@ -243,17 +240,5 @@ struct SubagentBudgetControls: View {
         .font(Caprine.Activity.font)
         .foregroundStyle(model.theme.tokens.muted)
         .disabled(locked)
-    }
-}
-
-/// Native menus use an informational row instead of a multiline actionable label.
-struct SubagentMenuSummary: View {
-    let modelID: String
-
-    var body: some View {
-        Text("    └─ " + ModelRef(id: modelID).displayName)
-            .font(Caprine.ModelMenu.rowDetailFont)
-            .foregroundStyle(.secondary)
-            .accessibilityLabel("Subagent: " + ModelRef(id: modelID).displayName)
     }
 }

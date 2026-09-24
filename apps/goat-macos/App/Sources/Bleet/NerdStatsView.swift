@@ -10,8 +10,6 @@ struct NerdStatsView: View {
     @Bindable var session: ChatSession
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
-    @State private var runtimeStatus: EngineRuntimeStatus?
-    @State private var runtimeStatusOwner: String?
     @State private var series = GenerationRateSeries()
     @State private var generationID: UUID?
     @State private var selectedResponse: String?
@@ -33,10 +31,6 @@ struct NerdStatsView: View {
         "\(session.id):\(activeMessage?.id.uuidString ?? "idle"):\(scenePhase == .active)"
     }
 
-    private var statusKey: String {
-        "\(model.activeEngineID):\(model.engineIntentRevision):\(model.engineTransitioning):\(scenePhase == .active)"
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
@@ -49,10 +43,6 @@ struct NerdStatsView: View {
                         .foregroundStyle(tokens.tint)
                 }
             }
-            if model.enginePreset.metadataDialect == .omlx {
-                engineStatus
-                Divider()
-            }
             throughputChart
             Divider().overlay(tokens.muted.opacity(0.15))
             contextChart
@@ -60,20 +50,6 @@ struct NerdStatsView: View {
             if !history.isEmpty {
                 Divider().overlay(tokens.muted.opacity(0.15))
                 historyChart
-            }
-        }
-        .task(id: statusKey) {
-            let owner = statusKey
-            runtimeStatus = nil
-            runtimeStatusOwner = owner
-            guard scenePhase == .active, !model.engineTransitioning,
-                model.activeEngineProfile != nil, model.enginePreset.metadataDialect == .omlx
-            else { return }
-            while !Task.isCancelled {
-                let status = await model.engine.runtimeStatus()
-                guard !Task.isCancelled, owner == statusKey else { return }
-                runtimeStatus = status
-                do { try await Task.sleep(for: .seconds(5)) } catch { return }
             }
         }
         .task(id: samplingKey) {
@@ -136,31 +112,6 @@ struct NerdStatsView: View {
         }
         .font(Caprine.Activity.font)
         .foregroundStyle(tokens.muted)
-    }
-
-    private var engineStatus: some View {
-        let status = runtimeStatusOwner == statusKey ? runtimeStatus : nil
-        return VStack(alignment: .leading, spacing: Caprine.Activity.compactSpacing) {
-            Text(status?.version.map { "oMLX \($0)" } ?? "oMLX status")
-                .font(Caprine.Activity.emphasizedFont)
-            Text("Model/process memory: \(memoryLabel(status?.modelMemoryUsed))")
-            Text("Server memory ceiling: \(memoryLabel(status?.modelMemoryMaximum))")
-            Text("Active requests: \(status?.activeRequests.map(String.init) ?? "Unavailable")")
-            Text("Waiting requests: \(status?.waitingRequests.map(String.init) ?? "Unavailable")")
-            if let selected = status?.models?.first(where: { $0.id == (session.modelID ?? model.defaultModelID) }) {
-                Text(
-                    "Selected model: "
-                        + (selected.loading == true
-                            ? "Loading" : selected.loaded.map { $0 ? "Loaded" : "Not loaded" } ?? "Unavailable"))
-            }
-        }
-        .font(Caprine.Activity.font)
-        .foregroundStyle(tokens.muted)
-    }
-
-    private func memoryLabel(_ bytes: Int64?) -> String {
-        guard let bytes else { return "Unavailable" }
-        return ByteCountFormatter.string(fromByteCount: bytes, countStyle: .memory)
     }
 
     @ViewBuilder private var contextChart: some View {
@@ -361,5 +312,67 @@ struct NerdStatsView: View {
             Circle().fill(color).frame(width: 5, height: 5)
             Text(title).font(.caption2).foregroundStyle(tokens.muted)
         }
+    }
+}
+
+/// Visible inspector-owned polling, cancelled when hidden or the engine changes.
+struct InspectorEngineRuntimeDetails: View {
+    @Bindable var session: ChatSession
+    @Environment(AppModel.self) private var model
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var runtimeStatus: EngineRuntimeStatus?
+    @State private var runtimeStatusOwner: String?
+
+    private var statusKey: String {
+        "\(model.activeEngineID):\(model.engineIntentRevision):\(model.engineTransitioning):\(scenePhase == .active)"
+    }
+
+    var body: some View {
+        let status = runtimeStatusOwner == statusKey ? runtimeStatus : nil
+        VStack(alignment: .leading, spacing: Caprine.Activity.spacing) {
+            statusRow("Version", value: status?.version.map { "oMLX \($0)" } ?? "Unavailable")
+            statusRow("Model/process memory", value: memoryLabel(status?.modelMemoryUsed))
+            statusRow("Server memory ceiling", value: memoryLabel(status?.modelMemoryMaximum))
+            statusRow("Active requests", value: status?.activeRequests.map(String.init) ?? "Unavailable")
+            statusRow("Waiting requests", value: status?.waitingRequests.map(String.init) ?? "Unavailable")
+            if let selected = status?.models?.first(where: { $0.id == model.resolvedModelID(for: session) }) {
+                statusRow(
+                    "Selected model",
+                    value: selected.loading == true
+                        ? "Loading" : selected.loaded.map { $0 ? "Loaded" : "Not loaded" } ?? "Unavailable")
+            }
+        }
+        .font(Caprine.Activity.font)
+        .foregroundStyle(model.theme.tokens.muted)
+        .monospacedDigit()
+        .task(id: statusKey) {
+            let owner = statusKey
+            runtimeStatus = nil
+            runtimeStatusOwner = owner
+            guard scenePhase == .active, !model.engineTransitioning,
+                model.activeEngineProfile != nil, model.enginePreset.metadataDialect == .omlx
+            else { return }
+            while !Task.isCancelled {
+                let status = await model.engine.runtimeStatus()
+                guard !Task.isCancelled, owner == statusKey else { return }
+                runtimeStatus = status
+                do { try await Task.sleep(for: .seconds(5)) } catch { return }
+            }
+        }
+    }
+
+    private func statusRow(_ title: String, value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: Caprine.Activity.spacing) {
+            Text(title)
+            Spacer(minLength: Caprine.Activity.spacing)
+            Text(value)
+                .foregroundStyle(model.theme.tokens.ink)
+                .multilineTextAlignment(.trailing)
+        }
+    }
+
+    private func memoryLabel(_ bytes: Int64?) -> String {
+        guard let bytes else { return "Unavailable" }
+        return ByteCountFormatter.string(fromByteCount: bytes, countStyle: .memory)
     }
 }
