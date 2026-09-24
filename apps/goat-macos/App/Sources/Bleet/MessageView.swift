@@ -745,13 +745,102 @@ private struct ToolCallDetails: View {
                 }
                 .frame(maxHeight: Caprine.Activity.detailMaxHeight)
             }
+            if event.tool == "subagent_delegate", let runID = subagentRunID {
+                Divider().padding(.vertical, Caprine.Activity.ruleWidth)
+                SubagentTranscriptAffordance(runID: runID)
+            }
         }
+    }
+
+    private var subagentRunID: String? {
+        guard let result = event.result,
+            let data = result.data(using: .utf8),
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        return (json["run_id"] ?? json["runId"]) as? String
     }
 
     private func labeled(_ text: String) -> some View {
         Text(text.uppercased())
             .font(Caprine.Activity.badgeFont)
             .foregroundStyle(model.theme.tokens.muted)
+    }
+}
+
+private struct SubagentTranscriptAffordance: View {
+    let runID: String
+    @Environment(AppModel.self) private var model
+    @State private var record: SubagentRunRecord?
+    @State private var isExpanded = false
+    @State private var isLoading = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Caprine.Activity.compactSpacing) {
+            Button {
+                isExpanded.toggle()
+                if isExpanded && record == nil {
+                    loadRecord()
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.caption2)
+                    Text("Subagent Run Details")
+                        .font(Caprine.Activity.badgeFont)
+                    if let record {
+                        Text("(\(record.status) \u{00b7} \(record.roundsExecuted) rounds \u{00b7} \(record.totalTokens) tokens)")
+                            .font(Caprine.Activity.badgeFont)
+                            .foregroundStyle(model.theme.tokens.muted)
+                    }
+                }
+                .foregroundStyle(model.theme.tokens.tint)
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                if isLoading {
+                    ProgressView().controlSize(.small)
+                } else if let record {
+                    VStack(alignment: .leading, spacing: 6) {
+                        if let summary = record.summary, !summary.isEmpty {
+                            Text("SUMMARY")
+                                .font(Caprine.Activity.badgeFont)
+                                .foregroundStyle(model.theme.tokens.muted)
+                            Text(summary)
+                                .font(Caprine.Activity.font)
+                                .textSelection(.enabled)
+                        }
+                        if let transcript = record.transcriptJson, !transcript.isEmpty {
+                            Text("TRANSCRIPT")
+                                .font(Caprine.Activity.badgeFont)
+                                .foregroundStyle(model.theme.tokens.muted)
+                            ScrollView {
+                                JSONTreeView(raw: transcript)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .frame(maxHeight: Caprine.Activity.detailMaxHeight)
+                        }
+                    }
+                    .padding(.leading, 8)
+                } else {
+                    Text("Could not load subagent run transcript.")
+                        .font(Caprine.Activity.font)
+                        .foregroundStyle(model.theme.tokens.muted)
+                }
+            }
+        }
+    }
+
+    private func loadRecord() {
+        guard let db = model.db else { return }
+        isLoading = true
+        Task {
+            let loaded = try? await db.subagentRun(id: runID)
+            await MainActor.run {
+                self.record = loaded
+                self.isLoading = false
+            }
+        }
     }
 }
 

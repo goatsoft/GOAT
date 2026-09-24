@@ -103,7 +103,7 @@ struct GOATedSettingsView: View {
                 Button {
                     chooseSkillFolder(for: globalRoot)
                 } label: {
-                    Label("Add Skill…", systemImage: "plus")
+                    Label("Add Skill\u{2026}", systemImage: "plus")
                 }
                 .buttonStyle(SecondaryChipButtonStyle())
 
@@ -128,7 +128,7 @@ struct GOATedSettingsView: View {
             }
 
             Text(
-                "Global skills apply to every chat and load progressively when their descriptions match a request. Add Pen skills from that Pen’s page."
+                "Global skills apply to every chat and load progressively when their descriptions match a request. Add Pen skills from that Pen\u{2019}s page."
             )
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -266,8 +266,16 @@ struct GOATedSettingsView: View {
             BuiltInExtension(
                 name: "Skills",
                 detail:
-                    "Required core functionality. Discover Global and Pen skills, load instructions when needed, and use chat commands. Manage your own skills from Skills; user extension skills follow their extension’s switch.",
+                    "Required core functionality. Discover Global and Pen skills, load instructions when needed, and use chat commands. Manage your own skills from Skills; user extension skills follow their extension\u{2019}s switch.",
                 symbol: "shippingbox.fill"),
+            BuiltInExtension(
+                name: "Subagents",
+                detail:
+                    "Enable read-only code search and repository investigation via subagent delegation within the active Pen.",
+                symbol: "person.2.badge.gearshape",
+                enabled: Binding(
+                    get: { model.memory.builtInSettings.subagentsEnabled },
+                    set: { model.memory.builtInSettings.subagentsEnabled = $0 })),
         ].sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
@@ -317,6 +325,7 @@ struct GOATedSettingsView: View {
                         .disabled(model.extensionsChanging || model.shepherd.activeTurnID != nil)
                 }
                 if item.name == "Herder" { herderConfiguration }
+                if item.name == "Subagents" { subagentsConfiguration }
                 if item.name == "Hindsight Memory" {
                     Text(
                         "On by default. Turning this off pauses Hindsight and hides it from Memory choices. Saved connections, selected banks and server data are preserved; affected memory stays paused until you enable Hindsight or choose a local provider."
@@ -388,6 +397,40 @@ struct GOATedSettingsView: View {
             .font(.caption).foregroundStyle(.secondary)
         }
         .disabled(!settings.herderEnabled || model.extensionsChanging || model.shepherd.activeTurnID != nil)
+    }
+
+    private var subagentsConfiguration: some View {
+        @Bindable var settings = model.memory.builtInSettings
+        return VStack(alignment: .leading, spacing: 10) {
+            Divider()
+            Stepper(
+                "Max rounds: \(settings.subagentMaxRounds)",
+                value: Binding(
+                    get: { settings.subagentMaxRounds },
+                    set: { settings.setSubagentMaxRounds($0) }
+                ),
+                in: 1...10
+            )
+            Text(
+                "Maximum number of tool call rounds the subagent can perform before summarizing."
+            )
+            .font(.caption).foregroundStyle(.secondary)
+
+            Stepper(
+                "Watchdog timeout: \(settings.subagentTimeoutSeconds)s",
+                value: Binding(
+                    get: { settings.subagentTimeoutSeconds },
+                    set: { settings.setSubagentTimeoutSeconds($0) }
+                ),
+                in: 10...90,
+                step: 5
+            )
+            Text(
+                "Hard watchdog timeout in seconds for subagent task completion."
+            )
+            .font(.caption).foregroundStyle(.secondary)
+        }
+        .disabled(!settings.subagentsEnabled || model.extensionsChanging || model.shepherd.activeTurnID != nil)
     }
 
     private var allRoots: [SkillManagementRoot] {
