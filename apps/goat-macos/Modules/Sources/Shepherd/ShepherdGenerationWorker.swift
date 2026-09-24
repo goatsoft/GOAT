@@ -517,7 +517,7 @@ actor ShepherdGenerationWorker {
             switch engine {
             case .http(let code), .httpDetail(let code, _, _):
                 return retryableStatusCodes.contains(code)
-            case .notConfigured:
+            case .notConfigured, .streamBufferOverflow:
                 return false
             }
         }

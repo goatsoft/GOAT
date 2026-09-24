@@ -20,6 +20,8 @@ public extension EngineError {
             return Self.classification(for: code, detail: "")
         case .httpDetail(let code, let detail, _):
             return Self.classification(for: code, detail: detail)
+        case .streamBufferOverflow:
+            return .connection
         }
     }
 

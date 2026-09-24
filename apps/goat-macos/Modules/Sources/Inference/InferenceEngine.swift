@@ -199,7 +199,7 @@ public final class GenerationTransportClosureHandle: @unchecked Sendable {
     private let lock = NSLock()
     private var isAcknowledged = false
     private var onAcknowledgeCallbacks: [@Sendable () -> Void] = []
-    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var waiters: [UUID: CheckedContinuation<Void, Never>] = [:]
 
     public init() {}
 
@@ -229,7 +229,7 @@ public final class GenerationTransportClosureHandle: @unchecked Sendable {
         isAcknowledged = true
         let callbacks = onAcknowledgeCallbacks
         onAcknowledgeCallbacks.removeAll()
-        let pendingWaiters = waiters
+        let pendingWaiters = Array(waiters.values)
         waiters.removeAll()
         lock.unlock()
 
@@ -241,32 +241,50 @@ public final class GenerationTransportClosureHandle: @unchecked Sendable {
         }
     }
 
-    public func waitForClosure(timeoutSeconds: Int = 5) async -> Bool {
-        let already: Bool = {
-            lock.lock()
-            defer { lock.unlock() }
-            return isAcknowledged
-        }()
-        if already { return true }
+    private func checkClosed() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return isAcknowledged
+    }
 
+    private func addWaiter(id: UUID, continuation: CheckedContinuation<Void, Never>) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if isAcknowledged {
+            return false
+        }
+        waiters[id] = continuation
+        return true
+    }
+
+    private func removeWaiter(id: UUID) -> CheckedContinuation<Void, Never>? {
+        lock.lock()
+        defer { lock.unlock() }
+        return waiters.removeValue(forKey: id)
+    }
+
+    public func waitForClosure(timeoutSeconds: Int = 5) async -> Bool {
+        if checkClosed() { return true }
+        if timeoutSeconds <= 0 { return false }
+
+        let waiterID = UUID()
         return await withTaskGroup(of: Bool.self) { group in
             group.addTask {
-                await withCheckedContinuation { cont in
-                    self.lock.lock()
-                    if self.isAcknowledged {
-                        self.lock.unlock()
-                        cont.resume()
-                    } else {
-                        self.waiters.append(cont)
-                        self.lock.unlock()
+                await withTaskCancellationHandler {
+                    await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                        let added = self.addWaiter(id: waiterID, continuation: cont)
+                        if !added {
+                            cont.resume()
+                        }
                     }
+                } onCancel: {
+                    let waiter = self.removeWaiter(id: waiterID)
+                    waiter?.resume()
                 }
-                return true
+                return self.checkClosed()
             }
             group.addTask {
-                if timeoutSeconds > 0 {
-                    try? await Task.sleep(for: .seconds(timeoutSeconds))
-                }
+                try? await Task.sleep(for: .seconds(timeoutSeconds))
                 return false
             }
             let first = await group.next() ?? false
@@ -385,6 +403,7 @@ public enum EngineError: LocalizedError, Sendable {
     case http(Int)
     case httpDetail(Int, String, retryAfter: TimeInterval?)
     case notConfigured
+    case streamBufferOverflow
 
     public var errorDescription: String? {
         switch self {
@@ -397,6 +416,7 @@ public enum EngineError: LocalizedError, Sendable {
                 ? "The engine wants an API key. Add one in Settings → Engine."
                 : "Engine returned HTTP \(code)\(detail.isEmpty ? "." : " - \(detail)")"
         case .notConfigured: "No engine configured."
+        case .streamBufferOverflow: "Stream buffer overflow: slow consumer could not keep up with engine generation."
         }
     }
 }

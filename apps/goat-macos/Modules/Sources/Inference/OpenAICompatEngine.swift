@@ -302,6 +302,8 @@ public actor OpenAICompatEngine: InferenceEngine {
                 var assembler = StreamAssembler(round: r.round)
 
                 defer {
+                    r.transportClosureHandle?.acknowledge()
+                    r.onTransportClosed?()
                     Task { [weak self] in
                         await self?.unregisterStreamTask(taskID)
                     }
@@ -321,8 +323,6 @@ public actor OpenAICompatEngine: InferenceEngine {
                     let client = JudasHTTPClient(origin: config.baseURL, source: .engine, name: config.name)
                     defer {
                         client.invalidateAndCancel()
-                        r.transportClosureHandle?.acknowledge()
-                        r.onTransportClosed?()
                     }
                     let (bytes, resp) = try await client.bytes(for: req)
                     guard let http = resp as? HTTPURLResponse else { throw EngineError.http(-1) }
@@ -361,8 +361,13 @@ public actor OpenAICompatEngine: InferenceEngine {
                         else { continue }
                         for event in assembler.feed(chunk) {
                             switch continuation.yield(event) {
-                            case .enqueued, .dropped, .terminated:
+                            case .enqueued:
                                 break
+                            case .dropped:
+                                continuation.finish(throwing: EngineError.streamBufferOverflow)
+                                return
+                            case .terminated:
+                                return
                             @unknown default:
                                 break
                             }
@@ -370,8 +375,13 @@ public actor OpenAICompatEngine: InferenceEngine {
                     }
                     for event in assembler.finish() {
                         switch continuation.yield(event) {
-                        case .enqueued, .dropped, .terminated:
+                        case .enqueued:
                             break
+                        case .dropped:
+                            continuation.finish(throwing: EngineError.streamBufferOverflow)
+                            return
+                        case .terminated:
+                            return
                         @unknown default:
                             break
                         }

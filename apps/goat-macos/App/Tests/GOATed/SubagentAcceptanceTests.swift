@@ -1582,9 +1582,10 @@ extension AppTests.GOATed {
 
                 func stream(_ request: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
                     AsyncThrowingStream { continuation in
-                        // Flood 100 events immediately exceeding the buffer capacity of 32
-                        for i in 0..<100 {
-                            continuation.yield(.token("flood_\(i) "))
+                        // Flood thinking events (each under 1 MiB max event size, but totaling > 2 MiB buffer limit)
+                        let chunk = String(repeating: "t", count: 800 * 1024)
+                        for _ in 0..<5 {
+                            continuation.yield(.thinking(chunk))
                         }
                         continuation.finish()
                     }
@@ -1609,6 +1610,172 @@ extension AppTests.GOATed {
             let result = try await worker.run()
             #expect(result.receipt.status == .failed)
             #expect(result.receipt.unresolved.contains { $0.reason == "streamBufferOverflow" })
+        }
+
+        // Controlled slow consumer through engine boundary triggers buffer overflow
+        @Test func engineBoundary_slowConsumerTriggersBufferOverflow() async throws {
+            let (stream, continuation) = AsyncThrowingStream<GenerationEvent, Error>.makeStream(
+                bufferingPolicy: .bufferingNewest(32)
+            )
+
+            actor FloodingProducer {
+                func flood(continuation: AsyncThrowingStream<GenerationEvent, Error>.Continuation) {
+                    for i in 0..<50 {
+                        switch continuation.yield(.token("chunk_\(i)")) {
+                        case .enqueued:
+                            break
+                        case .dropped:
+                            continuation.finish(throwing: EngineError.streamBufferOverflow)
+                            return
+                        case .terminated:
+                            return
+                        @unknown default:
+                            break
+                        }
+                    }
+                    continuation.finish()
+                }
+            }
+
+            let producer = FloodingProducer()
+            await producer.flood(continuation: continuation)
+
+            // Consumer reads after flood has completed (slow consumer held)
+            var errorThrown: Error?
+            do {
+                for try await _ in stream {}
+            } catch {
+                errorThrown = error
+            }
+
+            #expect(errorThrown is EngineError)
+            if let engineError = errorThrown as? EngineError {
+                guard case .streamBufferOverflow = engineError else {
+                    Issue.record("Expected .streamBufferOverflow but got \(engineError)")
+                    return
+                }
+            }
+        }
+
+        // OpenAICompatEngine pre-client failure acknowledges transport closure handle
+        @Test func openAICompatEngine_preClientFailureAcknowledgesTransportClosureHandle() async throws {
+            final class AckBox: @unchecked Sendable {
+                private let lock = NSLock()
+                private var ack = false
+                func set() {
+                    lock.lock()
+                    defer { lock.unlock() }
+                    ack = true
+                }
+                var value: Bool {
+                    lock.lock()
+                    defer { lock.unlock() }
+                    return ack
+                }
+            }
+
+            let engine = OpenAICompatEngine(config: EngineConfig(baseURL: URL(string: "http://127.0.0.1:0")!))
+            let handle = GenerationTransportClosureHandle()
+            let ackBox = AckBox()
+            handle.onAcknowledge {
+                ackBox.set()
+            }
+
+            let request = GenerationRequest(
+                model: "qwen2.5-7b-instruct",
+                turns: [ChatTurn(role: .user, text: "hi")],
+                effort: .trot,
+                transportClosureHandle: handle
+            )
+
+            let stream = await engine.stream(request)
+            do {
+                for try await _ in stream {}
+            } catch {}
+
+            // Must acknowledge even though endpoint is invalid or client fails
+            let closed = await handle.waitForClosure(timeoutSeconds: 1)
+            #expect(closed == true)
+            #expect(ackBox.value == true)
+        }
+
+        // Transport closure handle never-acknowledged case does not hang and respects timeout
+        @Test func generationTransportClosureHandle_neverAcknowledgedDoesNotHang() async throws {
+            let handle = GenerationTransportClosureHandle()
+
+            // timeoutSeconds: 0 returns false immediately
+            let immediate = await handle.waitForClosure(timeoutSeconds: 0)
+            #expect(immediate == false)
+
+            // unacknowledged handle returns false upon timeout without hanging
+            let timedOut = await handle.waitForClosure(timeoutSeconds: 1)
+            #expect(timedOut == false)
+            #expect(handle.isClosed == false)
+        }
+
+        // Worker terminal-write failure test: propagates database persistence errors
+        @Test func terminalWriteFailure_propagatesDatabaseError() async throws {
+            let (workspace, fileTools) = try createWorkspace()
+            defer { try? FileManager.default.removeItem(at: workspace) }
+            let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: tempDir) }
+            let dbPath = tempDir.appendingPathComponent("test.db").path
+            let db = try ChatDatabase(path: dbPath)
+            let chatID = UUID()
+            let turnID = UUID()
+            try await db.save(makeChat(id: chatID.uuidString))
+
+            actor CorruptingEngine: InferenceEngine {
+                let dirToCorrupt: URL
+                init(dirToCorrupt: URL) {
+                    self.dirToCorrupt = dirToCorrupt
+                }
+                func health() async -> EngineHealth { .ok([]) }
+                func runtimeStatus() async -> EngineRuntimeStatus? {
+                    EngineRuntimeStatus(
+                        observedAt: .now,
+                        version: "1.0",
+                        modelMemoryUsed: 100 * 1024 * 1024,
+                        modelMemoryMaximum: 16 * 1024 * 1024 * 1024,
+                        activeRequests: 0,
+                        waitingRequests: 0,
+                        models: [
+                            EngineModelRuntimeStatus(id: "qwen2.5-7b-instruct", loaded: true, contextWindow: 32_768)
+                        ]
+                    )
+                }
+                func stream(_ request: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
+                    // Save subagent run has already succeeded at this point.
+                    // Now corrupt/remove the database directory so transitionSubagentRun will fail with SQLite error.
+                    try? FileManager.default.removeItem(at: dirToCorrupt)
+                    return AsyncThrowingStream { continuation in
+                        continuation.yield(.token("Completed task"))
+                        continuation.finish()
+                    }
+                }
+            }
+
+            let context = SubagentExecutionContext(
+                chatID: chatID,
+                turnID: turnID,
+                projectID: nil,
+                workspace: workspace,
+                fileTools: fileTools,
+                engine: CorruptingEngine(dirToCorrupt: tempDir),
+                database: db,
+                lease: SubagentCapabilityLease()
+            )
+
+            let worker = SubagentWorker(
+                task: SubagentTaskBrief(objective: "Terminal persistence failure test"),
+                context: context
+            )
+
+            // When transitionSubagentRun fails, worker.run() must propagate the error, not swallow it
+            await #expect(throws: Error.self) {
+                try await worker.run()
+            }
         }
 
         // Large event exceeding maxStreamEventBytes triggers buffer overflow

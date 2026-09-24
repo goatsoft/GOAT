@@ -6,6 +6,30 @@ import Pens
 import Persistence
 import Tools
 
+private final class QueuedByteTracker: @unchecked Sendable {
+    private let lock = NSLock()
+    private var bytes = 0
+
+    func add(_ count: Int) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        bytes += count
+        return bytes
+    }
+
+    func subtract(_ count: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        bytes = max(0, bytes - count)
+    }
+
+    var current: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return bytes
+    }
+}
+
 #if canImport(FoundationModels)
 import FoundationModels
 #endif
@@ -280,11 +304,11 @@ public actor SubagentWorker {
             let summaryText = receipt.summary
             let transcriptCount = transcriptJSON?.utf8.count ?? 0
 
-            // Perform terminal status transition in a detached context so cancellation of the
-            // calling task does not abort recording terminal state in SQLite.
-            let updated =
-                (try? await Task.detached {
-                    try await db.transitionSubagentRun(
+            // Perform terminal status transition in a detached context to shield from cancellation
+            // of the calling task, while properly propagating real persistence errors.
+            let updatedResult = await Task.detached { () -> Result<Bool, Error> in
+                do {
+                    let res = try await db.transitionSubagentRun(
                         id: runIDString,
                         toStatus: statusRaw,
                         roundsExecuted: roundsExecuted,
@@ -296,16 +320,30 @@ public actor SubagentWorker {
                         receiptJson: receiptJson,
                         completedAt: .now
                     )
-                }.value) ?? false
+                    return .success(res)
+                } catch {
+                    return .failure(error)
+                }
+            }.value
+
+            let updated = try updatedResult.get()
 
             if !updated {
-                // Lost the CAS race: return the authoritative committed state
-                let committedOpt = try? await Task.detached {
-                    try await db.subagentRun(id: runIDString)
+                // Lost the CAS race: reload the authoritative committed state
+                let committedResult = await Task.detached { () -> Result<SubagentRunRecord?, Error> in
+                    do {
+                        let rec = try await db.subagentRun(id: runIDString)
+                        return .success(rec)
+                    } catch {
+                        return .failure(error)
+                    }
                 }.value
 
-                if let committed = committedOpt,
-                    let committedStatus = SubagentStatus(rawValue: committed.status)
+                let committed = try committedResult.get()
+
+                if let committed,
+                    let committedStatus = SubagentStatus(rawValue: committed.status),
+                    committedStatus != .running
                 {
                     let decoder = JSONDecoder()
                     let committedCitations =
@@ -333,8 +371,8 @@ public actor SubagentWorker {
                         roundsExecuted: committed.roundsExecuted,
                         totalTokens: committed.totalTokens
                     )
-                } else if committedOpt == nil {
-                    // Chat cascade deletion or missing row: fail closed
+                } else {
+                    // Chat cascade deletion, missing row, or record is not in a terminal state: fail closed
                     throw CapabilityError.revoked
                 }
             }
@@ -731,6 +769,7 @@ public actor SubagentWorker {
 
             let producerStream = await engine.stream(request)
 
+            let queuedByteTracker = QueuedByteTracker()
             let (consumerStream, continuation) =
                 AsyncThrowingStream<GenerationEvent, Error>.makeStream(
                     bufferingPolicy: .bufferingNewest(SubagentLimits.streamBufferCapacity)
@@ -744,7 +783,6 @@ public actor SubagentWorker {
                     }
                 }
                 do {
-                    var bufferBytesEnqueued = 0
                     forwarderLoop: for try await event in producerStream {
                         let eventBytes: Int
                         switch event {
@@ -767,8 +805,8 @@ public actor SubagentWorker {
                             break forwarderLoop
                         }
 
-                        bufferBytesEnqueued += eventBytes
-                        if bufferBytesEnqueued > SubagentLimits.maxStreamBufferBytes {
+                        let currentlyQueued = queuedByteTracker.add(eventBytes)
+                        if currentlyQueued > SubagentLimits.maxStreamBufferBytes {
                             continuation.finish(throwing: SubagentWorkerError.streamBufferOverflow)
                             break forwarderLoop
                         }
@@ -794,6 +832,23 @@ public actor SubagentWorker {
                 streamLoop: for try await event in consumerStream {
                     try Task.checkCancellation()
                     try context.lease.checkValid()
+
+                    let dequeuedBytes: Int
+                    switch event {
+                    case .token(let chunk):
+                        dequeuedBytes = chunk.utf8.count
+                    case .thinking(let th):
+                        dequeuedBytes = th.utf8.count
+                    case .toolInput(let bytes):
+                        dequeuedBytes = bytes
+                    case .toolCalls(let calls):
+                        dequeuedBytes = calls.reduce(0) {
+                            $0 + $1.id.utf8.count + $1.name.utf8.count + $1.argumentsJSON.utf8.count
+                        }
+                    case .done:
+                        dequeuedBytes = 0
+                    }
+                    queuedByteTracker.subtract(dequeuedBytes)
 
                     switch event {
                     case .token(let chunk):
