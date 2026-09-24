@@ -360,13 +360,16 @@ private func workerRequest() -> GenerationRequest {
 
 private actor LiveRecoveryProbeEngine: InferenceEngine {
     let engine: OpenAICompatEngine
+    private(set) var dispatchedModels: [String] = []
     var injectMalformedResponse: Bool
     init(engine: OpenAICompatEngine, injectMalformedResponse: Bool) {
         self.engine = engine
         self.injectMalformedResponse = injectMalformedResponse
     }
     func health() async -> EngineHealth { await engine.health() }
+    func runtimeStatus() async -> EngineRuntimeStatus? { await engine.runtimeStatus() }
     func stream(_ request: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
+        dispatchedModels.append(request.model)
         if injectMalformedResponse {
             injectMalformedResponse = false
             return AsyncThrowingStream {
@@ -1982,6 +1985,111 @@ extension AppTests.Shepherd {
                 try String(contentsOf: workspace.appendingPathComponent("src/check.ts"), encoding: .utf8)
                     == "export const value = 'two';\n")
             #expect(session.messages.allSatisfy { $0.error == nil })
+        }
+
+        @Test(.tags(.integration), .enabled(if: ProcessInfo.processInfo.environment["GOAT_LIVE_SUBAGENTS"] == "1"))
+        @MainActor func liveParentDelegatesToSeparateWorkerAndResumes() async throws {
+            let directory = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".goat/config")
+            let config = try #require(try EngineStore.load(from: directory.appendingPathComponent("engines.json")))
+            let selectedEngine = ProcessInfo.processInfo.environment["GOAT_LIVE_ENGINE_NAME"]
+            let profile = try #require(
+                config.engines.first { selectedEngine == nil ? $0.id == config.active : $0.name == selectedEngine })
+            let credentials = try JSONDecoder().decode(
+                [String: String].self,
+                from: Data(contentsOf: directory.appendingPathComponent("credentials.json")))
+            let engine = OpenAICompatEngine(
+                config: EngineConfig(
+                    baseURL: try #require(URL(string: profile.url)),
+                    apiKey: credentials["engine.\(profile.id).apiKey"], name: profile.name,
+                    metadataDialect: profile.preset.metadataDialect))
+            let parentID = ProcessInfo.processInfo.environment["GOAT_LIVE_MODEL"] ?? "Qwen3.8-27B-MLX-4bit"
+            let workerID = try #require(ProcessInfo.processInfo.environment["GOAT_LIVE_WORKER_MODEL"])
+            let health = await engine.health()
+            let parent = try #require(health.models.first { $0.id == parentID })
+            try #require(health.models.contains { $0.id == workerID })
+            let status = try #require(await engine.runtimeStatus())
+            try #require(status.activeRequests == 0 && status.waitingRequests == 0)
+            // Explicit opt-in qualification warms the chosen models; production never silently loads a worker.
+            for id in [parentID, workerID] {
+                let closure = GenerationTransportClosureHandle()
+                let request = GenerationRequest(
+                    model: id, turns: [ChatTurn(role: .user, text: "Reply OK")],
+                    effort: .graze, maxTokens: 1, transportClosureHandle: closure)
+                for try await _ in await engine.stream(request) {}
+                #expect(await closure.waitForClosure())
+            }
+            let resident = try #require(await engine.runtimeStatus())
+            try #require(
+                [parentID, workerID].allSatisfy { id in
+                    resident.models?.contains { $0.id == id && $0.loaded == true } == true
+                }, "Load and pin both models in oMLX before qualification")
+            let root = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent(
+                "live-pair-\(UUID())")
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let marker = "worker-evidence-\(UUID().uuidString)"
+            try "export const evidence = '\(marker)';\n".write(
+                to: root.appendingPathComponent("evidence.ts"), atomically: true, encoding: .utf8)
+            let suite = "live-pair-\(UUID())"
+            let defaults = try #require(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let settings = BuiltInExtensionSettings(defaults: defaults)
+            settings.setSubagentModelID(workerID, for: profile.id)
+            settings.setSubagentTimeoutSeconds(90)
+            let activity = ActivityLog()
+            let router = AppToolRouter(
+                mcp: MCPModel(db: nil, activity: activity),
+                memory: MemoryModel(activity: activity, builtInSettings: settings), activity: activity,
+                builtInSkillsRoot: root.appendingPathComponent("missing"),
+                globalSkillsRoot: root.appendingPathComponent("missing"))
+            let probe = LiveRecoveryProbeEngine(engine: engine, injectMalformedResponse: false)
+            router.workspaceForProject = { _ in root }
+            router.engineProvider = { probe }
+            router.isEngineLocal = { true }
+            router.workerModelID = { settings.subagentModelID(for: profile.id) }
+            let session = ChatSession(effort: .graze, modelID: parentID)
+            session.projectID = UUID()
+            let env = FakeEnv()
+            env.automaticChatTitles = false
+            let identity = ModelIdentity(engineProfileID: profile.id, modelID: parentID)
+            env.liveGenerationContext = GenerationContext(
+                engineProfileID: profile.id, engineName: profile.name,
+                engineConfigurationRevision: 1, identity: identity,
+                compatibility: ModelCompatibilityResolver.resolve(
+                    identity: identity,
+                    familyProfile: ModelFamilyRegistry.profile(for: parentID), generationSettingsOwner: .engineManaged))
+            env.availableModels = [parent]
+            env.fallbackModelID = parentID
+            env.project = ShepherdProjectContext(name: "Pair qualification", instructions: "", workspacePath: root.path)
+            let shepherd = ShepherdModel(engine: probe, tools: router, activity: activity)
+            shepherd.env = env
+            let user = ChatMessage(role: .user)
+            user.text =
+                "Use subagent_delegate exactly once to ask the worker to read evidence.ts and return its exported string with a verified citation. Do not read the file yourself. After the worker returns, report that exact string and its source."
+            user.complete = true
+            session.messages = [user]
+            #expect(shepherd.run(in: session))
+            let deadline = ContinuousClock.now.advanced(by: .seconds(240))
+            while shepherd.hasActiveTurn && ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(100))
+            }
+            if shepherd.hasActiveTurn {
+                shepherd.stop()
+                Issue.record("Live pair timed out")
+            }
+            await shepherd.streamTask?.value
+            let events = session.messages.flatMap { $0.toolEvents }
+            let delegation = try #require(events.first { $0.tool == SubagentsProvider.toolName })
+            let receipt = try JSONDecoder().decode(SubagentReceipt.self, from: Data((delegation.result ?? "").utf8))
+            print("LIVE_PAIR_RECEIPT", delegation.result ?? "missing")
+            #expect(receipt.status == .completed)
+            #expect(receipt.citations.contains { $0.path == "evidence.ts" && $0.startLine == 1 })
+            #expect(session.messages.last?.text.contains(marker) == true)
+            let models = await probe.dispatchedModels
+            #expect(models.first == parentID && models.last == parentID)
+            #expect(models.contains(workerID))
+            #expect(session.modelID == parentID)
+            print("LIVE_PAIR_DISPATCH", models, "status", receipt.status.rawValue, "citations", receipt.citations.count)
         }
 
         @Test @MainActor func leadDuringGenerationIsDurableAndJoinsTheNextResponse() async {

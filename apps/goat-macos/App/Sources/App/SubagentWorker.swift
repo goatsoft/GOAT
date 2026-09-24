@@ -506,11 +506,6 @@ public actor SubagentWorker {
             return
                 "Model context window (\(contextWindow)) is smaller than requested subagent context budget (\(requiredBudgetTokens))."
         }
-        if contextWindow > SubagentLimits.maximumSupportedContextWindow {
-            return
-                "Model context window (\(contextWindow)) exceeds validated Stage 1 limit (\(SubagentLimits.maximumSupportedContextWindow))."
-        }
-
         guard let envelope = SubagentLimits.resolvedEnvelope(for: loadedModel.id) else {
             return
                 "Model '\(loadedModel.id)' is an unverified or aliased model outside the validated Stage 1 model allowlist."
@@ -531,7 +526,9 @@ public actor SubagentWorker {
         let requestedTokens = min(contextWindow, requiredBudgetTokens)
         let kvBytesPerToken = envelope.bytesPerToken
         let kvCacheBytes: Int64 = Int64(requestedTokens) * kvBytesPerToken
-        let runtimeOverheadBytes: Int64 = 256 * 1024 * 1024
+        // Includes recurrent hybrid state and temporary execution allocations. We additionally
+        // overestimate hybrid KV by charging all layers, not just full-attention layers.
+        let runtimeOverheadBytes: Int64 = 512 * 1024 * 1024
         let minimumRequiredHeadroomBytes: Int64 = kvCacheBytes + runtimeOverheadBytes
         if freeMemoryBytes < minimumRequiredHeadroomBytes {
             let freeMB = max(0, freeMemoryBytes / (1024 * 1024))
@@ -639,7 +636,8 @@ public actor SubagentWorker {
                 "\nInvestigation focus (advisory; other files within this Pen remain available): \(filter.joined(separator: ", "))"
         }
         if let schema = task.returnSchema, !schema.isEmpty {
-            systemPrompt += "\nRequired return schema: \(schema)"
+            systemPrompt +=
+                "\nThe parent requested these presentation details inside the summary string only: \(schema). The outer JSON receipt shape above is mandatory and must not change."
         }
 
         transcript.append(ChatTurn(role: .system, text: systemPrompt))
@@ -691,6 +689,19 @@ public actor SubagentWorker {
             let isSynthesisPass = remainingRounds == 0
 
             let availableTools = isSynthesisPass ? [] : await fence.availableToolSpecs
+            if isSynthesisPass {
+                transcript.append(
+                    ChatTurn(
+                        role: .user,
+                        text: """
+                            Finish now using the evidence already read. Return only a JSON object, without Markdown fences:
+                            {"summary":"your findings","citations":[{"path":"relative/file","start_line":1,"end_line":1}],"unresolved":[]}
+                            Include citations for the files and exact lines supporting your findings. Never invent a read or line.
+                            Any requested custom output format belongs inside the summary string; do not replace these outer keys.
+                            """))
+                transcriptBytes = totalTranscriptBytes(transcript)
+                self.currentTranscript = transcript
+            }
 
             var estimatedInputTokens = estimateInputTokens(turns: transcript, tools: availableTools)
             if estimatedInputTokens > SubagentLimits.maxInputTokensPerRequest {
@@ -780,6 +791,7 @@ public actor SubagentWorker {
                 effort: context.effort,
                 maxTokens: maxGenAllowed,
                 tools: availableTools,
+                compatibility: SubagentLimits.workerCompatibility(for: context.modelID ?? "qwen2.5-7b-instruct"),
                 round: roundsExecuted,
                 transportClosureHandle: closureHandle
             )

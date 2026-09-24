@@ -5,6 +5,7 @@ import Observation
 @MainActor @Observable
 final class BuiltInExtensionSettings {
     private let defaults: UserDefaults
+    private var subagentModels: [String: String]
     var herderEnabled: Bool { didSet { defaults.set(herderEnabled, forKey: "goated.herder.enabled") } }
     var herderWritesEnabled: Bool { didSet { defaults.set(herderWritesEnabled, forKey: "goated.herder.writes") } }
     var herderCommandsEnabled: Bool { didSet { defaults.set(herderCommandsEnabled, forKey: "goated.herder.commands") } }
@@ -17,6 +18,7 @@ final class BuiltInExtensionSettings {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        subagentModels = defaults.dictionary(forKey: "goated.subagents.models") as? [String: String] ?? [:]
         herderEnabled = defaults.object(forKey: "goated.herder.enabled") as? Bool ?? true
         herderWritesEnabled = defaults.object(forKey: "goated.herder.writes") as? Bool ?? true
         herderCommandsEnabled = defaults.object(forKey: "goated.herder.commands") as? Bool ?? true
@@ -35,6 +37,17 @@ final class BuiltInExtensionSettings {
         } else {
             subagentPreferredBackend = .localEngine
         }
+    }
+
+    /// Selections are scoped to the engine profile, never silently reused on another server.
+    func subagentModelID(for engineID: String?) -> String? {
+        guard let engineID else { return nil }
+        return subagentModels[engineID]
+    }
+
+    func setSubagentModelID(_ modelID: String?, for engineID: String) {
+        subagentModels[engineID] = modelID.flatMap { $0.isEmpty ? nil : $0 }
+        defaults.set(subagentModels, forKey: "goated.subagents.models")
     }
 
     func setCommandTimeout(_ value: Int) {

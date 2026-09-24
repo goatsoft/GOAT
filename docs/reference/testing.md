@@ -72,3 +72,23 @@ no longer controls pooling. Helper counts and framework noise are observations,
 not portable test thresholds; compare the same full test plan and toolchain and
 retain the raw logs. App Sandbox remains off under ADR-0007; adding private WebKit
 entitlements is not a remedy for helper diagnostics.
+
+### Live local worker pairing
+
+The opt-in `liveParentDelegatesToSeparateWorkerAndResumes` test uses the saved engine connection and
+credential without printing it. It warms the selected installed models, creates a disposable Pen with a
+random source value, asks the parent to delegate reading it, verifies the child's citation, then checks
+that the parent resumes on its original model and reports the value. No user project files are submitted.
+
+Run against an idle engine with both models installed and pinned:
+
+```sh
+TEST_RUNNER_GOAT_LIVE_SUBAGENTS=1 \
+TEST_RUNNER_GOAT_LIVE_ENGINE_NAME='Your engine profile name' \
+TEST_RUNNER_GOAT_LIVE_MODEL='Qwen3.8-27B-MLX-4bit' \
+TEST_RUNNER_GOAT_LIVE_WORKER_MODEL='Qwen3.5-9B-4bit' \
+make test-app TEST_PLAN=Shepherd
+```
+
+Use the exact model IDs returned by the engine. Omitting the engine name selects the saved active profile.
+The test is skipped by default and in CI. Passing deterministic tests alone does not qualify a live pair.

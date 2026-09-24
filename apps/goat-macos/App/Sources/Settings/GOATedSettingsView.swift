@@ -403,6 +403,33 @@ struct GOATedSettingsView: View {
     private var subagentsConfiguration: some View {
         @Bindable var settings = model.memory.builtInSettings
         return VStack(alignment: .leading, spacing: Caprine.Activity.spacing) {
+            Picker(
+                "Worker model",
+                selection: Binding(
+                    get: { model.selectedSubagentModelID ?? "" },
+                    set: { value in
+                        guard let engineID = model.activeEngineProfile?.id else { return }
+                        settings.setSubagentModelID(value.isEmpty ? nil : value, for: engineID)
+                    }
+                )
+            ) {
+                Text("Choose a worker model").tag("")
+                ForEach(model.models.filter { SubagentLimits.resolvedEnvelope(for: $0.id) != nil }) { worker in
+                    Text(worker.id).tag(worker.id)
+                }
+                if let selected = model.selectedSubagentModelID,
+                    !model.models.contains(where: {
+                        $0.id == selected && SubagentLimits.resolvedEnvelope(for: $0.id) != nil
+                    })
+                {
+                    Text("Unavailable: \(selected)").tag(selected)
+                }
+            }
+            .disabled(model.shepherd.activeTurnID != nil || !settings.subagentsEnabled)
+            Text(
+                "The chat model delegates focused read-only work to this model, waits, then continues with its findings. Load and pin both models in your engine before starting. Selection applies to this engine only."
+            )
+            .font(Caprine.Activity.font).foregroundStyle(.secondary)
             Text(model.subagentAvailabilityMessage)
                 .font(Caprine.Activity.font)
                 .foregroundStyle(.secondary)
@@ -424,7 +451,7 @@ struct GOATedSettingsView: View {
                     Text("Maximum investigation time before stopping and returning partial findings.")
                         .font(Caprine.Activity.font).foregroundStyle(.secondary)
                     Text(
-                        "Supported models: Qwen 2.5 7B/14B, Qwen 2.5 Coder 7B, Llama 3/3.1 8B, Mistral 7B and Gemma 2 9B. Exact engine model identifiers are checked before use."
+                        "Worker choices include verified Qwen 3.5 9B and Qwen 3.8 27B MLX 4-bit conversions, plus supported earlier models. Unknown variants remain unavailable."
                     )
                     .font(Caprine.Activity.font).foregroundStyle(.secondary)
                 }

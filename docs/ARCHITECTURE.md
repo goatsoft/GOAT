@@ -123,3 +123,8 @@ Fresh installations keep an empty engine list and open Engine settings after loc
 ### Read-only investigations
 
 The built-in Subagents extension runs a bounded investigation inside the parent turn and a folder-backed Pen (ADR-0096). `scope_hint` is advisory; the Pen and read-only capability fence define authority. Local supported-model availability is checked before advertising the tool, with runtime memory and loaded-model admission repeated before generation. Inference owns one closure handle per request, while the host retains engine quarantine until that request acknowledges teardown. Results have a native summary/source view with raw transcript diagnostics. Apple system inference is deferred.
+
+Local investigation workers are selected per engine profile independently of the parent chat model.
+The parent waits for a bounded read-only receipt and then resumes; there is no simultaneous parent/child
+inference. Explicitly configured loopback and literal LAN engines pass through JUDAS. See ADR-0096 for
+modern Qwen admission bounds and the planned, strictly on-device Apple Foundation Models backend.

@@ -483,13 +483,13 @@ final class AppModel {
             self?.pens.first(where: { $0.id == id })?.name ?? "this Pen"
         }
         toolRouter.engineProvider = { [weak self] in self?.engine }
-        toolRouter.isEngineLoopback = { [weak self] in
+        toolRouter.isEngineLocal = { [weak self] in
             guard let profile = self?.activeEngineProfile, let url = URL(string: profile.url) else {
                 return false
             }
-            return Judas.isLoopback(url)
+            return LocalNetworkAddress.contains(url)
         }
-        toolRouter.currentModelID = { [weak self] in self?.currentSession?.modelID ?? self?.defaultModelID }
+        toolRouter.workerModelID = { [weak self] in self?.selectedSubagentModelID }
         toolRouter.databaseProvider = { [weak self] in self?.db }
     }
 }

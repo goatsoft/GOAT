@@ -7,6 +7,10 @@ import Pens
 import Shepherd
 
 extension AppModel {
+    var selectedSubagentModelID: String? {
+        memory.builtInSettings.subagentModelID(for: activeEngineProfile?.id)
+    }
+
     private func permitGenerationAfterInvestigation() -> Bool {
         guard !toolRouter.isEngineQuarantined else {
             generationNotice =
@@ -22,7 +26,7 @@ extension AppModel {
         if !memory.builtInSettings.subagentsEnabled { return "Investigations are turned off." }
         if toolRouter.isEngineQuarantined { return "Waiting for the previous investigation to stop." }
         return SubagentAvailability.unavailableReason(
-            hasLocalEngine: toolRouter.isEngineLoopback(), modelID: currentSession?.modelID
+            hasLocalEngine: toolRouter.isEngineLocal(), modelID: selectedSubagentModelID
         )
             ?? "Available in a folder-backed Pen when the local model is loaded and the engine has capacity. Files are read-only."
     }

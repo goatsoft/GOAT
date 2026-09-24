@@ -19,6 +19,12 @@ extension AppTests.GOATed {
             #expect(
                 settings.subagentsEnabled && settings.subagentMaxRounds == 5 && settings.subagentTimeoutSeconds == 60)
             #expect(settings.subagentPreferredBackend == .localEngine)
+            settings.setSubagentModelID("Qwen3.5-9B-4bit", for: "studio")
+            #expect(settings.subagentModelID(for: "another-engine") == nil)
+            #expect(settings.subagentModelID(for: nil) == nil)
+            #expect(BuiltInExtensionSettings(defaults: defaults).subagentModelID(for: "studio") == "Qwen3.5-9B-4bit")
+            settings.setSubagentModelID(nil, for: "studio")
+            #expect(settings.subagentModelID(for: "studio") == nil)
             settings.herderEnabled = false
             settings.herderWritesEnabled = false
             settings.herderCommandsEnabled = false

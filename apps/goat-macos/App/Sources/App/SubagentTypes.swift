@@ -89,13 +89,24 @@ public enum SubagentLimits {
     public static let maxUnresolvedBytes = 2 * 1_024  // 2 KiB
 
     public static let maxDelegationsPerTurn = 3
-    public static let maximumSupportedContextWindow = 131_072
 
     public static let streamBufferCapacity = 32
     public static let maxStreamEventBytes = 1024 * 1024  // 1 MiB
     public static let maxStreamBufferBytes = 2 * 1024 * 1024  // 2 MiB
 
     public static let supportedModelEnvelopes: [String: Stage1ModelEnvelope] = [
+        "qwen3-8b-4bit": Stage1ModelEnvelope(layers: 36, kvHeads: 8, headDimension: 128, maxContextWindow: 40_960),
+        // oMLX exposes cached HF models with this exact repository-derived identifier.
+        "mlx-community--qwen3-8b-4bit": Stage1ModelEnvelope(
+            layers: 36, kvHeads: 8, headDimension: 128, maxContextWindow: 40_960),
+        // Conservative hybrid bound: charge every layer as full attention, plus the worker runtime allowance.
+        // Architecture sources: Qwen/Qwen3.5-9B and Qwen/Qwen3.8-27B config.json.
+        "qwen3.5-9b-4bit": Stage1ModelEnvelope(layers: 32, kvHeads: 4, headDimension: 256, maxContextWindow: 262_144),
+        "qwen3.5-9b-mlx-4bit": Stage1ModelEnvelope(
+            layers: 32, kvHeads: 4, headDimension: 256, maxContextWindow: 262_144),
+        "qwen3.8-27b-4bit": Stage1ModelEnvelope(layers: 64, kvHeads: 4, headDimension: 256, maxContextWindow: 262_144),
+        "qwen3.8-27b-mlx-4bit": Stage1ModelEnvelope(
+            layers: 64, kvHeads: 4, headDimension: 256, maxContextWindow: 262_144),
         "qwen2.5-7b-instruct": Stage1ModelEnvelope(layers: 28, kvHeads: 4, headDimension: 128),
         "qwen2.5-7b": Stage1ModelEnvelope(layers: 28, kvHeads: 4, headDimension: 128),
         "qwen2.5-coder-7b-instruct": Stage1ModelEnvelope(layers: 28, kvHeads: 4, headDimension: 128),
@@ -111,6 +122,18 @@ public enum SubagentLimits {
         "gemma-2-9b-it": Stage1ModelEnvelope(layers: 42, kvHeads: 8, headDimension: 256),
         "gemma-2-9b": Stage1ModelEnvelope(layers: 42, kvHeads: 8, headDimension: 256),
     ]
+
+    public static func workerCompatibility(for modelID: String) -> ResolvedModelCompatibility {
+        let name = modelID.lowercased().split(separator: "/").last.map(String.init) ?? modelID.lowercased()
+        // The audited 9B template supports enable_thinking=false. Keep the parent's policy independent.
+        let baseName = name.split(separator: ":").first.map(String.init) ?? name
+        let qwen35 = ["qwen3.5-9b-4bit", "qwen3.5-9b-mlx-4bit"].contains(baseName)
+        return ModelCompatibilityResolver.resolve(
+            identity: ModelIdentity(engineProfileID: "subagent", modelID: modelID),
+            override: qwen35 ? .qwenChatTemplate : .automatic,
+            familyProfile: ModelFamilyRegistry.profile(for: modelID),
+            generationSettingsOwner: .engineManaged)
+    }
 
     public static func resolvedEnvelope(for modelID: String) -> Stage1ModelEnvelope? {
         let normalized =
@@ -134,7 +157,9 @@ public enum SubagentLimits {
 public enum SubagentAvailability {
     public static func unavailableReason(hasLocalEngine: Bool, modelID: String?) -> String? {
         guard hasLocalEngine else { return "Choose a local engine to use investigations." }
-        guard let modelID, !modelID.isEmpty else { return "Choose a model to use investigations." }
+        guard let modelID, !modelID.isEmpty else {
+            return "Choose a worker model in Settings > GOATed > Extensions > Subagents."
+        }
         guard SubagentLimits.resolvedEnvelope(for: modelID) != nil else {
             return "The selected model is not yet supported for investigations. Choose a supported model."
         }

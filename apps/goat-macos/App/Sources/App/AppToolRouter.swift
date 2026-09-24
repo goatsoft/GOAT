@@ -19,8 +19,8 @@ final class AppToolRouter: ShepherdToolSource {
     let commandPermissions: PenCommandPermissionModel
     let filePermissions: PenFilePermissionModel
     var engineProvider: () -> (any InferenceEngine)? = { nil }
-    var isEngineLoopback: () -> Bool = { false }
-    var currentModelID: () -> String? = { nil }
+    var isEngineLocal: () -> Bool = { false }
+    var workerModelID: () -> String? = { nil }
     var databaseProvider: () -> ChatDatabase? = { nil }
     private var penFileSession:
         (
@@ -230,8 +230,8 @@ final class AppToolRouter: ShepherdToolSource {
                         turnID, chatID, projectID, workspace, provider, registration, files.workspaceIdentity
                     )
                     if memory.builtInSettings.subagentsEnabled {
-                        let isLoopback = isEngineLoopback()
-                        let subagentEngine = isLoopback ? engineProvider() : nil
+                        let isLocal = isEngineLocal()
+                        let subagentEngine = isLocal ? engineProvider() : nil
                         let authority = SubagentTurnAuthority { [weak self] in
                             guard let self else { throw CapabilityError.revoked }
                             let (sessionTurnID, sessionReg, isEnabled, currentWorkspace) = await MainActor.run {
@@ -257,7 +257,7 @@ final class AppToolRouter: ShepherdToolSource {
                             workspace: workspace,
                             authority: authority,
                             engine: subagentEngine,
-                            modelID: currentModelID(),
+                            modelID: workerModelID(),
                             configuration: memory.builtInSettings.subagentConfiguration,
                             database: databaseProvider(),
                             quarantine: subagentQuarantine

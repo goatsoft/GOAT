@@ -1,7 +1,9 @@
 import CryptoKit
 import Foundation
 import GOATed
+import Hoofprint
 import Inference
+import JUDAS
 import Memory
 import Pens
 import Persistence
@@ -14,8 +16,15 @@ private actor ScriptedEngine: InferenceEngine {
     private var script: [[GenerationEvent]]
     private(set) var requests: [GenerationRequest] = []
     private let delay: Duration?
+    private let modelID: String
+    private let loaded: Bool
 
-    init(script: [[GenerationEvent]], delay: Duration? = nil) {
+    init(
+        script: [[GenerationEvent]], delay: Duration? = nil, modelID: String = "qwen2.5-7b-instruct",
+        loaded: Bool = true
+    ) {
+        self.modelID = modelID
+        self.loaded = loaded
         self.script = script
         self.delay = delay
     }
@@ -32,9 +41,9 @@ private actor ScriptedEngine: InferenceEngine {
             waitingRequests: 0,
             models: [
                 EngineModelRuntimeStatus(
-                    id: "qwen2.5-7b-instruct",
-                    loaded: true,
-                    contextWindow: 32_768
+                    id: modelID,
+                    loaded: loaded,
+                    contextWindow: modelID.contains("3.5") ? 262_144 : 32_768
                 )
             ]
         )
@@ -2031,11 +2040,15 @@ extension AppTests.GOATed {
             let result = try await provider.invoke(
                 ToolCallRequest(
                     tool: SubagentsProvider.toolName,
-                    argumentsJSON: #"{"objective":"Inspect files","max_rounds":10}"#), context: context)
+                    argumentsJSON:
+                        #"{"objective":"Inspect files","max_rounds":10,"return_schema":"Use exported_string and citation fields"}"#
+                ), context: context)
             #expect(!result.isError)
             let requests = await engine.requests
             #expect(requests.count == 2)
             #expect(requests.last?.tools.isEmpty == true)
+            #expect(requests.first?.turns.first?.text.contains("inside the summary string only") == true)
+            #expect(requests.last?.turns.last?.text.contains("do not replace these outer keys") == true)
         }
 
         @Test func scopeHintsAreAdvisoryAndLegacyFiltersAreRejected() async throws {
@@ -2081,6 +2094,85 @@ extension AppTests.GOATed {
             #expect(
                 SubagentAvailability.unavailableReason(hasLocalEngine: false, modelID: "qwen2.5-7b-instruct") != nil)
             #expect(SubagentAvailability.unavailableReason(hasLocalEngine: true, modelID: nil) != nil)
+        }
+
+        @MainActor @Test func routerDispatchesToSelectedWorkerOnlyOnLocalEngine() async throws {
+            let (workspace, _) = try createWorkspace()
+            defer { try? FileManager.default.removeItem(at: workspace) }
+            let workerID = "Qwen3.5-9B-4bit"
+            let parentID = "Qwen3.8-27B-MLX-4bit"
+            let engine = ScriptedEngine(script: [[.token("{\"summary\":\"Worker findings\"}")]], modelID: workerID)
+            let activity = ActivityLog()
+            let suite = "worker-routing-\(UUID())"
+            let defaults = try #require(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let settings = BuiltInExtensionSettings(defaults: defaults)
+            settings.setSubagentModelID(workerID, for: "studio")
+            let router = AppToolRouter(
+                mcp: MCPModel(db: nil, activity: activity),
+                memory: MemoryModel(activity: activity, builtInSettings: settings), activity: activity,
+                builtInSkillsRoot: workspace, globalSkillsRoot: workspace)
+            router.workspaceForProject = { _ in workspace }
+            router.engineProvider = { engine }
+            router.isEngineLocal = { LocalNetworkAddress.contains(URL(string: "http://192.168.1.42:8001")!) }
+            router.workerModelID = { settings.subagentModelID(for: "studio") }
+            let chat = UUID()
+            let pen = UUID()
+            let turn = UUID()
+            try await router.turnWillPrepare(chatID: chat, projectID: pen, turnID: turn)
+            let (_, routes) = await router.availableToolSpecs(
+                forChatID: chat, projectID: pen, includeMCP: false, excludedMCPServers: [])
+            let route = try #require(routes[SubagentsProvider.toolName])
+            let result = try await router.authorizeAndInvoke(
+                route: route, argumentsJSON: #"{"objective":"Investigate the Pen"}"#)
+            #expect(result?.content.contains("Worker findings") == true)
+            let requests = await engine.requests
+            #expect(!requests.isEmpty)
+            #expect(requests.allSatisfy { $0.model == workerID && $0.model != parentID })
+            #expect(requests.allSatisfy { $0.effort == .graze })
+            #expect(requests.allSatisfy { EffectiveGenerationParameters(request: $0).qwenEnableThinking == false })
+            #expect(!router.subagentQuarantine.isTransportActive)
+            await router.turnDidEnd(turnID: turn, cancelled: false)
+            router.isEngineLocal = { LocalNetworkAddress.contains(URL(string: "https://example.com")!) }
+            let nextTurn = UUID()
+            try await router.turnWillPrepare(chatID: chat, projectID: pen, turnID: nextTurn)
+            let (_, remoteRoutes) = await router.availableToolSpecs(
+                forChatID: chat, projectID: pen, includeMCP: false, excludedMCPServers: [])
+            #expect(remoteRoutes[SubagentsProvider.toolName] == nil)
+            await router.turnDidEnd(turnID: nextTurn, cancelled: false)
+        }
+
+        @Test func verifiedHybridVariantsHaveConservativeBounds() throws {
+            let profiledID = "mlx-community/Qwen3.5-9B-4bit:worker"
+            let request = GenerationRequest(
+                model: profiledID, turns: [], effort: .graze,
+                compatibility: SubagentLimits.workerCompatibility(for: profiledID))
+            #expect(EffectiveGenerationParameters(request: request).qwenEnableThinking == false)
+            for id in ["Qwen3.5-9B-4bit", "mlx-community/Qwen3.5-9B-MLX-4bit", "Qwen3.8-27B-MLX-4bit"] {
+                let envelope = try #require(SubagentLimits.resolvedEnvelope(for: id))
+                #expect(envelope.maxContextWindow == 262_144)
+                #expect(envelope.bytesPerToken >= 131_072)
+            }
+            for id in ["Qwen3.5-9B-MTP-4bit", "Qwen3.5-9B-abliterated-4bit", "Qwen3.8-27B-MLX-8bit", "default"] {
+                #expect(SubagentLimits.resolvedEnvelope(for: id) == nil)
+            }
+        }
+
+        @Test func unloadedWorkerFailsWithoutFallingBackToParent() async throws {
+            let (workspace, files) = try createWorkspace()
+            defer { try? FileManager.default.removeItem(at: workspace) }
+            let workerID = "Qwen3.5-9B-4bit"
+            let engine = ScriptedEngine(script: [], modelID: workerID, loaded: false)
+            let turn = UUID()
+            let provider = SubagentsProvider(
+                turnID: turn, fileTools: files, workspace: workspace, engine: engine, modelID: workerID)
+            let result = try await provider.invoke(
+                ToolCallRequest(
+                    tool: SubagentsProvider.toolName,
+                    argumentsJSON: #"{"objective":"Investigate"}"#),
+                context: ExtensionContext(view: ExtensionView(chatID: UUID(), penID: nil), turnID: turn))
+            #expect(result.content.contains("not loaded"))
+            #expect(await engine.requests.isEmpty)
         }
     }
 }

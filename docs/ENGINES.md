@@ -150,3 +150,19 @@ OpenAI-compatible messages and tool schemas form the shared client contract. Mod
 The same-request discrepancy between oMLX's reported 37 tok/s and GOAT's live 2–3 tok/s remains under investigation in [issue #38](https://github.com/goatsoft/GOAT/issues/38). These maintenance changes do not resolve it. Live estimates and final engine usage are distinct measurements; no conclusion that all low rates are display errors has been established.
 
 Follow-up qualification on 21 September verified offline Custom-profile retention, explicit switching to a healthy saved engine and restoration of that selection in a fresh process on Golden Gate and Tahoe. A Qwen wiki checkpoint was independently read back and retrieved accurately in a fresh chat; semantic compaction retained its constraints, passed checks, unresolved failure and next action, with the summary and source messages verified in SQLite. An initial reporting turn exceeded its three-minute bound after successful memory operations; the independent retrieval/compaction probe passed with five-minute operation bounds. These results do not establish a latency target or qualify the earlier stopped Aurora compaction.
+
+## Local investigation pair
+
+Select a worker under Settings > GOATed > Extensions > Subagents for the active engine profile.
+Load and pin the main and worker models in oMLX first. Qwen3.8-27B MLX 4-bit plus Qwen3.5-9B MLX 4-bit is the
+initial modern pairing target; the worker accepts the exact `Qwen3.5-9B-4bit` and
+`Qwen3.5-9B-MLX-4bit` identifiers (with optional repository namespace). Unknown derivatives are excluded.
+The parent waits during read-only investigation and resumes with the result. A missing or unloaded
+worker returns a clear error instead of silently switching models. Public inference endpoints cannot
+serve this local-only worker mode; loopback and literal local-network addresses remain subject to JUDAS.
+
+Live qualification on oMLX 0.6.4 confirmed Qwen3.8-27B-MLX-4bit → Qwen3.5-9B-4bit →
+Qwen3.8-27B-MLX-4bit: the worker read a disposable source file, returned a verified line citation with
+a content fingerprint, and the parent reported the correct random value. Both models were pinned;
+the server reported 21.52 GiB of model memory. This qualifies the bounded read-only handoff, not
+unrestricted coding quality, parallel execution or the deferred Apple system-model backend.

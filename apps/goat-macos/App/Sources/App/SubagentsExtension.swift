@@ -22,6 +22,7 @@ public actor SubagentsProvider: ModelToolProvider, TurnObserver {
         {
           "type": "object",
           "required": ["objective"],
+          "additionalProperties": false,
           "properties": {
             "objective": {
               "type": "string",
@@ -40,7 +41,7 @@ public actor SubagentsProvider: ModelToolProvider, TurnObserver {
             },
             "return_schema": {
               "type": "string",
-              "description": "Optional description of the expected format or structure of the summary."
+              "description": "Optional presentation guidance for the summary string only. The host receipt and citation structure cannot be replaced."
             }
           }
         }
@@ -177,7 +178,7 @@ public actor SubagentsProvider: ModelToolProvider, TurnObserver {
             authority: authority,
             engine: engine,
             modelID: modelID,
-            effort: .trot,
+            effort: .graze,
             maxRounds: effectiveMaxRounds,
             timeoutSeconds: configuration.timeoutSeconds,
             database: database,

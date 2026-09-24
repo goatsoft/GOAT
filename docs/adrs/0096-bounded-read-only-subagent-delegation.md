@@ -86,16 +86,15 @@ public protocol SubagentBackend: Sendable {
 }
 ```
 Two backends are defined:
-- **Local Engine Backend (Baseline):** Executes re-entrantly against the active model on the currently
-  loaded local engine (such as oMLX). Because the parent turn is synchronously awaiting the tool result,
-  parent and child inference do not execute concurrently on the GPU. Reusing the loaded model avoids weight
-  reloading. Before execution, the host checks that the engine is idle and that KV cache memory headroom is
-  sufficient for the requested subagent context window. If memory admission fails, delegation fails closed
-  with a descriptive error instead of thrashing.
+- **Local Engine Backend (Baseline):** The owner selects a worker model per engine profile. The parent
+  retains its own chat model and synchronously awaits the delegated result before continuing. The worker
+  uses the same explicitly configured local engine, including literal local-network addresses admitted
+  by JUDAS (ADR-0055). Both models must already be loaded; missing workers fail with a descriptive error,
+  never silently reuse the parent or load a different model. Only one child generates at a time.
+  Admission checks engine idle state, loaded worker identity and memory headroom on that server.
 - **System Language Model Backend (Progressive Enhancement):** Targets Apple's on-device `SystemLanguageModel`
   (`import FoundationModels`). Before execution, runtime availability is verified via
-  `SystemLanguageModel.default.availability`. If available, lightweight extraction and summary tasks execute on
-  the Apple Neural Engine. If unavailable (unsupported hardware, disabled by policy, or missing assets), it
+  `SystemLanguageModel.default.availability`. If available, lightweight extraction and summary tasks execute through the on-device framework. Hardware scheduling is owned by Apple; GOAT does not promise a particular processor. If unavailable (unsupported hardware, disabled by policy, or missing assets), it
   fails closed or falls back explicitly to the Local Engine Backend according to user configuration, never
   initiating an unrequested network request.
 
@@ -145,8 +144,9 @@ All other tools are excluded:
   prompts fails closed immediately with `unattendedApprovalDenied`.
 - **The Herd Guarantee:** Child subagent exploration tools generate zero network traffic, operating strictly
   against local Pen files with zero telemetry, zero analytics, and no external network endpoints. The only
-  network transport permitted during delegation is local loopback HTTP communication to the configured local
-  inference engine (such as oMLX).
+  network transport permitted during delegation is communication to the explicitly configured inference engine
+  on loopback or a literal local-network address. JUDAS still authorizes the connection; cloud endpoints and
+  arbitrary DNS aliases do not acquire local authority.
 
 ### 6. Work Bounding, Token Accounting, and Output Guarantees
 
@@ -304,3 +304,38 @@ The test plan for Stage 1 subagent delegation includes the following determinist
 - Apple system inference remains deferred and is not offered as a Stage 1 backend. Native Writing Tools remain an explicitly user-invoked platform feature.
 
 Further lifecycle decomposition and broader shared test-fixture consolidation are follow-up work; they do not change these contracts.
+
+### Local worker pairing and Apple Intelligence intent (#32)
+
+The owner-facing goal is a capable main model orchestrating focused work delegated to a smaller model.
+Settings > GOATed > Extensions > Subagents selects a worker from the active engine catalog, persisted per
+engine profile. No implicit parent-model fallback is allowed. Worker requests use their own model-family
+policy, bounded low-effort generation and the existing read-only capability fence. The parent remains
+responsible for implementation and final synthesis. This does not introduce concurrent model generation.
+
+The initial modern pair is Qwen3.8-27B MLX 4-bit as parent and Qwen3.5-9B MLX 4-bit as worker. Audited
+worker IDs include the exact `-4bit` and `-MLX-4bit` conversions. MTP-only weights, arbitrary fine-tunes,
+unknown aliases and unverified quantizations are not admitted by substring matching. Hybrid memory
+admission conservatively charges all 32/64 layers as full attention (four KV heads, dimension 256,
+two bytes per element), although only one in four layers uses full attention. An additional 512 MiB
+allowance covers recurrent state and temporary allocations. The existing bounded 14,336-token request
+allocation is used, not the advertised 262,144-token model capacity. Both models' already-resident weights
+are included in server-reported memory usage. This is conservative admission, not a guarantee against
+unrelated processes consuming memory after the check.
+
+Architecture sources: [Qwen3.5-9B config](https://huggingface.co/Qwen/Qwen3.5-9B/blob/main/config.json)
+and [Qwen3.8-27B config](https://huggingface.co/Qwen/Qwen3.8-27B/blob/main/config.json).
+
+Apple Intelligence is an explicit product direction, not abandoned scope: a subsequent on-device
+Foundation Models backend should handle suitable extraction, task-brief refinement and summaries.
+Qualification must demonstrate availability handling, bounded structured output, cancellation and zero
+cloud fallback. Unavailability must be visible; switching to the configured local worker requires an
+explicit owner policy. Native Writing Tools are not evidence that this backend has been implemented.
+
+The installed Qwen3-8B 4-bit worker is also supported, including oMLX's exact HF-cache identifier
+`mlx-community--Qwen3-8B-4bit`. Its envelope uses 36 layers, eight KV heads, dimension 128 and a
+40,960-token capacity from the [upstream config](https://huggingface.co/Qwen/Qwen3-8B/blob/main/config.json).
+
+The Qwen3.5-9B worker explicitly disables thinking through its audited
+[chat template](https://huggingface.co/Qwen/Qwen3.5-9B/blob/main/chat_template.jinja), keeping lightweight
+file investigation within the child deadline. Parent reasoning settings are unchanged.
