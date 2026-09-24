@@ -29,6 +29,9 @@ struct ModelMenuItems: View {
             if let selected {
                 modelRow(selected, favourite: projection.favourites.contains { $0.id == selected.id })
                     .disabled(model.shepherd.hasActiveTurn || model.engineTransitioning)
+                if let worker = model.selectedSubagentModelID {
+                    SubagentMenuSummary(modelID: worker)
+                }
             }
             ForEach(favourites) { ref in
                 modelRow(ref, favourite: true)
@@ -240,5 +243,17 @@ struct SubagentBudgetControls: View {
         .font(Caprine.Activity.font)
         .foregroundStyle(model.theme.tokens.muted)
         .disabled(locked)
+    }
+}
+
+/// Native menus use an informational row instead of a multiline actionable label.
+struct SubagentMenuSummary: View {
+    let modelID: String
+
+    var body: some View {
+        Text("    └─ " + ModelRef(id: modelID).displayName)
+            .font(Caprine.ModelMenu.rowDetailFont)
+            .foregroundStyle(.secondary)
+            .accessibilityLabel("Subagent: " + ModelRef(id: modelID).displayName)
     }
 }

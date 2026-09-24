@@ -34,28 +34,30 @@ struct ModelEffortControl: View {
     }
 
     var body: some View {
-        Menu {
-            nativeMenuContent
-        } label: {
-            VStack(alignment: .leading, spacing: Caprine.ModelMenu.rowDetailSpacing) {
+        VStack(alignment: .leading, spacing: Caprine.ModelMenu.rowDetailSpacing) {
+            Menu {
+                nativeMenuContent
+            } label: {
                 Text(nativeMenuLabel)
                     .font(Caprine.ModelMenu.labelFont)
                     .foregroundStyle(model.theme.tokens.ink)
-                if let worker = model.selectedSubagentModelID {
-                    SubagentModelLabel(modelID: worker)
-                }
+            }
+            .menuStyle(.borderlessButton)
+            .buttonStyle(.plain)
+            .tint(Caprine.Semantic.onAccent)
+            .foregroundStyle(Caprine.Semantic.onAccent)
+            .accessibilityLabel("Model and effort")
+            .accessibilityValue(
+                "\(projection.selectedDisplayName), \(projection.selectedAvailability), \(session.effort.label)"
+                    + (model.selectedSubagentModelID.map { ", Subagent: \(ModelRef(id: $0).displayName)" } ?? "")
+            )
+            .help("Model and effort - \(session.effort.blurb) (Command-1 through Command-4)")
+            if let worker = model.selectedSubagentModelID {
+                SubagentModelLabel(modelID: worker)
+                    .accessibilityHidden(true)
             }
         }
-        .menuStyle(.borderlessButton)
-        .buttonStyle(.plain)
-        .tint(Caprine.Semantic.onAccent)
-        .foregroundStyle(Caprine.Semantic.onAccent)
-        .accessibilityLabel("Model and effort")
-        .accessibilityValue(
-            "\(projection.selectedDisplayName), \(projection.selectedAvailability), \(session.effort.label)"
-                + (model.selectedSubagentModelID.map { ", Subagent: \(ModelRef(id: $0).displayName)" } ?? "")
-        )
-        .help("Model and effort - \(session.effort.blurb) (Command-1 through Command-4)")
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     @ViewBuilder
@@ -69,6 +71,9 @@ struct ModelEffortControl: View {
                     selected, favourite: projection.favourites.contains { $0.id == selected.id }
                 )
                 .disabled(model.shepherd.hasActiveTurn || model.engineTransitioning)
+                if let worker = model.selectedSubagentModelID {
+                    SubagentMenuSummary(modelID: worker)
+                }
             }
             ForEach(favourites) { ref in
                 systemModelRow(ref, favourite: true)

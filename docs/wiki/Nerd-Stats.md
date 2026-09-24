@@ -34,3 +34,7 @@ locked during a chat turn; changes apply to the next turn. Auto scales with conf
 (71,680 processing tokens for five rounds). Custom supports 32,768–131,072 tokens. Repeated input
 counts toward this allowance; it is separate from the worker's context and memory limits.
 Exploration reserves capacity for the final summary and switches to reporting before consuming it.
+
+The composer reserves room for the parent and child labels. Both the chat model picker
+and Chat → Model menu repeat the selected worker as an indented informational row beneath
+the selected parent. Use the Subagent submenu to change the worker.
