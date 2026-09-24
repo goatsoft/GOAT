@@ -206,7 +206,8 @@ extension AppTests.GOATed {
             let result = try await worker.run()
 
             #expect(result.receipt.status == .failed)
-            #expect(result.receipt.unresolved.contains(where: { $0.reason == "admissionDenied" }))
+            let hasAdmissionDenied = result.receipt.unresolved.contains { $0.reason == "admissionDenied" }
+            #expect(hasAdmissionDenied)
         }
 
         // Scenario 4: Completion Arriving After Stop
@@ -442,8 +443,14 @@ extension AppTests.GOATed {
             #expect(!verified[0].sliceHash.isEmpty)
 
             #expect(unresolved.count == 2)
-            #expect(unresolved.contains(where: { $0.path == "Secret.swift" && $0.reason == "unverifiedCitation" }))
-            #expect(unresolved.contains(where: { $0.path == "Auth.swift" && $0.reason == "unverifiedCitation" }))
+            let secretUnresolved = unresolved.contains { item in
+                item.path == "Secret.swift" && item.reason == "unverifiedCitation"
+            }
+            let authUnresolved = unresolved.contains { item in
+                item.path == "Auth.swift" && item.reason == "unverifiedCitation"
+            }
+            #expect(secretUnresolved)
+            #expect(authUnresolved)
         }
     }
 }
