@@ -195,6 +195,87 @@ public struct ToolCallEvent: Sendable, Equatable {
     }
 }
 
+public final class GenerationTransportClosureHandle: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isAcknowledged = false
+    private var onAcknowledgeCallbacks: [@Sendable () -> Void] = []
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    public init() {}
+
+    public var isClosed: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return isAcknowledged
+    }
+
+    public func onAcknowledge(_ callback: @escaping @Sendable () -> Void) {
+        lock.lock()
+        if isAcknowledged {
+            lock.unlock()
+            callback()
+            return
+        }
+        onAcknowledgeCallbacks.append(callback)
+        lock.unlock()
+    }
+
+    public func acknowledge() {
+        lock.lock()
+        guard !isAcknowledged else {
+            lock.unlock()
+            return
+        }
+        isAcknowledged = true
+        let callbacks = onAcknowledgeCallbacks
+        onAcknowledgeCallbacks.removeAll()
+        let pendingWaiters = waiters
+        waiters.removeAll()
+        lock.unlock()
+
+        for cb in callbacks {
+            cb()
+        }
+        for waiter in pendingWaiters {
+            waiter.resume()
+        }
+    }
+
+    public func waitForClosure(timeoutSeconds: Int = 5) async -> Bool {
+        let already: Bool = {
+            lock.lock()
+            defer { lock.unlock() }
+            return isAcknowledged
+        }()
+        if already { return true }
+
+        return await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                await withCheckedContinuation { cont in
+                    self.lock.lock()
+                    if self.isAcknowledged {
+                        self.lock.unlock()
+                        cont.resume()
+                    } else {
+                        self.waiters.append(cont)
+                        self.lock.unlock()
+                    }
+                }
+                return true
+            }
+            group.addTask {
+                if timeoutSeconds > 0 {
+                    try? await Task.sleep(for: .seconds(timeoutSeconds))
+                }
+                return false
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
+        }
+    }
+}
+
 public struct GenerationRequest: Sendable {
     public var model: String
     public var turns: [ChatTurn]
@@ -209,11 +290,13 @@ public struct GenerationRequest: Sendable {
     public var round: Int
     public var rejectedSamplingParameters: Set<String> = []
     public var onTransportClosed: (@Sendable () -> Void)? = nil
+    public var transportClosureHandle: GenerationTransportClosureHandle? = nil
     public init(
         model: String, turns: [ChatTurn], effort: Effort, maxTokens: Int? = nil,
         tools: [ToolSpec] = [], modelCapabilities: ModelCapabilities = .unknown,
         compatibility: ResolvedModelCompatibility? = nil, round: Int = 0,
-        onTransportClosed: (@Sendable () -> Void)? = nil
+        onTransportClosed: (@Sendable () -> Void)? = nil,
+        transportClosureHandle: GenerationTransportClosureHandle? = nil
     ) {
         self.model = model
         self.turns = turns
@@ -230,6 +313,7 @@ public struct GenerationRequest: Sendable {
                 source: .genericFallback,
                 capabilities: modelCapabilities)
         self.onTransportClosed = onTransportClosed
+        self.transportClosureHandle = transportClosureHandle
     }
 }
 

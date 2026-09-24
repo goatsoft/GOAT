@@ -32,7 +32,7 @@ private actor ScriptedEngine: InferenceEngine {
             waitingRequests: 0,
             models: [
                 EngineModelRuntimeStatus(
-                    id: "default",
+                    id: "qwen2.5-7b-instruct",
                     loaded: true,
                     contextWindow: 32_768
                 )
@@ -49,7 +49,11 @@ private actor ScriptedEngine: InferenceEngine {
         let sleepDuration = delay
 
         return AsyncThrowingStream { continuation in
-            Task {
+            let task = Task {
+                defer {
+                    request.transportClosureHandle?.acknowledge()
+                    request.onTransportClosed?()
+                }
                 if let sleepDuration {
                     try? await Task.sleep(for: sleepDuration)
                 }
@@ -57,6 +61,9 @@ private actor ScriptedEngine: InferenceEngine {
                     continuation.yield(event)
                 }
                 continuation.finish()
+            }
+            continuation.onTermination = { _ in
+                task.cancel()
             }
         }
     }
@@ -75,7 +82,7 @@ private actor HangingEngine: InferenceEngine {
             waitingRequests: 0,
             models: [
                 EngineModelRuntimeStatus(
-                    id: "default",
+                    id: "qwen2.5-7b-instruct",
                     loaded: true,
                     contextWindow: 32_768
                 )
@@ -86,6 +93,8 @@ private actor HangingEngine: InferenceEngine {
     func stream(_ request: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
         AsyncThrowingStream { continuation in
             continuation.onTermination = { @Sendable _ in
+                request.transportClosureHandle?.acknowledge()
+                request.onTransportClosed?()
                 continuation.finish(throwing: CancellationError())
             }
         }
@@ -105,7 +114,7 @@ private actor UncooperativeEngine: InferenceEngine {
             waitingRequests: 0,
             models: [
                 EngineModelRuntimeStatus(
-                    id: "default",
+                    id: "qwen2.5-7b-instruct",
                     loaded: true,
                     contextWindow: 32_768
                 )
@@ -729,7 +738,9 @@ extension AppTests.GOATed {
                         modelMemoryMaximum: 16 * 1024 * 1024 * 1024,
                         activeRequests: nil,
                         waitingRequests: 0,
-                        models: [EngineModelRuntimeStatus(id: "default", loaded: true, contextWindow: 32_768)]
+                        models: [
+                            EngineModelRuntimeStatus(id: "qwen2.5-7b-instruct", loaded: true, contextWindow: 32_768)
+                        ]
                     )
                 }
                 func stream(_ request: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
@@ -760,7 +771,9 @@ extension AppTests.GOATed {
                         modelMemoryMaximum: 16 * 1024 * 1024 * 1024,
                         activeRequests: 0,
                         waitingRequests: nil,
-                        models: [EngineModelRuntimeStatus(id: "default", loaded: true, contextWindow: 32_768)]
+                        models: [
+                            EngineModelRuntimeStatus(id: "qwen2.5-7b-instruct", loaded: true, contextWindow: 32_768)
+                        ]
                     )
                 }
                 func stream(_ request: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
@@ -792,7 +805,7 @@ extension AppTests.GOATed {
                         modelMemoryMaximum: 16 * 1024 * 1024 * 1024,
                         activeRequests: 0,
                         waitingRequests: 0,
-                        models: [EngineModelRuntimeStatus(id: "default", loaded: true, contextWindow: nil)]
+                        models: [EngineModelRuntimeStatus(id: "qwen2.5-7b-instruct", loaded: true, contextWindow: nil)]
                     )
                 }
                 func stream(_ request: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
@@ -823,7 +836,9 @@ extension AppTests.GOATed {
                         modelMemoryMaximum: 1000 * 1024 * 1024,  // 100 MiB free, less than 256 MiB required
                         activeRequests: 0,
                         waitingRequests: 0,
-                        models: [EngineModelRuntimeStatus(id: "default", loaded: true, contextWindow: 32_768)]
+                        models: [
+                            EngineModelRuntimeStatus(id: "qwen2.5-7b-instruct", loaded: true, contextWindow: 32_768)
+                        ]
                     )
                 }
                 func stream(_ request: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
@@ -1046,7 +1061,7 @@ extension AppTests.GOATed {
 
             quarantine.markQuarantined()
             let request = GenerationRequest(
-                model: "default",
+                model: "qwen2.5-7b-instruct",
                 turns: [ChatTurn(role: .user, text: "Hello")],
                 effort: .trot,
                 maxTokens: 100
@@ -1200,7 +1215,9 @@ extension AppTests.GOATed {
                         modelMemoryMaximum: 64 * 1024 * 1024 * 1024,
                         activeRequests: 0,
                         waitingRequests: 0,
-                        models: [EngineModelRuntimeStatus(id: "default", loaded: true, contextWindow: 262_144)]
+                        models: [
+                            EngineModelRuntimeStatus(id: "qwen2.5-7b-instruct", loaded: true, contextWindow: 262_144)
+                        ]
                     )
                 }
                 func stream(_ request: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
@@ -1253,18 +1270,12 @@ extension AppTests.GOATed {
             #expect(parsed4.summary == reversedBraces)
         }
 
-        // Delayed transport acknowledgement gates parent dispatch
+        // Controlled latch ensures parent request is NOT invoked before child closure acknowledgement
         @Test func transportAcknowledgement_gatesParentDispatchUntilClosureAcknowledged() async throws {
-            let (workspace, fileTools) = try createWorkspace()
-            defer { try? FileManager.default.removeItem(at: workspace) }
-            let db = try createDatabase()
-            let chatID = UUID()
-            let turnID = UUID()
-            try await db.save(makeChat(id: chatID.uuidString))
+            let quarantine = SubagentTransportQuarantine()
 
-            actor DelayedAckEngine: InferenceEngine {
-                private var streamContinuation: AsyncThrowingStream<GenerationEvent, Error>.Continuation?
-                private(set) var streamCalled = false
+            actor ControlledLatchEngine: InferenceEngine {
+                var parentStreamInvoked = false
 
                 func health() async -> EngineHealth { .ok([]) }
                 func runtimeStatus() async -> EngineRuntimeStatus? {
@@ -1275,83 +1286,72 @@ extension AppTests.GOATed {
                         modelMemoryMaximum: 16 * 1024 * 1024 * 1024,
                         activeRequests: 0,
                         waitingRequests: 0,
-                        models: [EngineModelRuntimeStatus(id: "default", loaded: true, contextWindow: 32_768)]
+                        models: [
+                            EngineModelRuntimeStatus(id: "qwen2.5-7b-instruct", loaded: true, contextWindow: 32_768)
+                        ]
                     )
                 }
 
                 func stream(_ request: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
-                    streamCalled = true
+                    parentStreamInvoked = true
                     return AsyncThrowingStream { continuation in
-                        self.streamContinuation = continuation
-                        continuation.yield(.token("working..."))
-                        continuation.onTermination = { _ in
-                            Task {
-                                // Simulate delayed transport shutdown before calling onTransportClosed
-                                try? await Task.sleep(for: .milliseconds(150))
-                                request.onTransportClosed?()
-                            }
-                        }
+                        continuation.yield(.token("parent response"))
+                        continuation.finish()
                     }
+                }
+
+                func wasInvoked() -> Bool {
+                    parentStreamInvoked
                 }
             }
 
-            let quarantine = SubagentTransportQuarantine()
-            let underlyingEngine = DelayedAckEngine()
-            let guardedEngine = QuarantineGuardedEngine(underlying: underlyingEngine, quarantine: quarantine)
+            let underlying = ControlledLatchEngine()
+            let guardedEngine = QuarantineGuardedEngine(underlying: underlying, quarantine: quarantine)
 
-            let context = SubagentExecutionContext(
-                chatID: chatID,
-                turnID: turnID,
-                projectID: nil,
-                workspace: workspace,
-                fileTools: fileTools,
-                engine: underlyingEngine,
-                database: db,
-                lease: SubagentCapabilityLease(),
-                quarantine: quarantine
-            )
-
-            let worker = SubagentWorker(
-                task: SubagentTaskBrief(objective: "Delayed acknowledgement test"),
-                context: context
-            )
-
-            let workerTask = Task {
-                try await worker.run()
+            // Simulate active child transport with closure handle
+            let childClosureHandle = GenerationTransportClosureHandle()
+            quarantine.markTransportActive()
+            childClosureHandle.onAcknowledge {
+                quarantine.markTransportClosed()
             }
 
-            // Allow worker to start and activate transport quarantine
-            try await Task.sleep(for: .milliseconds(40))
-            #expect(quarantine.isTransportActive)
+            #expect(quarantine.isTransportActive == true)
 
-            // Cancel the worker
-            workerTask.cancel()
-
-            // Immediate parent request dispatch through guarded engine should be rejected while transport is still closing
             let parentReq = GenerationRequest(
-                model: "default",
-                turns: [ChatTurn(role: .user, text: "Hello")],
+                model: "qwen2.5-7b-instruct",
+                turns: [ChatTurn(role: .user, text: "Parent hello")],
                 effort: .graze
             )
 
-            // During the 150ms delay, quarantine is active and parent dispatch is blocked
-            var parentStream = await guardedEngine.stream(parentReq)
-            var parentThrew503 = false
-            do {
-                for try await _ in parentStream {}
-            } catch let error as EngineError {
-                if case .httpDetail(let code, _, _) = error, code == 503 {
-                    parentThrew503 = true
+            // Launch parent stream in background task through guardedEngine
+            let parentTask = Task {
+                let stream = await guardedEngine.stream(parentReq)
+                var events: [GenerationEvent] = []
+                for try await event in stream {
+                    events.append(event)
                 }
+                return events
             }
-            #expect(parentThrew503)
 
-            _ = try await workerTask.value
+            // Allow the task to reach guardedEngine.stream awaiting closure
+            try await Task.sleep(for: .milliseconds(50))
 
-            // Wait for delayed acknowledgement to complete
-            let closed = await quarantine.awaitClosure(timeoutSeconds: 1)
-            #expect(closed)
-            #expect(!quarantine.isTransportActive)
+            // Assert: underlying parent request is NOT invoked before acknowledgement
+            let invokedBeforeAck = await underlying.wasInvoked()
+            #expect(
+                invokedBeforeAck == false,
+                "Parent stream must not be invoked before child transport closure is acknowledged")
+
+            // Release child transport closure
+            childClosureHandle.acknowledge()
+
+            // Parent request should now proceed, dispatch to underlying engine, and finish deterministically
+            let events = try await parentTask.value
+            #expect(!events.isEmpty)
+
+            let invokedAfterAck = await underlying.wasInvoked()
+            #expect(invokedAfterAck == true, "Parent stream must be invoked after transport closure is acknowledged")
+            #expect(quarantine.isTransportActive == false)
         }
 
         // Prompt token reservation when stream method itself suspends
@@ -1373,7 +1373,9 @@ extension AppTests.GOATed {
                         modelMemoryMaximum: 16 * 1024 * 1024 * 1024,
                         activeRequests: 0,
                         waitingRequests: 0,
-                        models: [EngineModelRuntimeStatus(id: "default", loaded: true, contextWindow: 32_768)]
+                        models: [
+                            EngineModelRuntimeStatus(id: "qwen2.5-7b-instruct", loaded: true, contextWindow: 32_768)
+                        ]
                     )
                 }
 
@@ -1414,7 +1416,7 @@ extension AppTests.GOATed {
             #expect(result.receipt.totalTokens > 0)
         }
 
-        // Memory admission checks: rejects 70B model, admits valid model based on turn budget
+        // Memory admission checks: rejects 70B/unverified models, admits valid model based on turn budget
         @Test func memoryAdmission_rejects70BModelAndAdmitsTurnBudget() async throws {
             let (workspace, fileTools) = try createWorkspace()
             defer { try? FileManager.default.removeItem(at: workspace) }
@@ -1463,14 +1465,57 @@ extension AppTests.GOATed {
             #expect(result1.receipt.status == .failed)
             #expect(
                 result1.receipt.unresolved.contains {
-                    $0.detail?.contains("outside the validated Stage 1 model envelope") == true
+                    $0.detail?.contains("outside the validated Stage 1 model allowlist") == true
                 })
 
-            // 2. Viable 7B model with 131k context window admitted based on 14,336 turn budget
+            // 2. Unverified / aliased model "default" fails closed
+            actor AliasedDefaultEngine: InferenceEngine {
+                func health() async -> EngineHealth { .ok([]) }
+                func runtimeStatus() async -> EngineRuntimeStatus? {
+                    EngineRuntimeStatus(
+                        observedAt: .now,
+                        version: "1.0",
+                        modelMemoryUsed: 100 * 1024 * 1024,
+                        modelMemoryMaximum: 64 * 1024 * 1024 * 1024,
+                        activeRequests: 0,
+                        waitingRequests: 0,
+                        models: [
+                            EngineModelRuntimeStatus(id: "default", loaded: true, contextWindow: 32_768)
+                        ]
+                    )
+                }
+                func stream(_ request: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
+                    AsyncThrowingStream { $0.finish() }
+                }
+            }
+
+            let contextAliased = SubagentExecutionContext(
+                chatID: chatID,
+                turnID: turnID,
+                projectID: nil,
+                workspace: workspace,
+                fileTools: fileTools,
+                engine: AliasedDefaultEngine(),
+                database: db,
+                lease: SubagentCapabilityLease()
+            )
+
+            let workerAliased = SubagentWorker(
+                task: SubagentTaskBrief(objective: "Aliased model test"),
+                context: contextAliased
+            )
+            let resultAliased = try await workerAliased.run()
+            #expect(resultAliased.receipt.status == .failed)
+            #expect(
+                resultAliased.receipt.unresolved.contains {
+                    $0.detail?.contains("outside the validated Stage 1 model allowlist") == true
+                })
+
+            // 3. Viable 7B model with 131k context window admitted based on 14,336 turn budget
             actor Valid7BEngine: InferenceEngine {
                 func health() async -> EngineHealth { .ok([]) }
                 func runtimeStatus() async -> EngineRuntimeStatus? {
-                    // Free memory is 3 GiB (less than 17 GiB advertised context, but greater than 2.1 GiB turn budget)
+                    // Free memory is 3 GiB (greater than ~1.04 GiB required headroom for Qwen 7B)
                     EngineRuntimeStatus(
                         observedAt: .now,
                         version: "1.0",
@@ -1479,7 +1524,7 @@ extension AppTests.GOATed {
                         activeRequests: 0,
                         waitingRequests: 0,
                         models: [
-                            EngineModelRuntimeStatus(id: "qwen-2.5-7b-instruct", loaded: true, contextWindow: 131_072)
+                            EngineModelRuntimeStatus(id: "qwen2.5-7b-instruct", loaded: true, contextWindow: 131_072)
                         ]
                     )
                 }
@@ -1529,7 +1574,9 @@ extension AppTests.GOATed {
                         modelMemoryMaximum: 16 * 1024 * 1024 * 1024,
                         activeRequests: 0,
                         waitingRequests: 0,
-                        models: [EngineModelRuntimeStatus(id: "default", loaded: true, contextWindow: 32_768)]
+                        models: [
+                            EngineModelRuntimeStatus(id: "qwen2.5-7b-instruct", loaded: true, contextWindow: 32_768)
+                        ]
                     )
                 }
 
@@ -1564,6 +1611,61 @@ extension AppTests.GOATed {
             #expect(result.receipt.unresolved.contains { $0.reason == "streamBufferOverflow" })
         }
 
+        // Large event exceeding maxStreamEventBytes triggers buffer overflow
+        @Test func streamBuffer_largeEventTriggersBufferOverflow() async throws {
+            let (workspace, fileTools) = try createWorkspace()
+            defer { try? FileManager.default.removeItem(at: workspace) }
+            let db = try createDatabase()
+            let chatID = UUID()
+            let turnID = UUID()
+            try await db.save(makeChat(id: chatID.uuidString))
+
+            actor LargeEventEngine: InferenceEngine {
+                func health() async -> EngineHealth { .ok([]) }
+                func runtimeStatus() async -> EngineRuntimeStatus? {
+                    EngineRuntimeStatus(
+                        observedAt: .now,
+                        version: "1.0",
+                        modelMemoryUsed: 100 * 1024 * 1024,
+                        modelMemoryMaximum: 16 * 1024 * 1024 * 1024,
+                        activeRequests: 0,
+                        waitingRequests: 0,
+                        models: [
+                            EngineModelRuntimeStatus(id: "qwen2.5-7b-instruct", loaded: true, contextWindow: 32_768)
+                        ]
+                    )
+                }
+
+                func stream(_ request: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
+                    AsyncThrowingStream { continuation in
+                        // Yield single event exceeding 64 KiB
+                        let hugeChunk = String(repeating: "x", count: 1200 * 1024)
+                        continuation.yield(.token(hugeChunk))
+                        continuation.finish()
+                    }
+                }
+            }
+
+            let context = SubagentExecutionContext(
+                chatID: chatID,
+                turnID: turnID,
+                projectID: nil,
+                workspace: workspace,
+                fileTools: fileTools,
+                engine: LargeEventEngine(),
+                database: db,
+                lease: SubagentCapabilityLease()
+            )
+
+            let worker = SubagentWorker(
+                task: SubagentTaskBrief(objective: "Large event test"),
+                context: context
+            )
+            let result = try await worker.run()
+            #expect(result.receipt.status == .failed)
+            #expect(result.receipt.unresolved.contains { $0.reason == "streamBufferOverflow" })
+        }
+
         // Transcript bounds and toolCallID preservation with heavy JSON escaping
         @Test func transcriptBounds_jsonEscapingHeavyContentEnforcesLimitAndPreservesToolCallID() throws {
             // 500,000 quotes expands to over 1,000,000 bytes in JSON
@@ -1582,6 +1684,38 @@ extension AppTests.GOATed {
 
             // Verify toolCallID is preserved in serialized JSON
             #expect(encoded.contains("call_abc123"))
+
+            // Verify serialized string is parseable JSON
+            guard let data = encoded.data(using: .utf8) else {
+                #expect(Bool(false), "Encoded string must convert to UTF-8 data")
+                return
+            }
+            let jsonObject = try? JSONSerialization.jsonObject(with: data)
+            #expect(jsonObject != nil, "Serialized transcript must be valid JSON")
+        }
+
+        // Retained toolCallID with 300,000 quote characters must produce valid JSON under 512 KiB
+        @Test func transcriptBounds_extremeQuotesInToolCallIDProducesValidJSON() throws {
+            let extremeQuotes = String(repeating: "\"", count: 300_000)
+            let turns: [ChatTurn] = [
+                ChatTurn(role: .system, text: "System prompt"),
+                ChatTurn(role: .user, text: "User prompt"),
+                ChatTurn(role: .tool, text: "Tool result", toolCallID: extremeQuotes),
+            ]
+
+            let encoded = SubagentWorker.encodeTranscript(turns)
+            #expect(encoded != nil)
+            guard let encoded else { return }
+
+            #expect(encoded.utf8.count <= SubagentLimits.maxTranscriptBytes)
+
+            // Proves valid JSON: must deserialize cleanly with JSONSerialization
+            guard let data = encoded.data(using: .utf8) else {
+                #expect(Bool(false), "Encoded string must convert to UTF-8 data")
+                return
+            }
+            let jsonObject = try? JSONSerialization.jsonObject(with: data)
+            #expect(jsonObject != nil, "Serialized transcript must be valid JSON")
         }
     }
 }

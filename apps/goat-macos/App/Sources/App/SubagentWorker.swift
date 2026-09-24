@@ -275,22 +275,36 @@ public actor SubagentWorker {
             let receiptJson =
                 (try? String(data: encoder.encode(receipt), encoding: .utf8)) ?? "{}"
 
-            let updated = try await db.transitionSubagentRun(
-                id: id.uuidString,
-                toStatus: status.rawValue,
-                roundsExecuted: roundsExecuted,
-                totalTokens: totalTokens,
-                transcriptBytes: transcriptJSON?.utf8.count ?? 0,
-                transcriptJson: transcriptJSON,
-                summary: receipt.summary,
-                citationsJson: citationsJson,
-                receiptJson: receiptJson,
-                completedAt: .now
-            )
+            let runIDString = id.uuidString
+            let statusRaw = status.rawValue
+            let summaryText = receipt.summary
+            let transcriptCount = transcriptJSON?.utf8.count ?? 0
+
+            // Perform terminal status transition in a detached context so cancellation of the
+            // calling task does not abort recording terminal state in SQLite.
+            let updated =
+                (try? await Task.detached {
+                    try await db.transitionSubagentRun(
+                        id: runIDString,
+                        toStatus: statusRaw,
+                        roundsExecuted: roundsExecuted,
+                        totalTokens: totalTokens,
+                        transcriptBytes: transcriptCount,
+                        transcriptJson: transcriptJSON,
+                        summary: summaryText,
+                        citationsJson: citationsJson,
+                        receiptJson: receiptJson,
+                        completedAt: .now
+                    )
+                }.value) ?? false
 
             if !updated {
                 // Lost the CAS race: return the authoritative committed state
-                if let committed = try await db.subagentRun(id: id.uuidString),
+                let committedOpt = try? await Task.detached {
+                    try await db.subagentRun(id: runIDString)
+                }.value
+
+                if let committed = committedOpt,
                     let committedStatus = SubagentStatus(rawValue: committed.status)
                 {
                     let decoder = JSONDecoder()
@@ -319,7 +333,7 @@ public actor SubagentWorker {
                         roundsExecuted: committed.roundsExecuted,
                         totalTokens: committed.totalTokens
                     )
-                } else {
+                } else if committedOpt == nil {
                     // Chat cascade deletion or missing row: fail closed
                     throw CapabilityError.revoked
                 }
@@ -432,11 +446,14 @@ public actor SubagentWorker {
                 "Model context window (\(contextWindow)) exceeds validated Stage 1 limit (\(SubagentLimits.maximumSupportedContextWindow))."
         }
 
-        let lowerModelID = loadedModel.id.lowercased()
-        let isExcluded = SubagentLimits.stage1ExcludedModelPatterns.contains { lowerModelID.contains($0) }
-        let isAllowed = SubagentLimits.stage1AllowedModelPatterns.contains { lowerModelID.contains($0) }
-        if isExcluded || !isAllowed {
-            return "Model '\(loadedModel.id)' is outside the validated Stage 1 model envelope."
+        guard let envelope = SubagentLimits.resolvedEnvelope(for: loadedModel.id) else {
+            return
+                "Model '\(loadedModel.id)' is an unverified or aliased model outside the validated Stage 1 model allowlist."
+        }
+
+        if contextWindow > envelope.maxContextWindow {
+            return
+                "Model context window (\(contextWindow)) exceeds validated Stage 1 limit (\(envelope.maxContextWindow))."
         }
 
         guard let maxMem = status.modelMemoryMaximum, let usedMem = status.modelMemoryUsed else {
@@ -444,11 +461,10 @@ public actor SubagentWorker {
         }
 
         let freeMemoryBytes = maxMem - usedMem
-        // KV-cache headroom calculation based on actual requested allocation (ADR-0096):
+        // KV-cache headroom calculation based on actual requested allocation and verified architecture bounds (ADR-0096):
         // Child request allocation is bounded by requiredBudgetTokens (14,336 tokens).
-        // Validated Stage 1 model envelope: 32 layers * 8 KV heads * 128 head dim * 2 (K+V) * 2 bytes = 131,072 bytes/token.
         let requestedTokens = min(contextWindow, requiredBudgetTokens)
-        let kvBytesPerToken: Int64 = 32 * 8 * 128 * 2 * 2
+        let kvBytesPerToken = envelope.bytesPerToken
         let kvCacheBytes: Int64 = Int64(requestedTokens) * kvBytesPerToken
         let runtimeOverheadBytes: Int64 = 256 * 1024 * 1024
         let minimumRequiredHeadroomBytes: Int64 = kvCacheBytes + runtimeOverheadBytes
@@ -687,17 +703,23 @@ public actor SubagentWorker {
             let quarantine = context.quarantine
             quarantine?.markTransportActive()
 
+            let closureHandle = GenerationTransportClosureHandle()
+            closureHandle.onAcknowledge { [weak quarantine] in
+                quarantine?.markTransportClosed()
+            }
+
             var request = GenerationRequest(
-                model: context.modelID ?? "default",
+                model: context.modelID ?? "qwen2.5-7b-instruct",
                 turns: transcript,
                 effort: context.effort,
                 maxTokens: maxGenAllowed,
                 tools: availableTools,
-                round: roundsExecuted
+                round: roundsExecuted,
+                onTransportClosed: {
+                    closureHandle.acknowledge()
+                },
+                transportClosureHandle: closureHandle
             )
-            request.onTransportClosed = { [weak quarantine] in
-                quarantine?.markTransportClosed()
-            }
 
             var assistantText = ""
             var toolCalls: [ToolCallEvent] = []
@@ -711,18 +733,46 @@ public actor SubagentWorker {
 
             let (consumerStream, continuation) =
                 AsyncThrowingStream<GenerationEvent, Error>.makeStream(
-                    bufferingPolicy: .bufferingOldest(SubagentLimits.streamBufferCapacity)
+                    bufferingPolicy: .bufferingNewest(SubagentLimits.streamBufferCapacity)
                 )
             let forwarderTask = Task {
                 defer {
-                    continuation.finish()
-                    Task {
-                        await engine.awaitTransportClosure()
-                        quarantine?.markTransportClosed()
+                    if Task.isCancelled {
+                        continuation.finish(throwing: CancellationError())
+                    } else {
+                        continuation.finish()
                     }
                 }
                 do {
+                    var bufferBytesEnqueued = 0
                     forwarderLoop: for try await event in producerStream {
+                        let eventBytes: Int
+                        switch event {
+                        case .token(let chunk):
+                            eventBytes = chunk.utf8.count
+                        case .thinking(let th):
+                            eventBytes = th.utf8.count
+                        case .toolInput(let bytes):
+                            eventBytes = bytes
+                        case .toolCalls(let calls):
+                            eventBytes = calls.reduce(0) {
+                                $0 + $1.id.utf8.count + $1.name.utf8.count + $1.argumentsJSON.utf8.count
+                            }
+                        case .done:
+                            eventBytes = 0
+                        }
+
+                        if eventBytes > SubagentLimits.maxStreamEventBytes {
+                            continuation.finish(throwing: SubagentWorkerError.streamBufferOverflow)
+                            break forwarderLoop
+                        }
+
+                        bufferBytesEnqueued += eventBytes
+                        if bufferBytesEnqueued > SubagentLimits.maxStreamBufferBytes {
+                            continuation.finish(throwing: SubagentWorkerError.streamBufferOverflow)
+                            break forwarderLoop
+                        }
+
                         switch continuation.yield(event) {
                         case .enqueued:
                             break
@@ -821,11 +871,11 @@ public actor SubagentWorker {
                         break streamLoop
                     }
                 }
+                try Task.checkCancellation()
             } catch {
                 forwarderTask.cancel()
-                await engine.awaitTransportClosure()
                 if let quarantine {
-                    let closed = await quarantine.awaitClosure(
+                    let closed = await closureHandle.waitForClosure(
                         timeoutSeconds: SubagentLimits.cancellationGracePeriodSeconds)
                     if !closed {
                         quarantine.markQuarantined()
@@ -835,9 +885,8 @@ public actor SubagentWorker {
             }
 
             forwarderTask.cancel()
-            await engine.awaitTransportClosure()
             if let quarantine {
-                let closed = await quarantine.awaitClosure(
+                let closed = await closureHandle.waitForClosure(
                     timeoutSeconds: SubagentLimits.cancellationGracePeriodSeconds)
                 if !closed {
                     quarantine.markQuarantined()
@@ -1080,65 +1129,56 @@ public actor SubagentWorker {
             let toolCallID: String?
         }
 
+        func sanitizeCall(_ call: ToolCallEvent) -> SimpleToolCall {
+            SimpleToolCall(
+                id: UTF8BoundaryTruncator.truncate(call.id, maxBytes: 256, notice: ""),
+                name: UTF8BoundaryTruncator.truncate(call.name, maxBytes: 256, notice: ""),
+                argumentsJSON: UTF8BoundaryTruncator.truncate(call.argumentsJSON, maxBytes: 1024, notice: "")
+            )
+        }
+
+        func sanitizeTurn(_ turn: ChatTurn, maxTextBytes: Int) -> SimpleTurn {
+            SimpleTurn(
+                role: turn.role.rawValue,
+                text: UTF8BoundaryTruncator.truncate(turn.text, maxBytes: maxTextBytes, notice: ""),
+                toolCalls: turn.toolCalls.isEmpty ? nil : turn.toolCalls.map(sanitizeCall),
+                toolCallID: turn.toolCallID.map { UTF8BoundaryTruncator.truncate($0, maxBytes: 256, notice: "") }
+            )
+        }
+
         var candidateTurns = turns
         let encoder = JSONEncoder()
 
-        for _ in 0..<10 {
-            let simplified = candidateTurns.map { turn in
-                SimpleTurn(
-                    role: turn.role.rawValue,
-                    text: turn.text,
-                    toolCalls: turn.toolCalls.isEmpty
-                        ? nil
-                        : turn.toolCalls.map {
-                            SimpleToolCall(id: $0.id, name: $0.name, argumentsJSON: $0.argumentsJSON)
-                        },
-                    toolCallID: turn.toolCallID
-                )
-            }
-            guard let data = try? encoder.encode(simplified) else { return nil }
-            if data.count <= SubagentLimits.maxTranscriptBytes {
+        // 1. Try encoding with full turns and sanitized fields
+        for maxText in [16 * 1024, 4 * 1024, 1024, 256] {
+            let simplified = candidateTurns.map { sanitizeTurn($0, maxTextBytes: maxText) }
+            if let data = try? encoder.encode(simplified), data.count <= SubagentLimits.maxTranscriptBytes {
                 return String(data: data, encoding: .utf8)
             }
-            if candidateTurns.count <= 2 {
-                let maxTextAllowed = max(64, (SubagentLimits.maxTranscriptBytes / 4))
-                candidateTurns = candidateTurns.map { t in
-                    ChatTurn(
-                        role: t.role,
-                        text: UTF8BoundaryTruncator.truncate(t.text, maxBytes: maxTextAllowed),
-                        thinking: t.thinking,
-                        images: t.images,
-                        toolCalls: t.toolCalls,
-                        toolCallID: t.toolCallID
-                    )
-                }
-                break
+            if candidateTurns.count > 2 {
+                candidateTurns = pruneTranscript(candidateTurns)
             }
-            candidateTurns = pruneTranscript(candidateTurns)
         }
 
-        let finalSimplified = candidateTurns.map { turn in
-            SimpleTurn(
-                role: turn.role.rawValue,
-                text: UTF8BoundaryTruncator.truncate(turn.text, maxBytes: 1024),
-                toolCalls: turn.toolCalls.isEmpty
-                    ? nil
-                    : turn.toolCalls.map {
-                        SimpleToolCall(
-                            id: $0.id,
-                            name: $0.name,
-                            argumentsJSON: UTF8BoundaryTruncator.truncate($0.argumentsJSON, maxBytes: 256)
-                        )
-                    },
-                toolCallID: turn.toolCallID
-            )
+        // 2. Drop older turns progressively until only the last 2 turns remain
+        while candidateTurns.count > 2 {
+            candidateTurns.remove(at: 1)
+            let simplified = candidateTurns.map { sanitizeTurn($0, maxTextBytes: 512) }
+            if let data = try? encoder.encode(simplified), data.count <= SubagentLimits.maxTranscriptBytes {
+                return String(data: data, encoding: .utf8)
+            }
         }
-        guard let finalData = try? encoder.encode(finalSimplified) else { return nil }
-        if finalData.count <= SubagentLimits.maxTranscriptBytes {
-            return String(data: finalData, encoding: .utf8)
+
+        // 3. Fallback: minimal turns with very tight text bounds
+        for maxText in [256, 64] {
+            let minimal = candidateTurns.map { sanitizeTurn($0, maxTextBytes: maxText) }
+            if let data = try? encoder.encode(minimal), data.count <= SubagentLimits.maxTranscriptBytes {
+                return String(data: data, encoding: .utf8)
+            }
         }
-        let clampedData = finalData.prefix(SubagentLimits.maxTranscriptBytes)
-        return String(decoding: clampedData, as: UTF8.self)
+
+        // 4. Guaranteed valid static JSON fallback - never truncate raw JSON bytes
+        return "[{\"role\":\"system\",\"text\":\"[transcript truncated]\"}]"
     }
 }
 

@@ -294,7 +294,10 @@ public actor OpenAICompatEngine: InferenceEngine {
     public func stream(_ r: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
         let config = self.config
         let taskID = UUID()
-        return AsyncThrowingStream { continuation in
+        var streamTask: Task<Void, Never>?
+        let stream = AsyncThrowingStream<GenerationEvent, Error>(
+            bufferingPolicy: .bufferingNewest(32)
+        ) { continuation in
             let task = Task { [weak self] in
                 var assembler = StreamAssembler(round: r.round)
 
@@ -318,6 +321,7 @@ public actor OpenAICompatEngine: InferenceEngine {
                     let client = JudasHTTPClient(origin: config.baseURL, source: .engine, name: config.name)
                     defer {
                         client.invalidateAndCancel()
+                        r.transportClosureHandle?.acknowledge()
                         r.onTransportClosed?()
                     }
                     let (bytes, resp) = try await client.bytes(for: req)
@@ -348,12 +352,30 @@ public actor OpenAICompatEngine: InferenceEngine {
                         guard line.hasPrefix("data:") else { continue }
                         let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
                         if payload == "[DONE]" { break }
+                        if payload.utf8.count > 128 * 1024 {
+                            throw EngineError.httpDetail(
+                                500, "Upstream stream event payload exceeded bounds", retryAfter: nil)
+                        }
                         guard let data = payload.data(using: .utf8),
                             let chunk = try? JSONDecoder().decode(StreamChunk.self, from: data)
                         else { continue }
-                        for event in assembler.feed(chunk) { continuation.yield(event) }
+                        for event in assembler.feed(chunk) {
+                            switch continuation.yield(event) {
+                            case .enqueued, .dropped, .terminated:
+                                break
+                            @unknown default:
+                                break
+                            }
+                        }
                     }
-                    for event in assembler.finish() { continuation.yield(event) }
+                    for event in assembler.finish() {
+                        switch continuation.yield(event) {
+                        case .enqueued, .dropped, .terminated:
+                            break
+                        @unknown default:
+                            break
+                        }
+                    }
                     continuation.finish()
                 } catch is CancellationError {
                     continuation.finish()
@@ -361,11 +383,13 @@ public actor OpenAICompatEngine: InferenceEngine {
                     continuation.finish(throwing: error)
                 }
             }
-            Task { [weak self] in
-                await self?.registerStreamTask(taskID, task: task)
-            }
+            streamTask = task
             continuation.onTermination = { _ in task.cancel() }
         }
+        if let streamTask {
+            self.activeStreamTasks[taskID] = streamTask
+        }
+        return stream
     }
 }
 

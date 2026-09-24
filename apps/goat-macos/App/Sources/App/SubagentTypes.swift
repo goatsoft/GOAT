@@ -39,6 +39,32 @@ public enum SubagentStatus: String, Codable, Sendable {
     case failed
 }
 
+public struct Stage1ModelEnvelope: Sendable, Equatable {
+    public let layers: Int
+    public let kvHeads: Int
+    public let headDimension: Int
+    public let bytesPerElement: Int
+    public let maxContextWindow: Int
+
+    public init(
+        layers: Int,
+        kvHeads: Int,
+        headDimension: Int,
+        bytesPerElement: Int = 2,
+        maxContextWindow: Int = 131_072
+    ) {
+        self.layers = layers
+        self.kvHeads = kvHeads
+        self.headDimension = headDimension
+        self.bytesPerElement = bytesPerElement
+        self.maxContextWindow = maxContextWindow
+    }
+
+    public var bytesPerToken: Int64 {
+        Int64(layers * kvHeads * headDimension * 2 * bytesPerElement)
+    }
+}
+
 public enum SubagentLimits {
     public static let defaultMaxRounds = 5
     public static let ceilingMaxRounds = 10
@@ -66,13 +92,41 @@ public enum SubagentLimits {
     public static let maximumSupportedContextWindow = 131_072
 
     public static let streamBufferCapacity = 32
+    public static let maxStreamEventBytes = 1024 * 1024  // 64 KiB
+    public static let maxStreamBufferBytes = 2 * 1024 * 1024  // 512 KiB
 
-    public static let stage1AllowedModelPatterns: [String] = [
-        "qwen", "llama", "mistral", "gemma", "test", "mock", "default", "subagent",
+    public static let supportedModelEnvelopes: [String: Stage1ModelEnvelope] = [
+        "qwen2.5-7b-instruct": Stage1ModelEnvelope(layers: 28, kvHeads: 4, headDimension: 128),
+        "qwen2.5-7b": Stage1ModelEnvelope(layers: 28, kvHeads: 4, headDimension: 128),
+        "qwen2.5-coder-7b-instruct": Stage1ModelEnvelope(layers: 28, kvHeads: 4, headDimension: 128),
+        "qwen2.5-coder-7b": Stage1ModelEnvelope(layers: 28, kvHeads: 4, headDimension: 128),
+        "qwen2.5-14b-instruct": Stage1ModelEnvelope(layers: 48, kvHeads: 8, headDimension: 128),
+        "qwen2.5-14b": Stage1ModelEnvelope(layers: 48, kvHeads: 8, headDimension: 128),
+        "llama-3.1-8b-instruct": Stage1ModelEnvelope(layers: 32, kvHeads: 8, headDimension: 128),
+        "llama-3.1-8b": Stage1ModelEnvelope(layers: 32, kvHeads: 8, headDimension: 128),
+        "llama-3-8b-instruct": Stage1ModelEnvelope(layers: 32, kvHeads: 8, headDimension: 128),
+        "llama-3-8b": Stage1ModelEnvelope(layers: 32, kvHeads: 8, headDimension: 128),
+        "mistral-7b-instruct": Stage1ModelEnvelope(layers: 32, kvHeads: 8, headDimension: 128),
+        "mistral-7b-instruct-v0.3": Stage1ModelEnvelope(layers: 32, kvHeads: 8, headDimension: 128),
+        "gemma-2-9b-it": Stage1ModelEnvelope(layers: 42, kvHeads: 8, headDimension: 256),
+        "gemma-2-9b": Stage1ModelEnvelope(layers: 42, kvHeads: 8, headDimension: 256),
     ]
-    public static let stage1ExcludedModelPatterns: [String] = [
-        "70b", "72b", "405b",
-    ]
+
+    public static func resolvedEnvelope(for modelID: String) -> Stage1ModelEnvelope? {
+        let normalized =
+            modelID.lowercased()
+            .split(separator: "/")
+            .last.map(String.init) ?? modelID.lowercased()
+        if let env = supportedModelEnvelopes[normalized] {
+            return env
+        }
+        for (key, env) in supportedModelEnvelopes {
+            if normalized == key || normalized.hasPrefix(key + ":") {
+                return env
+            }
+        }
+        return nil
+    }
 }
 
 public struct SubagentTaskBrief: Codable, Sendable, Equatable {
