@@ -4,6 +4,8 @@ import Tools
 /// Selected by the host, never by a model or an extension contribution.
 public enum ToolExecutionBudget: Sendable {
     case standard
+    /// The built-in worker enforces a maximum 300-second investigation deadline.
+    case supervisedSubagent
     /// The trusted command supervisor enforces its own maximum 600-second job deadline.
     /// Allow time for startup, termination and collecting the final command receipt.
     case supervisedCommand
@@ -11,6 +13,7 @@ public enum ToolExecutionBudget: Sendable {
     var deadline: Duration {
         switch self {
         case .standard: .seconds(120)
+        case .supervisedSubagent: .seconds(330)
         case .supervisedCommand: .seconds(630)
         }
     }

@@ -1,4 +1,5 @@
 import Bleet
+import Caprine
 import Inference
 import SwiftUI
 
@@ -20,6 +21,19 @@ struct InspectorView: View {
                             Text(session.effort.label).foregroundStyle(
                                 session.effort.presentationColor(in: model.theme))
                         }
+                    }
+                    Divider()
+                    LabeledContent("Subagent", value: subagentName)
+                    Text(model.subagentAvailabilityMessage)
+                        .font(Caprine.Activity.font)
+                        .foregroundStyle(model.theme.tokens.muted)
+                    if model.selectedSubagentModelID != nil {
+                        LabeledContent(
+                            "Worker time limit", value: "\(model.memory.builtInSettings.subagentTimeoutSeconds)s")
+                        LabeledContent("Worker round limit", value: "\(model.memory.builtInSettings.subagentMaxRounds)")
+                        Text("Read-only investigations. The parent resumes after the worker returns.")
+                            .font(Caprine.Activity.font)
+                            .foregroundStyle(model.theme.tokens.muted)
                     }
                     LabeledContent("Messages", value: "\(session.messages.count)")
 
@@ -74,6 +88,10 @@ struct InspectorView: View {
             let count = state.tools.filter { !MCPModel.isOwnerAdministrationTool($0.name) }.count
             return (name: name, toolCount: count)
         }
+    }
+
+    private var subagentName: String {
+        model.selectedSubagentModelID.map { ModelRef(id: $0).displayName } ?? "Not selected"
     }
 
     private var modelName: String {

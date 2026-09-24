@@ -53,7 +53,7 @@ On macOS, system-level capabilities provide distinct architectural opportunities
 - Configurable via `BuiltInExtensionSettings`:
   - `subagentsEnabled: Bool` (default true).
   - `subagentMaxRounds: Int` (default 5, ceiling 10).
-  - `subagentTimeoutSeconds: Int` (default 60, minimum 10, maximum 90).
+  - `subagentTimeoutSeconds: Int` (default 180, minimum 10, maximum 300).
   - `subagentPreferredBackend: SubagentBackendID` (default .localEngine).
 
 ### 2. Single-Active-Turn Invariant and Execution Budgets
@@ -65,13 +65,17 @@ On macOS, system-level capabilities provide distinct architectural opportunities
   `subagent_delegate`, driven by a headless background actor (`SubagentWorker`).
 
 #### Inner and Outer Deadlines
-- GOATed enforces an outer model-tool execution budget on extension invocations (`ToolExecutionBudget.standard`,
-  which is 120 seconds). Exceeding this budget causes GOATed to quarantine the extension.
+- GOATed enforces an outer model-tool execution budget on extension invocations (`ToolExecutionBudget.supervisedSubagent`,
+  which is 330 seconds and is selected only for the built-in delegation route). Exceeding this budget causes GOATed to quarantine the extension.
 - To prevent accidental quarantine of `goat.subagents`, the child subagent timeout is strictly decoupled from
   and bounded below the outer budget:
-  `innerChildTimeout <= 90 seconds < outerBudget (120 seconds)`.
+  `innerChildTimeout <= 300 seconds < outerBudget (330 seconds)`.
 - A minimum buffer of 30 seconds is guaranteed for the child worker to abort operations, collect partial findings,
-  synthesize a structured receipt, and persist its terminal state before the outer 120-second budget expires.
+  synthesize a structured receipt, and persist its terminal state before the outer 330-second budget expires.
+
+The longer default accommodates multiple prompt-processing and generation rounds on local hardware.
+Explicitly saved time limits remain unchanged; the default applies when no valid limit is saved.
+Other extension tools retain their existing budgets.
 
 ### 3. Pluggable Subagent Backend Architecture
 Introduce a typed backend abstraction:
@@ -251,7 +255,7 @@ be verified against actual tool execution evidence:
 The test plan for Stage 1 subagent delegation includes the following deterministic acceptance scenarios:
 
 1. **Inner/Outer Deadline Ordering:** Verify that an inner timeout (e.g. 60s) fires, cleanly terminates the child,
-   records `timedOut`, and returns a partial receipt before the outer 120s budget expires, preventing extension quarantine.
+   records `timedOut`, and returns a partial receipt before the outer 330s budget expires, preventing extension quarantine.
 2. **Uncooperative Child Worker:** Simulate a child task that ignores cancellation. Verify capability lease revocation,
    host task severance, failure to update the CAS database record, and rejection of late callbacks.
 3. **Transport Termination and Quarantine:** Simulate delayed socket closure on engine transport. Verify that parent
@@ -276,7 +280,7 @@ The test plan for Stage 1 subagent delegation includes the following determinist
 ## Consequences
 
 - Complex multi-step investigation runs within a tightly bounded child sandbox without polluting parent context.
-- Eliminates risk of extension quarantine by strictly ordering child timeouts (<=90s) within the outer budget (120s).
+- Eliminates risk of extension quarantine by strictly ordering child timeouts (<=300s) within the outer budget (330s).
 - Protects engine and memory stability by enforcing sequential GPU access, memory headroom checks, and reservation quarantine.
 - Protects workspace integrity with an executable Pen-file-only capability fence and host-side handle validation.
 - Preserves the single active turn invariant and the Herd Guarantee.

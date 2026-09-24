@@ -29,7 +29,9 @@ final class BuiltInExtensionSettings {
         let maxRounds = defaults.integer(forKey: "goated.subagents.max_rounds")
         subagentMaxRounds = (1...10).contains(maxRounds) ? maxRounds : SubagentLimits.defaultMaxRounds
         let timeoutSec = defaults.integer(forKey: "goated.subagents.timeout")
-        subagentTimeoutSeconds = (10...90).contains(timeoutSec) ? timeoutSec : SubagentLimits.defaultTimeoutSeconds
+        subagentTimeoutSeconds =
+            (10...SubagentLimits.ceilingTimeoutSeconds).contains(timeoutSec)
+            ? timeoutSec : SubagentLimits.defaultTimeoutSeconds
         if let backendRaw = defaults.string(forKey: "goated.subagents.backend"),
             let backend = SubagentBackendID(rawValue: backendRaw)
         {
@@ -66,7 +68,7 @@ final class BuiltInExtensionSettings {
     }
 
     func setSubagentTimeoutSeconds(_ value: Int) {
-        subagentTimeoutSeconds = min(90, max(10, value))
+        subagentTimeoutSeconds = min(SubagentLimits.ceilingTimeoutSeconds, max(10, value))
         defaults.set(subagentTimeoutSeconds, forKey: "goated.subagents.timeout")
     }
 

@@ -17,7 +17,7 @@ extension AppTests.GOATed {
             #expect(settings.herderEnabled && settings.herderWritesEnabled && settings.herderCommandsEnabled)
             #expect(settings.hindsightEnabled && settings.commandTimeout == 120)
             #expect(
-                settings.subagentsEnabled && settings.subagentMaxRounds == 5 && settings.subagentTimeoutSeconds == 60)
+                settings.subagentsEnabled && settings.subagentMaxRounds == 5 && settings.subagentTimeoutSeconds == 180)
             #expect(settings.subagentPreferredBackend == .localEngine)
             settings.setSubagentModelID("Qwen3.5-9B-4bit", for: "studio")
             #expect(settings.subagentModelID(for: "another-engine") == nil)
@@ -49,8 +49,11 @@ extension AppTests.GOATed {
             #expect(loaded.subagentMaxRounds == 10)
             loaded.setSubagentTimeoutSeconds(5)
             #expect(loaded.subagentTimeoutSeconds == 10)
-            loaded.setSubagentTimeoutSeconds(200)
-            #expect(loaded.subagentTimeoutSeconds == 90)
+            loaded.setSubagentTimeoutSeconds(400)
+            #expect(loaded.subagentTimeoutSeconds == 300)
+            #expect(BuiltInExtensionSettings(defaults: defaults).subagentTimeoutSeconds == 300)
+            loaded.setSubagentTimeoutSeconds(60)
+            #expect(BuiltInExtensionSettings(defaults: defaults).subagentTimeoutSeconds == 60)
         }
 
         @MainActor @Test func herderCanBeReadOnlyOrDisabledAndOldRoutesCannotBypassIt() async throws {

@@ -13,3 +13,8 @@ Engine-supplied token counts and timing are preferred when available. An estimat
 Open the available statistics/chart controls to examine throughput, the context ring and recent response measurements. A filled context indicator is a prompt-budget signal; it is not a measure of task understanding or memory quality.
 
 Use [Statistics reference](../reference/STATISTICS.md) for exact definitions, fallback behavior and chart limits. For slow first responses or missing usage, see [Troubleshooting](../how-to/TROUBLESHOOTING.md).
+
+The Model section shows the selected subagent beneath the parent, including availability,
+its investigation time limit and round limit. These describe the configured worker, not
+measured child throughput. The default investigation limit is 180 seconds; Settings →
+GOATed → Extensions → Subagents → Advanced supports 10–300 seconds.

@@ -446,7 +446,7 @@ struct GOATedSettingsView: View {
                         "Time limit: \(settings.subagentTimeoutSeconds)s",
                         value: Binding(
                             get: { settings.subagentTimeoutSeconds }, set: { settings.setSubagentTimeoutSeconds($0) }),
-                        in: 10...90, step: 5
+                        in: 10...SubagentLimits.ceilingTimeoutSeconds, step: 5
                     )
                     Text("Maximum investigation time before stopping and returning partial findings.")
                         .font(Caprine.Activity.font).foregroundStyle(.secondary)

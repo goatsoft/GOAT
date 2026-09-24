@@ -345,7 +345,11 @@ final class AppToolRouter: ShepherdToolSource {
                 let budget: ToolExecutionBudget =
                     handle.registration.extensionID.rawValue == "goat.herder"
                         && handle.name == "pen_run_command"
-                        && penFileSession?.turnID == handle.turnID ? .supervisedCommand : .standard
+                        && penFileSession?.turnID == handle.turnID
+                    ? .supervisedCommand
+                    : (handle.registration.extensionID.rawValue == "goat.subagents"
+                        && handle.name == "subagent_delegate"
+                        && penFileSession?.turnID == handle.turnID ? .supervisedSubagent : .standard)
                 let result = try await extensions.invoke(handle, argumentsJSON: argumentsJSON, executionBudget: budget)
                 {
                     [weak self] handle, arguments in

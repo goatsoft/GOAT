@@ -70,10 +70,10 @@ public enum SubagentLimits {
     public static let ceilingMaxRounds = 10
     public static let minimumMaxRounds = 1
 
-    public static let defaultTimeoutSeconds = 60
-    public static let ceilingTimeoutSeconds = 90
+    public static let defaultTimeoutSeconds = 180
+    public static let ceilingTimeoutSeconds = 300
     public static let minimumTimeoutSeconds = 1
-    public static let outerBudgetSeconds = 120
+    public static let outerBudgetSeconds = 330
     public static let cancellationGracePeriodSeconds = 5
 
     public static let maxInputTokensPerRequest = 12_288
