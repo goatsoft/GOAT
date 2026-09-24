@@ -472,7 +472,8 @@ final class AppModel {
         memory = MemoryModel(activity: activity)
         toolRouter = AppToolRouter(mcp: mcp, memory: memory, activity: activity)
         userExtensions = UserExtensionManager(runtime: toolRouter.extensions, activity: activity)
-        shepherd = ShepherdModel(engine: engine, tools: toolRouter, activity: activity)
+        let guardedEngine = QuarantineGuardedEngine(underlying: engine, quarantine: toolRouter.subagentQuarantine)
+        shepherd = ShepherdModel(engine: guardedEngine, tools: toolRouter, activity: activity)
         shepherd.env = self
         toolRouter.workspaceForProject = { [weak self] id in
             self?.pens.first(where: { $0.id == id })?.workspace.map { URL(fileURLWithPath: $0.path) }

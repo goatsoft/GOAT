@@ -32,6 +32,7 @@ final class AppToolRouter: ShepherdToolSource {
             turnID: UUID, chatID: UUID, projectID: UUID, workspace: URL, provider: SubagentsProvider,
             registration: Registration
         )?
+    public let subagentQuarantine = SubagentTransportQuarantine()
     private let memory: MemoryModel
     private let activity: ActivityLog
     private let builtInSkillsRoot: URL
@@ -258,7 +259,8 @@ final class AppToolRouter: ShepherdToolSource {
                             engine: subagentEngine,
                             modelID: currentModelID(),
                             configuration: memory.builtInSettings.subagentConfiguration,
-                            database: databaseProvider()
+                            database: databaseProvider(),
+                            quarantine: subagentQuarantine
                         )
                         let subagentReg = try await extensions.activate(
                             SubagentsExtension(provider: subagentProvider), scope: .pen(projectID))
@@ -519,10 +521,7 @@ final class AppToolRouter: ShepherdToolSource {
     }
 
     var isEngineQuarantined: Bool {
-        if let session = subagentSession {
-            return session.provider.quarantine.isQuarantined
-        }
-        return false
+        subagentQuarantine.isQuarantined || subagentQuarantine.isTransportActive
     }
 
     func cancelPendingPermission() { mcp.cancelPendingPermission() }

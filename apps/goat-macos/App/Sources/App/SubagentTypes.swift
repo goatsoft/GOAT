@@ -63,6 +63,7 @@ public enum SubagentLimits {
     public static let maxUnresolvedBytes = 2 * 1_024  // 2 KiB
 
     public static let maxDelegationsPerTurn = 3
+    public static let maximumSupportedContextWindow = 131_072
 }
 
 public struct SubagentTaskBrief: Codable, Sendable, Equatable {
@@ -299,12 +300,55 @@ public struct SubagentTurnAuthority: SubagentHostAuthority {
     }
 }
 
+public final class QuarantineWaitRegistration: @unchecked Sendable {
+    public let id = UUID()
+    private let lock = NSLock()
+    private var isCancelled = false
+    private var isResumed = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    public init() {}
+
+    public func setContinuation(_ cont: CheckedContinuation<Void, Never>) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if isCancelled || isResumed {
+            return false
+        }
+        self.continuation = cont
+        return true
+    }
+
+    public func cancel() -> CheckedContinuation<Void, Never>? {
+        lock.lock()
+        defer { lock.unlock() }
+        isCancelled = true
+        guard !isResumed else { return nil }
+        isResumed = true
+        let cont = continuation
+        continuation = nil
+        return cont
+    }
+
+    public func resume() {
+        lock.lock()
+        guard !isResumed else {
+            lock.unlock()
+            return
+        }
+        isResumed = true
+        let cont = continuation
+        continuation = nil
+        lock.unlock()
+        cont?.resume()
+    }
+}
+
 public final class SubagentTransportQuarantine: @unchecked Sendable {
     private let lock = NSLock()
     private var quarantined = false
     private var transportActive = false
-    private var nextWaiterId = 0
-    private var closureWaiters: [Int: CheckedContinuation<Void, Never>] = [:]
+    private var waiters: [UUID: QuarantineWaitRegistration] = [:]
 
     public init() {}
 
@@ -332,11 +376,11 @@ public final class SubagentTransportQuarantine: @unchecked Sendable {
         if quarantined {
             quarantined = false
         }
-        let waiters = Array(closureWaiters.values)
-        closureWaiters.removeAll()
+        let pending = Array(waiters.values)
+        waiters.removeAll()
         lock.unlock()
 
-        for waiter in waiters {
+        for waiter in pending {
             waiter.resume()
         }
     }
@@ -354,41 +398,43 @@ public final class SubagentTransportQuarantine: @unchecked Sendable {
     }
 
     public func waitForClosure() async {
+        let registration = QuarantineWaitRegistration()
+
         let shouldWait: Bool = {
             lock.lock()
             defer { lock.unlock() }
-            return transportActive
+            if !transportActive {
+                return false
+            }
+            waiters[registration.id] = registration
+            return true
         }()
         guard shouldWait else { return }
 
-        var myId = 0
         await withTaskCancellationHandler {
             await withCheckedContinuation { cont in
-                lock.lock()
-                if !transportActive {
-                    lock.unlock()
+                let inserted = registration.setContinuation(cont)
+                if !inserted {
                     cont.resume()
-                } else {
-                    nextWaiterId += 1
-                    myId = nextWaiterId
-                    closureWaiters[myId] = cont
-                    lock.unlock()
                 }
             }
         } onCancel: {
             lock.lock()
-            let waiter = closureWaiters.removeValue(forKey: myId)
+            waiters.removeValue(forKey: registration.id)
             lock.unlock()
-            waiter?.resume()
+            if let cont = registration.cancel() {
+                cont.resume()
+            }
         }
     }
 
     public func awaitClosure(timeoutSeconds: Int) async -> Bool {
-        let active: Bool = {
+        let (active, isQuar): (Bool, Bool) = {
             lock.lock()
             defer { lock.unlock() }
-            return transportActive
+            return (transportActive, quarantined)
         }()
+        if isQuar { return false }
         guard active else { return true }
 
         let result = await withTaskGroup(of: Bool.self) { group in
@@ -410,6 +456,64 @@ public final class SubagentTransportQuarantine: @unchecked Sendable {
             markQuarantined()
         }
         return result
+    }
+}
+
+/// An inference engine decorator that gates engine dispatch behind confirmed transport closure
+/// and quarantine state from subagent delegations (ADR-0096).
+public actor QuarantineGuardedEngine: InferenceEngine {
+    private let underlying: any InferenceEngine
+    private let quarantine: SubagentTransportQuarantine
+
+    public init(underlying: any InferenceEngine, quarantine: SubagentTransportQuarantine) {
+        self.underlying = underlying
+        self.quarantine = quarantine
+    }
+
+    public func health() async -> EngineHealth {
+        await underlying.health()
+    }
+
+    public func runtimeStatus() async -> EngineRuntimeStatus? {
+        await underlying.runtimeStatus()
+    }
+
+    public func probeCapabilities(for model: ModelRef) async -> ModelRef {
+        await underlying.probeCapabilities(for: model)
+    }
+
+    public func inspectModel(_ model: ModelRef) async -> EngineModelInspection {
+        await underlying.inspectModel(model)
+    }
+
+    public func stream(_ request: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
+        if quarantine.isQuarantined {
+            return AsyncThrowingStream { continuation in
+                continuation.finish(
+                    throwing: EngineError.httpDetail(
+                        503,
+                        "Engine transport is quarantined due to unclosed subagent transport",
+                        retryAfter: TimeInterval(SubagentLimits.cancellationGracePeriodSeconds)
+                    )
+                )
+            }
+        }
+        if quarantine.isTransportActive {
+            let closed = await quarantine.awaitClosure(timeoutSeconds: SubagentLimits.cancellationGracePeriodSeconds)
+            if !closed {
+                quarantine.markQuarantined()
+                return AsyncThrowingStream { continuation in
+                    continuation.finish(
+                        throwing: EngineError.httpDetail(
+                            503,
+                            "Engine transport is quarantined due to unclosed subagent transport",
+                            retryAfter: TimeInterval(SubagentLimits.cancellationGracePeriodSeconds)
+                        )
+                    )
+                }
+            }
+        }
+        return await underlying.stream(request)
     }
 }
 

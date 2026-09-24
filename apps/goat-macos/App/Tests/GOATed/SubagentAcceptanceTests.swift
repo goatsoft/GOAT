@@ -27,7 +27,7 @@ private actor ScriptedEngine: InferenceEngine {
             observedAt: .now,
             version: "1.0",
             modelMemoryUsed: 100 * 1024 * 1024,
-            modelMemoryMaximum: 1024 * 1024 * 1024,
+            modelMemoryMaximum: 16 * 1024 * 1024 * 1024,
             activeRequests: 0,
             waitingRequests: 0,
             models: [
@@ -70,7 +70,7 @@ private actor HangingEngine: InferenceEngine {
             observedAt: .now,
             version: "1.0",
             modelMemoryUsed: 100 * 1024 * 1024,
-            modelMemoryMaximum: 1024 * 1024 * 1024,
+            modelMemoryMaximum: 16 * 1024 * 1024 * 1024,
             activeRequests: 0,
             waitingRequests: 0,
             models: [
@@ -100,7 +100,7 @@ private actor UncooperativeEngine: InferenceEngine {
             observedAt: .now,
             version: "1.0",
             modelMemoryUsed: 100 * 1024 * 1024,
-            modelMemoryMaximum: 1024 * 1024 * 1024,
+            modelMemoryMaximum: 16 * 1024 * 1024 * 1024,
             activeRequests: 0,
             waitingRequests: 0,
             models: [
@@ -726,7 +726,7 @@ extension AppTests.GOATed {
                         observedAt: .now,
                         version: "1.0",
                         modelMemoryUsed: 100 * 1024 * 1024,
-                        modelMemoryMaximum: 1024 * 1024 * 1024,
+                        modelMemoryMaximum: 16 * 1024 * 1024 * 1024,
                         activeRequests: nil,
                         waitingRequests: 0,
                         models: [EngineModelRuntimeStatus(id: "default", loaded: true, contextWindow: 32_768)]
@@ -757,7 +757,7 @@ extension AppTests.GOATed {
                         observedAt: .now,
                         version: "1.0",
                         modelMemoryUsed: 100 * 1024 * 1024,
-                        modelMemoryMaximum: 1024 * 1024 * 1024,
+                        modelMemoryMaximum: 16 * 1024 * 1024 * 1024,
                         activeRequests: 0,
                         waitingRequests: nil,
                         models: [EngineModelRuntimeStatus(id: "default", loaded: true, contextWindow: 32_768)]
@@ -789,7 +789,7 @@ extension AppTests.GOATed {
                         observedAt: .now,
                         version: "1.0",
                         modelMemoryUsed: 100 * 1024 * 1024,
-                        modelMemoryMaximum: 1024 * 1024 * 1024,
+                        modelMemoryMaximum: 16 * 1024 * 1024 * 1024,
                         activeRequests: 0,
                         waitingRequests: 0,
                         models: [EngineModelRuntimeStatus(id: "default", loaded: true, contextWindow: nil)]
@@ -1022,6 +1022,212 @@ extension AppTests.GOATed {
             #expect(result.receipt.status == .budgetExhausted)
             let transcriptBytes = result.transcriptJSON?.utf8.count ?? 0
             #expect(transcriptBytes <= SubagentLimits.maxTranscriptBytes + 1024)
+        }
+
+        // Quarantine Wait Registration Pre-Cancelled Test
+        @Test func quarantineWaitRegistration_preCancelledResumesImmediately() async throws {
+            let registration = QuarantineWaitRegistration()
+            registration.cancel()
+            await withCheckedContinuation { cont in
+                let inserted = registration.setContinuation(cont)
+                if !inserted {
+                    cont.resume()
+                }
+            }
+        }
+
+        // Quarantine Guarded Engine Blocks While Quarantined Test
+        @Test func quarantineGuardedEngine_blocksWhileQuarantined() async throws {
+            let underlying = ScriptedEngine(script: [
+                [.token("Parent turn text"), .done(GenStats(ttft: nil, tokens: 10, duration: 0.01))]
+            ])
+            let quarantine = SubagentTransportQuarantine()
+            let guarded = QuarantineGuardedEngine(underlying: underlying, quarantine: quarantine)
+
+            quarantine.markQuarantined()
+            let request = GenerationRequest(
+                model: "default",
+                turns: [ChatTurn(role: .user, text: "Hello")],
+                effort: .trot,
+                maxTokens: 100
+            )
+
+            let stream = await guarded.stream(request)
+            var errorThrown: Error?
+            do {
+                for try await _ in stream {}
+            } catch {
+                errorThrown = error
+            }
+            #expect(errorThrown != nil)
+            #expect(quarantine.isQuarantined)
+        }
+
+        // Multi-call aggregate memory bounding test: stops before overflowing call
+        @Test func liveMemoryBounds_stopsBeforeOverflowingCall() async throws {
+            let (workspace, fileTools) = try createWorkspace()
+            defer { try? FileManager.default.removeItem(at: workspace) }
+            let db = try createDatabase()
+            let chatID = UUID()
+            let turnID = UUID()
+            try await db.save(makeChat(id: chatID.uuidString))
+
+            let bigArgs1 = String(repeating: "A", count: 400 * 1024)
+            let bigArgs2 = String(repeating: "B", count: 200 * 1024)
+            let call1 = ToolCallEvent(id: "call_1", name: "view_file", argumentsJSON: bigArgs1)
+            let call2 = ToolCallEvent(id: "call_2", name: "view_file", argumentsJSON: bigArgs2)
+
+            let engine = ScriptedEngine(script: [
+                [.toolCalls([call1, call2])]
+            ])
+
+            let context = SubagentExecutionContext(
+                chatID: chatID,
+                turnID: turnID,
+                projectID: nil,
+                workspace: workspace,
+                fileTools: fileTools,
+                engine: engine,
+                database: db,
+                lease: SubagentCapabilityLease()
+            )
+
+            let worker = SubagentWorker(
+                task: SubagentTaskBrief(objective: "Aggregate tool call bounding test"),
+                context: context
+            )
+            let result = try await worker.run()
+
+            #expect(result.receipt.status == .budgetExhausted)
+            if let transcript = result.transcriptJSON {
+                #expect(transcript.contains("call_1"))
+                #expect(!transcript.contains("call_2"))
+            }
+        }
+
+        // Tool input streaming enforces maxGenAllowed
+        @Test func toolInputStreaming_enforcesMaxGenAllowed() async throws {
+            let (workspace, fileTools) = try createWorkspace()
+            defer { try? FileManager.default.removeItem(at: workspace) }
+            let db = try createDatabase()
+            let chatID = UUID()
+            let turnID = UUID()
+            try await db.save(makeChat(id: chatID.uuidString))
+
+            let engine = ScriptedEngine(script: [
+                [
+                    .toolInput(bytes: 4000),
+                    .toolInput(bytes: 5000),
+                    .token("Should not be reached"),
+                ]
+            ])
+
+            let context = SubagentExecutionContext(
+                chatID: chatID,
+                turnID: turnID,
+                projectID: nil,
+                workspace: workspace,
+                fileTools: fileTools,
+                engine: engine,
+                database: db,
+                lease: SubagentCapabilityLease()
+            )
+
+            let worker = SubagentWorker(
+                task: SubagentTaskBrief(objective: "Tool input streaming cap test"),
+                context: context
+            )
+            let result = try await worker.run()
+
+            #expect(result.receipt.status == .budgetExhausted)
+            #expect(result.receipt.unresolved.contains { $0.reason == "budgetExhausted" })
+        }
+
+        // Prompt tokens reserved immediately upon cancellation
+        @Test func promptTokensReservedImmediately_uponCancellation() async throws {
+            let (workspace, fileTools) = try createWorkspace()
+            defer { try? FileManager.default.removeItem(at: workspace) }
+            let db = try createDatabase()
+            let chatID = UUID()
+            let turnID = UUID()
+            try await db.save(makeChat(id: chatID.uuidString))
+
+            let engine = HangingEngine()
+            let context = SubagentExecutionContext(
+                chatID: chatID,
+                turnID: turnID,
+                projectID: nil,
+                workspace: workspace,
+                fileTools: fileTools,
+                engine: engine,
+                database: db,
+                lease: SubagentCapabilityLease()
+            )
+
+            let worker = SubagentWorker(
+                task: SubagentTaskBrief(objective: "Prompt accounting cancellation test"),
+                context: context
+            )
+
+            let runTask = Task {
+                try await worker.run()
+            }
+
+            try await Task.sleep(for: .milliseconds(50))
+            await worker.cancel()
+
+            let result = try await runTask.value
+            #expect(result.receipt.status == .cancelled)
+            #expect(result.receipt.totalTokens > 0)
+        }
+
+        // Stage 1 model envelope rejects excessive context window
+        @Test func stage1ModelEnvelope_rejectsExcessiveContextWindow() async throws {
+            let (workspace, fileTools) = try createWorkspace()
+            defer { try? FileManager.default.removeItem(at: workspace) }
+            let db = try createDatabase()
+            let chatID = UUID()
+            let turnID = UUID()
+            try await db.save(makeChat(id: chatID.uuidString))
+
+            actor OversizedContextEngine: InferenceEngine {
+                func health() async -> EngineHealth { .ok([]) }
+                func runtimeStatus() async -> EngineRuntimeStatus? {
+                    EngineRuntimeStatus(
+                        observedAt: .now,
+                        version: "1.0",
+                        modelMemoryUsed: 100 * 1024 * 1024,
+                        modelMemoryMaximum: 64 * 1024 * 1024 * 1024,
+                        activeRequests: 0,
+                        waitingRequests: 0,
+                        models: [EngineModelRuntimeStatus(id: "default", loaded: true, contextWindow: 262_144)]
+                    )
+                }
+                func stream(_ request: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
+                    AsyncThrowingStream { $0.finish() }
+                }
+            }
+
+            let context = SubagentExecutionContext(
+                chatID: chatID,
+                turnID: turnID,
+                projectID: nil,
+                workspace: workspace,
+                fileTools: fileTools,
+                engine: OversizedContextEngine(),
+                database: db,
+                lease: SubagentCapabilityLease()
+            )
+
+            let worker = SubagentWorker(
+                task: SubagentTaskBrief(objective: "Oversized context test"),
+                context: context
+            )
+            let result = try await worker.run()
+
+            #expect(result.receipt.status == .failed)
+            #expect(
+                result.receipt.unresolved.contains { $0.detail?.contains("exceeds validated Stage 1 limit") == true })
         }
     }
 }
