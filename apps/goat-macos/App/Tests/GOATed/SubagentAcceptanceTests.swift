@@ -103,7 +103,7 @@ extension AppTests.GOATed {
 
         // Scenario 1: Inner/Outer Deadline Ordering
         @Test func scenario01_innerOuterDeadlineOrdering() async throws {
-            let (workspace, fileTools) = try createWorkspace()
+            let (workspace, _) = try createWorkspace()
             defer { try? FileManager.default.removeItem(at: workspace) }
             let db = try createDatabase()
             let chatID = UUID()
@@ -433,16 +433,20 @@ extension AppTests.GOATed {
             let unreadFileCitation = SubagentCitation(path: "Secret.swift", startLine: 1, endLine: 5)
             // Citation 3: Out-of-bounds citation for Auth.swift (line 4 was not read)
             let outOfBoundsCitation = SubagentCitation(path: "Auth.swift", startLine: 1, endLine: 4)
+            // Citation 4: Inverted line range
+            let invertedCitation = SubagentCitation(path: "Auth.swift", startLine: 3, endLine: 1)
+            // Citation 5: Invalid/zero start line
+            let zeroCitation = SubagentCitation(path: "Auth.swift", startLine: 0, endLine: 2)
 
             let (verified, unresolved) = await fence.verifyCitations(
-                claimed: [validCitation, unreadFileCitation, outOfBoundsCitation]
+                claimed: [validCitation, unreadFileCitation, outOfBoundsCitation, invertedCitation, zeroCitation]
             )
 
             #expect(verified.count == 1)
             #expect(verified[0].path == "Auth.swift")
             #expect(!verified[0].sliceHash.isEmpty)
 
-            #expect(unresolved.count == 2)
+            #expect(unresolved.count == 4)
             let secretUnresolved = unresolved.contains { item in
                 item.path == "Secret.swift" && item.reason == "unverifiedCitation"
             }
@@ -451,6 +455,14 @@ extension AppTests.GOATed {
             }
             #expect(secretUnresolved)
             #expect(authUnresolved)
+
+            // Test SubagentCitation decoding without slice_hash (model claim)
+            let jsonClaim = """
+            {"path": "Auth.swift", "start_line": 1, "end_line": 2}
+            """.data(using: .utf8)!
+            let decodedClaim = try JSONDecoder().decode(SubagentCitation.self, from: jsonClaim)
+            #expect(decodedClaim.sliceHash == "")
+            #expect(decodedClaim.path == "Auth.swift")
         }
     }
 }
