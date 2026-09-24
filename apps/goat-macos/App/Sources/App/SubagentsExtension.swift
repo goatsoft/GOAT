@@ -5,58 +5,55 @@ import Pens
 import Persistence
 import Tools
 
-struct SubagentsExtension: Extension {
+public struct SubagentsExtension: Extension {
     public let manifest = ExtensionManifest(id: "goat.subagents", version: "0.1.0")
     public let contributions: ExtensionContributions
 
-    init(provider: SubagentsProvider) {
-        contributions = ExtensionContributions(
-            tools: [provider],
-            observers: [provider]
-        )
+    public init(provider: SubagentsProvider) {
+        contributions = ExtensionContributions(tools: [provider], observers: [provider])
     }
 }
 
-actor SubagentsProvider: ModelToolProvider, TurnObserver {
-    static let toolName = "subagent_delegate"
-
-    static let toolSchema = ToolSchema(
-        name: toolName,
-        description:
-            "Delegate a focused read-only repository search or code investigation to an isolated subagent. The subagent inspects files within the Pen workspace and returns a concise, evidence-backed receipt with citations.",
-        inputSchemaJSON: """
-            {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["objective"],
-              "properties": {
-                "objective": {
-                  "type": "string",
-                  "description": "The specific read-only investigation objective or question to research."
-                },
-                "path_filter": {
-                  "type": "array",
-                  "items": { "type": "string" },
-                  "description": "Optional list of directory or file paths to constrain the search scope."
-                },
-                "max_rounds": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "maximum": 10,
-                  "description": "Optional maximum number of tool execution rounds for the subagent (capped by host configuration)."
-                },
-                "return_schema": {
-                  "type": "string",
-                  "description": "Optional description of the expected format or structure of the summary."
-                }
-              }
+public actor SubagentsProvider: ModelToolProvider, TurnObserver {
+    public static let toolName = "subagent_delegate"
+    public static let toolDescription =
+        "Delegates a read-only code search and investigation task to a subagent assistant within the Pen workspace."
+    public static let toolInputSchemaJSON = """
+        {
+          "type": "object",
+          "required": ["objective"],
+          "properties": {
+            "objective": {
+              "type": "string",
+              "description": "Clear and specific objective for the subagent to investigate."
+            },
+            "path_filter": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Optional list of path prefixes to restrict the investigation to."
+            },
+            "max_rounds": {
+              "type": "integer",
+              "description": "Optional round limit for the subagent tool loop (1 to 10)."
+            },
+            "return_schema": {
+              "type": "string",
+              "description": "Optional description of the expected format or structure of the summary."
             }
-            """
+          }
+        }
+        """
+
+    public static let toolSchema = ToolSchema(
+        name: toolName,
+        description: toolDescription,
+        inputSchemaJSON: toolInputSchemaJSON
     )
 
     private let turnID: UUID
     private let fileTools: PenFileTools
     private let workspace: URL
+    private let authority: (any SubagentHostAuthority)?
     private let engine: (any InferenceEngine)?
     private let modelID: String?
     private let configuration: SubagentConfiguration
@@ -67,10 +64,11 @@ actor SubagentsProvider: ModelToolProvider, TurnObserver {
     private var activeLease: SubagentCapabilityLease?
     private var isQuarantined = false
 
-    init(
+    public init(
         turnID: UUID,
         fileTools: PenFileTools,
         workspace: URL,
+        authority: (any SubagentHostAuthority)? = nil,
         engine: (any InferenceEngine)? = nil,
         modelID: String? = nil,
         configuration: SubagentConfiguration,
@@ -80,6 +78,7 @@ actor SubagentsProvider: ModelToolProvider, TurnObserver {
         self.turnID = turnID
         self.fileTools = fileTools
         self.workspace = workspace
+        self.authority = authority
         self.engine = engine
         self.modelID = modelID
         self.configuration = configuration
@@ -145,6 +144,7 @@ actor SubagentsProvider: ModelToolProvider, TurnObserver {
             projectID: context.view.penID,
             workspace: workspace,
             fileTools: fileTools,
+            authority: authority,
             engine: engine,
             modelID: modelID,
             effort: .trot,
@@ -173,9 +173,25 @@ actor SubagentsProvider: ModelToolProvider, TurnObserver {
         do {
             let result = try await backend.execute(task: taskBrief, context: executionContext)
             let encoder = JSONEncoder()
-            encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
-            let receiptData = try encoder.encode(result.receipt)
-            let receiptString = String(data: receiptData, encoding: .utf8) ?? "{}"
+            encoder.outputFormatting = [.sortedKeys]
+            let bounded = result.receipt.boundedReceipt()
+            var receiptData = (try? encoder.encode(bounded)) ?? Data()
+
+            var receiptString = String(data: receiptData, encoding: .utf8) ?? "{}"
+            if receiptString.utf8.count > SubagentLimits.maxReceiptBytes {
+                let minimal = SubagentReceipt(
+                    runId: bounded.runId,
+                    status: bounded.status,
+                    summary: UTF8BoundaryTruncator.truncate(bounded.summary, maxBytes: 128),
+                    citations: [],
+                    unresolved: [],
+                    roundsExecuted: bounded.roundsExecuted,
+                    totalTokens: bounded.totalTokens
+                )
+                receiptData = (try? encoder.encode(minimal)) ?? Data()
+                receiptString = String(data: receiptData, encoding: .utf8) ?? "{}"
+            }
+
             return ToolResult(content: receiptString, isError: result.receipt.status != .completed)
         } catch is CancellationError {
             throw CancellationError()
@@ -192,7 +208,6 @@ actor SubagentsProvider: ModelToolProvider, TurnObserver {
         }
 
         if activeWorker != nil {
-            // 5-second shutdown grace period
             let shutdownTask = Task {
                 try? await Task.sleep(for: .seconds(SubagentLimits.cancellationGracePeriodSeconds))
             }

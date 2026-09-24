@@ -19,6 +19,7 @@ final class AppToolRouter: ShepherdToolSource {
     let commandPermissions: PenCommandPermissionModel
     let filePermissions: PenFilePermissionModel
     var engineProvider: () -> (any InferenceEngine)? = { nil }
+    var isEngineLoopback: () -> Bool = { false }
     var currentModelID: () -> String? = { nil }
     var databaseProvider: () -> ChatDatabase? = { nil }
     private var penFileSession:
@@ -228,11 +229,29 @@ final class AppToolRouter: ShepherdToolSource {
                         turnID, chatID, projectID, workspace, provider, registration, files.workspaceIdentity
                     )
                     if memory.builtInSettings.subagentsEnabled {
+                        let isLoopback = isEngineLoopback()
+                        let subagentEngine = isLoopback ? engineProvider() : nil
+                        let authority = SubagentTurnAuthority { [weak self] in
+                            try await MainActor.run {
+                                guard let self else { throw CapabilityError.revoked }
+                                guard self.memory.builtInSettings.subagentsEnabled else {
+                                    throw CapabilityError.unauthorized
+                                }
+                                guard let session = self.subagentSession, session.turnID == turnID else {
+                                    throw CapabilityError.revoked
+                                }
+                                guard self.workspaceForProject(projectID) == workspace else {
+                                    throw CapabilityError.revoked
+                                }
+                                return files
+                            }
+                        }
                         let subagentProvider = SubagentsProvider(
                             turnID: turnID,
                             fileTools: files,
                             workspace: workspace,
-                            engine: engineProvider(),
+                            authority: authority,
+                            engine: subagentEngine,
                             modelID: currentModelID(),
                             configuration: memory.builtInSettings.subagentConfiguration,
                             database: databaseProvider()
@@ -358,9 +377,6 @@ final class AppToolRouter: ShepherdToolSource {
     }
 
     func invokeConcurrently(_ calls: [ConcurrentToolCall]) async -> [ConcurrentToolOutcome] {
-        // Read-only calls are auto-allowed and their file I/O runs off the PenFileTools actor, so
-        // this router (a Sendable @MainActor type) fans them out concurrently and gathers the
-        // outcomes; the caller applies them in call order.
         await withTaskGroup(of: ConcurrentToolOutcome.self) { group in
             for call in calls {
                 group.addTask { [self] in
@@ -479,6 +495,7 @@ final class AppToolRouter: ShepherdToolSource {
                 return false
             }
             return session.turnID == handle.turnID && session.registration == handle.registration
+                && workspaceForProject(session.projectID) == session.workspace
         case "goat.pronk": return pronkRegistration != nil
         case "goat.hindsight":
             return memory.builtInSettings.hindsightEnabled && turnMemoryConfiguration == memory.configuration
@@ -529,8 +546,6 @@ final class AppToolRouter: ShepherdToolSource {
         }
     }
 
-    /// All callers join one registration operation per provider. A failed attempt can be retried;
-    /// no caller sees a partially initialized provider as ready just because another caller began.
     private func registerSkillProvider(
         _ provider: FileSkillProvider, extensionID: String, scope: ExtensionScope
     ) async {

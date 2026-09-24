@@ -41,7 +41,7 @@ enum MessageMemorySaveState: Equatable {
 
     var help: String {
         switch self {
-        case .saving: "Saving to memory…"
+        case .saving: "Saving to memory\u{2026}"
         case .queued: "Queued for memory"
         case .saved: "Saved to memory"
         case .failed(let reason): "Could not save to memory: \(reason). Click to retry."
@@ -213,7 +213,7 @@ final class AppModel {
     var herdRootPath: String {
         didSet { UserDefaults.standard.set(herdRootPath, forKey: "herd.defaultRoot") }
     }
-    var health: EngineHealth = .offline("Starting…")
+    var health: EngineHealth = .offline("Starting\u{2026}")
     var engineTransitioning = false
     var modelCapabilitiesLoading = false
     var capabilityProbeModelID: String?
@@ -326,7 +326,7 @@ final class AppModel {
         let name =
             ReadingFonts.isAvailable(id, for: role)
             ? ReadingFonts.name(id, for: role) : (role == .chat ? "System" : "System Mono")
-        return selection == "theme" ? "Theme · \(name)" : name
+        return selection == "theme" ? "Theme \u{00b7} \(name)" : name
     }
 
     func readingFontNotice(_ selection: String, role: ReadingFontRole) -> String? {
@@ -481,6 +481,12 @@ final class AppModel {
             self?.pens.first(where: { $0.id == id })?.name ?? "this Pen"
         }
         toolRouter.engineProvider = { [weak self] in self?.engine }
+        toolRouter.isEngineLoopback = { [weak self] in
+            guard let profile = self?.activeEngineProfile, let url = URL(string: profile.url) else {
+                return false
+            }
+            return Judas.isLoopback(url)
+        }
         toolRouter.currentModelID = { [weak self] in self?.currentSession?.modelID ?? self?.defaultModelID }
         toolRouter.databaseProvider = { [weak self] in self?.db }
     }

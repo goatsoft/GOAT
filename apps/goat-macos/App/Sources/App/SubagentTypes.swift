@@ -10,10 +10,21 @@ public enum SubagentBackendID: String, Codable, CaseIterable, Sendable {
     case localEngine
     case systemLanguageModel
 
+    public static var allCases: [SubagentBackendID] {
+        [.localEngine]
+    }
+
     public var displayName: String {
         switch self {
         case .localEngine: "Local Engine"
-        case .systemLanguageModel: "Apple System Language Model"
+        case .systemLanguageModel: "Apple System Language Model (Deferred)"
+        }
+    }
+
+    public var isSupportedInStage1: Bool {
+        switch self {
+        case .localEngine: true
+        case .systemLanguageModel: false
         }
     }
 }
@@ -80,6 +91,24 @@ public struct SubagentTaskBrief: Codable, Sendable, Equatable {
     }
 }
 
+public struct SubagentCitationClaim: Codable, Sendable, Equatable {
+    public var path: String
+    public var startLine: Int
+    public var endLine: Int
+
+    public init(path: String, startLine: Int, endLine: Int) {
+        self.path = path
+        self.startLine = startLine
+        self.endLine = endLine
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case path
+        case startLine = "start_line"
+        case endLine = "end_line"
+    }
+}
+
 public struct SubagentCitation: Codable, Sendable, Equatable {
     public var path: String
     public var startLine: Int
@@ -98,6 +127,14 @@ public struct SubagentCitation: Codable, Sendable, Equatable {
         case startLine = "start_line"
         case endLine = "end_line"
         case sliceHash = "slice_hash"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.path = try container.decode(String.self, forKey: .path)
+        self.startLine = try container.decode(Int.self, forKey: .startLine)
+        self.endLine = try container.decode(Int.self, forKey: .endLine)
+        self.sliceHash = try container.decodeIfPresent(String.self, forKey: .sliceHash) ?? ""
     }
 }
 
@@ -205,18 +242,88 @@ extension SubagentReceipt {
         }
 
         if let receiptData = try? encoder.encode(bounded), receiptData.count > SubagentLimits.maxReceiptBytes {
+            let minimalFallback = SubagentReceipt(
+                runId: bounded.runId,
+                status: bounded.status,
+                summary: UTF8BoundaryTruncator.truncate(bounded.summary, maxBytes: 128),
+                citations: Array(bounded.citations.prefix(1)).map {
+                    SubagentCitation(
+                        path: UTF8BoundaryTruncator.truncate($0.path, maxBytes: 64),
+                        startLine: $0.startLine,
+                        endLine: $0.endLine,
+                        sliceHash: $0.sliceHash
+                    )
+                },
+                unresolved: [],
+                roundsExecuted: bounded.roundsExecuted,
+                totalTokens: bounded.totalTokens
+            )
+            if let fallbackData = try? encoder.encode(minimalFallback), fallbackData.count <= SubagentLimits.maxReceiptBytes {
+                return minimalFallback
+            }
             return SubagentReceipt(
                 runId: bounded.runId,
                 status: bounded.status,
-                summary: UTF8BoundaryTruncator.truncate(bounded.summary, maxBytes: 512),
-                citations: Array(bounded.citations.prefix(1)),
-                unresolved: Array(bounded.unresolved.prefix(1)),
+                summary: UTF8BoundaryTruncator.truncate(bounded.summary, maxBytes: 64),
+                citations: [],
+                unresolved: [],
                 roundsExecuted: bounded.roundsExecuted,
                 totalTokens: bounded.totalTokens
             )
         }
 
         return bounded
+    }
+}
+
+public protocol SubagentHostAuthority: Sendable {
+    func validateHostAuthority() async throws
+    func currentPenFileTools() async throws -> PenFileTools
+}
+
+public struct SubagentTurnAuthority: SubagentHostAuthority {
+    private let validator: @Sendable () async throws -> PenFileTools
+
+    public init(validator: @escaping @Sendable () async throws -> PenFileTools) {
+        self.validator = validator
+    }
+
+    public func validateHostAuthority() async throws {
+        _ = try await validator()
+    }
+
+    public func currentPenFileTools() async throws -> PenFileTools {
+        try await validator()
+    }
+}
+
+public actor SubagentTransportQuarantine {
+    private var isQuarantined = false
+    private var isClosed = false
+
+    public init() {}
+
+    public func markQuarantined() {
+        isQuarantined = true
+    }
+
+    public func confirmClosed() {
+        isClosed = true
+        isQuarantined = false
+    }
+
+    public var canDispatchInference: Bool {
+        !isQuarantined && isClosed
+    }
+
+    public func waitUntilClosed(timeoutSeconds: Double) async -> Bool {
+        if isClosed { return true }
+        let start = Date()
+        while Date().timeIntervalSince(start) < timeoutSeconds {
+            if isClosed { return true }
+            try? await Task.sleep(for: .milliseconds(25))
+        }
+        return isClosed
     }
 }
 
@@ -294,6 +401,7 @@ public struct SubagentExecutionContext: Sendable {
     public var projectID: UUID?
     public var workspace: URL
     public var fileTools: PenFileTools
+    public var authority: (any SubagentHostAuthority)?
     public var engine: (any InferenceEngine)?
     public var modelID: String?
     public var effort: Effort
@@ -309,6 +417,7 @@ public struct SubagentExecutionContext: Sendable {
         projectID: UUID?,
         workspace: URL,
         fileTools: PenFileTools,
+        authority: (any SubagentHostAuthority)? = nil,
         engine: (any InferenceEngine)? = nil,
         modelID: String? = nil,
         effort: Effort = .trot,
@@ -323,6 +432,7 @@ public struct SubagentExecutionContext: Sendable {
         self.projectID = projectID
         self.workspace = workspace
         self.fileTools = fileTools
+        self.authority = authority
         self.engine = engine
         self.modelID = modelID
         self.effort = effort

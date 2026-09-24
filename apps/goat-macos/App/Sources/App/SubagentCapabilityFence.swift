@@ -20,12 +20,18 @@ public actor SubagentCapabilityFence {
         public let lines: [String]
     }
 
-    private let fileTools: PenFileTools
+    private let authority: any SubagentHostAuthority
     private let lease: SubagentCapabilityLease
     private var readSpans: [String: [ReadSpan]] = [:]
+    private var retainedSpanBytes: Int = 0
+
+    public init(authority: any SubagentHostAuthority, lease: SubagentCapabilityLease) {
+        self.authority = authority
+        self.lease = lease
+    }
 
     public init(fileTools: PenFileTools, lease: SubagentCapabilityLease) {
-        self.fileTools = fileTools
+        self.authority = SubagentTurnAuthority { fileTools }
         self.lease = lease
     }
 
@@ -43,6 +49,7 @@ public actor SubagentCapabilityFence {
 
     public func invoke(_ call: ToolCallRequest) async throws -> ToolResult {
         try lease.checkValid()
+        try await authority.validateHostAuthority()
 
         guard Self.permittedTools.contains(call.tool) else {
             return ToolResult(
@@ -53,8 +60,11 @@ public actor SubagentCapabilityFence {
         }
 
         do {
+            let fileTools = try await authority.currentPenFileTools()
             let result = try await fileTools.read(tool: call.tool, argumentsJSON: call.argumentsJSON)
+
             try lease.checkValid()
+            try await authority.validateHostAuthority()
 
             if call.tool == "pen_read_file" && !result.isError {
                 recordRead(argumentsJSON: call.argumentsJSON, output: result.content)
@@ -115,6 +125,18 @@ public actor SubagentCapabilityFence {
         }
 
         let bodyLines = Array(lines.dropFirst())
+        let bodyBytes = bodyLines.reduce(0) { $0 + $1.utf8.count + 1 }
+
+        // Bound retained read spans in memory to 512 KiB total
+        if retainedSpanBytes + bodyBytes > SubagentLimits.maxTranscriptBytes {
+            while retainedSpanBytes + bodyBytes > SubagentLimits.maxTranscriptBytes, !readSpans.isEmpty {
+                if let firstKey = readSpans.keys.first, let removed = readSpans.removeValue(forKey: firstKey) {
+                    let freed = removed.reduce(0) { sum, s in sum + s.lines.reduce(0) { $0 + $1.utf8.count + 1 } }
+                    retainedSpanBytes = max(0, retainedSpanBytes - freed)
+                }
+            }
+        }
+
         let span = ReadSpan(
             path: normalizedPath,
             startLine: start,
@@ -122,6 +144,7 @@ public actor SubagentCapabilityFence {
             lines: bodyLines
         )
         readSpans[normalizedPath, default: []].append(span)
+        retainedSpanBytes += bodyBytes
     }
 
     private func normalizePath(_ path: String) -> String {
@@ -129,12 +152,24 @@ public actor SubagentCapabilityFence {
     }
 
     public func verifyCitations(
-        claimed: [SubagentCitation]
+        claimed: [SubagentCitationClaim]
     ) -> (verified: [SubagentCitation], unresolved: [SubagentUnresolvedItem]) {
         var verified: [SubagentCitation] = []
         var unresolved: [SubagentUnresolvedItem] = []
 
         for citation in claimed {
+            // Strictly check for positive, ordered line bounds
+            guard citation.startLine >= 1, citation.endLine >= citation.startLine else {
+                unresolved.append(
+                    SubagentUnresolvedItem(
+                        path: citation.path,
+                        reason: "unverifiedCitation",
+                        detail: "Invalid or inverted line range \(citation.startLine)-\(citation.endLine) for '\(citation.path)'."
+                    )
+                )
+                continue
+            }
+
             let normalized = normalizePath(citation.path)
             guard let spans = readSpans[normalized], !spans.isEmpty else {
                 unresolved.append(
@@ -152,12 +187,15 @@ public actor SubagentCapabilityFence {
             for span in spans {
                 if citation.startLine >= span.startLine && citation.endLine <= span.endLine {
                     let relativeStart = citation.startLine - span.startLine
-                    let relativeCount = (citation.endLine - citation.startLine) + 1
-                    if relativeStart >= 0 && relativeStart + relativeCount <= span.lines.count {
-                        let sliceLines = span.lines[relativeStart..<(relativeStart + relativeCount)]
-                        let sliceText = sliceLines.joined(separator: "\n")
-                        matchedSliceData = Data(sliceText.utf8)
-                        break
+                    let (relativeCount, overflowCount) = (citation.endLine - citation.startLine).addingReportingOverflow(1)
+                    if !overflowCount && relativeStart >= 0 && relativeCount > 0 {
+                        let (endIndex, overflowEnd) = relativeStart.addingReportingOverflow(relativeCount)
+                        if !overflowEnd && endIndex <= span.lines.count {
+                            let sliceLines = span.lines[relativeStart..<endIndex]
+                            let sliceText = sliceLines.joined(separator: "\n")
+                            matchedSliceData = Data(sliceText.utf8)
+                            break
+                        }
                     }
                 }
             }
@@ -165,9 +203,13 @@ public actor SubagentCapabilityFence {
             if let sliceData = matchedSliceData {
                 let digest = SHA256.hash(data: sliceData)
                 let hashString = digest.map { String(format: "%02x", $0) }.joined()
-                var updated = citation
-                updated.sliceHash = hashString
-                verified.append(updated)
+                let verifiedCitation = SubagentCitation(
+                    path: citation.path,
+                    startLine: citation.startLine,
+                    endLine: citation.endLine,
+                    sliceHash: hashString
+                )
+                verified.append(verifiedCitation)
             } else {
                 unresolved.append(
                     SubagentUnresolvedItem(
@@ -180,6 +222,13 @@ public actor SubagentCapabilityFence {
             }
         }
 
-        return (verified, unresolved)
+        return (verified: verified, unresolved: unresolved)
+    }
+
+    public func verifyCitations(
+        claimed: [SubagentCitation]
+    ) -> (verified: [SubagentCitation], unresolved: [SubagentUnresolvedItem]) {
+        let claims = claimed.map { SubagentCitationClaim(path: $0.path, startLine: $0.startLine, endLine: $0.endLine) }
+        return verifyCitations(claimed: claims)
     }
 }
