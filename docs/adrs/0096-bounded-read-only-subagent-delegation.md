@@ -163,16 +163,26 @@ All other tools are excluded:
 #### Token Budgets and Accounting
 - **Per-Request Context Admission:** Input context for each child inference request is capped at 12,288 tokens.
 - **Per-Round Generation Cap:** Output generation is capped at 2,048 tokens per child round.
-- **Per-Delegation Token Budget:** Total tokens (input plus generated) within a single delegation are bounded at 16,384.
-- **Aggregate Parent-Turn Bound:** Cumulative generated tokens across all child delegations in a single parent turn
-  (including prompt refinement and synthesis) cannot exceed 8,192 tokens. Total cumulative tokens across the turn
-  cannot exceed 32,768.
+- **Per-Delegation Processing Budget:** Auto allocates 14,336 tokens per configured round,
+  bounded to 32,768–131,072 total tokens. Custom selects a value in that range. Input is
+  counted again on each request, including cached input. This is a work allowance, not RAM allocation.
+- **Aggregate Parent-Turn Bound:** Total processing across children is at most twice the
+  configured investigation allowance. Generated output across children is capped at
+  `max(8,192, configuredRounds * 2,048 * 2)`, at most 40,960 tokens. Three delegations remain the maximum.
+- The same saved Auto/Custom, time and round controls appear in Nerd Stats and Extensions settings.
+  They are locked throughout an active parent turn. The next turn captures a configuration snapshot.
+  The tool description tells the parent its effective limits and recommends focused tasks.
 
 #### Synthesis Pass Budget Reservation
-- The child worker reserves 1 round and 2,048 generated tokens for a final synthesis pass.
-- If the token budget, round limit, or time deadline is reached without sufficient reserved budget, no further
-  model inference is attempted. Instead, the host constructs a deterministic receipt without model inference,
-  summarizing accumulated evidence and marking `status: budgetExhausted` (or `timedOut`).
+- Exploration reserves up to 14,336 processing tokens for the final bounded input and output.
+  The worker switches to synthesis before another exploration request would consume that reserve,
+  when only one output round remains, or after 65% of the wall-clock limit has elapsed.
+- The final input is pruned if needed to leave output headroom. The objective is included only once.
+  Unchecked parts must be reported as unresolved. Hard deadlines and cancellation remain authoritative;
+  a stalled request can still prevent synthesis. In that case the host returns a bounded failure receipt
+  with any previously verified summary/citations; it does not invent findings from raw reads.
+- Engine-reported usage still undergoes strict final budget checks. Larger processing allowances
+  do not change the 12,288-token input or 2,048-token output limits used for memory admission.
 
 #### Intermediate and Output Limits
 - **Per-Call Tool Output Limit:** Intermediate tool responses (such as file reads or search outputs) are

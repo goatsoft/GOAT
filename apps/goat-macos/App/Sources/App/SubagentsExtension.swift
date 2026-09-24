@@ -100,8 +100,17 @@ public actor SubagentsProvider: ModelToolProvider, TurnObserver {
         }
         guard !quarantine.isQuarantined else { return [] }
         guard !quarantine.isTransportActive else { return [] }
-        guard accounting.canDelegate else { return [] }
-        return [Self.toolSchema]
+        guard accounting.canDelegate(budget: configuration.tokenBudget) else { return [] }
+        return [
+            ToolSchema(
+                name: Self.toolName,
+                description: Self.toolDescription
+                    + " Effective limits: \(configuration.maxRounds) rounds including the final summary, "
+                    + "\(configuration.timeoutSeconds) seconds, \(configuration.tokenBudget.delegationTokens) total processing tokens "
+                    + "including repeated input. Delegate one focused question; split broad audits into smaller tasks. "
+                    + "Requested rounds cannot exceed the owner limit. Reuse partial findings instead of repeating reads.",
+                inputSchemaJSON: Self.toolInputSchemaJSON)
+        ]
     }
 
     public func invoke(_ call: ToolCallRequest, context: ExtensionContext) async throws -> ToolResult {
@@ -124,7 +133,7 @@ public actor SubagentsProvider: ModelToolProvider, TurnObserver {
                 isError: true
             )
         }
-        guard accounting.canDelegate else {
+        guard accounting.canDelegate(budget: configuration.tokenBudget) else {
             return ToolResult(
                 content: "Parent turn token budget exceeded for subagent delegations.",
                 isError: true
@@ -179,6 +188,7 @@ public actor SubagentsProvider: ModelToolProvider, TurnObserver {
             engine: engine,
             modelID: modelID,
             effort: .graze,
+            tokenBudget: configuration.tokenBudget,
             maxRounds: effectiveMaxRounds,
             timeoutSeconds: configuration.timeoutSeconds,
             database: database,

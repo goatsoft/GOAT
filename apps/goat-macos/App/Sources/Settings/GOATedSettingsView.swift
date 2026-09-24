@@ -435,21 +435,7 @@ struct GOATedSettingsView: View {
                 .foregroundStyle(.secondary)
             DisclosureGroup("Advanced") {
                 VStack(alignment: .leading, spacing: Caprine.Activity.spacing) {
-                    Stepper(
-                        "Maximum rounds: \(settings.subagentMaxRounds)",
-                        value: Binding(get: { settings.subagentMaxRounds }, set: { settings.setSubagentMaxRounds($0) }),
-                        in: 1...10
-                    )
-                    Text("Includes the final summary round. One round produces a summary without file tools.")
-                        .font(Caprine.Activity.font).foregroundStyle(.secondary)
-                    Stepper(
-                        "Time limit: \(settings.subagentTimeoutSeconds)s",
-                        value: Binding(
-                            get: { settings.subagentTimeoutSeconds }, set: { settings.setSubagentTimeoutSeconds($0) }),
-                        in: 10...SubagentLimits.ceilingTimeoutSeconds, step: 5
-                    )
-                    Text("Maximum investigation time before stopping and returning partial findings.")
-                        .font(Caprine.Activity.font).foregroundStyle(.secondary)
+                    SubagentBudgetControls(model: model)
                     Text(
                         "Worker choices include verified Qwen 3.5 9B and Qwen 3.8 27B MLX 4-bit conversions, plus supported earlier models. Unknown variants remain unavailable."
                     )

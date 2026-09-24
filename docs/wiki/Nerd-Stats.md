@@ -27,3 +27,10 @@ load models or guarantee memory capacity. GOAT checks current engine status at d
 
 The Subagent menu keeps a short label. Once selected, the worker appears beneath the
 parent in smaller muted text with a tree connector, in both the composer and inspector.
+
+Expand **Subagent budget** in Nerd Stats, or open **Settings → Extensions → Subagents → Advanced**,
+to edit the same saved Auto/Custom processing budget, round limit and time limit. Controls are
+locked during a chat turn; changes apply to the next turn. Auto scales with configured rounds
+(71,680 processing tokens for five rounds). Custom supports 32,768–131,072 tokens. Repeated input
+counts toward this allowance; it is separate from the worker's context and memory limits.
+Exploration reserves capacity for the final summary and switches to reporting before consuming it.

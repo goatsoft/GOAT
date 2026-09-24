@@ -12,12 +12,17 @@ final class BuiltInExtensionSettings {
     var subagentsEnabled: Bool { didSet { defaults.set(subagentsEnabled, forKey: "goated.subagents.enabled") } }
     private(set) var hindsightEnabled: Bool
     private(set) var commandTimeout: Int
+    private(set) var subagentAutomaticBudget: Bool
+    private(set) var subagentCustomTokenBudget: Int
     private(set) var subagentMaxRounds: Int
     private(set) var subagentTimeoutSeconds: Int
     private(set) var subagentPreferredBackend: SubagentBackendID
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        subagentAutomaticBudget = defaults.object(forKey: "goated.subagents.budget.auto") as? Bool ?? true
+        let tokenBudget = defaults.integer(forKey: "goated.subagents.budget.tokens")
+        subagentCustomTokenBudget = (32_768...131_072).contains(tokenBudget) ? tokenBudget : 65_536
         subagentModels = defaults.dictionary(forKey: "goated.subagents.models") as? [String: String] ?? [:]
         herderEnabled = defaults.object(forKey: "goated.herder.enabled") as? Bool ?? true
         herderWritesEnabled = defaults.object(forKey: "goated.herder.writes") as? Bool ?? true
@@ -62,6 +67,16 @@ final class BuiltInExtensionSettings {
         defaults.set(value, forKey: "goated.hindsight.enabled")
     }
 
+    func setSubagentAutomaticBudget(_ value: Bool) {
+        subagentAutomaticBudget = value
+        defaults.set(value, forKey: "goated.subagents.budget.auto")
+    }
+
+    func setSubagentCustomTokenBudget(_ value: Int) {
+        subagentCustomTokenBudget = min(131_072, max(32_768, value))
+        defaults.set(subagentCustomTokenBudget, forKey: "goated.subagents.budget.tokens")
+    }
+
     func setSubagentMaxRounds(_ value: Int) {
         subagentMaxRounds = min(10, max(1, value))
         defaults.set(subagentMaxRounds, forKey: "goated.subagents.max_rounds")
@@ -82,7 +97,8 @@ final class BuiltInExtensionSettings {
             enabled: subagentsEnabled,
             maxRounds: subagentMaxRounds,
             timeoutSeconds: subagentTimeoutSeconds,
-            preferredBackend: subagentPreferredBackend
+            preferredBackend: subagentPreferredBackend,
+            customTokenBudget: subagentAutomaticBudget ? nil : subagentCustomTokenBudget
         )
     }
 

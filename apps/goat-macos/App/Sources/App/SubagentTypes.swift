@@ -609,12 +609,14 @@ public final class SubagentTurnTokenAccounting: @unchecked Sendable {
         storedCumulativeTotalTokens += total
     }
 
-    public var canDelegate: Bool {
+    public var canDelegate: Bool { canDelegate(budget: .init()) }
+
+    public func canDelegate(budget: SubagentTokenBudget) -> Bool {
         lock.lock()
         defer { lock.unlock() }
         return storedDelegationsCount < SubagentLimits.maxDelegationsPerTurn
-            && storedCumulativeGeneratedTokens < SubagentLimits.maxGeneratedTokensPerTurn
-            && storedCumulativeTotalTokens < SubagentLimits.maxTotalTokensPerTurn
+            && storedCumulativeGeneratedTokens < budget.generatedTokensPerTurn
+            && storedCumulativeTotalTokens < budget.totalTokensPerTurn
     }
 }
 
@@ -653,6 +655,7 @@ public struct SubagentExecutionContext: Sendable {
     public var engine: (any InferenceEngine)?
     public var modelID: String?
     public var effort: Effort
+    public var tokenBudget: SubagentTokenBudget
     public var maxRounds: Int
     public var timeoutSeconds: Int
     public var database: ChatDatabase?
@@ -670,6 +673,7 @@ public struct SubagentExecutionContext: Sendable {
         engine: (any InferenceEngine)? = nil,
         modelID: String? = nil,
         effort: Effort = .trot,
+        tokenBudget: SubagentTokenBudget = .init(),
         maxRounds: Int = SubagentLimits.defaultMaxRounds,
         timeoutSeconds: Int = SubagentLimits.defaultTimeoutSeconds,
         database: ChatDatabase? = nil,
@@ -686,6 +690,7 @@ public struct SubagentExecutionContext: Sendable {
         self.engine = engine
         self.modelID = modelID
         self.effort = effort
+        self.tokenBudget = tokenBudget
         self.maxRounds = maxRounds
         self.timeoutSeconds = timeoutSeconds
         self.database = database
@@ -723,21 +728,63 @@ public protocol SubagentBackend: Sendable {
     ) async throws -> SubagentResult
 }
 
+/// Total processing includes repeated prompt tokens; it is not a context-window allocation.
+public struct SubagentTokenBudget: Sendable, Equatable {
+    public let delegationTokens: Int
+    public let generatedTokensPerTurn: Int
+    public let totalTokensPerTurn: Int
+
+    public init(
+        delegationTokens: Int = SubagentLimits.maxTokensPerDelegation,
+        generatedTokensPerTurn: Int = SubagentLimits.maxGeneratedTokensPerTurn,
+        totalTokensPerTurn: Int = SubagentLimits.maxTotalTokensPerTurn
+    ) {
+        self.delegationTokens = min(131_072, max(16_384, delegationTokens))
+        self.generatedTokensPerTurn = min(40_960, max(8_192, generatedTokensPerTurn))
+        self.totalTokensPerTurn = min(262_144, max(32_768, totalTokensPerTurn))
+    }
+
+    public static func resolve(customTokens: Int?, rounds: Int) -> Self {
+        let rounds = min(10, max(1, rounds))
+        let allowance = min(131_072, max(32_768, customTokens ?? rounds * 14_336))
+        return Self(
+            delegationTokens: allowance, generatedTokensPerTurn: max(8_192, rounds * 2_048 * 2),
+            totalTokensPerTurn: allowance * 2)
+    }
+
+    public func shouldSummarize(remainingTotal: Int, promptTokens: Int, remainingGenerated: Int) -> Bool {
+        remainingTotal <= promptTokens + SubagentLimits.maxGeneratedTokensPerRound + summaryReserve
+            || remainingGenerated <= SubagentLimits.maxGeneratedTokensPerRound * 2
+    }
+
+    /// Reserve a full bounded summary request, including its input and generated output.
+    public var summaryReserve: Int {
+        min(delegationTokens / 2, SubagentLimits.maxInputTokensPerRequest + SubagentLimits.maxGeneratedTokensPerRound)
+    }
+}
+
 public struct SubagentConfiguration: Sendable, Equatable {
     public var enabled: Bool
     public var maxRounds: Int
     public var timeoutSeconds: Int
     public var preferredBackend: SubagentBackendID
+    public var customTokenBudget: Int?
+
+    public var tokenBudget: SubagentTokenBudget {
+        .resolve(customTokens: customTokenBudget, rounds: maxRounds)
+    }
 
     public init(
         enabled: Bool = true,
         maxRounds: Int = SubagentLimits.defaultMaxRounds,
         timeoutSeconds: Int = SubagentLimits.defaultTimeoutSeconds,
-        preferredBackend: SubagentBackendID = .localEngine
+        preferredBackend: SubagentBackendID = .localEngine,
+        customTokenBudget: Int? = nil
     ) {
         self.enabled = enabled
         self.maxRounds = maxRounds
         self.timeoutSeconds = timeoutSeconds
         self.preferredBackend = preferredBackend
+        self.customTokenBudget = customTokenBudget
     }
 }

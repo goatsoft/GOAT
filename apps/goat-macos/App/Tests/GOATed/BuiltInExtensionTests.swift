@@ -10,6 +10,37 @@ import Testing
 extension AppTests.GOATed {
     @Suite struct BuiltInExtensionTests {
 
+        @MainActor @Test func subagentBudgetPersistsAndTurnSnapshotDoesNotChange() throws {
+            let name = "goat-budget-tests-\(UUID())"
+            let defaults = try #require(UserDefaults(suiteName: name))
+            defer { defaults.removePersistentDomain(forName: name) }
+            let settings = BuiltInExtensionSettings(defaults: defaults)
+            #expect(settings.subagentAutomaticBudget)
+            let snapshot = settings.subagentConfiguration
+            #expect(snapshot.tokenBudget.delegationTokens == 71_680)
+            settings.setSubagentAutomaticBudget(false)
+            settings.setSubagentCustomTokenBudget(98_304)
+            let reloaded = BuiltInExtensionSettings(defaults: defaults)
+            #expect(!reloaded.subagentAutomaticBudget)
+            #expect(reloaded.subagentConfiguration.tokenBudget.delegationTokens == 98_304)
+            #expect(snapshot.tokenBudget.delegationTokens == 71_680)
+            settings.setSubagentCustomTokenBudget(Int.max)
+            #expect(settings.subagentCustomTokenBudget == 131_072)
+            settings.setSubagentCustomTokenBudget(-1)
+            #expect(settings.subagentCustomTokenBudget == 32_768)
+            settings.setSubagentAutomaticBudget(true)
+            settings.setSubagentMaxRounds(10)
+            #expect(settings.subagentConfiguration.tokenBudget.delegationTokens == 131_072)
+            let budget = SubagentTokenBudget.resolve(customTokens: 32_768, rounds: 5)
+            #expect(budget.shouldSummarize(remainingTotal: 16_000, promptTokens: 4_000, remainingGenerated: 8_000))
+            #expect(!budget.shouldSummarize(remainingTotal: 32_768, promptTokens: 4_000, remainingGenerated: 8_000))
+            #expect(budget.shouldSummarize(remainingTotal: 32_768, promptTokens: 1_000, remainingGenerated: 2_100))
+            let accounting = SubagentTurnTokenAccounting()
+            accounting.recordDelegation(generated: 100, total: 32_768)
+            #expect(!accounting.canDelegate)
+            #expect(accounting.canDelegate(budget: budget))
+        }
+
         @Test func subagentMenuUsesCapabilitiesAndAuditedWorkersRatherThanMatchingModelFamilies() {
             let parent = ModelRef(id: "another-family-parent", capabilities: .init(tools: .supported(by: .modelList)))
             let worker = ModelRef(id: "Qwen3.5-9B-4bit")

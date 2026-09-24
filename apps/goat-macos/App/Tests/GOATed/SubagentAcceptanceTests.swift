@@ -332,6 +332,45 @@ extension AppTests.GOATed {
             #expect(lease.isRevoked)
         }
 
+        @Test func customBudgetProcessesMoreThanLegacyLimitAndReservesSummary() async throws {
+            let (workspace, fileTools) = try createWorkspace()
+            defer { try? FileManager.default.removeItem(at: workspace) }
+            try String(repeating: "evidence ", count: 500).write(
+                to: workspace.appendingPathComponent("evidence.txt"), atomically: true, encoding: .utf8)
+            let engine = ScriptedEngine(script: [
+                [
+                    .toolCalls([
+                        ToolCallEvent(id: "read", name: "pen_read_file", argumentsJSON: #"{"path":"evidence.txt"}"#)
+                    ]),
+                    .done(GenStats(ttft: nil, tokens: 100, duration: 0.01, promptTokens: 10_000, tokensAreExact: true)),
+                ],
+                [
+                    .toolCalls([ToolCallEvent(id: "list", name: "pen_list_files", argumentsJSON: #"{"path":"."}"#)]),
+                    .done(GenStats(ttft: nil, tokens: 100, duration: 0.01, promptTokens: 10_000, tokensAreExact: true)),
+                ],
+                [
+                    .token(
+                        #"{"summary":"Evidence found","citations":[{"path":"evidence.txt","start_line":1,"end_line":1}],"unresolved":[]}"#
+                    ),
+                    .done(GenStats(ttft: nil, tokens: 100, duration: 0.01, promptTokens: 2_000, tokensAreExact: true)),
+                ],
+            ])
+            let context = SubagentExecutionContext(
+                chatID: UUID(), turnID: UUID(), projectID: nil, workspace: workspace, fileTools: fileTools,
+                engine: engine, tokenBudget: .resolve(customTokens: 32_768, rounds: 5),
+                maxRounds: 5, lease: SubagentCapabilityLease())
+            let result = try await SubagentWorker(
+                task: SubagentTaskBrief(objective: "Read evidence and report with a citation"), context: context
+            ).run()
+            #expect(result.receipt.status == .completed)
+            #expect(result.receipt.totalTokens > SubagentLimits.maxTokensPerDelegation)
+            #expect(result.receipt.citations.count == 1)
+            let requests = await engine.requests
+            #expect(requests.count == 3)
+            #expect(requests.last?.tools.isEmpty == true)
+            #expect(requests.first?.tools.isEmpty == false)
+        }
+
         // Scenario 5: Token and Round Budget Exhaustion
         @Test func scenario05_tokenAndRoundBudgetExhaustion() async throws {
             let (workspace, fileTools) = try createWorkspace()

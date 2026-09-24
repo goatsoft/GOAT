@@ -31,6 +31,11 @@ struct InspectorView: View {
                     }
                     Divider()
                     SubagentModelMenu(model: model, parentModelID: model.resolvedModelID(for: session))
+                    if model.selectedSubagentModelID != nil {
+                        DisclosureGroup("Subagent budget") {
+                            SubagentBudgetControls(model: model)
+                        }
+                    }
                     LabeledContent("Messages", value: "\(session.messages.count)")
 
                 }

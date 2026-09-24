@@ -186,3 +186,59 @@ struct SubagentModelLabel: View {
             .accessibilityLabel("Subagent: " + ModelRef(id: modelID).displayName)
     }
 }
+
+/// One configuration editor for the inspector and Extensions settings.
+struct SubagentBudgetControls: View {
+    @Bindable var model: AppModel
+
+    private var locked: Bool {
+        model.shepherd.hasActiveTurn || model.extensionsChanging || model.engineTransitioning
+    }
+
+    var body: some View {
+        let settings = model.memory.builtInSettings
+        let budget = settings.subagentConfiguration.tokenBudget
+        VStack(alignment: .leading, spacing: Caprine.Activity.spacing) {
+            Picker(
+                "Budget",
+                selection: Binding(
+                    get: { settings.subagentAutomaticBudget },
+                    set: { if !locked { settings.setSubagentAutomaticBudget($0) } })
+            ) {
+                Text("Auto").tag(true)
+                Text("Custom").tag(false)
+            }
+            if !settings.subagentAutomaticBudget {
+                Stepper(
+                    "Processing tokens: \(settings.subagentCustomTokenBudget.formatted())",
+                    value: Binding(
+                        get: { settings.subagentCustomTokenBudget },
+                        set: { if !locked { settings.setSubagentCustomTokenBudget($0) } }),
+                    in: 32_768...131_072, step: 8_192)
+            }
+            Stepper(
+                "Maximum rounds: \(settings.subagentMaxRounds)",
+                value: Binding(
+                    get: { settings.subagentMaxRounds },
+                    set: { if !locked { settings.setSubagentMaxRounds($0) } }),
+                in: 1...10)
+            Stepper(
+                "Time limit: \(settings.subagentTimeoutSeconds)s",
+                value: Binding(
+                    get: { settings.subagentTimeoutSeconds },
+                    set: { if !locked { settings.setSubagentTimeoutSeconds($0) } }),
+                in: 10...SubagentLimits.ceilingTimeoutSeconds, step: 5)
+            Text(
+                "Allowance: \(budget.delegationTokens.formatted()) tokens per investigation; \(budget.totalTokensPerTurn.formatted()) shared across this turn's investigations."
+            )
+            Text(
+                "Includes repeated input and output. Auto scales with rounds. The final summary has reserved capacity; context and memory limits stay separate."
+            )
+            Text("Rounds include the summary. Changes apply to the next chat turn.")
+            if locked { Text("Finish or stop the current chat turn to change the budget.") }
+        }
+        .font(Caprine.Activity.font)
+        .foregroundStyle(model.theme.tokens.muted)
+        .disabled(locked)
+    }
+}

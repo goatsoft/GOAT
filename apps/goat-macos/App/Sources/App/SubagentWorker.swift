@@ -140,6 +140,7 @@ public actor SubagentWorker {
     private var currentClaimedCitations: [SubagentCitationClaim] = []
     private var currentClaimedUnresolved: [SubagentUnresolvedItem] = []
     private var currentSummary = ""
+    private var startedAt = ContinuousClock.now
     private var runningWorkTask: Task<Void, Never>?
     private let bridge = WorkerCompletionBridge()
 
@@ -170,7 +171,8 @@ public actor SubagentWorker {
             max(context.timeoutSeconds, SubagentLimits.minimumTimeoutSeconds),
             SubagentLimits.ceilingTimeoutSeconds
         )
-        let deadline = ContinuousClock.now + .seconds(timeoutSeconds)
+        startedAt = .now
+        let deadline = startedAt + .seconds(timeoutSeconds)
         let lease = context.lease
 
         // Independent watchdog task: revokes lease immediately upon deadline expiry
@@ -617,7 +619,6 @@ public actor SubagentWorker {
 
         var systemPrompt = """
             You are a focused, read-only subagent assistant.
-            Objective: \(task.objective)
             Inspect files and gather evidence strictly within the Pen workspace using the available read-only tools.
             When finished, output a concise summary of your findings along with verified citations.
             Format your final response as valid JSON:
@@ -659,11 +660,11 @@ public actor SubagentWorker {
             let parentTotal = context.turnTokenAccounting?.cumulativeTotalTokens ?? 0
 
             let parentGenRemaining =
-                SubagentLimits.maxGeneratedTokensPerTurn - parentGen - generatedTokens
+                context.tokenBudget.generatedTokensPerTurn - parentGen - generatedTokens
             let parentTotalRemaining =
-                SubagentLimits.maxTotalTokensPerTurn - parentTotal - totalTokens
+                context.tokenBudget.totalTokensPerTurn - parentTotal - totalTokens
             let delegationTotalRemaining =
-                SubagentLimits.maxTokensPerDelegation - totalTokens
+                context.tokenBudget.delegationTokens - totalTokens
 
             if parentGenRemaining <= 0 || parentTotalRemaining <= 0 || delegationTotalRemaining <= 0 {
                 return try await finalizeTerminal(
@@ -686,15 +687,25 @@ public actor SubagentWorker {
 
             roundsExecuted += 1
             let remainingRounds = maxRounds - roundsExecuted
-            let isSynthesisPass = remainingRounds == 0
+            let fileTools = await fence.availableToolSpecs
+            let promptEstimate = estimateInputTokens(turns: transcript, tools: fileTools)
+            let totalRemaining = min(parentTotalRemaining, delegationTotalRemaining)
+            let elapsed = startedAt.duration(to: .now)
+            let timeForSummary = elapsed >= .seconds(Double(context.timeoutSeconds) * 0.65)
+            let isSynthesisPass =
+                remainingRounds == 0 || timeForSummary
+                || context.tokenBudget.shouldSummarize(
+                    remainingTotal: totalRemaining, promptTokens: promptEstimate,
+                    remainingGenerated: parentGenRemaining)
 
-            let availableTools = isSynthesisPass ? [] : await fence.availableToolSpecs
+            let availableTools = isSynthesisPass ? [] : fileTools
             if isSynthesisPass {
                 transcript.append(
                     ChatTurn(
                         role: .user,
                         text: """
-                            Finish now using the evidence already read. Return only a JSON object, without Markdown fences:
+                            Finish now using the evidence already read. Mark unverified parts of the objective as unresolved.
+                            Return only a JSON object, without Markdown fences:
                             {"summary":"your findings","citations":[{"path":"relative/file","start_line":1,"end_line":1}],"unresolved":[]}
                             Include citations for the files and exact lines supporting your findings. Never invent a read or line.
                             Any requested custom output format belongs inside the summary string; do not replace these outer keys.
@@ -704,15 +715,19 @@ public actor SubagentWorker {
             }
 
             var estimatedInputTokens = estimateInputTokens(turns: transcript, tools: availableTools)
-            if estimatedInputTokens > SubagentLimits.maxInputTokensPerRequest {
+            let inputLimit =
+                isSynthesisPass
+                ? min(SubagentLimits.maxInputTokensPerRequest, max(0, totalRemaining - 1_024))
+                : SubagentLimits.maxInputTokensPerRequest
+            if estimatedInputTokens > inputLimit {
                 transcript = pruneTranscript(transcript)
                 transcriptBytes = totalTranscriptBytes(transcript)
                 estimatedInputTokens = estimateInputTokens(turns: transcript, tools: availableTools)
-                if estimatedInputTokens > SubagentLimits.maxInputTokensPerRequest {
+                if estimatedInputTokens > inputLimit {
                     return try await finalizeTerminal(
                         status: .budgetExhausted,
                         summary:
-                            "Input context exceeded limit (\(estimatedInputTokens) > \(SubagentLimits.maxInputTokensPerRequest)).",
+                            "Summary/input budget exceeded (\(estimatedInputTokens) > \(inputLimit)).",
                         citations: (await fence.verifyCitations(claimed: claimedCitations)).verified,
                         unresolved: claimedUnresolved + [
                             SubagentUnresolvedItem(
@@ -728,11 +743,12 @@ public actor SubagentWorker {
                 }
             }
 
+            let summaryReserve = isSynthesisPass ? 0 : context.tokenBudget.summaryReserve
             let maxGenAllowed = min(
                 SubagentLimits.maxGeneratedTokensPerRound,
-                parentGenRemaining,
-                max(0, parentTotalRemaining - estimatedInputTokens),
-                max(0, delegationTotalRemaining - estimatedInputTokens)
+                max(0, parentGenRemaining - (isSynthesisPass ? 0 : SubagentLimits.maxGeneratedTokensPerRound)),
+                max(0, parentTotalRemaining - estimatedInputTokens - summaryReserve),
+                max(0, delegationTotalRemaining - estimatedInputTokens - summaryReserve)
             )
 
             if maxGenAllowed <= 0 {
@@ -744,7 +760,7 @@ public actor SubagentWorker {
                     unresolved: claimedUnresolved + [
                         SubagentUnresolvedItem(
                             reason: "budgetExhausted",
-                            detail: "Exceeded generation token limit."
+                            detail: "Insufficient total processing allowance for the next prompt and output."
                         )
                     ],
                     roundsExecuted: roundsExecuted - 1,
@@ -1107,9 +1123,9 @@ public actor SubagentWorker {
         // Strict limit check: do not return completed if token ceiling was exceeded
         let parentGen = context.turnTokenAccounting?.cumulativeGeneratedTokens ?? 0
         let parentTotal = context.turnTokenAccounting?.cumulativeTotalTokens ?? 0
-        if totalTokens > SubagentLimits.maxTokensPerDelegation
-            || (parentGen + generatedTokens) > SubagentLimits.maxGeneratedTokensPerTurn
-            || (parentTotal + totalTokens) > SubagentLimits.maxTotalTokensPerTurn
+        if totalTokens > context.tokenBudget.delegationTokens
+            || (parentGen + generatedTokens) > context.tokenBudget.generatedTokensPerTurn
+            || (parentTotal + totalTokens) > context.tokenBudget.totalTokensPerTurn
         {
             return try await finalizeTerminal(
                 status: .budgetExhausted,
