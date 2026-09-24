@@ -69,7 +69,7 @@ test-web:
 
 test-app: prepare
 	python3 scripts/run-host-tests.py xcodebuild -project GOAT.xcodeproj -scheme GOAT -configuration $(CONFIG) \
-	  -derivedDataPath $(DERIVED) -destination 'platform=macOS,arch=arm64' ARCHS=arm64 -onlyUsePackageVersionsFromResolvedFile ENABLE_TESTABILITY=YES $(SIGNING_FLAGS) GOAT_RELEASE_CHANNEL="$(RELEASE_CHANNEL)" RELEASE_TAG="$(RELEASE_TAG)" -testPlan "$(TEST_PLAN)" $(XCODE_FLAGS) test
+	  -derivedDataPath $(DERIVED) -destination 'platform=macOS,arch=arm64' ARCHS=arm64 -onlyUsePackageVersionsFromResolvedFile ENABLE_TESTABILITY=YES $(SIGNING_FLAGS) GOAT_RELEASE_CHANNEL="$(RELEASE_CHANNEL)" RELEASE_TAG="$(RELEASE_TAG)" -testPlan "$(TEST_PLAN)" GOAT_APP_BUNDLE_IDENTIFIER=dev.leet.goat.test-host $(XCODE_FLAGS) test
 
 format:
 	swift format --in-place --recursive App/Sources App/Tests Modules/Sources Modules/Tests

@@ -45,6 +45,7 @@ struct InspectorView: View {
                     if model.selectedSubagentModelID != nil {
                         DisclosureGroup("Options") {
                             SubagentBudgetControls(model: model)
+                                .padding(.top, Caprine.Activity.spacing)
                         }
                     }
                 }

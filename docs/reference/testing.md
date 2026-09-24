@@ -92,3 +92,5 @@ make test-app TEST_PLAN=Shepherd
 
 Use the exact model IDs returned by the engine. Omitting the engine name selects the saved active profile.
 The test is skipped by default and in CI. Passing deterministic tests alone does not qualify a live pair.
+
+Hosted app tests use the `dev.leet.goat.test-host` app identity, separate from the normal app. This isolates `UserDefaults` writes, including the large reading-font sizes exercised by layout tests. The final build in `make verify` restores the normal app identity.

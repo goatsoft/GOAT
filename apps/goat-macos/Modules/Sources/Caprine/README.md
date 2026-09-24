@@ -4,8 +4,6 @@ Themes, colour rendering and reusable visual primitives.
 
 Public seams: `Caprine`, `ThemeSpec`, `ThemeStore`, `ThemeCatalog`, `caprineSecondaryMenu(color:)`, `CaprineCompactStepper`.
 
-Secondary menus use muted text and a native caret without a filled bezel. Compact steppers use unfilled repeating arrows, respect integer bounds, and expose accessibility adjustments.
-
 Dependencies: Herd, Pens.
 
 Theme files are bounded local data; font declarations never download assets.

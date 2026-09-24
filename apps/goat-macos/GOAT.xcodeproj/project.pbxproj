@@ -1434,7 +1434,8 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.leet.goat;
+				GOAT_APP_BUNDLE_IDENTIFIER = dev.leet.goat;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(GOAT_APP_BUNDLE_IDENTIFIER)";
 				PRODUCT_NAME = GOAT;
 				SDKROOT = macosx;
 			};
@@ -1531,7 +1532,8 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.leet.goat;
+				GOAT_APP_BUNDLE_IDENTIFIER = dev.leet.goat;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(GOAT_APP_BUNDLE_IDENTIFIER)";
 				PRODUCT_NAME = GOAT;
 				SDKROOT = macosx;
 			};
