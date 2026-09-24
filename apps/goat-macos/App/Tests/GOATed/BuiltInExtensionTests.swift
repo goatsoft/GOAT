@@ -16,20 +16,34 @@ extension AppTests.GOATed {
             let settings = BuiltInExtensionSettings(defaults: defaults)
             #expect(settings.herderEnabled && settings.herderWritesEnabled && settings.herderCommandsEnabled)
             #expect(settings.hindsightEnabled && settings.commandTimeout == 120)
+            #expect(settings.subagentsEnabled && settings.subagentMaxRounds == 5 && settings.subagentTimeoutSeconds == 60)
+            #expect(settings.subagentPreferredBackend == .localEngine)
             settings.herderEnabled = false
             settings.herderWritesEnabled = false
             settings.herderCommandsEnabled = false
             settings.setHindsightEnabled(false)
             settings.setCommandTimeout(900)
+            settings.subagentsEnabled = false
+            settings.setSubagentMaxRounds(8)
+            settings.setSubagentTimeoutSeconds(45)
+            settings.setSubagentPreferredBackend(.systemLanguageModel)
             let loaded = BuiltInExtensionSettings(defaults: defaults)
             #expect(!loaded.herderEnabled && !loaded.herderWritesEnabled && !loaded.herderCommandsEnabled)
             #expect(!loaded.hindsightEnabled && loaded.commandTimeout == 600)
+            #expect(!loaded.subagentsEnabled && loaded.subagentMaxRounds == 8 && loaded.subagentTimeoutSeconds == 45)
+            #expect(loaded.subagentPreferredBackend == .systemLanguageModel)
             loaded.herderEnabled = true
             #expect(loaded.allowsHerderTool("pen_read_file"))
             #expect(!loaded.allowsHerderTool("pen_write_file"))
             #expect(!loaded.allowsHerderTool("pen_run_command"))
             loaded.setCommandTimeout(0)
             #expect(loaded.commandTimeout == 1)
+            loaded.setSubagentMaxRounds(100)
+            #expect(loaded.subagentMaxRounds == 10)
+            loaded.setSubagentTimeoutSeconds(5)
+            #expect(loaded.subagentTimeoutSeconds == 10)
+            loaded.setSubagentTimeoutSeconds(200)
+            #expect(loaded.subagentTimeoutSeconds == 90)
         }
 
         @MainActor @Test func herderCanBeReadOnlyOrDisabledAndOldRoutesCannotBypassIt() async throws {
