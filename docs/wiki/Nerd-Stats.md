@@ -14,10 +14,10 @@ Open the available statistics/chart controls to examine throughput, the context 
 
 Use [Statistics reference](../reference/STATISTICS.md) for exact definitions, fallback behavior and chart limits. For slow first responses or missing usage, see [Troubleshooting](../how-to/TROUBLESHOOTING.md).
 
-The Model section shows the selected subagent beneath the parent, including availability,
-its investigation time limit and round limit. These describe the configured worker, not
-measured child throughput. The default investigation limit is 180 seconds; Settings →
-GOATed → Extensions → Subagents → Advanced supports 10–300 seconds.
+The Model section shows the selected subagent beneath the parent. The Subagent menu contains
+only None and the worker models. None clears this engine's worker selection and stops delegation
+without disabling the Subagents extension. Advanced options stay in Settings → Extensions →
+Subagents → Advanced, including the 180-second default investigation limit (10–300 seconds).
 
 Select the worker directly from the Model section's Subagent menu, the chat model menu,
 or the menu-bar Model menu. Choices come from the current engine's catalogue and audited

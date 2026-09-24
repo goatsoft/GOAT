@@ -131,8 +131,6 @@ struct EffortMenuItems: View {
 struct SubagentModelMenu: View {
     @Bindable var model: AppModel
     let parentModelID: String?
-    @Environment(\.openSettings) private var openSettings
-
     private var selectionLocked: Bool {
         model.shepherd.hasActiveTurn || model.engineTransitioning || model.extensionsChanging
     }
@@ -141,52 +139,35 @@ struct SubagentModelMenu: View {
         let projection = SubagentMenuProjection(
             models: model.models, parentModelID: parentModelID, hasLocalEngine: model.toolRouter.isEngineLocal())
         let selected = model.selectedSubagentModelID
-        Menu {
-            if let reason = projection.unavailableReason {
-                Text(reason)
+        Menu("Subagent") {
+            Toggle("None", isOn: selection(for: nil))
+                .disabled(selectionLocked || model.activeEngineProfile == nil)
+            ForEach(projection.workers) { worker in
+                Toggle(worker.displayName, isOn: selection(for: worker.id))
+                    .disabled(selectionLocked || projection.unavailableReason != nil)
             }
-            Toggle(
-                "Enable Subagents",
-                isOn: Binding(
-                    get: { model.memory.builtInSettings.subagentsEnabled },
-                    set: { enabled in
-                        guard !selectionLocked else { return }
-                        model.memory.builtInSettings.subagentsEnabled = enabled
-                    })
-            )
-            .disabled(selectionLocked || projection.unavailableReason != nil)
-            Picker(
-                "Worker model",
-                selection: Binding(
-                    get: { model.selectedSubagentModelID ?? "" },
-                    set: { value in
-                        guard !selectionLocked, projection.unavailableReason == nil,
-                            let engineID = model.activeEngineProfile?.id
-                        else { return }
-                        model.memory.builtInSettings.setSubagentModelID(value.isEmpty ? nil : value, for: engineID)
-                    })
-            ) {
-                Text("Not selected").tag("")
-                ForEach(projection.workers) { worker in
-                    Text(worker.displayName + (worker.id == parentModelID ? " (same as parent)" : ""))
-                        .tag(worker.id)
-                }
-                if let selected, !projection.workers.contains(where: { $0.id == selected }) {
-                    Text("Unavailable: \(ModelRef(id: selected).displayName)").tag(selected)
-                }
+            if let selected, !projection.workers.contains(where: { $0.id == selected }) {
+                Toggle(ModelRef(id: selected).displayName, isOn: .constant(true))
+                    .disabled(true)
             }
-            .disabled(selectionLocked || projection.unavailableReason != nil)
-            if projection.workers.isEmpty { Text("No supported workers in this engine's catalogue.") }
-            if !model.memory.builtInSettings.herderEnabled { Text("Enable Herder in Extensions to investigate files.") }
-            Text("Load both models in the engine. Memory is checked before delegation.")
-            Divider()
-            Button("Subagent Settings…") {
-                model.settingsTab = .goated
-                openSettings()
-            }
-        } label: {
-            Text("Subagent")
         }
+        .help(projection.unavailableReason ?? "Select a worker, or None to turn off delegation for this engine.")
+    }
+
+    private func selection(for modelID: String?) -> Binding<Bool> {
+        Binding(
+            get: { model.selectedSubagentModelID == modelID },
+            set: { isSelected in
+                guard isSelected, !selectionLocked, let engineID = model.activeEngineProfile?.id else { return }
+                let projection = SubagentMenuProjection(
+                    models: model.models, parentModelID: parentModelID, hasLocalEngine: model.toolRouter.isEngineLocal()
+                )
+                guard
+                    modelID == nil
+                        || (projection.unavailableReason == nil && projection.workers.contains { $0.id == modelID })
+                else { return }
+                model.memory.builtInSettings.setSubagentModelID(modelID, for: engineID)
+            })
     }
 }
 

@@ -31,17 +31,6 @@ struct InspectorView: View {
                     }
                     Divider()
                     SubagentModelMenu(model: model, parentModelID: model.resolvedModelID(for: session))
-                    Text(model.subagentAvailabilityMessage)
-                        .font(Caprine.Activity.font)
-                        .foregroundStyle(model.theme.tokens.muted)
-                    if model.selectedSubagentModelID != nil {
-                        LabeledContent(
-                            "Worker time limit", value: "\(model.memory.builtInSettings.subagentTimeoutSeconds)s")
-                        LabeledContent("Worker round limit", value: "\(model.memory.builtInSettings.subagentMaxRounds)")
-                        Text("Read-only investigations. The parent resumes after the worker returns.")
-                            .font(Caprine.Activity.font)
-                            .foregroundStyle(model.theme.tokens.muted)
-                    }
                     LabeledContent("Messages", value: "\(session.messages.count)")
 
                 }

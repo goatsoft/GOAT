@@ -48,6 +48,9 @@ extension AppTests.GOATed {
             #expect(BuiltInExtensionSettings(defaults: defaults).subagentModelID(for: "studio") == "Qwen3.5-9B-4bit")
             settings.setSubagentModelID(nil, for: "studio")
             #expect(settings.subagentModelID(for: "studio") == nil)
+            #expect(settings.subagentsEnabled)
+            let cleared = BuiltInExtensionSettings(defaults: defaults)
+            #expect(cleared.subagentModelID(for: "studio") == nil && cleared.subagentsEnabled)
             settings.herderEnabled = false
             settings.herderWritesEnabled = false
             settings.herderCommandsEnabled = false
