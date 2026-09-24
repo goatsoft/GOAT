@@ -715,49 +715,46 @@ private struct ToolCallDetails: View {
     private var hasArguments: Bool { ToolCallPayload.containsValue(event.arguments) }
     private var hasResult: Bool { ToolCallPayload.containsValue(event.result) }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: Caprine.Activity.compactSpacing) {
-            if hasArguments {
-                labeled("Arguments")
-                if model.showToolDiffs, let diff {
-                    ToolDiffView(diff: diff, rawJSON: event.arguments)
-                } else {
-                    JSONTreeView(raw: event.arguments)
-                }
-            }
-            if hasArguments && hasResult {
-                Divider().padding(.vertical, Caprine.Activity.ruleWidth)
-            }
-            if hasResult, let result = event.result {
-                labeled(event.isError ? "Error" : "Result")
-                ScrollView {
-                    if event.isError {
-                        Text(result)
-                            .font(Caprine.Activity.monospaceFont)
-                            .foregroundStyle(Caprine.Semantic.warning)
-                            .lineSpacing(3)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    } else {
-                        JSONTreeView(raw: result)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-                .frame(maxHeight: Caprine.Activity.detailMaxHeight)
-            }
-            if event.tool == "subagent_delegate", let runID = subagentRunID {
-                Divider().padding(.vertical, Caprine.Activity.ruleWidth)
-                SubagentTranscriptAffordance(runID: runID)
-            }
-        }
+    private var investigationReceipt: SubagentReceipt? {
+        guard event.tool == "subagent_delegate", let data = event.result?.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(SubagentReceipt.self, from: data)
     }
 
-    private var subagentRunID: String? {
-        guard let result = event.result,
-            let data = result.data(using: .utf8),
-            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return nil }
-        return (json["run_id"] ?? json["runId"]) as? String
+    var body: some View {
+        if let receipt = investigationReceipt {
+            SubagentInvestigationDetails(receipt: receipt, arguments: event.arguments)
+        } else {
+            VStack(alignment: .leading, spacing: Caprine.Activity.compactSpacing) {
+                if hasArguments {
+                    labeled("Arguments")
+                    if model.showToolDiffs, let diff {
+                        ToolDiffView(diff: diff, rawJSON: event.arguments)
+                    } else {
+                        JSONTreeView(raw: event.arguments)
+                    }
+                }
+                if hasArguments && hasResult {
+                    Divider().padding(.vertical, Caprine.Activity.ruleWidth)
+                }
+                if hasResult, let result = event.result {
+                    labeled(event.isError ? "Error" : "Result")
+                    ScrollView {
+                        if event.isError {
+                            Text(result)
+                                .font(Caprine.Activity.monospaceFont)
+                                .foregroundStyle(Caprine.Semantic.warning)
+                                .lineSpacing(3)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        } else {
+                            JSONTreeView(raw: result)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                    .frame(maxHeight: Caprine.Activity.detailMaxHeight)
+                }
+            }
+        }
     }
 
     private func labeled(_ text: String) -> some View {
@@ -767,82 +764,119 @@ private struct ToolCallDetails: View {
     }
 }
 
-private struct SubagentTranscriptAffordance: View {
-    let runID: String
+private struct SubagentInvestigationDetails: View {
+    let receipt: SubagentReceipt
+    let arguments: String
     @Environment(AppModel.self) private var model
     @State private var record: SubagentRunRecord?
-    @State private var isExpanded = false
-    @State private var isLoading = false
+    @State private var loadFailed = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Caprine.Activity.compactSpacing) {
-            Button {
-                isExpanded.toggle()
-                if isExpanded && record == nil {
-                    loadRecord()
-                }
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.caption2)
-                    Text("Subagent Run Details")
-                        .font(Caprine.Activity.badgeFont)
-                    if let record {
-                        let statsLabel =
-                            "(\(record.status) \u{00b7} \(record.roundsExecuted) rounds \u{00b7} \(record.totalTokens) tokens)"
-                        Text(statsLabel)
-                            .font(Caprine.Activity.badgeFont)
-                            .foregroundStyle(model.theme.tokens.muted)
-                    }
-                }
-                .foregroundStyle(model.theme.tokens.tint)
-            }
-            .buttonStyle(.plain)
-
-            if isExpanded {
-                if isLoading {
-                    ProgressView().controlSize(.small)
-                } else if let record {
-                    VStack(alignment: .leading, spacing: 6) {
-                        if let summary = record.summary, !summary.isEmpty {
-                            Text("SUMMARY")
-                                .font(Caprine.Activity.badgeFont)
-                                .foregroundStyle(model.theme.tokens.muted)
-                            Text(summary)
-                                .font(Caprine.Activity.font)
-                                .textSelection(.enabled)
-                        }
-                        if let transcript = record.transcriptJson, !transcript.isEmpty {
-                            Text("TRANSCRIPT")
-                                .font(Caprine.Activity.badgeFont)
-                                .foregroundStyle(model.theme.tokens.muted)
-                            ScrollView {
-                                JSONTreeView(raw: transcript)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                            .frame(maxHeight: Caprine.Activity.detailMaxHeight)
-                        }
-                    }
-                    .padding(.leading, 8)
-                } else {
-                    Text("Could not load subagent run transcript.")
+        VStack(alignment: .leading, spacing: Caprine.Activity.spacing) {
+            HStack {
+                Label(statusLabel, systemImage: receipt.status == .completed ? "checkmark.circle" : "info.circle")
+                    .font(Caprine.Activity.emphasizedFont)
+                Spacer()
+                if let record, let completed = record.completedAt {
+                    Text("\(max(0, Int(completed.timeIntervalSince(record.createdAt))))s")
                         .font(Caprine.Activity.font)
                         .foregroundStyle(model.theme.tokens.muted)
                 }
             }
+            if !receipt.summary.isEmpty {
+                Text(receipt.summary)
+                    .font(Caprine.Activity.font)
+                    .textSelection(.enabled)
+            }
+            if !receipt.citations.isEmpty {
+                Text("Sources verified during this investigation")
+                    .font(Caprine.Activity.badgeFont)
+                    .foregroundStyle(model.theme.tokens.muted)
+                ForEach(Array(receipt.citations.enumerated()), id: \.offset) { _, citation in
+                    Button {
+                        if let url = citationURL(citation) {
+                            NSWorkspace.shared.activateFileViewerSelecting([url])
+                        }
+                    } label: {
+                        Label("\(citation.path):\(citation.startLine)–\(citation.endLine)", systemImage: "doc.text")
+                            .font(Caprine.Activity.monospaceFont)
+                            .multilineTextAlignment(.leading)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(model.theme.tokens.tint)
+                    .disabled(citationURL(citation) == nil)
+                    .help("Reveal the source file in Finder. It may have changed since this investigation.")
+                }
+            }
+            if !receipt.unresolved.isEmpty {
+                Text("Unresolved")
+                    .font(Caprine.Activity.badgeFont)
+                ForEach(Array(receipt.unresolved.enumerated()), id: \.offset) { _, item in
+                    Text([item.path, item.detail ?? item.reason].compactMap { $0 }.joined(separator: ": "))
+                        .font(Caprine.Activity.font)
+                        .foregroundStyle(model.theme.tokens.muted)
+                        .textSelection(.enabled)
+                }
+            }
+            DisclosureGroup("Diagnostics") {
+                VStack(alignment: .leading, spacing: Caprine.Activity.compactSpacing) {
+                    Text("\(receipt.roundsExecuted) rounds · \(receipt.totalTokens) tokens")
+                        .font(Caprine.Activity.font)
+                    JSONTreeView(raw: arguments)
+                    if let transcript = record?.transcriptJson {
+                        ScrollView { JSONTreeView(raw: transcript) }
+                            .frame(maxHeight: Caprine.Activity.detailMaxHeight)
+                    } else if loadFailed {
+                        Text("Saved transcript is unavailable. The result above is still available.")
+                            .font(Caprine.Activity.font)
+                    }
+                }
+            }
+            .font(Caprine.Activity.font)
+        }
+        .task(id: receipt.runId) {
+            record = nil
+            loadFailed = false
+            guard let db = model.db else {
+                loadFailed = true
+                return
+            }
+            do {
+                let loaded = try await db.subagentRun(id: receipt.runId)
+                guard !Task.isCancelled else { return }
+                record = loaded
+                loadFailed = loaded == nil
+            } catch {
+                guard !Task.isCancelled else { return }
+                loadFailed = true
+            }
         }
     }
 
-    private func loadRecord() {
-        guard let db = model.db else { return }
-        isLoading = true
-        Task {
-            let loaded = try? await db.subagentRun(id: runID)
-            await MainActor.run {
-                self.record = loaded
-                self.isLoading = false
-            }
+    private var statusLabel: String {
+        switch receipt.status {
+        case .running: "Investigating"
+        case .completed: "Investigation complete"
+        case .timedOut: "Time limit reached"
+        case .budgetExhausted: "Investigation limit reached"
+        case .cancelled: "Investigation stopped"
+        case .interrupted: "Investigation interrupted"
+        case .failed: "Investigation could not finish"
         }
+    }
+
+    private func citationURL(_ citation: SubagentCitation) -> URL? {
+        guard let record,
+            let chat = model.chats.first(where: { $0.id.uuidString == record.chatId }),
+            let penID = chat.projectID,
+            let path = model.pens.first(where: { $0.id == penID })?.workspace?.path
+        else { return nil }
+        let root = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath()
+        let target = root.appendingPathComponent(citation.path).standardizedFileURL.resolvingSymlinksInPath()
+        guard target.path.hasPrefix(root.path + "/"), FileManager.default.fileExists(atPath: target.path) else {
+            return nil
+        }
+        return target
     }
 }
 

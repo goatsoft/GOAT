@@ -52,7 +52,6 @@ private actor ScriptedEngine: InferenceEngine {
             let task = Task {
                 defer {
                     request.transportClosureHandle?.acknowledge()
-                    request.onTransportClosed?()
                 }
                 if let sleepDuration {
                     try? await Task.sleep(for: sleepDuration)
@@ -94,7 +93,6 @@ private actor HangingEngine: InferenceEngine {
         AsyncThrowingStream { continuation in
             continuation.onTermination = { @Sendable _ in
                 request.transportClosureHandle?.acknowledge()
-                request.onTransportClosed?()
                 continuation.finish(throwing: CancellationError())
             }
         }
@@ -1041,7 +1039,7 @@ extension AppTests.GOATed {
 
         // Quarantine Wait Registration Pre-Cancelled Test
         @Test func quarantineWaitRegistration_preCancelledResumesImmediately() async throws {
-            let registration = QuarantineWaitRegistration()
+            let registration = GenerationTransportClosureRegistration()
             registration.cancel()
             await withCheckedContinuation { cont in
                 let inserted = registration.setContinuation(cont)
@@ -1995,6 +1993,94 @@ extension AppTests.GOATed {
             // Must fail with streamBufferOverflow rather than returning .completed
             #expect(result.receipt.status == .failed)
             #expect(result.receipt.unresolved.contains { $0.reason == "streamBufferOverflow" })
+        }
+
+        @Test(arguments: [0, -1, 11, Int.max])
+        func invalidRoundRequestsNeverDispatch(rounds: Int) async throws {
+            let (workspace, files) = try createWorkspace()
+            defer { try? FileManager.default.removeItem(at: workspace) }
+            let turnID = UUID()
+            let engine = ScriptedEngine(script: [])
+            let provider = SubagentsProvider(
+                turnID: turnID, fileTools: files, workspace: workspace, engine: engine,
+                modelID: "qwen2.5-7b-instruct")
+            let context = ExtensionContext(view: ExtensionView(chatID: UUID(), penID: nil), turnID: turnID)
+            let brief = SubagentTaskBrief(objective: "Inspect files", maxRounds: rounds)
+            let arguments = String(decoding: try JSONEncoder().encode(brief), as: UTF8.self)
+            let result = try await provider.invoke(
+                ToolCallRequest(tool: SubagentsProvider.toolName, argumentsJSON: arguments), context: context)
+            #expect(result.isError)
+            #expect(result.content.contains("max_rounds must be between 1 and 10"))
+            #expect(await engine.requests.isEmpty)
+        }
+
+        @Test func hostRoundCapIncludesSynthesis() async throws {
+            let (workspace, files) = try createWorkspace()
+            defer { try? FileManager.default.removeItem(at: workspace) }
+            let engine = ScriptedEngine(script: [
+                [.toolCalls([ToolCallEvent(id: "list1", name: "pen_list_files", argumentsJSON: "{}")])],
+                [.token("{\"summary\":\"Inspected the Pen\"}")],
+            ])
+            let turnID = UUID()
+            var configuration = SubagentConfiguration()
+            configuration.maxRounds = 2
+            let provider = SubagentsProvider(
+                turnID: turnID, fileTools: files, workspace: workspace, engine: engine,
+                modelID: "qwen2.5-7b-instruct", configuration: configuration)
+            let context = ExtensionContext(view: ExtensionView(chatID: UUID(), penID: nil), turnID: turnID)
+            let result = try await provider.invoke(
+                ToolCallRequest(
+                    tool: SubagentsProvider.toolName,
+                    argumentsJSON: #"{"objective":"Inspect files","max_rounds":10}"#), context: context)
+            #expect(!result.isError)
+            let requests = await engine.requests
+            #expect(requests.count == 2)
+            #expect(requests.last?.tools.isEmpty == true)
+        }
+
+        @Test func scopeHintsAreAdvisoryAndLegacyFiltersAreRejected() async throws {
+            let brief = SubagentTaskBrief(objective: "Inspect sources", scopeHint: ["Sources/"])
+            let encoded = try JSONEncoder().encode(brief)
+            let decoded = try JSONDecoder().decode(SubagentTaskBrief.self, from: encoded)
+            #expect(decoded.scopeHint == ["Sources/"])
+            #expect(String(decoding: encoded, as: UTF8.self).contains("scope_hint"))
+            #expect(SubagentsProvider.toolInputSchemaJSON.contains("not an access restriction"))
+            let (workspace, files) = try createWorkspace()
+            defer { try? FileManager.default.removeItem(at: workspace) }
+            let turnID = UUID()
+            let engine = ScriptedEngine(script: [])
+            let provider = SubagentsProvider(
+                turnID: turnID, fileTools: files, workspace: workspace, engine: engine,
+                modelID: "qwen2.5-7b-instruct")
+            let context = ExtensionContext(view: ExtensionView(chatID: UUID(), penID: nil), turnID: turnID)
+            let result = try await provider.invoke(
+                ToolCallRequest(
+                    tool: SubagentsProvider.toolName,
+                    argumentsJSON: #"{"objective":"Inspect sources","path_filter":["Sources/"]}"#), context: context)
+            #expect(result.isError)
+            #expect(result.content.contains("scope_hint"))
+            #expect(await engine.requests.isEmpty)
+        }
+
+        @Test func unsupportedModelsDoNotAdvertiseDelegation() async throws {
+            let (workspace, files) = try createWorkspace()
+            defer { try? FileManager.default.removeItem(at: workspace) }
+            let turnID = UUID()
+            let engine = ScriptedEngine(script: [])
+            let context = ExtensionContext(view: ExtensionView(chatID: UUID(), penID: nil), turnID: turnID)
+            for modelID in ["default", "unverified-model"] {
+                let provider = SubagentsProvider(
+                    turnID: turnID, fileTools: files, workspace: workspace, engine: engine, modelID: modelID)
+                #expect(try await provider.tools(for: context).isEmpty)
+                #expect(SubagentAvailability.unavailableReason(hasLocalEngine: true, modelID: modelID) != nil)
+            }
+            let supported = SubagentsProvider(
+                turnID: turnID, fileTools: files, workspace: workspace, engine: engine,
+                modelID: "qwen2.5-7b-instruct")
+            #expect(try await supported.tools(for: context).count == 1)
+            #expect(
+                SubagentAvailability.unavailableReason(hasLocalEngine: false, modelID: "qwen2.5-7b-instruct") != nil)
+            #expect(SubagentAvailability.unavailableReason(hasLocalEngine: true, modelID: nil) != nil)
         }
     }
 }

@@ -1,4 +1,5 @@
 import AppKit
+import Caprine
 import Foundation
 import GOATed
 import Herd
@@ -401,36 +402,35 @@ struct GOATedSettingsView: View {
 
     private var subagentsConfiguration: some View {
         @Bindable var settings = model.memory.builtInSettings
-        return VStack(alignment: .leading, spacing: 10) {
-            Divider()
-            Stepper(
-                "Max rounds: \(settings.subagentMaxRounds)",
-                value: Binding(
-                    get: { settings.subagentMaxRounds },
-                    set: { settings.setSubagentMaxRounds($0) }
-                ),
-                in: 1...10
-            )
-            Text(
-                "Maximum number of tool call rounds the subagent can perform before summarizing."
-            )
-            .font(.caption).foregroundStyle(.secondary)
-
-            Stepper(
-                "Watchdog timeout: \(settings.subagentTimeoutSeconds)s",
-                value: Binding(
-                    get: { settings.subagentTimeoutSeconds },
-                    set: { settings.setSubagentTimeoutSeconds($0) }
-                ),
-                in: 10...90,
-                step: 5
-            )
-            Text(
-                "Hard watchdog timeout in seconds for subagent task completion."
-            )
-            .font(.caption).foregroundStyle(.secondary)
+        return VStack(alignment: .leading, spacing: Caprine.Activity.spacing) {
+            Text(model.subagentAvailabilityMessage)
+                .font(Caprine.Activity.font)
+                .foregroundStyle(.secondary)
+            DisclosureGroup("Advanced") {
+                VStack(alignment: .leading, spacing: Caprine.Activity.spacing) {
+                    Stepper(
+                        "Maximum rounds: \(settings.subagentMaxRounds)",
+                        value: Binding(get: { settings.subagentMaxRounds }, set: { settings.setSubagentMaxRounds($0) }),
+                        in: 1...10
+                    )
+                    Text("Includes the final summary round. One round produces a summary without file tools.")
+                        .font(Caprine.Activity.font).foregroundStyle(.secondary)
+                    Stepper(
+                        "Time limit: \(settings.subagentTimeoutSeconds)s",
+                        value: Binding(
+                            get: { settings.subagentTimeoutSeconds }, set: { settings.setSubagentTimeoutSeconds($0) }),
+                        in: 10...90, step: 5
+                    )
+                    Text("Maximum investigation time before stopping and returning partial findings.")
+                        .font(Caprine.Activity.font).foregroundStyle(.secondary)
+                    Text(
+                        "Supported models: Qwen 2.5 7B/14B, Qwen 2.5 Coder 7B, Llama 3/3.1 8B, Mistral 7B and Gemma 2 9B. Exact engine model identifiers are checked before use."
+                    )
+                    .font(Caprine.Activity.font).foregroundStyle(.secondary)
+                }
+            }
+            .disabled(!settings.subagentsEnabled || model.extensionsChanging || model.shepherd.activeTurnID != nil)
         }
-        .disabled(!settings.subagentsEnabled || model.extensionsChanging || model.shepherd.activeTurnID != nil)
     }
 
     private var allRoots: [SkillManagementRoot] {

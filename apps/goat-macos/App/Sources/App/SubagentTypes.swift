@@ -92,8 +92,8 @@ public enum SubagentLimits {
     public static let maximumSupportedContextWindow = 131_072
 
     public static let streamBufferCapacity = 32
-    public static let maxStreamEventBytes = 1024 * 1024  // 64 KiB
-    public static let maxStreamBufferBytes = 2 * 1024 * 1024  // 512 KiB
+    public static let maxStreamEventBytes = 1024 * 1024  // 1 MiB
+    public static let maxStreamBufferBytes = 2 * 1024 * 1024  // 2 MiB
 
     public static let supportedModelEnvelopes: [String: Stage1ModelEnvelope] = [
         "qwen2.5-7b-instruct": Stage1ModelEnvelope(layers: 28, kvHeads: 4, headDimension: 128),
@@ -129,27 +129,40 @@ public enum SubagentLimits {
     }
 }
 
+/// Static eligibility is shared by tool advertisement and settings. Runtime admission
+/// still verifies loaded state, request counts and memory immediately before dispatch.
+public enum SubagentAvailability {
+    public static func unavailableReason(hasLocalEngine: Bool, modelID: String?) -> String? {
+        guard hasLocalEngine else { return "Choose a local engine to use investigations." }
+        guard let modelID, !modelID.isEmpty else { return "Choose a model to use investigations." }
+        guard SubagentLimits.resolvedEnvelope(for: modelID) != nil else {
+            return "The selected model is not yet supported for investigations. Choose a supported model."
+        }
+        return nil
+    }
+}
+
 public struct SubagentTaskBrief: Codable, Sendable, Equatable {
     public var objective: String
-    public var pathFilter: [String]?
+    public var scopeHint: [String]?
     public var maxRounds: Int?
     public var returnSchema: String?
 
     public init(
         objective: String,
-        pathFilter: [String]? = nil,
+        scopeHint: [String]? = nil,
         maxRounds: Int? = nil,
         returnSchema: String? = nil
     ) {
         self.objective = objective
-        self.pathFilter = pathFilter
+        self.scopeHint = scopeHint
         self.maxRounds = maxRounds
         self.returnSchema = returnSchema
     }
 
     enum CodingKeys: String, CodingKey {
         case objective
-        case pathFilter = "path_filter"
+        case scopeHint = "scope_hint"
         case maxRounds = "max_rounds"
         case returnSchema = "return_schema"
     }
@@ -363,55 +376,11 @@ public struct SubagentTurnAuthority: SubagentHostAuthority {
     }
 }
 
-public final class QuarantineWaitRegistration: @unchecked Sendable {
-    public let id = UUID()
-    private let lock = NSLock()
-    private var isCancelled = false
-    private var isResumed = false
-    private var continuation: CheckedContinuation<Void, Never>?
-
-    public init() {}
-
-    public func setContinuation(_ cont: CheckedContinuation<Void, Never>) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        if isCancelled || isResumed {
-            return false
-        }
-        self.continuation = cont
-        return true
-    }
-
-    public func cancel() -> CheckedContinuation<Void, Never>? {
-        lock.lock()
-        defer { lock.unlock() }
-        isCancelled = true
-        guard !isResumed else { return nil }
-        isResumed = true
-        let cont = continuation
-        continuation = nil
-        return cont
-    }
-
-    public func resume() {
-        lock.lock()
-        guard !isResumed else {
-            lock.unlock()
-            return
-        }
-        isResumed = true
-        let cont = continuation
-        continuation = nil
-        lock.unlock()
-        cont?.resume()
-    }
-}
-
 public final class SubagentTransportQuarantine: @unchecked Sendable {
     private let lock = NSLock()
     private var quarantined = false
     private var transportActive = false
-    private var waiters: [UUID: QuarantineWaitRegistration] = [:]
+    private var waiters: [UUID: GenerationTransportClosureRegistration] = [:]
 
     public init() {}
 
@@ -461,7 +430,7 @@ public final class SubagentTransportQuarantine: @unchecked Sendable {
     }
 
     public func waitForClosure() async {
-        let registration = QuarantineWaitRegistration()
+        let registration = GenerationTransportClosureRegistration()
 
         let shouldWait: Bool = {
             lock.lock()
@@ -579,9 +548,6 @@ public actor QuarantineGuardedEngine: InferenceEngine {
         return await underlying.stream(request)
     }
 
-    public func awaitTransportClosure() async {
-        await underlying.awaitTransportClosure()
-    }
 }
 
 public final class SubagentTurnTokenAccounting: @unchecked Sendable {

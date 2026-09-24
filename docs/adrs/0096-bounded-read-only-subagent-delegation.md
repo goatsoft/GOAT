@@ -292,3 +292,15 @@ The test plan for Stage 1 subagent delegation includes the following determinist
   strictly prohibited.
 - **Trusting Model Citations Without Verification:** LLMs frequently hallucinate line numbers and file names;
   rejected in favor of host-verified tool read spans and SHA-256 fingerprints.
+
+### Stage 1 implementation contract
+
+- `subagent_delegate` accepts a nonempty objective and an optional `max_rounds` in 1...10. The host's configured cap also applies; the final round is synthesis, so a one-round run does not use file tools. Invalid values are rejected before dispatch.
+- `scope_hint` contains advisory paths for investigation focus. It is not an authorization boundary. The capability fence enforces read-only access to the owning Pen. The earlier `path_filter` spelling is rejected with migration guidance rather than implying a narrower enforced boundary.
+- Static availability is shared by tool advertisement and settings: a local engine and an explicitly supported model identity are required. Runtime admission still checks loaded state, idle request counts, context and model-specific memory headroom before dispatch. Unknown model aliases fail closed.
+- Inference owns the per-request `GenerationTransportClosureHandle` and cancellation-safe registration. The producer acknowledges the handle after teardown, including failures before client creation. There is no second closure callback or engine-wide completion wait. The host retains quarantine across turn lifetimes.
+- Results present status, summary, verified source references, unresolved items and elapsed time. Source buttons reveal an existing file within the current owning Pen; verification describes the bytes read during the investigation, not a guarantee that the current file is unchanged. Raw arguments and transcripts remain under Diagnostics.
+- Settings keep round/time limits under Advanced. A quarantined engine shows an explanation when Send or Regenerate is attempted; the draft is preserved.
+- Apple system inference remains deferred and is not offered as a Stage 1 backend. Native Writing Tools remain an explicitly user-invoked platform feature.
+
+Further lifecycle decomposition and broader shared test-fixture consolidation are follow-up work; they do not change these contracts.

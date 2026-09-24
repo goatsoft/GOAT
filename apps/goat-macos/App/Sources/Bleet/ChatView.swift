@@ -76,6 +76,16 @@ struct ChatView: View {
                 .padding(Caprine.Activity.inset)
                 .background(.bar)
             }
+            if let notice = model.generationNotice {
+                HStack {
+                    Text(notice).font(Caprine.Activity.font)
+                    Spacer()
+                    Button("Dismiss") { model.generationNotice = nil }
+                }
+                .padding(Caprine.Activity.inset)
+                .background(.bar)
+                .accessibilityElement(children: .contain)
+            }
             ChatTranscriptView(session: session).id(session.id)
             Composer(
                 session: session,

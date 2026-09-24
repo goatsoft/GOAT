@@ -57,10 +57,6 @@ final class StreamOverflowState: @unchecked Sendable {
     }
 }
 
-#if canImport(FoundationModels)
-import FoundationModels
-#endif
-
 enum SubagentWorkerError: LocalizedError {
     case streamBufferOverflow
 
@@ -86,13 +82,11 @@ private func isStreamBufferOverflow(_ error: Error) -> Bool {
 actor WorkerCompletionBridge {
     private var continuation: CheckedContinuation<Result<SubagentResult, Error>?, Never>?
     private var isSettled = false
-    private var isWorkFinished = false
     private var storedResult: Result<SubagentResult, Error>?
     private var isTimedOut = false
     private var isCancelled = false
 
     func complete(with result: Result<SubagentResult, Error>) {
-        isWorkFinished = true
         guard !isSettled else { return }
         isSettled = true
         storedResult = result
@@ -131,9 +125,6 @@ actor WorkerCompletionBridge {
         }
     }
 
-    func isFinished() -> Bool {
-        isWorkFinished
-    }
 }
 
 public actor SubagentWorker {
@@ -141,7 +132,6 @@ public actor SubagentWorker {
     private let task: SubagentTaskBrief
     private let context: SubagentExecutionContext
     private let fence: SubagentCapabilityFence
-    private var transportAborted = false
 
     private var currentRoundsExecuted = 0
     private var currentGeneratedTokens = 0
@@ -194,7 +184,7 @@ public actor SubagentWorker {
 
         let workTask = Task { [self] () -> Void in
             do {
-                let res = try await self.executeInternal(deadline: deadline)
+                let res = try await self.executeInternal()
                 await self.bridge.complete(with: .success(res))
             } catch {
                 await self.bridge.complete(with: .failure(error))
@@ -428,7 +418,7 @@ public actor SubagentWorker {
         )
     }
 
-    private func executeInternal(deadline: ContinuousClock.Instant) async throws -> SubagentResult {
+    private func executeInternal() async throws -> SubagentResult {
         // 1. Persist initial running state in database (fail-closed if durable write fails)
         if let db = context.database {
             let taskJson = (try? String(data: JSONEncoder().encode(task), encoding: .utf8)) ?? "{}"
@@ -469,7 +459,7 @@ public actor SubagentWorker {
             )
         }
 
-        return try await executeLoop(deadline: deadline)
+        return try await executeLoop()
     }
 
     private func checkAdmission() async -> String? {
@@ -595,7 +585,7 @@ public actor SubagentWorker {
         return tokens
     }
 
-    private func executeLoop(deadline: ContinuousClock.Instant) async throws -> SubagentResult {
+    private func executeLoop() async throws -> SubagentResult {
         guard let engine = context.engine else {
             return try await finalizeTerminal(
                 status: .failed,
@@ -614,7 +604,8 @@ public actor SubagentWorker {
             )
         }
 
-        let effectiveRoundsCap = context.maxRounds
+        let effectiveRoundsCap = min(
+            SubagentLimits.ceilingMaxRounds, max(SubagentLimits.minimumMaxRounds, context.maxRounds))
         let maxRounds: Int
         if let requested = task.maxRounds {
             maxRounds = min(max(requested, SubagentLimits.minimumMaxRounds), effectiveRoundsCap)
@@ -643,9 +634,9 @@ public actor SubagentWorker {
               ]
             }
             """
-        if let filter = task.pathFilter, !filter.isEmpty {
+        if let filter = task.scopeHint, !filter.isEmpty {
             systemPrompt +=
-                "\nScope limited strictly to these paths/patterns: \(filter.joined(separator: ", "))"
+                "\nInvestigation focus (advisory; other files within this Pen remain available): \(filter.joined(separator: ", "))"
         }
         if let schema = task.returnSchema, !schema.isEmpty {
             systemPrompt += "\nRequired return schema: \(schema)"
@@ -790,9 +781,6 @@ public actor SubagentWorker {
                 maxTokens: maxGenAllowed,
                 tools: availableTools,
                 round: roundsExecuted,
-                onTransportClosed: {
-                    closureHandle.acknowledge()
-                },
                 transportClosureHandle: closureHandle
             )
 

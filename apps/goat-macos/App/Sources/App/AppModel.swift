@@ -185,6 +185,7 @@ final class AppModel {
     let engineRecovery = EngineRecoveryController()
     let modelCapabilityOwnership = ModelCapabilityProbeOwnership()
     var engineIntentRevision: UInt64 = 0
+    var generationNotice: String?
     var engineStopStatus: String?
     var engineStopRevision: UInt64?
     @ObservationIgnored var engineStopTask: Task<Void, Never>?

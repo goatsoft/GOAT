@@ -119,3 +119,7 @@ Chat text/code attachments use validated `.goatdoc` envelopes in the existing at
 Hindsight session health is independent of individual memory request success. Connection checks share an owned attempt and reuse healthy transports; scope recovery preserves extension and JUDAS authority. See [ADR-0076](adrs/0076-hindsight-health-and-session-ownership.md).
 
 Fresh installations keep an empty engine list and open Engine settings after local startup. Existing lists and explicit legacy connections retain their settings. The first saved engine becomes active after its profile and optional credential have been written. See [ADR-0080](adrs/0080-explicit-first-engine-setup.md).
+
+### Read-only investigations
+
+The built-in Subagents extension runs a bounded investigation inside the parent turn and a folder-backed Pen (ADR-0096). `scope_hint` is advisory; the Pen and read-only capability fence define authority. Local supported-model availability is checked before advertising the tool, with runtime memory and loaded-model admission repeated before generation. Inference owns one closure handle per request, while the host retains engine quarantine until that request acknowledges teardown. Results have a native summary/source view with raw transcript diagnostics. Apple system inference is deferred.

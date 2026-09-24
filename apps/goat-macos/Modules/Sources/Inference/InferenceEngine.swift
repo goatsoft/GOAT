@@ -195,6 +195,7 @@ public struct ToolCallEvent: Sendable, Equatable {
     }
 }
 
+/// All registration state is protected by the lock; continuations resume at most once.
 public final class GenerationTransportClosureRegistration: @unchecked Sendable {
     public let id = UUID()
     private let lock = NSLock()
@@ -239,6 +240,7 @@ public final class GenerationTransportClosureRegistration: @unchecked Sendable {
     }
 }
 
+/// The lock protects acknowledgement and registrations across producer and cancellation tasks.
 public final class GenerationTransportClosureHandle: @unchecked Sendable {
     private let lock = NSLock()
     private var isAcknowledged = false
@@ -358,13 +360,11 @@ public struct GenerationRequest: Sendable {
     /// tool-call identifiers unique across rounds.
     public var round: Int
     public var rejectedSamplingParameters: Set<String> = []
-    public var onTransportClosed: (@Sendable () -> Void)? = nil
     public var transportClosureHandle: GenerationTransportClosureHandle? = nil
     public init(
         model: String, turns: [ChatTurn], effort: Effort, maxTokens: Int? = nil,
         tools: [ToolSpec] = [], modelCapabilities: ModelCapabilities = .unknown,
         compatibility: ResolvedModelCompatibility? = nil, round: Int = 0,
-        onTransportClosed: (@Sendable () -> Void)? = nil,
         transportClosureHandle: GenerationTransportClosureHandle? = nil
     ) {
         self.model = model
@@ -381,7 +381,6 @@ public struct GenerationRequest: Sendable {
                 effectiveStyle: .genericOpenAI,
                 source: .genericFallback,
                 capabilities: modelCapabilities)
-        self.onTransportClosed = onTransportClosed
         self.transportClosureHandle = transportClosureHandle
     }
 }
@@ -479,13 +478,10 @@ public protocol InferenceEngine: Actor {
     func probeCapabilities(for model: ModelRef) async -> ModelRef
     func inspectModel(_ model: ModelRef) async -> EngineModelInspection
     func stream(_ request: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error>
-    func awaitTransportClosure() async
 }
 
 public extension InferenceEngine {
     func runtimeStatus() async -> EngineRuntimeStatus? { nil }
-
-    func awaitTransportClosure() async {}
 
     /// Unknown is the portable fallback for engines without a metadata adapter.
     func probeCapabilities(for model: ModelRef) async -> ModelRef { model }

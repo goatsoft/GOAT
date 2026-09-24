@@ -6,23 +6,6 @@ import JUDAS
 public actor OpenAICompatEngine: InferenceEngine {
     public private(set) var config: EngineConfig
     private var configRevision: UInt64 = 0
-    private var activeStreamTasks: [UUID: Task<Void, Never>] = [:]
-
-    private func registerStreamTask(_ id: UUID, task: Task<Void, Never>) {
-        activeStreamTasks[id] = task
-    }
-
-    private func unregisterStreamTask(_ id: UUID) {
-        activeStreamTasks.removeValue(forKey: id)
-    }
-
-    public func awaitTransportClosure() async {
-        let tasks = Array(activeStreamTasks.values)
-        for task in tasks {
-            _ = await task.result
-        }
-    }
-
     public init(config: EngineConfig) {
         self.config = config
     }
@@ -293,20 +276,14 @@ public actor OpenAICompatEngine: InferenceEngine {
 
     public func stream(_ r: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
         let config = self.config
-        let taskID = UUID()
-        var streamTask: Task<Void, Never>?
         let stream = AsyncThrowingStream<GenerationEvent, Error>(
             bufferingPolicy: .bufferingNewest(32)
         ) { continuation in
-            let task = Task { [weak self] in
+            let task = Task {
                 var assembler = StreamAssembler(round: r.round)
 
                 defer {
                     r.transportClosureHandle?.acknowledge()
-                    r.onTransportClosed?()
-                    Task { [weak self] in
-                        await self?.unregisterStreamTask(taskID)
-                    }
                 }
 
                 do {
@@ -393,11 +370,7 @@ public actor OpenAICompatEngine: InferenceEngine {
                     continuation.finish(throwing: error)
                 }
             }
-            streamTask = task
             continuation.onTermination = { _ in task.cancel() }
-        }
-        if let streamTask {
-            self.activeStreamTasks[taskID] = streamTask
         }
         return stream
     }

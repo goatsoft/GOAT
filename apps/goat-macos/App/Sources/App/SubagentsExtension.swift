@@ -27,13 +27,15 @@ public actor SubagentsProvider: ModelToolProvider, TurnObserver {
               "type": "string",
               "description": "Clear and specific objective for the subagent to investigate."
             },
-            "path_filter": {
+            "scope_hint": {
               "type": "array",
               "items": { "type": "string" },
-              "description": "Optional list of path prefixes to restrict the investigation to."
+              "description": "Optional advisory paths to focus on. This is not an access restriction; read-only tools may inspect other files within the Pen."
             },
             "max_rounds": {
               "type": "integer",
+              "minimum": 1,
+              "maximum": 10,
               "description": "Optional round limit for the subagent tool loop (1 to 10)."
             },
             "return_schema": {
@@ -91,6 +93,10 @@ public actor SubagentsProvider: ModelToolProvider, TurnObserver {
     public func tools(for context: ExtensionContext) async throws -> [ToolSchema] {
         guard context.turnID == turnID else { return [] }
         guard configuration.enabled else { return [] }
+        guard configuration.preferredBackend.isSupportedInStage1 else { return [] }
+        guard SubagentAvailability.unavailableReason(hasLocalEngine: engine != nil, modelID: modelID) == nil else {
+            return []
+        }
         guard !quarantine.isQuarantined else { return [] }
         guard !quarantine.isTransportActive else { return [] }
         guard accounting.canDelegate else { return [] }
@@ -135,6 +141,22 @@ public actor SubagentsProvider: ModelToolProvider, TurnObserver {
         else {
             return ToolResult(
                 content: "Invalid subagent_delegate arguments: expected JSON with 'objective'.", isError: true)
+        }
+
+        guard !taskBrief.objective.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return ToolResult(content: "An investigation needs a nonempty objective.", isError: true)
+        }
+        if let rounds = taskBrief.maxRounds, !(1...SubagentLimits.ceilingMaxRounds).contains(rounds) {
+            return ToolResult(content: "max_rounds must be between 1 and 10.", isError: true)
+        }
+        if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any], object["path_filter"] != nil {
+            return ToolResult(
+                content:
+                    "Use scope_hint for advisory paths. path_filter is not an enforced restriction and is no longer accepted.",
+                isError: true)
+        }
+        if let reason = SubagentAvailability.unavailableReason(hasLocalEngine: engine != nil, modelID: modelID) {
+            return ToolResult(content: reason, isError: true)
         }
 
         let lease = SubagentCapabilityLease()
