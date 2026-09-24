@@ -89,6 +89,9 @@ public final class ChatDatabase: Sendable {
                 complete: true, position: position, createdAt: .now)
             try notice.insert(db)
         }
+        if try db.tableExists("subagent_run") {
+            try db.execute(sql: "UPDATE subagent_run SET status = 'interrupted' WHERE status = 'running'")
+        }
     }
 
     private static var migrator: DatabaseMigrator {
@@ -228,6 +231,27 @@ public final class ChatDatabase: Sendable {
                 table.add(column: "compactionJson", .text)
             }
         }
+        migrator.registerMigration("v14-subagent-run") { db in
+            try db.create(table: "subagent_run") { t in
+                t.primaryKey("id", .text)
+                t.belongsTo("chat", onDelete: .cascade).notNull()
+                t.column("parentTurnId", .text).notNull()
+                t.column("status", .text).notNull()
+                t.column("taskBriefJson", .text).notNull()
+                t.column("roundsExecuted", .integer).notNull().defaults(to: 0)
+                t.column("totalTokens", .integer).notNull().defaults(to: 0)
+                t.column("transcriptBytes", .integer).notNull().defaults(to: 0)
+                t.column("transcriptJson", .text)
+                t.column("summary", .text)
+                t.column("citationsJson", .text)
+                t.column("receiptJson", .text)
+                t.column("createdAt", .datetime).notNull()
+                t.column("completedAt", .datetime)
+            }
+            try db.create(indexOn: "subagent_run", columns: ["chatId"])
+            try db.create(indexOn: "subagent_run", columns: ["parentTurnId"])
+            try db.create(indexOn: "subagent_run", columns: ["status"])
+        }
         return migrator
     }
 
@@ -294,6 +318,7 @@ public final class ChatDatabase: Sendable {
 
     public func deleteChat(id: String) async throws {
         try await pool.write { db in
+            _ = try SubagentRunRecord.filter(Column("chatId") == id).deleteAll(db)
             _ = try PenFileGrantRecord.filter(Column("chatID") == id).deleteAll(db)
             _ = try ChatRecord.deleteOne(db, key: id)
         }
@@ -368,6 +393,67 @@ public final class ChatDatabase: Sendable {
     public func deleteGrants(server: String) async throws {
         try await pool.write { db in
             _ = try ToolGrantRecord.filter(Column("server") == server).deleteAll(db)
+        }
+    }
+
+    // MARK: - Subagents
+
+    public func save(_ record: SubagentRunRecord) async throws {
+        try await pool.write { db in try record.save(db) }
+    }
+
+    public func subagentRun(id: String) async throws -> SubagentRunRecord? {
+        try await pool.read { db in try SubagentRunRecord.fetchOne(db, key: id) }
+    }
+
+    public func subagentRuns(chatId: String) async throws -> [SubagentRunRecord] {
+        try await pool.read { db in
+            try SubagentRunRecord.filter(Column("chatId") == chatId).order(Column("createdAt")).fetchAll(db)
+        }
+    }
+
+    public func subagentRuns(parentTurnId: String) async throws -> [SubagentRunRecord] {
+        try await pool.read { db in
+            try SubagentRunRecord.filter(Column("parentTurnId") == parentTurnId).order(Column("createdAt")).fetchAll(db)
+        }
+    }
+
+    @discardableResult
+    public func transitionSubagentRun(
+        id: String,
+        toStatus: String,
+        roundsExecuted: Int,
+        totalTokens: Int,
+        transcriptBytes: Int,
+        transcriptJson: String?,
+        summary: String?,
+        citationsJson: String?,
+        receiptJson: String?,
+        completedAt: Date = .now
+    ) async throws -> Bool {
+        try await pool.write { db in
+            let sql = """
+                UPDATE subagent_run
+                SET status = ?, roundsExecuted = ?, totalTokens = ?, transcriptBytes = ?,
+                    transcriptJson = ?, summary = ?, citationsJson = ?, receiptJson = ?, completedAt = ?
+                WHERE id = ? AND status = 'running'
+                """
+            try db.execute(
+                sql: sql,
+                arguments: [
+                    toStatus, roundsExecuted, totalTokens, transcriptBytes,
+                    transcriptJson, summary, citationsJson, receiptJson, completedAt, id,
+                ])
+            return db.changesCount > 0
+        }
+    }
+
+    @discardableResult
+    public func recoverInterruptedSubagentRuns() async throws -> Int {
+        try await pool.write { db in
+            guard try db.tableExists("subagent_run") else { return 0 }
+            try db.execute(sql: "UPDATE subagent_run SET status = 'interrupted' WHERE status = 'running'")
+            return db.changesCount
         }
     }
 }

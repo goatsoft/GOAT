@@ -400,3 +400,128 @@ private func makeChat(id: String = UUID().uuidString, projectId: String? = nil) 
     #expect(regular.kind == "regular")
     #expect(regular.compactionJson == nil)
 }
+
+@Test func subagentRunRoundTripAndCASTransitions() async throws {
+    let (db, _) = try tempDB()
+    let chat = makeChat()
+    try await db.save(chat)
+
+    let runId = UUID().uuidString
+    let turnId = UUID().uuidString
+    let initialRun = SubagentRunRecord(
+        id: runId,
+        chatId: chat.id,
+        parentTurnId: turnId,
+        status: "running",
+        taskBriefJson: "{\"objective\":\"Find auth logic\"}",
+        roundsExecuted: 0,
+        totalTokens: 0,
+        transcriptBytes: 0,
+        createdAt: .now
+    )
+    try await db.save(initialRun)
+
+    let fetched = try await db.subagentRun(id: runId)
+    #expect(fetched?.status == "running")
+    #expect(fetched?.chatId == chat.id)
+    #expect(fetched?.parentTurnId == turnId)
+
+    let transitioned = try await db.transitionSubagentRun(
+        id: runId,
+        toStatus: "completed",
+        roundsExecuted: 3,
+        totalTokens: 1500,
+        transcriptBytes: 4096,
+        transcriptJson: "[{\"role\":\"user\"}]",
+        summary: "Auth logic located in Auth.swift",
+        citationsJson: "[{\"path\":\"Auth.swift\"}]",
+        receiptJson: "{\"status\":\"completed\"}"
+    )
+    #expect(transitioned == true)
+
+    let afterTransition = try await db.subagentRun(id: runId)
+    #expect(afterTransition?.status == "completed")
+    #expect(afterTransition?.roundsExecuted == 3)
+    #expect(afterTransition?.totalTokens == 1500)
+    #expect(afterTransition?.summary == "Auth logic located in Auth.swift")
+    #expect(afterTransition?.completedAt != nil)
+
+    // Attempting a second transition from a terminal state fails (CAS guarantees idempotency)
+    let secondTransition = try await db.transitionSubagentRun(
+        id: runId,
+        toStatus: "timedOut",
+        roundsExecuted: 4,
+        totalTokens: 2000,
+        transcriptBytes: 5000,
+        transcriptJson: nil,
+        summary: nil,
+        citationsJson: nil,
+        receiptJson: nil
+    )
+    #expect(secondTransition == false)
+    let unchanged = try await db.subagentRun(id: runId)
+    #expect(unchanged?.status == "completed")
+}
+
+@Test func subagentRunsCascadeOnChatDeletion() async throws {
+    let (db, _) = try tempDB()
+    let chat = makeChat()
+    try await db.save(chat)
+
+    let runId = UUID().uuidString
+    let turnId = UUID().uuidString
+    try await db.save(SubagentRunRecord(
+        id: runId,
+        chatId: chat.id,
+        parentTurnId: turnId,
+        status: "running",
+        taskBriefJson: "{\"objective\":\"test\"}"
+    ))
+
+    #expect(try await db.subagentRun(id: runId) != nil)
+    try await db.deleteChat(id: chat.id)
+    #expect(try await db.subagentRun(id: runId) == nil)
+}
+
+@Test func subagentRecoveryMarksRunningRunsAsInterrupted() async throws {
+    let (db, path) = try tempDB()
+    let chat = makeChat()
+    try await db.save(chat)
+
+    let runId1 = UUID().uuidString
+    let runId2 = UUID().uuidString
+    try await db.save(SubagentRunRecord(
+        id: runId1,
+        chatId: chat.id,
+        parentTurnId: UUID().uuidString,
+        status: "running",
+        taskBriefJson: "{\"objective\":\"interrupted task\"}"
+    ))
+    try await db.save(SubagentRunRecord(
+        id: runId2,
+        chatId: chat.id,
+        parentTurnId: UUID().uuidString,
+        status: "completed",
+        taskBriefJson: "{\"objective\":\"already completed\"}"
+    ))
+
+    let recovered = try await db.recoverInterruptedSubagentRuns()
+    #expect(recovered == 1)
+
+    let run1 = try await db.subagentRun(id: runId1)
+    let run2 = try await db.subagentRun(id: runId2)
+    #expect(run1?.status == "interrupted")
+    #expect(run2?.status == "completed")
+
+    // Test startup reopening recovery as well
+    try await db.save(SubagentRunRecord(
+        id: "run-stuck",
+        chatId: chat.id,
+        parentTurnId: UUID().uuidString,
+        status: "running",
+        taskBriefJson: "{}"
+    ))
+    let reopenedDB = try ChatDatabase(path: path)
+    let stuckRun = try await reopenedDB.subagentRun(id: "run-stuck")
+    #expect(stuckRun?.status == "interrupted")
+}
