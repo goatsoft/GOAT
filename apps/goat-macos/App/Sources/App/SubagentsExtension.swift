@@ -22,35 +22,36 @@ actor SubagentsProvider: ModelToolProvider, TurnObserver {
 
     static let toolSchema = ToolSchema(
         name: toolName,
-        description: "Delegate a focused read-only repository search or code investigation to an isolated subagent. The subagent inspects files within the Pen workspace and returns a concise, evidence-backed receipt with citations.",
+        description:
+            "Delegate a focused read-only repository search or code investigation to an isolated subagent. The subagent inspects files within the Pen workspace and returns a concise, evidence-backed receipt with citations.",
         inputSchemaJSON: """
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["objective"],
-          "properties": {
-            "objective": {
-              "type": "string",
-              "description": "The specific read-only investigation objective or question to research."
-            },
-            "path_filter": {
-              "type": "array",
-              "items": { "type": "string" },
-              "description": "Optional list of directory or file paths to constrain the search scope."
-            },
-            "max_rounds": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 10,
-              "description": "Optional maximum number of tool execution rounds for the subagent (capped by host configuration)."
-            },
-            "return_schema": {
-              "type": "string",
-              "description": "Optional description of the expected format or structure of the summary."
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["objective"],
+              "properties": {
+                "objective": {
+                  "type": "string",
+                  "description": "The specific read-only investigation objective or question to research."
+                },
+                "path_filter": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "Optional list of directory or file paths to constrain the search scope."
+                },
+                "max_rounds": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10,
+                  "description": "Optional maximum number of tool execution rounds for the subagent (capped by host configuration)."
+                },
+                "return_schema": {
+                  "type": "string",
+                  "description": "Optional description of the expected format or structure of the summary."
+                }
+              }
             }
-          }
-        }
-        """
+            """
     )
 
     private let turnID: UUID
@@ -123,8 +124,10 @@ actor SubagentsProvider: ModelToolProvider, TurnObserver {
         }
 
         guard let data = call.argumentsJSON.data(using: .utf8),
-              let taskBrief = try? JSONDecoder().decode(SubagentTaskBrief.self, from: data) else {
-            return ToolResult(content: "Invalid subagent_delegate arguments: expected JSON with 'objective'.", isError: true)
+            let taskBrief = try? JSONDecoder().decode(SubagentTaskBrief.self, from: data)
+        else {
+            return ToolResult(
+                content: "Invalid subagent_delegate arguments: expected JSON with 'objective'.", isError: true)
         }
 
         let lease = SubagentCapabilityLease()

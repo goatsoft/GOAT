@@ -16,7 +16,8 @@ extension AppTests.GOATed {
             let settings = BuiltInExtensionSettings(defaults: defaults)
             #expect(settings.herderEnabled && settings.herderWritesEnabled && settings.herderCommandsEnabled)
             #expect(settings.hindsightEnabled && settings.commandTimeout == 120)
-            #expect(settings.subagentsEnabled && settings.subagentMaxRounds == 5 && settings.subagentTimeoutSeconds == 60)
+            #expect(
+                settings.subagentsEnabled && settings.subagentMaxRounds == 5 && settings.subagentTimeoutSeconds == 60)
             #expect(settings.subagentPreferredBackend == .localEngine)
             settings.herderEnabled = false
             settings.herderWritesEnabled = false

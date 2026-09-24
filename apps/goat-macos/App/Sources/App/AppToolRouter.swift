@@ -1,4 +1,3 @@
-import Persistence
 import Foundation
 import GOATed
 import Herd
@@ -7,6 +6,7 @@ import Inference
 import JUDAS
 import Memory
 import Pens
+import Persistence
 import Pronk
 import Shepherd
 import Tools

@@ -29,7 +29,8 @@ final class BuiltInExtensionSettings {
         let timeoutSec = defaults.integer(forKey: "goated.subagents.timeout")
         subagentTimeoutSeconds = (10...90).contains(timeoutSec) ? timeoutSec : SubagentLimits.defaultTimeoutSeconds
         if let backendRaw = defaults.string(forKey: "goated.subagents.backend"),
-            let backend = SubagentBackendID(rawValue: backendRaw) {
+            let backend = SubagentBackendID(rawValue: backendRaw)
+        {
             subagentPreferredBackend = backend
         } else {
             subagentPreferredBackend = .localEngine

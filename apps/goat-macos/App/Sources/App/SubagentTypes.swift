@@ -45,11 +45,11 @@ public enum SubagentLimits {
     public static let maxGeneratedTokensPerTurn = 8_192
     public static let maxTotalTokensPerTurn = 32_768
 
-    public static let maxToolOutputBytes = 32 * 1_024        // 32 KiB
-    public static let maxTranscriptBytes = 512 * 1_024       // 512 KiB
-    public static let maxReceiptBytes = 16 * 1_024          // 16 KiB
-    public static let maxSummaryBytes = 8 * 1_024           // 8 KiB
-    public static let maxUnresolvedBytes = 2 * 1_024        // 2 KiB
+    public static let maxToolOutputBytes = 32 * 1_024  // 32 KiB
+    public static let maxTranscriptBytes = 512 * 1_024  // 512 KiB
+    public static let maxReceiptBytes = 16 * 1_024  // 16 KiB
+    public static let maxSummaryBytes = 8 * 1_024  // 8 KiB
+    public static let maxUnresolvedBytes = 2 * 1_024  // 2 KiB
 
     public static let maxDelegationsPerTurn = 3
 }
@@ -175,12 +175,14 @@ extension SubagentReceipt {
         encoder.outputFormatting = [.sortedKeys]
         if let data = try? encoder.encode(bounded.unresolved), data.count > SubagentLimits.maxUnresolvedBytes {
             while bounded.unresolved.count > 1,
-                  let currentData = try? encoder.encode(bounded.unresolved),
-                  currentData.count > SubagentLimits.maxUnresolvedBytes {
+                let currentData = try? encoder.encode(bounded.unresolved),
+                currentData.count > SubagentLimits.maxUnresolvedBytes
+            {
                 bounded.unresolved.removeLast()
             }
             if let currentData = try? encoder.encode(bounded.unresolved),
-               currentData.count > SubagentLimits.maxUnresolvedBytes {
+                currentData.count > SubagentLimits.maxUnresolvedBytes
+            {
                 bounded.unresolved = [
                     SubagentUnresolvedItem(
                         reason: "truncated",
@@ -195,8 +197,9 @@ extension SubagentReceipt {
 
         if let receiptData = try? encoder.encode(bounded), receiptData.count > SubagentLimits.maxReceiptBytes {
             while bounded.citations.count > 1,
-                  let currentData = try? encoder.encode(bounded),
-                  currentData.count > SubagentLimits.maxReceiptBytes {
+                let currentData = try? encoder.encode(bounded),
+                currentData.count > SubagentLimits.maxReceiptBytes
+            {
                 bounded.citations.removeLast()
             }
         }
@@ -219,63 +222,63 @@ extension SubagentReceipt {
 
 public final class SubagentTurnTokenAccounting: @unchecked Sendable {
     private let lock = NSLock()
-    private var _delegationsCount: Int = 0
-    private var _cumulativeGeneratedTokens: Int = 0
-    private var _cumulativeTotalTokens: Int = 0
+    private var storedDelegationsCount: Int = 0
+    private var storedCumulativeGeneratedTokens: Int = 0
+    private var storedCumulativeTotalTokens: Int = 0
 
     public init() {}
 
     public var delegationsCount: Int {
         lock.lock()
         defer { lock.unlock() }
-        return _delegationsCount
+        return storedDelegationsCount
     }
 
     public var cumulativeGeneratedTokens: Int {
         lock.lock()
         defer { lock.unlock() }
-        return _cumulativeGeneratedTokens
+        return storedCumulativeGeneratedTokens
     }
 
     public var cumulativeTotalTokens: Int {
         lock.lock()
         defer { lock.unlock() }
-        return _cumulativeTotalTokens
+        return storedCumulativeTotalTokens
     }
 
     public func recordDelegation(generated: Int, total: Int) {
         lock.lock()
         defer { lock.unlock() }
-        _delegationsCount += 1
-        _cumulativeGeneratedTokens += generated
-        _cumulativeTotalTokens += total
+        storedDelegationsCount += 1
+        storedCumulativeGeneratedTokens += generated
+        storedCumulativeTotalTokens += total
     }
 
     public var canDelegate: Bool {
         lock.lock()
         defer { lock.unlock() }
-        return _delegationsCount < SubagentLimits.maxDelegationsPerTurn &&
-            _cumulativeGeneratedTokens < SubagentLimits.maxGeneratedTokensPerTurn &&
-            _cumulativeTotalTokens < SubagentLimits.maxTotalTokensPerTurn
+        return storedDelegationsCount < SubagentLimits.maxDelegationsPerTurn
+            && storedCumulativeGeneratedTokens < SubagentLimits.maxGeneratedTokensPerTurn
+            && storedCumulativeTotalTokens < SubagentLimits.maxTotalTokensPerTurn
     }
 }
 
 public final class SubagentCapabilityLease: @unchecked Sendable {
     private let lock = NSLock()
-    private var _isRevoked = false
+    private var storedIsRevoked = false
 
     public init() {}
 
     public var isRevoked: Bool {
         lock.lock()
         defer { lock.unlock() }
-        return _isRevoked
+        return storedIsRevoked
     }
 
     public func revoke() {
         lock.lock()
         defer { lock.unlock() }
-        _isRevoked = true
+        storedIsRevoked = true
     }
 
     public func checkValid() throws {
@@ -358,7 +361,6 @@ public protocol SubagentBackend: Sendable {
         context: SubagentExecutionContext
     ) async throws -> SubagentResult
 }
-
 
 public struct SubagentConfiguration: Sendable, Equatable {
     public var enabled: Bool

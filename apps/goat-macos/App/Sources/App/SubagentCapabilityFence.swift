@@ -1,7 +1,7 @@
-import Inference
 import CryptoKit
 import Foundation
 import GOATed
+import Inference
 import Pens
 import Tools
 
@@ -46,7 +46,8 @@ public actor SubagentCapabilityFence {
 
         guard Self.permittedTools.contains(call.tool) else {
             return ToolResult(
-                content: "Unattended approval denied: subagents are strictly read-only and cannot execute '\(call.tool)'.",
+                content:
+                    "Unattended approval denied: subagents are strictly read-only and cannot execute '\(call.tool)'.",
                 isError: true
             )
         }
@@ -86,8 +87,9 @@ public actor SubagentCapabilityFence {
 
     private func recordRead(argumentsJSON: String, output: String) {
         guard let data = argumentsJSON.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let path = json["path"] as? String else {
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let path = json["path"] as? String
+        else {
             return
         }
 
@@ -171,7 +173,8 @@ public actor SubagentCapabilityFence {
                     SubagentUnresolvedItem(
                         path: citation.path,
                         reason: "unverifiedCitation",
-                        detail: "Line range \(citation.startLine)-\(citation.endLine) was not covered by read spans for '\(citation.path)'."
+                        detail:
+                            "Line range \(citation.startLine)-\(citation.endLine) was not covered by read spans for '\(citation.path)'."
                     )
                 )
             }

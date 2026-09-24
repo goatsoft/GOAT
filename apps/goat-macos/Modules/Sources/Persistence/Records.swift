@@ -191,7 +191,6 @@ public struct ToolEventSnapshot: Codable, Sendable, Equatable, Identifiable {
     }
 }
 
-
 public struct SubagentRunRecord: Codable, FetchableRecord, PersistableRecord, Sendable, Equatable {
     public static let databaseTableName = "subagent_run"
     public var id: String

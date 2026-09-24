@@ -24,7 +24,8 @@ private actor ScriptedEngine: InferenceEngine {
 
     func stream(_ request: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
         requests.append(request)
-        let events = script.isEmpty
+        let events =
+            script.isEmpty
             ? [.done(GenStats(ttft: nil, tokens: 10, duration: 0.01))]
             : script.removeFirst()
         let sleepDuration = delay
@@ -117,7 +118,7 @@ extension AppTests.GOATed {
                 workspace: workspace,
                 fileTools: fileTools,
                 engine: HangingEngine(),
-                timeoutSeconds: 1, // Test 1-second timeout
+                timeoutSeconds: 1,  // Test 1-second timeout
                 database: db,
                 lease: lease
             )
@@ -257,7 +258,7 @@ extension AppTests.GOATed {
             let script: [[GenerationEvent]] = [
                 [.toolCalls([toolCallEvent]), .done(GenStats(ttft: nil, tokens: 100, duration: 0.01))],
                 [.toolCalls([toolCallEvent]), .done(GenStats(ttft: nil, tokens: 100, duration: 0.01))],
-                [.token("Final synthesis after max rounds"), .done(GenStats(ttft: nil, tokens: 50, duration: 0.01))]
+                [.token("Final synthesis after max rounds"), .done(GenStats(ttft: nil, tokens: 50, duration: 0.01))],
             ]
             let engine = ScriptedEngine(script: script)
 
@@ -269,7 +270,7 @@ extension AppTests.GOATed {
                 workspace: workspace,
                 fileTools: fileTools,
                 engine: engine,
-                maxRounds: 2, // Constrain to 2 rounds
+                maxRounds: 2,  // Constrain to 2 rounds
                 database: db,
                 lease: lease
             )
@@ -298,7 +299,9 @@ extension AppTests.GOATed {
                 status: .completed,
                 summary: hugeSummary,
                 citations: (0..<500).map { SubagentCitation(path: "path\($0).swift", startLine: 1, endLine: 10) },
-                unresolved: (0..<500).map { SubagentUnresolvedItem(path: "path\($0).swift", reason: "test", detail: "large detail text") }
+                unresolved: (0..<500).map {
+                    SubagentUnresolvedItem(path: "path\($0).swift", reason: "test", detail: "large detail text")
+                }
             )
             let bounded = receipt.boundedReceipt()
             let encoded = try JSONEncoder().encode(bounded)
@@ -347,7 +350,8 @@ extension AppTests.GOATed {
             let fence = SubagentCapabilityFence(fileTools: fileTools, lease: lease)
 
             // Any write tool must fail closed with unattended approval denied
-            let writeCall = ToolCallRequest(tool: "pen_write_file", argumentsJSON: "{\"path\":\"a.txt\",\"content\":\"hi\"}")
+            let writeCall = ToolCallRequest(
+                tool: "pen_write_file", argumentsJSON: "{\"path\":\"a.txt\",\"content\":\"hi\"}")
             let writeResult = try await fence.invoke(writeCall)
             #expect(writeResult.isError)
             #expect(writeResult.content.contains("Unattended approval denied"))
@@ -369,20 +373,22 @@ extension AppTests.GOATed {
 
             let runId1 = UUID().uuidString
             let runId2 = UUID().uuidString
-            try await db.save(SubagentRunRecord(
-                id: runId1,
-                chatId: chatID,
-                parentTurnId: UUID().uuidString,
-                status: "running",
-                taskBriefJson: "{}"
-            ))
-            try await db.save(SubagentRunRecord(
-                id: runId2,
-                chatId: chatID,
-                parentTurnId: UUID().uuidString,
-                status: "completed",
-                taskBriefJson: "{}"
-            ))
+            try await db.save(
+                SubagentRunRecord(
+                    id: runId1,
+                    chatId: chatID,
+                    parentTurnId: UUID().uuidString,
+                    status: "running",
+                    taskBriefJson: "{}"
+                ))
+            try await db.save(
+                SubagentRunRecord(
+                    id: runId2,
+                    chatId: chatID,
+                    parentTurnId: UUID().uuidString,
+                    status: "completed",
+                    taskBriefJson: "{}"
+                ))
 
             let recoveredCount = try await db.recoverInterruptedSubagentRuns()
             #expect(recoveredCount == 1)

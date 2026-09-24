@@ -5,6 +5,7 @@ import Inference
 import Pens
 import Persistence
 import Tools
+
 #if canImport(FoundationModels)
 import FoundationModels
 #endif
@@ -63,7 +64,11 @@ public actor SubagentWorker {
                         status: .failed,
                         summary: "Subagent admission rejected: engine is busy or memory headroom is insufficient.",
                         citations: [],
-                        unresolved: [SubagentUnresolvedItem(reason: "admissionDenied", detail: busy ? "Engine is busy." : "Memory headroom is insufficient.")],
+                        unresolved: [
+                            SubagentUnresolvedItem(
+                                reason: "admissionDenied",
+                                detail: busy ? "Engine is busy." : "Memory headroom is insufficient.")
+                        ],
                         roundsExecuted: 0,
                         totalTokens: 0,
                         transcriptJSON: nil
@@ -171,14 +176,18 @@ public actor SubagentWorker {
             try context.lease.checkValid()
 
             // Cumulative parent-turn and per-delegation budget checks
-            if totalTokens >= SubagentLimits.maxTokensPerDelegation ||
-                generatedTokens >= SubagentLimits.maxGeneratedTokensPerTurn ||
-                totalTokens >= SubagentLimits.maxTotalTokensPerTurn {
+            if totalTokens >= SubagentLimits.maxTokensPerDelegation
+                || generatedTokens >= SubagentLimits.maxGeneratedTokensPerTurn
+                || totalTokens >= SubagentLimits.maxTotalTokensPerTurn
+            {
                 return try await finalizeTerminal(
                     status: .budgetExhausted,
-                    summary: finalSummary.isEmpty ? "Subagent reached token budget limit before completion." : finalSummary,
+                    summary: finalSummary.isEmpty
+                        ? "Subagent reached token budget limit before completion." : finalSummary,
                     citations: claimedCitations,
-                    unresolved: claimedUnresolved + [SubagentUnresolvedItem(reason: "budgetExhausted", detail: "Exceeded token budget limit.")],
+                    unresolved: claimedUnresolved + [
+                        SubagentUnresolvedItem(reason: "budgetExhausted", detail: "Exceeded token budget limit.")
+                    ],
                     roundsExecuted: roundsExecuted,
                     totalTokens: totalTokens,
                     transcriptJSON: encodeTranscript(transcript)
@@ -282,7 +291,8 @@ public actor SubagentWorker {
 
         let status: SubagentStatus = wasTimeout ? .timedOut : .cancelled
         let reason = wasTimeout ? "timedOut" : "cancelled"
-        let summary = wasTimeout
+        let summary =
+            wasTimeout
             ? "Subagent delegation timed out before completing synthesis."
             : "Subagent delegation was cancelled by parent turn."
 
@@ -354,7 +364,8 @@ public actor SubagentWorker {
             if pruned[i].role == .tool && pruned[i].text.utf8.count > 1024 {
                 pruned[i] = ChatTurn(
                     role: .tool,
-                    text: UTF8BoundaryTruncator.truncate(pruned[i].text, maxBytes: 1024, notice: "\n[earlier tool output pruned]")
+                    text: UTF8BoundaryTruncator.truncate(
+                        pruned[i].text, maxBytes: 1024, notice: "\n[earlier tool output pruned]")
                 )
             }
         }

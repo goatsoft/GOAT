@@ -470,13 +470,14 @@ private func makeChat(id: String = UUID().uuidString, projectId: String? = nil) 
 
     let runId = UUID().uuidString
     let turnId = UUID().uuidString
-    try await db.save(SubagentRunRecord(
-        id: runId,
-        chatId: chat.id,
-        parentTurnId: turnId,
-        status: "running",
-        taskBriefJson: "{\"objective\":\"test\"}"
-    ))
+    try await db.save(
+        SubagentRunRecord(
+            id: runId,
+            chatId: chat.id,
+            parentTurnId: turnId,
+            status: "running",
+            taskBriefJson: "{\"objective\":\"test\"}"
+        ))
 
     #expect(try await db.subagentRun(id: runId) != nil)
     try await db.deleteChat(id: chat.id)
@@ -490,20 +491,22 @@ private func makeChat(id: String = UUID().uuidString, projectId: String? = nil) 
 
     let runId1 = UUID().uuidString
     let runId2 = UUID().uuidString
-    try await db.save(SubagentRunRecord(
-        id: runId1,
-        chatId: chat.id,
-        parentTurnId: UUID().uuidString,
-        status: "running",
-        taskBriefJson: "{\"objective\":\"interrupted task\"}"
-    ))
-    try await db.save(SubagentRunRecord(
-        id: runId2,
-        chatId: chat.id,
-        parentTurnId: UUID().uuidString,
-        status: "completed",
-        taskBriefJson: "{\"objective\":\"already completed\"}"
-    ))
+    try await db.save(
+        SubagentRunRecord(
+            id: runId1,
+            chatId: chat.id,
+            parentTurnId: UUID().uuidString,
+            status: "running",
+            taskBriefJson: "{\"objective\":\"interrupted task\"}"
+        ))
+    try await db.save(
+        SubagentRunRecord(
+            id: runId2,
+            chatId: chat.id,
+            parentTurnId: UUID().uuidString,
+            status: "completed",
+            taskBriefJson: "{\"objective\":\"already completed\"}"
+        ))
 
     let recovered = try await db.recoverInterruptedSubagentRuns()
     #expect(recovered == 1)
@@ -514,13 +517,14 @@ private func makeChat(id: String = UUID().uuidString, projectId: String? = nil) 
     #expect(run2?.status == "completed")
 
     // Test startup reopening recovery as well
-    try await db.save(SubagentRunRecord(
-        id: "run-stuck",
-        chatId: chat.id,
-        parentTurnId: UUID().uuidString,
-        status: "running",
-        taskBriefJson: "{}"
-    ))
+    try await db.save(
+        SubagentRunRecord(
+            id: "run-stuck",
+            chatId: chat.id,
+            parentTurnId: UUID().uuidString,
+            status: "running",
+            taskBriefJson: "{}"
+        ))
     let reopenedDB = try ChatDatabase(path: path)
     let stuckRun = try await reopenedDB.subagentRun(id: "run-stuck")
     #expect(stuckRun?.status == "interrupted")
