@@ -39,7 +39,7 @@ On macOS, system-level capabilities provide distinct architectural opportunities
    Because system Writing Tools may utilize cloud processing or external intelligence depending on user system
    preferences, it is treated as a user-invoked platform editing feature rather than part of GOAT's offline engine.
 3. **App Intents Integration Surface:** `AppIntents` provides a separate mechanism for system experiences and
-   Siri to trigger GOAT actions from the outside. This is a external invocation boundary, kept distinct from
+   Siri to trigger GOAT actions from the outside. This is an external invocation boundary, kept distinct from
    GOAT's internal model execution backends.
 
 ## Decision
@@ -112,86 +112,106 @@ and do not serve as internal subagent inference backends.
   ambiguous user requests can optionally undergo an on-device refinement pass (via `SystemLanguageModel` or a
   deterministic template) to produce explicit search criteria, file path filters, and expected return schemas.
 
-### 5. Executable Permission Fence and Capability Allowlist
+### 5. Executable Permission Fence and Pen-File-Only Scope
+
+#### Strict Pen-File-Only Scope in Stage 1
+To eliminate any conflict with Hindsight remote endpoints or JUDAS network policies, Stage 1 delegation is
+strictly limited to local Pen file inspection. Memory inspection, external MCP tools, and command execution
+are deferred.
 
 #### Host-Validated Capability Handles
 Excluding a tool name from the model schema is not an authorization boundary. The host creates an explicit
 child capability scope:
 - The child worker is provisioned with host-validated `ToolHandle` tokens bound strictly to the parent turn
   and Pen workspace.
-- The host validates tool ownership, active turn validity, and workspace path containment on every invocation.
+- The host validates tool ownership, active turn validity, workspace path containment, and extension registration
+  status on every invocation.
 - Attempting to invoke a forged, expired, or out-of-scope handle throws `CapabilityError.unauthorized`.
 
 #### Tool Allowlist
-The child subagent schema is strictly limited to read-only workspace and memory inspection:
-- **Permitted Read-Only Pen Tools:**
-  - `pen_read_file`
-  - `pen_list_files`
-  - `pen_search`
-  - `pen_glob`
-- **Denied Pen Operations:**
-  - File writes (`pen_write_file`) and edits (`pen_edit_file`) are excluded.
-  - Command executions (`pen_run_command`, `pen_command_status`, `pen_stop_command`) are excluded.
-- **Excluded MCP Tools:** All external MCP tools are completely excluded from the child toolset in Stage 1,
-  regardless of their declared read-only properties.
-- **No Recursive Spawning:** The `subagent_delegate` tool is excluded from child schemas.
+The child subagent schema is strictly limited to four audited read-only Pen tools:
+- `pen_read_file`
+- `pen_list_files`
+- `pen_search`
+- `pen_glob`
+
+All other tools are excluded:
+- File writes (`pen_write_file`) and edits (`pen_edit_file`) are excluded.
+- Command executions (`pen_run_command`, `pen_command_status`, `pen_stop_command`) are excluded.
+- All external MCP tools are completely excluded in Stage 1, regardless of their self-reported read-only metadata.
+- Memory provider queries and Hindsight lookups are excluded from Stage 1 child schemas.
+- The `subagent_delegate` tool is excluded from child schemas, preventing recursive spawning.
 - **Unattended Fail-Closed Policy:** Any operation requiring interactive user confirmation or host permission
   prompts fails closed immediately with `unattendedApprovalDenied`.
-- **The Herd Guarantee:** Child subagents operate strictly local and offline. No analytics, telemetry, or
-  unsolicited network connections.
+- **The Herd Guarantee:** Child subagents operate strictly local and offline. Zero telemetry, zero analytics,
+  and zero network traffic.
 
-### 6. Work Bounding and Cumulative Delegation Limits
+### 6. Work Bounding, Token Accounting, and Output Guarantees
 
 #### Concurrency and Delegation Caps
 - **Single Child Admission:** Exactly one child subagent may run at any time per parent turn. Concurrent calls
   to `subagent_delegate` fail with `alreadyDelegating`.
 - **Cumulative Invocations:** A parent turn may invoke `subagent_delegate` at most 3 times. Subsequent calls
   are rejected by the router.
-- **Cumulative Token Budget:** Total tokens across all child turns within a single delegation are capped at 16,384.
+
+#### Token Budgets and Accounting
+- **Per-Request Context Admission:** Input context for each child inference request is capped at 12,288 tokens.
+- **Per-Round Generation Cap:** Output generation is capped at 2,048 tokens per child round.
+- **Per-Delegation Token Budget:** Total tokens (input plus generated) within a single delegation are bounded at 16,384.
+- **Aggregate Parent-Turn Bound:** Cumulative generated tokens across all child delegations in a single parent turn
+  (including prompt refinement and synthesis) cannot exceed 8,192 tokens. Total cumulative tokens across the turn
+  cannot exceed 32,768.
+
+#### Synthesis Pass Budget Reservation
+- The child worker reserves 1 round and 2,048 generated tokens for a final synthesis pass.
+- If the token budget, round limit, or time deadline is reached without sufficient reserved budget, no further
+  model inference is attempted. Instead, the host constructs a deterministic receipt without model inference,
+  summarizing accumulated evidence and marking `status: budgetExhausted` (or `timedOut`).
 
 #### Intermediate and Output Limits
 - **Per-Call Tool Output Limit:** Intermediate tool responses (such as file reads or search outputs) are
   capped at 32 KiB per call. Output exceeding this limit is cleanly truncated with a structured marker.
 - **Child Transcript Limit:** The cumulative child conversation transcript stored in memory is capped at 512 KiB.
-- **Receipt Size Limit:** The synthesized JSON receipt returned to the parent turn is strictly bounded at 16 KiB.
-- **JSON Truncation Safety:** If a receipt exceeds size boundaries, truncation never slices raw JSON. Instead,
-  lower-priority secondary citations and non-critical metadata are pruned, preserving valid JSON structure and
-  recording an explicit `truncated: true` flag and `omitted_citations_count`.
-- **Budget Exhaustion Outcome:** When round, token, or time limits are reached, the worker ceases further tool
-  calls and executes a single bounded synthesis pass to emit a receipt with `status: budgetExhausted` and all
-  evidence accumulated to that point.
+  Intermediate tool outputs in the transcript are pruned to fit this limit.
+- **Guaranteed 16 KiB Receipt Size:**
+  - `summary` is hard-capped at 8,192 UTF-8 bytes.
+  - `unresolved` is hard-capped at 2,048 UTF-8 bytes.
+  - Text fields exceeding their bounds are truncated on valid UTF-8 character boundaries with a `[truncated]` notice.
+  - Secondary citations and non-critical telemetry are pruned to ensure the total receipt remains under 16 KiB.
+  - If serialized output still threatens the limit, an always-fitting minimal fallback receipt (<1 KiB) is emitted,
+    containing primary citations and a direct reference to `run_id`.
+  - Truncation never cuts raw JSON strings, preserving valid JSON parsing at all times.
 
 ### 7. Durable Child Ownership, Recovery, and Evidence Provenance
 
 #### Persistence Schema
-Child subagent lifecycles are persisted in an auxiliary `subagent_runs` table in `Persistence`:
-- `run_id: UUID` (primary key)
-- `parent_chat_id: UUID` (foreign key to `chats.id` with `ON DELETE CASCADE`)
-- `parent_turn_id: UUID` (foreign key identifying the initiating parent turn)
-- `status: String` (`running`, `completed`, `timedOut`, `cancelled`, `interrupted`, `failed`)
+Child subagent lifecycles are persisted in an auxiliary `subagent_run` table in `Persistence`:
+- `id: String` (primary key UUID)
+- `chat_id: String` (foreign key referencing `chat(id)` with `ON DELETE CASCADE`)
+- `parent_turn_id: String` (correlation UUID identifying the parent turn)
+- `status: String` (`running`, `completed`, `timedOut`, `budgetExhausted`, `cancelled`, `interrupted`, `failed`)
 - `task_brief_json: String` (delegated objective and search constraints)
 - `rounds_executed: Int`
 - `total_tokens: Int`
 - `transcript_bytes: Int`
+- `transcript_json: String?` (persisted full child transcript, capped at 512 KiB on disk)
 - `summary: String?`
 - `citations_json: String?`
 - `receipt_json: String?`
 - `created_at: Date`
 - `completed_at: Date?`
 
-#### Lifecycle Ordering and Idempotency
+#### Lifecycle Ordering and Compare-and-Set Transitions
 1. **Creation:** A record with status `running` is committed to the database before the child worker starts.
-2. **Terminal Transition:** Upon completion, timeout, or cancellation, the record transitions to its final
-   status, recording the serialized receipt.
-3. **Receipt Return:** The serialized receipt is returned to the parent turn as the result of `subagent_delegate`.
-4. **Idempotency and Late-Result Rejection:** Once a record transitions to a terminal state (`timedOut`,
-   `cancelled`, `interrupted`), late completions or delayed tool responses are discarded and cannot overwrite
-   the terminal state.
-5. **Startup Recovery:** During app launch, `StartupDiskLoader` scans for any `subagent_runs` remaining in the
-   `running` state and updates them to `interrupted`. Unfinished child runs are never left hanging or
-   silently erased.
-6. **Cascade Deletion:** When a parent chat is deleted, all associated `subagent_runs` are automatically deleted
-   via database foreign key cascade.
+2. **Atomic Terminal Transitions:** Every terminal state transition (`completed`, `timedOut`, `budgetExhausted`,
+   `cancelled`, `interrupted`, `failed`) executes as an atomic compare-and-set database update:
+   `UPDATE subagent_run SET status = :new_status, ... WHERE id = :run_id AND status = 'running'`.
+   If zero rows are updated, the transition is rejected, ensuring terminal idempotency.
+3. **Late-Result Rejection:** Once terminal, any delayed tool returns or late inference callbacks are discarded.
+4. **Startup Recovery:** During application launch, `StartupDiskLoader` executes a recovery query that updates
+   any `subagent_run` rows remaining in the `running` status to `interrupted`.
+5. **Cascade Deletion:** When a parent chat is deleted, all associated `subagent_run` rows and transcripts are
+   purged automatically via database foreign key cascade.
 
 #### Evidence Provenance and Citation Verification
 Model-generated citations cannot be trusted without verification. Every citation in the returned receipt must
@@ -203,21 +223,60 @@ be verified against actual tool execution evidence:
 - **Unverified Citation Handling:** Any citation referencing unread files, invalid line ranges, or failed reads
   is stripped from the `citations` list and moved to `unresolved` with the reason `unverifiedCitation`.
 
-### 8. Cancellation Ownership and Uncooperative Workers
-- **Cancellation Propagation:** When a parent turn is cancelled or stopped by the user, Swift Task cancellation
-  propagates immediately to the child `SubagentWorker`.
-- **Transport Cancellation:** Active HTTP connections to the engine or streaming sessions are aborted immediately.
-- **Bounded Shutdown:** The child worker is granted up to 5 seconds to finalize database records and release
-  memory leases.
-- **Uncooperative Severance:** If a child task or tool fails to respond to cancellation within the 5-second window,
-  the host severs the task handle, marks the database record `cancelled`, and reclaims parent execution. Any
-  subsequent return from the severed worker is discarded.
+### 8. Cancellation Ownership, Leases, and Engine Protection
+
+#### Capability Lease Revocation
+- When a child times out, exhausts budget, or receives a parent cancellation signal, the host immediately revokes
+  the child's capability lease.
+- Subsequent tool invocations or inference stream chunks arriving from the child are immediately rejected with
+  `CapabilityError.revoked`.
+
+#### Transport Shutdown and Reservation Quarantine
+- Swift Task cancellation propagates immediately to the child `SubagentWorker` and its underlying engine HTTP
+  connections or streaming tasks.
+- Severing a Swift task handle does not guarantee immediate termination of underlying socket connections.
+  Therefore, the engine reservation held by the parent turn cannot be released or reused for new model inference
+  until the engine transport confirms closure.
+- **Shutdown Grace Period:** The child worker is granted up to 5 seconds to complete transport termination and
+  finalize database records.
+- **Fail-Closed Reservation Quarantine:** If transport closure is not confirmed within the 5-second window, the host
+  quarantines the engine reservation, preventing the parent from dispatching subsequent inference until the
+  transport confirms aborted state. This prevents concurrent model execution on the engine.
+- An unconfirmed transport shutdown never permits parent inference to proceed prematurely.
+
+### 9. Acceptance Test Scenarios
+
+The test plan for Stage 1 subagent delegation includes the following deterministic acceptance scenarios:
+
+1. **Inner/Outer Deadline Ordering:** Verify that an inner timeout (e.g. 60s) fires, cleanly terminates the child,
+   records `timedOut`, and returns a partial receipt before the outer 120s budget expires, preventing extension quarantine.
+2. **Uncooperative Child Worker:** Simulate a child task that ignores cancellation. Verify capability lease revocation,
+   host task severance, failure to update the CAS database record, and rejection of late callbacks.
+3. **Transport Termination and Quarantine:** Simulate delayed socket closure on engine transport. Verify that parent
+   engine reservation is quarantined and blocked from new inference until socket termination is confirmed.
+4. **Completion Arriving After Stop:** Simulate a user stopping the parent turn while the child is generating. Verify
+   immediate cancellation, CAS transition to `cancelled`, and rejection of late model responses.
+5. **Token and Round Budget Exhaustion:** Test that reaching round limits or cumulative token bounds halts further tool
+   execution and produces a receipt with `status: budgetExhausted`. Verify deterministic fallback when synthesis
+   budget is insufficient.
+6. **Oversized and Multibyte Output Truncation:** Pass multibyte UTF-8 outputs exceeding 32 KiB and 16 KiB. Verify clean
+   truncation on valid character boundaries without corrupting JSON syntax.
+7. **Permission Security and Handle Forgery:** Attempt invoking unissued or altered `ToolHandle` tokens, stale
+   handles from prior turns, or Pen tools after workspace re-binding. Verify `CapabilityError.unauthorized` or `revoked`.
+8. **Unattended Approval Denial:** Attempt invoking write tools or commands from a child context. Verify immediate
+   fail-closed denial with `unattendedApprovalDenied` without prompting the user.
+9. **Startup Recovery and Cascade Deletion:** Create simulated `running` subagent runs and verify `StartupDiskLoader`
+   migrates them to `interrupted` on boot. Delete parent chat and verify cascade deletion of all child run records.
+10. **Evidence Provenance and Fabricated Citation Stripping:** Provide model citations matching unread files or out-of-bound
+    line ranges. Verify that invalid citations are stripped from `citations` and added to `unresolved`, while valid
+    citations retain their SHA-256 slice fingerprints.
 
 ## Consequences
 
 - Complex multi-step investigation runs within a tightly bounded child sandbox without polluting parent context.
 - Eliminates risk of extension quarantine by strictly ordering child timeouts (<=90s) within the outer budget (120s).
-- Protects workspace integrity with an executable read-only capability fence and host-side handle validation.
+- Protects engine and memory stability by enforcing sequential GPU access, memory headroom checks, and reservation quarantine.
+- Protects workspace integrity with an executable Pen-file-only capability fence and host-side handle validation.
 - Preserves the single active turn invariant and the Herd Guarantee.
 - Establishes a verified, durable provenance model for all subagent evidence before introducing write delegation in Stage 2.
 
@@ -225,8 +284,8 @@ be verified against actual tool execution evidence:
 
 - **Subprocess or Daemon Architecture:** Adds IPC overhead, process lifecycle issues, and security boundaries;
   rejected in favor of in-process Swift actors within the existing GOAT architecture.
-- **Permitting Read-Only External MCP Tools:** External MCP tools frequently lack strict read-only enforcement;
-  excluded in Stage 1 in favor of audited builtin Pen tools.
+- **Permitting Memory or External MCP Tools in Stage 1:** External MCP tools and Hindsight endpoints introduce network
+  risks and approval prompts; deferred in favor of strictly local Pen file inspection.
 - **Allowing Recursive Delegation:** Dramatically increases complexity, risk of context explosion, and deadlock;
   strictly prohibited.
 - **Trusting Model Citations Without Verification:** LLMs frequently hallucinate line numbers and file names;
