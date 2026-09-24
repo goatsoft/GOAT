@@ -64,6 +64,15 @@ public enum SubagentLimits {
 
     public static let maxDelegationsPerTurn = 3
     public static let maximumSupportedContextWindow = 131_072
+
+    public static let streamBufferCapacity = 32
+
+    public static let stage1AllowedModelPatterns: [String] = [
+        "qwen", "llama", "mistral", "gemma", "test", "mock", "default", "subagent",
+    ]
+    public static let stage1ExcludedModelPatterns: [String] = [
+        "70b", "72b", "405b",
+    ]
 }
 
 public struct SubagentTaskBrief: Codable, Sendable, Equatable {
@@ -514,6 +523,10 @@ public actor QuarantineGuardedEngine: InferenceEngine {
             }
         }
         return await underlying.stream(request)
+    }
+
+    public func awaitTransportClosure() async {
+        await underlying.awaitTransportClosure()
     }
 }
 

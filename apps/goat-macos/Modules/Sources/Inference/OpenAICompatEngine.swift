@@ -6,6 +6,22 @@ import JUDAS
 public actor OpenAICompatEngine: InferenceEngine {
     public private(set) var config: EngineConfig
     private var configRevision: UInt64 = 0
+    private var activeStreamTasks: [UUID: Task<Void, Never>] = [:]
+
+    private func registerStreamTask(_ id: UUID, task: Task<Void, Never>) {
+        activeStreamTasks[id] = task
+    }
+
+    private func unregisterStreamTask(_ id: UUID) {
+        activeStreamTasks.removeValue(forKey: id)
+    }
+
+    public func awaitTransportClosure() async {
+        let tasks = Array(activeStreamTasks.values)
+        for task in tasks {
+            _ = await task.result
+        }
+    }
 
     public init(config: EngineConfig) {
         self.config = config
@@ -277,9 +293,16 @@ public actor OpenAICompatEngine: InferenceEngine {
 
     public func stream(_ r: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
         let config = self.config
+        let taskID = UUID()
         return AsyncThrowingStream { continuation in
-            let task = Task {
+            let task = Task { [weak self] in
                 var assembler = StreamAssembler(round: r.round)
+
+                defer {
+                    Task { [weak self] in
+                        await self?.unregisterStreamTask(taskID)
+                    }
+                }
 
                 do {
                     guard config.isValidEndpoint else { throw EngineError.notConfigured }
@@ -293,7 +316,10 @@ public actor OpenAICompatEngine: InferenceEngine {
                     req.httpBody = try Self.encodedBody(for: r)
 
                     let client = JudasHTTPClient(origin: config.baseURL, source: .engine, name: config.name)
-                    defer { client.invalidateAndCancel() }
+                    defer {
+                        client.invalidateAndCancel()
+                        r.onTransportClosed?()
+                    }
                     let (bytes, resp) = try await client.bytes(for: req)
                     guard let http = resp as? HTTPURLResponse else { throw EngineError.http(-1) }
                     if http.statusCode != 200 {
@@ -334,6 +360,9 @@ public actor OpenAICompatEngine: InferenceEngine {
                 } catch {
                     continuation.finish(throwing: error)
                 }
+            }
+            Task { [weak self] in
+                await self?.registerStreamTask(taskID, task: task)
             }
             continuation.onTermination = { _ in task.cancel() }
         }

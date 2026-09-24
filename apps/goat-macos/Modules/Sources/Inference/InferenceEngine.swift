@@ -208,10 +208,12 @@ public struct GenerationRequest: Sendable {
     /// tool-call identifiers unique across rounds.
     public var round: Int
     public var rejectedSamplingParameters: Set<String> = []
+    public var onTransportClosed: (@Sendable () -> Void)? = nil
     public init(
         model: String, turns: [ChatTurn], effort: Effort, maxTokens: Int? = nil,
         tools: [ToolSpec] = [], modelCapabilities: ModelCapabilities = .unknown,
-        compatibility: ResolvedModelCompatibility? = nil, round: Int = 0
+        compatibility: ResolvedModelCompatibility? = nil, round: Int = 0,
+        onTransportClosed: (@Sendable () -> Void)? = nil
     ) {
         self.model = model
         self.turns = turns
@@ -227,6 +229,7 @@ public struct GenerationRequest: Sendable {
                 effectiveStyle: .genericOpenAI,
                 source: .genericFallback,
                 capabilities: modelCapabilities)
+        self.onTransportClosed = onTransportClosed
     }
 }
 
@@ -321,10 +324,13 @@ public protocol InferenceEngine: Actor {
     func probeCapabilities(for model: ModelRef) async -> ModelRef
     func inspectModel(_ model: ModelRef) async -> EngineModelInspection
     func stream(_ request: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error>
+    func awaitTransportClosure() async
 }
 
 public extension InferenceEngine {
     func runtimeStatus() async -> EngineRuntimeStatus? { nil }
+
+    func awaitTransportClosure() async {}
 
     /// Unknown is the portable fallback for engines without a metadata adapter.
     func probeCapabilities(for model: ModelRef) async -> ModelRef { model }

@@ -1229,5 +1229,359 @@ extension AppTests.GOATed {
             #expect(
                 result.receipt.unresolved.contains { $0.detail?.contains("exceeds validated Stage 1 limit") == true })
         }
+
+        // Fallback parser tests for prefixed JSON, trailing text, and reversed braces
+        @Test func fallbackParser_prefixedJSONAndTrailingTextAndReversedBraces() {
+            // 1. Prefixed JSON ending at the end of the text
+            let prefixedJSON = "Thinking completed. Here is the response: {\"summary\":\"done\"}"
+            let parsed1 = SubagentWorker.parseModelResponse(prefixedJSON)
+            #expect(parsed1.summary == "done")
+
+            // 2. Prefixed empty JSON at end of text (bounds check)
+            let prefixedEmpty = "Analysis: {}"
+            let parsed2 = SubagentWorker.parseModelResponse(prefixedEmpty)
+            #expect(parsed2.summary == prefixedEmpty)
+
+            // 3. Prefixed JSON with trailing text
+            let withTrailing = "Here is the result: {\"summary\":\"success\"} Hope this helps!"
+            let parsed3 = SubagentWorker.parseModelResponse(withTrailing)
+            #expect(parsed3.summary == "success")
+
+            // 4. Reversed braces (does not crash or create invalid slice)
+            let reversedBraces = "Invalid text } before {"
+            let parsed4 = SubagentWorker.parseModelResponse(reversedBraces)
+            #expect(parsed4.summary == reversedBraces)
+        }
+
+        // Delayed transport acknowledgement gates parent dispatch
+        @Test func transportAcknowledgement_gatesParentDispatchUntilClosureAcknowledged() async throws {
+            let (workspace, fileTools) = try createWorkspace()
+            defer { try? FileManager.default.removeItem(at: workspace) }
+            let db = try createDatabase()
+            let chatID = UUID()
+            let turnID = UUID()
+            try await db.save(makeChat(id: chatID.uuidString))
+
+            actor DelayedAckEngine: InferenceEngine {
+                private var streamContinuation: AsyncThrowingStream<GenerationEvent, Error>.Continuation?
+                private(set) var streamCalled = false
+
+                func health() async -> EngineHealth { .ok([]) }
+                func runtimeStatus() async -> EngineRuntimeStatus? {
+                    EngineRuntimeStatus(
+                        observedAt: .now,
+                        version: "1.0",
+                        modelMemoryUsed: 100 * 1024 * 1024,
+                        modelMemoryMaximum: 16 * 1024 * 1024 * 1024,
+                        activeRequests: 0,
+                        waitingRequests: 0,
+                        models: [EngineModelRuntimeStatus(id: "default", loaded: true, contextWindow: 32_768)]
+                    )
+                }
+
+                func stream(_ request: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
+                    streamCalled = true
+                    return AsyncThrowingStream { continuation in
+                        self.streamContinuation = continuation
+                        continuation.yield(.token("working..."))
+                        continuation.onTermination = { _ in
+                            Task {
+                                // Simulate delayed transport shutdown before calling onTransportClosed
+                                try? await Task.sleep(for: .milliseconds(150))
+                                request.onTransportClosed?()
+                            }
+                        }
+                    }
+                }
+            }
+
+            let quarantine = SubagentTransportQuarantine()
+            let underlyingEngine = DelayedAckEngine()
+            let guardedEngine = QuarantineGuardedEngine(underlying: underlyingEngine, quarantine: quarantine)
+
+            let context = SubagentExecutionContext(
+                chatID: chatID,
+                turnID: turnID,
+                projectID: nil,
+                workspace: workspace,
+                fileTools: fileTools,
+                engine: underlyingEngine,
+                database: db,
+                lease: SubagentCapabilityLease(),
+                quarantine: quarantine
+            )
+
+            let worker = SubagentWorker(
+                task: SubagentTaskBrief(objective: "Delayed acknowledgement test"),
+                context: context
+            )
+
+            let workerTask = Task {
+                try await worker.run()
+            }
+
+            // Allow worker to start and activate transport quarantine
+            try await Task.sleep(for: .milliseconds(40))
+            #expect(quarantine.isTransportActive)
+
+            // Cancel the worker
+            workerTask.cancel()
+
+            // Immediate parent request dispatch through guarded engine should be rejected while transport is still closing
+            let parentReq = GenerationRequest(
+                model: "default",
+                turns: [ChatTurn(role: .user, text: "Hello")],
+                effort: .graze
+            )
+
+            // During the 150ms delay, quarantine is active and parent dispatch is blocked
+            var parentStream = await guardedEngine.stream(parentReq)
+            var parentThrew503 = false
+            do {
+                for try await _ in parentStream {}
+            } catch let error as EngineError {
+                if case .httpDetail(let code, _, _) = error, code == 503 {
+                    parentThrew503 = true
+                }
+            }
+            #expect(parentThrew503)
+
+            _ = try await workerTask.value
+
+            // Wait for delayed acknowledgement to complete
+            let closed = await quarantine.awaitClosure(timeoutSeconds: 1)
+            #expect(closed)
+            #expect(!quarantine.isTransportActive)
+        }
+
+        // Prompt token reservation when stream method itself suspends
+        @Test func promptAccounting_reservesTokensWhenStreamMethodItselfSuspends() async throws {
+            let (workspace, fileTools) = try createWorkspace()
+            defer { try? FileManager.default.removeItem(at: workspace) }
+            let db = try createDatabase()
+            let chatID = UUID()
+            let turnID = UUID()
+            try await db.save(makeChat(id: chatID.uuidString))
+
+            actor SuspendingStreamMethodEngine: InferenceEngine {
+                func health() async -> EngineHealth { .ok([]) }
+                func runtimeStatus() async -> EngineRuntimeStatus? {
+                    EngineRuntimeStatus(
+                        observedAt: .now,
+                        version: "1.0",
+                        modelMemoryUsed: 100 * 1024 * 1024,
+                        modelMemoryMaximum: 16 * 1024 * 1024 * 1024,
+                        activeRequests: 0,
+                        waitingRequests: 0,
+                        models: [EngineModelRuntimeStatus(id: "default", loaded: true, contextWindow: 32_768)]
+                    )
+                }
+
+                func stream(_ request: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
+                    // Method itself suspends before returning the stream
+                    try? await Task.sleep(for: .seconds(10))
+                    return AsyncThrowingStream { $0.finish() }
+                }
+            }
+
+            let context = SubagentExecutionContext(
+                chatID: chatID,
+                turnID: turnID,
+                projectID: nil,
+                workspace: workspace,
+                fileTools: fileTools,
+                engine: SuspendingStreamMethodEngine(),
+                database: db,
+                lease: SubagentCapabilityLease()
+            )
+
+            let worker = SubagentWorker(
+                task: SubagentTaskBrief(objective: "Suspending stream method test"),
+                context: context
+            )
+
+            let workerTask = Task {
+                try await worker.run()
+            }
+
+            // Allow worker to enter stream acquisition
+            try await Task.sleep(for: .milliseconds(40))
+            workerTask.cancel()
+
+            let result = try await workerTask.value
+            #expect(result.receipt.status == .cancelled)
+            // Round prompt tokens must be accounted even though stream method never returned
+            #expect(result.receipt.totalTokens > 0)
+        }
+
+        // Memory admission checks: rejects 70B model, admits valid model based on turn budget
+        @Test func memoryAdmission_rejects70BModelAndAdmitsTurnBudget() async throws {
+            let (workspace, fileTools) = try createWorkspace()
+            defer { try? FileManager.default.removeItem(at: workspace) }
+            let db = try createDatabase()
+            let chatID = UUID()
+            let turnID = UUID()
+            try await db.save(makeChat(id: chatID.uuidString))
+
+            // 1. 70B model rejected
+            actor Large70BEngine: InferenceEngine {
+                func health() async -> EngineHealth { .ok([]) }
+                func runtimeStatus() async -> EngineRuntimeStatus? {
+                    EngineRuntimeStatus(
+                        observedAt: .now,
+                        version: "1.0",
+                        modelMemoryUsed: 100 * 1024 * 1024,
+                        modelMemoryMaximum: 64 * 1024 * 1024 * 1024,
+                        activeRequests: 0,
+                        waitingRequests: 0,
+                        models: [
+                            EngineModelRuntimeStatus(id: "llama-3-70b-instruct", loaded: true, contextWindow: 131_072)
+                        ]
+                    )
+                }
+                func stream(_ request: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
+                    AsyncThrowingStream { $0.finish() }
+                }
+            }
+
+            let context1 = SubagentExecutionContext(
+                chatID: chatID,
+                turnID: turnID,
+                projectID: nil,
+                workspace: workspace,
+                fileTools: fileTools,
+                engine: Large70BEngine(),
+                database: db,
+                lease: SubagentCapabilityLease()
+            )
+
+            let worker1 = SubagentWorker(
+                task: SubagentTaskBrief(objective: "70B model test"),
+                context: context1
+            )
+            let result1 = try await worker1.run()
+            #expect(result1.receipt.status == .failed)
+            #expect(
+                result1.receipt.unresolved.contains {
+                    $0.detail?.contains("outside the validated Stage 1 model envelope") == true
+                })
+
+            // 2. Viable 7B model with 131k context window admitted based on 14,336 turn budget
+            actor Valid7BEngine: InferenceEngine {
+                func health() async -> EngineHealth { .ok([]) }
+                func runtimeStatus() async -> EngineRuntimeStatus? {
+                    // Free memory is 3 GiB (less than 17 GiB advertised context, but greater than 2.1 GiB turn budget)
+                    EngineRuntimeStatus(
+                        observedAt: .now,
+                        version: "1.0",
+                        modelMemoryUsed: 1 * 1024 * 1024 * 1024,
+                        modelMemoryMaximum: 4 * 1024 * 1024 * 1024,
+                        activeRequests: 0,
+                        waitingRequests: 0,
+                        models: [
+                            EngineModelRuntimeStatus(id: "qwen-2.5-7b-instruct", loaded: true, contextWindow: 131_072)
+                        ]
+                    )
+                }
+                func stream(_ request: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
+                    AsyncThrowingStream { continuation in
+                        continuation.yield(.token("{\"summary\":\"done\"}"))
+                        continuation.finish()
+                    }
+                }
+            }
+
+            let context2 = SubagentExecutionContext(
+                chatID: chatID,
+                turnID: turnID,
+                projectID: nil,
+                workspace: workspace,
+                fileTools: fileTools,
+                engine: Valid7BEngine(),
+                database: db,
+                lease: SubagentCapabilityLease()
+            )
+
+            let worker2 = SubagentWorker(
+                task: SubagentTaskBrief(objective: "Valid 7B turn budget test"),
+                context: context2
+            )
+            let result2 = try await worker2.run()
+            #expect(result2.receipt.status == .completed)
+        }
+
+        // Fast producer / slow consumer bounded delivery overflow handling
+        @Test func streamBuffer_fastProducerSlowConsumerTriggersOverflowHandling() async throws {
+            let (workspace, fileTools) = try createWorkspace()
+            defer { try? FileManager.default.removeItem(at: workspace) }
+            let db = try createDatabase()
+            let chatID = UUID()
+            let turnID = UUID()
+            try await db.save(makeChat(id: chatID.uuidString))
+
+            actor FastFloodingEngine: InferenceEngine {
+                func health() async -> EngineHealth { .ok([]) }
+                func runtimeStatus() async -> EngineRuntimeStatus? {
+                    EngineRuntimeStatus(
+                        observedAt: .now,
+                        version: "1.0",
+                        modelMemoryUsed: 100 * 1024 * 1024,
+                        modelMemoryMaximum: 16 * 1024 * 1024 * 1024,
+                        activeRequests: 0,
+                        waitingRequests: 0,
+                        models: [EngineModelRuntimeStatus(id: "default", loaded: true, contextWindow: 32_768)]
+                    )
+                }
+
+                func stream(_ request: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
+                    AsyncThrowingStream { continuation in
+                        // Flood 100 events immediately exceeding the buffer capacity of 32
+                        for i in 0..<100 {
+                            continuation.yield(.token("flood_\(i) "))
+                        }
+                        continuation.finish()
+                    }
+                }
+            }
+
+            let context = SubagentExecutionContext(
+                chatID: chatID,
+                turnID: turnID,
+                projectID: nil,
+                workspace: workspace,
+                fileTools: fileTools,
+                engine: FastFloodingEngine(),
+                database: db,
+                lease: SubagentCapabilityLease()
+            )
+
+            let worker = SubagentWorker(
+                task: SubagentTaskBrief(objective: "Buffer overflow test"),
+                context: context
+            )
+            let result = try await worker.run()
+            #expect(result.receipt.status == .failed)
+            #expect(result.receipt.unresolved.contains { $0.reason == "streamBufferOverflow" })
+        }
+
+        // Transcript bounds and toolCallID preservation with heavy JSON escaping
+        @Test func transcriptBounds_jsonEscapingHeavyContentEnforcesLimitAndPreservesToolCallID() throws {
+            // 500,000 quotes expands to over 1,000,000 bytes in JSON
+            let heavyQuotes = String(repeating: "\"", count: 500_000)
+            let turns: [ChatTurn] = [
+                ChatTurn(role: .system, text: "System prompt"),
+                ChatTurn(role: .user, text: heavyQuotes),
+                ChatTurn(role: .tool, text: "Tool result", toolCallID: "call_abc123"),
+            ]
+
+            let encoded = SubagentWorker.encodeTranscript(turns)
+            #expect(encoded != nil)
+            guard let encoded else { return }
+
+            #expect(encoded.utf8.count <= SubagentLimits.maxTranscriptBytes)
+
+            // Verify toolCallID is preserved in serialized JSON
+            #expect(encoded.contains("call_abc123"))
+        }
     }
 }
