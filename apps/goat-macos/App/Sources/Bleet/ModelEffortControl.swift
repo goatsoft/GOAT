@@ -37,17 +37,19 @@ struct ModelEffortControl: View {
         Menu {
             nativeMenuContent
         } label: {
-            VStack(alignment: .leading, spacing: Caprine.ModelMenu.rowDetailSpacing) {
-                HStack(spacing: Caprine.ModelMenu.spacing) {
-                    Text(nativeMenuLabel)
-                        .font(Caprine.ModelMenu.labelFont)
-                    Image(systemName: "chevron.down")
-                        .font(Caprine.ModelMenu.rowDetailFont)
-                }
+            HStack(spacing: Caprine.ModelMenu.spacing) {
+                Text(nativeMenuLabel)
+                    .font(Caprine.ModelMenu.labelFont)
+                    .lineLimit(1)
                 if let worker = model.selectedSubagentModelID {
-                    SubagentModelLabel(modelID: worker)
+                    Image(systemName: "arrow.triangle.branch")
+                        .font(Caprine.ModelMenu.rowDetailFont)
+                        .foregroundStyle(model.theme.tokens.muted)
+                        .help("Subagent: " + ModelRef(id: worker).displayName)
                         .accessibilityHidden(true)
                 }
+                Image(systemName: "chevron.down")
+                    .font(Caprine.ModelMenu.rowDetailFont)
             }
             .fixedSize(horizontal: false, vertical: true)
             .contentShape(Rectangle())

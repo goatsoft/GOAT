@@ -520,8 +520,7 @@ struct Composer: View {
         .padding(.horizontal, 22)
         .padding(
             .bottom,
-            model.selectedSubagentModelID == nil
-                ? Caprine.ModelMenu.composerBottomInset : Caprine.ModelMenu.composerPairedBottomInset
+            Caprine.ModelMenu.composerBottomInset
         )
         .padding(.top, 4)
         .fileImporter(

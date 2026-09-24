@@ -30,9 +30,9 @@ worker architectures, excluding models that explicitly lack tool support. The pa
 have reported tool support; matching model families is not required. Selection does not
 load models or guarantee memory capacity. GOAT checks current engine status at delegation.
 
-In the composer, the worker appears beneath the parent in smaller muted text with a tree
-connector. Both lines open the same model menu. The selected model and its worker also
-share one selectable item inside the model menus.
+The composer keeps the model and effort on one line. A branch icon indicates an active
+subagent; its tooltip names the worker. The whole control opens the model menu. Inside
+the menus, the selected model and its worker share one selectable item with a tree subtitle.
 
 Expand **Options** in the Nerd Stats Subagent section, or open **Settings → Extensions → Subagents → Advanced**,
 to edit the same saved Auto/Custom processing budget, round limit and time limit. Controls are
