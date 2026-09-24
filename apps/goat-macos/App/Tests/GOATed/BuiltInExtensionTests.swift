@@ -1,4 +1,5 @@
 import Foundation
+import Inference
 import Testing
 
 @testable import GOAT
@@ -8,6 +9,28 @@ import Testing
 
 extension AppTests.GOATed {
     @Suite struct BuiltInExtensionTests {
+
+        @Test func subagentMenuUsesCapabilitiesAndAuditedWorkersRatherThanMatchingModelFamilies() {
+            let parent = ModelRef(id: "another-family-parent", capabilities: .init(tools: .supported(by: .modelList)))
+            let worker = ModelRef(id: "Qwen3.5-9B-4bit")
+            let unsupported = ModelRef(id: "Qwen3-8B-4bit", capabilities: .init(tools: .unsupported(by: .modelList)))
+            let models = [parent, worker, unsupported, ModelRef(id: "unknown-worker")]
+            let available = SubagentMenuProjection(models: models, parentModelID: parent.id, hasLocalEngine: true)
+            #expect(available.unavailableReason == nil)
+            #expect(available.workers.map(\.id) == [worker.id])
+            #expect(
+                SubagentMenuProjection(models: models, parentModelID: parent.id, hasLocalEngine: false)
+                    .unavailableReason != nil)
+            #expect(
+                SubagentMenuProjection(models: models, parentModelID: unsupported.id, hasLocalEngine: true)
+                    .unavailableReason != nil)
+            #expect(
+                SubagentMenuProjection(models: models, parentModelID: worker.id, hasLocalEngine: true).unavailableReason
+                    != nil)
+            #expect(
+                SubagentMenuProjection(models: models, parentModelID: "missing", hasLocalEngine: true).unavailableReason
+                    != nil)
+        }
 
         @MainActor @Test func builtInPreferencesDefaultOnAndPersistWithoutGrantingPermissions() throws {
             let name = "goat-builtin-tests-\(UUID())"

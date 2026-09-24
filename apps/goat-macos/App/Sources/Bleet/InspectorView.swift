@@ -23,7 +23,7 @@ struct InspectorView: View {
                         }
                     }
                     Divider()
-                    LabeledContent("Subagent", value: subagentName)
+                    SubagentModelMenu(model: model, parentModelID: model.resolvedModelID(for: session))
                     Text(model.subagentAvailabilityMessage)
                         .font(Caprine.Activity.font)
                         .foregroundStyle(model.theme.tokens.muted)
@@ -88,10 +88,6 @@ struct InspectorView: View {
             let count = state.tools.filter { !MCPModel.isOwnerAdministrationTool($0.name) }.count
             return (name: name, toolCount: count)
         }
-    }
-
-    private var subagentName: String {
-        model.selectedSubagentModelID.map { ModelRef(id: $0).displayName } ?? "Not selected"
     }
 
     private var modelName: String {

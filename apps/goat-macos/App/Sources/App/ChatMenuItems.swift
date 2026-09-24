@@ -53,6 +53,8 @@ struct ModelMenuItems: View {
             }
             .disabled(others.isEmpty)
         }
+        Divider()
+        SubagentModelMenu(model: model, parentModelID: activeID)
     }
 
     private var activeID: String? { model.resolvedModelID(for: model.currentSession) }
@@ -122,5 +124,68 @@ struct EffortMenuItems: View {
                 guard isOn, let session = model.currentSession else { return }
                 model.selectEffort(effort, in: session)
             })
+    }
+}
+
+/// Shared by the composer, inspector and menu bar; selection remains engine-scoped.
+struct SubagentModelMenu: View {
+    @Bindable var model: AppModel
+    let parentModelID: String?
+    @Environment(\.openSettings) private var openSettings
+
+    private var selectionLocked: Bool {
+        model.shepherd.hasActiveTurn || model.engineTransitioning || model.extensionsChanging
+    }
+
+    var body: some View {
+        let projection = SubagentMenuProjection(
+            models: model.models, parentModelID: parentModelID, hasLocalEngine: model.toolRouter.isEngineLocal())
+        let selected = model.selectedSubagentModelID
+        Menu {
+            if let reason = projection.unavailableReason {
+                Text(reason)
+            }
+            Toggle(
+                "Enable Subagents",
+                isOn: Binding(
+                    get: { model.memory.builtInSettings.subagentsEnabled },
+                    set: { enabled in
+                        guard !selectionLocked else { return }
+                        model.memory.builtInSettings.subagentsEnabled = enabled
+                    })
+            )
+            .disabled(selectionLocked || projection.unavailableReason != nil)
+            Picker(
+                "Worker model",
+                selection: Binding(
+                    get: { model.selectedSubagentModelID ?? "" },
+                    set: { value in
+                        guard !selectionLocked, projection.unavailableReason == nil,
+                            let engineID = model.activeEngineProfile?.id
+                        else { return }
+                        model.memory.builtInSettings.setSubagentModelID(value.isEmpty ? nil : value, for: engineID)
+                    })
+            ) {
+                Text("Not selected").tag("")
+                ForEach(projection.workers) { worker in
+                    Text(worker.displayName + (worker.id == parentModelID ? " (same as parent)" : ""))
+                        .tag(worker.id)
+                }
+                if let selected, !projection.workers.contains(where: { $0.id == selected }) {
+                    Text("Unavailable: \(ModelRef(id: selected).displayName)").tag(selected)
+                }
+            }
+            .disabled(selectionLocked || projection.unavailableReason != nil)
+            if projection.workers.isEmpty { Text("No supported workers in this engine's catalogue.") }
+            if !model.memory.builtInSettings.herderEnabled { Text("Enable Herder in Extensions to investigate files.") }
+            Text("Load both models in the engine. Memory is checked before delegation.")
+            Divider()
+            Button("Subagent Settings…") {
+                model.settingsTab = .goated
+                openSettings()
+            }
+        } label: {
+            Text("Subagent: " + (selected.map { ModelRef(id: $0).displayName } ?? "Not selected"))
+        }
     }
 }

@@ -94,6 +94,8 @@ struct ModelEffortControl: View {
         }
         .disabled(others.isEmpty)
 
+        SubagentModelMenu(model: model, parentModelID: activeModelID)
+
         Menu("Effort") {
             ForEach(Effort.allCases) { effort in
                 Toggle(isOn: effortBinding(for: effort)) {

@@ -18,3 +18,9 @@ The Model section shows the selected subagent beneath the parent, including avai
 its investigation time limit and round limit. These describe the configured worker, not
 measured child throughput. The default investigation limit is 180 seconds; Settings →
 GOATed → Extensions → Subagents → Advanced supports 10–300 seconds.
+
+Select the worker directly from the Model section's Subagent menu, the chat model menu,
+or the menu-bar Model menu. Choices come from the current engine's catalogue and audited
+worker architectures, excluding models that explicitly lack tool support. The parent must
+have reported tool support; matching model families is not required. Selection does not
+load models or guarantee memory capacity. GOAT checks current engine status at delegation.
