@@ -24,3 +24,6 @@ or the menu-bar Model menu. Choices come from the current engine's catalogue and
 worker architectures, excluding models that explicitly lack tool support. The parent must
 have reported tool support; matching model families is not required. Selection does not
 load models or guarantee memory capacity. GOAT checks current engine status at delegation.
+
+The Subagent menu keeps a short label. Once selected, the worker appears beneath the
+parent in smaller muted text with a tree connector, in both the composer and inspector.

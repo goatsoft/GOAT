@@ -14,7 +14,14 @@ struct InspectorView: View {
                     NerdStatsView(session: session)
                 }
                 inspectorSection("Model") {
-                    LabeledContent("Model", value: modelName)
+                    LabeledContent("Model") {
+                        VStack(alignment: .leading, spacing: Caprine.ModelMenu.rowDetailSpacing) {
+                            Text(modelName)
+                            if let worker = model.selectedSubagentModelID {
+                                SubagentModelLabel(modelID: worker)
+                            }
+                        }
+                    }
                     LabeledContent("Effort") {
                         HStack(spacing: 6) {
                             if model.presentation.isEnabled { GoatieView(pose: session.effort.goatie, size: 18) }

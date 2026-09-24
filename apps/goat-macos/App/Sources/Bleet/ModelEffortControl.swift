@@ -37,9 +37,14 @@ struct ModelEffortControl: View {
         Menu {
             nativeMenuContent
         } label: {
-            Text(nativeMenuLabel)
-                .font(Caprine.ModelMenu.labelFont)
-                .foregroundStyle(model.theme.tokens.ink)
+            VStack(alignment: .leading, spacing: Caprine.ModelMenu.rowDetailSpacing) {
+                Text(nativeMenuLabel)
+                    .font(Caprine.ModelMenu.labelFont)
+                    .foregroundStyle(model.theme.tokens.ink)
+                if let worker = model.selectedSubagentModelID {
+                    SubagentModelLabel(modelID: worker)
+                }
+            }
         }
         .menuStyle(.borderlessButton)
         .buttonStyle(.plain)
@@ -48,6 +53,7 @@ struct ModelEffortControl: View {
         .accessibilityLabel("Model and effort")
         .accessibilityValue(
             "\(projection.selectedDisplayName), \(projection.selectedAvailability), \(session.effort.label)"
+                + (model.selectedSubagentModelID.map { ", Subagent: \(ModelRef(id: $0).displayName)" } ?? "")
         )
         .help("Model and effort - \(session.effort.blurb) (Command-1 through Command-4)")
     }

@@ -185,7 +185,23 @@ struct SubagentModelMenu: View {
                 openSettings()
             }
         } label: {
-            Text("Subagent: " + (selected.map { ModelRef(id: $0).displayName } ?? "Not selected"))
+            Text("Subagent")
         }
+    }
+}
+
+/// A compact child label shared by the composer and model inspector.
+struct SubagentModelLabel: View {
+    let modelID: String
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        Text("└─ " + ModelRef(id: modelID).displayName)
+            .font(Caprine.ModelMenu.rowDetailFont)
+            .foregroundStyle(model.theme.tokens.muted)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .help(modelID)
+            .accessibilityLabel("Subagent: " + ModelRef(id: modelID).displayName)
     }
 }
