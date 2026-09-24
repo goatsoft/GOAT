@@ -143,8 +143,10 @@ All other tools are excluded:
 - The `subagent_delegate` tool is excluded from child schemas, preventing recursive spawning.
 - **Unattended Fail-Closed Policy:** Any operation requiring interactive user confirmation or host permission
   prompts fails closed immediately with `unattendedApprovalDenied`.
-- **The Herd Guarantee:** Child subagents operate strictly local and offline. Zero telemetry, zero analytics,
-  and zero network traffic.
+- **The Herd Guarantee:** Child subagent exploration tools generate zero network traffic, operating strictly
+  against local Pen files with zero telemetry, zero analytics, and no external network endpoints. The only
+  network transport permitted during delegation is local loopback HTTP communication to the configured local
+  inference engine (such as oMLX).
 
 ### 6. Work Bounding, Token Accounting, and Output Guarantees
 
