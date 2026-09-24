@@ -784,8 +784,13 @@ private struct SubagentInvestigationDetails: View {
                 }
             }
             if !receipt.summary.isEmpty {
-                Text(receipt.summary)
-                    .font(Caprine.Activity.font)
+                Markdown(receipt.summary)
+                    .markdownImageProvider(BlockedMarkdownImageProvider())
+                    .markdownInlineImageProvider(BlockedMarkdownInlineImageProvider())
+                    .goatMarkdownStyle(fontSize: model.chatFontSize)
+                    .markdownBlockStyle(\.codeBlock) { configuration in
+                        CodeBlockView(configuration: configuration)
+                    }
                     .textSelection(.enabled)
             }
             if !receipt.citations.isEmpty {
@@ -818,21 +823,23 @@ private struct SubagentInvestigationDetails: View {
                         .textSelection(.enabled)
                 }
             }
-            DisclosureGroup("Diagnostics") {
-                VStack(alignment: .leading, spacing: Caprine.Activity.compactSpacing) {
-                    Text("\(receipt.roundsExecuted) rounds · \(receipt.totalTokens) tokens")
-                        .font(Caprine.Activity.font)
-                    JSONTreeView(raw: arguments)
-                    if let transcript = record?.transcriptJson {
-                        ScrollView { JSONTreeView(raw: transcript) }
-                            .frame(maxHeight: Caprine.Activity.detailMaxHeight)
-                    } else if loadFailed {
-                        Text("Saved transcript is unavailable. The result above is still available.")
+            if model.memory.builtInSettings.subagentDiagnosticsEnabled {
+                DisclosureGroup("Diagnostics") {
+                    VStack(alignment: .leading, spacing: Caprine.Activity.compactSpacing) {
+                        Text("\(receipt.roundsExecuted) rounds · \(receipt.totalTokens) tokens")
                             .font(Caprine.Activity.font)
+                        JSONTreeView(raw: arguments)
+                        if let transcript = record?.transcriptJson {
+                            ScrollView { JSONTreeView(raw: transcript) }
+                                .frame(maxHeight: Caprine.Activity.detailMaxHeight)
+                        } else if loadFailed {
+                            Text("Saved transcript is unavailable. The result above is still available.")
+                                .font(Caprine.Activity.font)
+                        }
                     }
                 }
+                .font(Caprine.Activity.font)
             }
-            .font(Caprine.Activity.font)
         }
         .task(id: receipt.runId) {
             record = nil

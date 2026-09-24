@@ -18,6 +18,8 @@ Availability changes wait until the active chat turn finishes. Disabling a capab
 
 Herder has separate controls for file creation/edits and shell commands, plus a default timeout. Turning off native writes does not prevent an approved shell command from modifying files. Use [permission controls](../how-to/PERMISSIONS.md) to review actual authority.
 
+Subagent investigation summaries render Markdown, including code blocks. **Show subagent diagnostics** in the Subagents settings is off by default. Enable it to inspect request arguments and saved worker transcripts. Results, verified sources and unresolved items remain visible with diagnostics off. This display preference does not change transcript retention.
+
 ## Add skills or packages
 
 Use **Settings → GOATed → Skills → Add Skill…** for a Global skill folder containing `SKILL.md`. Manage Pen skills on the Pen page. Available user-invocable skills appear through composer `/` and `+` menus.

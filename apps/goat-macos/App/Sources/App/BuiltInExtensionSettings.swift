@@ -10,6 +10,9 @@ final class BuiltInExtensionSettings {
     var herderWritesEnabled: Bool { didSet { defaults.set(herderWritesEnabled, forKey: "goated.herder.writes") } }
     var herderCommandsEnabled: Bool { didSet { defaults.set(herderCommandsEnabled, forKey: "goated.herder.commands") } }
     var subagentsEnabled: Bool { didSet { defaults.set(subagentsEnabled, forKey: "goated.subagents.enabled") } }
+    var subagentDiagnosticsEnabled: Bool {
+        didSet { defaults.set(subagentDiagnosticsEnabled, forKey: "goated.subagents.diagnostics") }
+    }
     private(set) var hindsightEnabled: Bool
     private(set) var commandTimeout: Int
     private(set) var subagentAutomaticBudget: Bool
@@ -20,6 +23,7 @@ final class BuiltInExtensionSettings {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        subagentDiagnosticsEnabled = defaults.bool(forKey: "goated.subagents.diagnostics")
         subagentAutomaticBudget = defaults.object(forKey: "goated.subagents.budget.auto") as? Bool ?? true
         let tokenBudget = defaults.integer(forKey: "goated.subagents.budget.tokens")
         subagentCustomTokenBudget = (32_768...131_072).contains(tokenBudget) ? tokenBudget : 65_536

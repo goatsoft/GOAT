@@ -433,6 +433,8 @@ struct GOATedSettingsView: View {
             Text(model.subagentAvailabilityMessage)
                 .font(Caprine.Activity.font)
                 .foregroundStyle(.secondary)
+            Toggle("Show subagent diagnostics", isOn: $settings.subagentDiagnosticsEnabled)
+                .help("Show request arguments and the saved worker transcript in investigation details.")
             DisclosureGroup("Advanced") {
                 VStack(alignment: .leading, spacing: Caprine.Activity.spacing) {
                     SubagentBudgetControls(model: model)
