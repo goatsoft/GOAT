@@ -480,5 +480,8 @@ final class AppModel {
         toolRouter.nameForProject = { [weak self] id in
             self?.pens.first(where: { $0.id == id })?.name ?? "this Pen"
         }
+        toolRouter.engineProvider = { [weak self] in self?.engine }
+        toolRouter.currentModelID = { [weak self] in self?.currentSession?.modelID ?? self?.defaultModelID }
+        toolRouter.databaseProvider = { [weak self] in self?.db }
     }
 }

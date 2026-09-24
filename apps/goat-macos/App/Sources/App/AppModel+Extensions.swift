@@ -7,7 +7,7 @@ import Hitch
 extension AppModel {
     func extensionReport() async -> [String] {
         let names = [
-            "goat.herder": "Herder", "goat.hindsight": "Hindsight Memory", "goat.hitch": "Hitch", "goat.pronk": "Pronk",
+            "goat.herder": "Herder", "goat.hindsight": "Hindsight Memory", "goat.hitch": "Hitch", "goat.pronk": "Pronk", "goat.subagents": "Subagents",
         ]
         let active = await toolRouter.extensions.activeExtensions()
         var report = active.map { "\(names[$0.id.rawValue] ?? $0.id.rawValue) \($0.version): registered" }

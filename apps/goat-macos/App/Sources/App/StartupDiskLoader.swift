@@ -94,6 +94,7 @@ enum StartupDiskLoader {
 
         var chatRecords: [ChatRecord] = []
         if let database {
+            _ = try? await database.recoverInterruptedSubagentRuns()
             do {
                 try await migrateProjectsToPensIfNeeded(database)
             } catch {

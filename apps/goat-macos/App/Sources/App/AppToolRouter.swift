@@ -1,3 +1,4 @@
+import Persistence
 import Foundation
 import GOATed
 import Herd
@@ -17,10 +18,18 @@ final class AppToolRouter: ShepherdToolSource {
     var nameForProject: (UUID) -> String = { _ in "this Pen" }
     let commandPermissions: PenCommandPermissionModel
     let filePermissions: PenFilePermissionModel
+    var engineProvider: () -> (any InferenceEngine)? = { nil }
+    var currentModelID: () -> String? = { nil }
+    var databaseProvider: () -> ChatDatabase? = { nil }
     private var penFileSession:
         (
             turnID: UUID, chatID: UUID, projectID: UUID, workspace: URL, provider: HerderFileProvider,
             registration: Registration, workspaceIdentity: String
+        )?
+    private var subagentSession:
+        (
+            turnID: UUID, chatID: UUID, projectID: UUID, workspace: URL, provider: SubagentsProvider,
+            registration: Registration
         )?
     private let memory: MemoryModel
     private let activity: ActivityLog
@@ -198,6 +207,10 @@ final class AppToolRouter: ShepherdToolSource {
             try? await extensions.unregister(session.registration)
         }
         penFileSession = nil
+        if let session = subagentSession {
+            try? await extensions.unregister(session.registration)
+        }
+        subagentSession = nil
         if memory.builtInSettings.herderEnabled, let projectID, let workspace = workspaceForProject(projectID) {
             do {
                 let files = try await Task.detached { try PenFileTools(workspace: workspace) }.value
@@ -214,6 +227,20 @@ final class AppToolRouter: ShepherdToolSource {
                     penFileSession = (
                         turnID, chatID, projectID, workspace, provider, registration, files.workspaceIdentity
                     )
+                    if memory.builtInSettings.subagentsEnabled {
+                        let subagentProvider = SubagentsProvider(
+                            turnID: turnID,
+                            fileTools: files,
+                            workspace: workspace,
+                            engine: engineProvider(),
+                            modelID: currentModelID(),
+                            configuration: memory.builtInSettings.subagentConfiguration,
+                            database: databaseProvider()
+                        )
+                        let subagentReg = try await extensions.activate(
+                            SubagentsExtension(provider: subagentProvider), scope: .pen(projectID))
+                        subagentSession = (turnID, chatID, projectID, workspace, subagentProvider, subagentReg)
+                    }
                 }
             } catch {
                 activity.log(.warn, "Pen file tools unavailable: \(error.localizedDescription)")
@@ -253,6 +280,10 @@ final class AppToolRouter: ShepherdToolSource {
         if let session = penFileSession, session.turnID == turnID {
             penFileSession = nil
             await session.provider.stopCommands()
+            try? await extensions.unregister(session.registration)
+        }
+        if let session = subagentSession, session.turnID == turnID {
+            subagentSession = nil
             try? await extensions.unregister(session.registration)
         }
         let outcome: TurnOutcome = cancelled ? .cancelled : (turnPersisted ? .completed : .failed)
@@ -443,6 +474,11 @@ final class AppToolRouter: ShepherdToolSource {
             }
             return session.turnID == handle.turnID && session.registration == handle.registration
                 && workspaceForProject(session.projectID) == session.workspace
+        case "goat.subagents":
+            guard memory.builtInSettings.subagentsEnabled, let session = subagentSession else {
+                return false
+            }
+            return session.turnID == handle.turnID && session.registration == handle.registration
         case "goat.pronk": return pronkRegistration != nil
         case "goat.hindsight":
             return memory.builtInSettings.hindsightEnabled && turnMemoryConfiguration == memory.configuration
