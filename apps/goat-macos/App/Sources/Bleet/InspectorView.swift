@@ -21,6 +21,13 @@ struct InspectorView: View {
                 }
                 inspectorSection("Model") {
                     Text(modelName)
+                    LabeledContent("Effort") {
+                        HStack(spacing: 6) {
+                            if model.presentation.isEnabled { GoatieView(pose: session.effort.goatie, size: 18) }
+                            Text(session.effort.label).foregroundStyle(
+                                session.effort.presentationColor(in: model.theme))
+                        }
+                    }
                     if let ref = model.models.first(where: { $0.id == model.resolvedModelID(for: session) }) {
                         VStack(alignment: .leading, spacing: Caprine.Activity.compactSpacing) {
                             capabilityRow("Tools", claim: ref.capabilities.tools)
@@ -28,13 +35,6 @@ struct InspectorView: View {
                             capabilityRow("Reasoning", claim: ref.capabilities.reasoning)
                         }
                         .font(Caprine.Activity.font)
-                    }
-                    LabeledContent("Effort") {
-                        HStack(spacing: 6) {
-                            if model.presentation.isEnabled { GoatieView(pose: session.effort.goatie, size: 18) }
-                            Text(session.effort.label).foregroundStyle(
-                                session.effort.presentationColor(in: model.theme))
-                        }
                     }
                 }
                 inspectorSection("Subagent") {
