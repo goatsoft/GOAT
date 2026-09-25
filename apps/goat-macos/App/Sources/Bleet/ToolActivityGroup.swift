@@ -52,11 +52,12 @@ struct ToolActivityGroup: View {
 
     private func actions(events: [ToolEventSnapshot], currentID: String?, isolatedGroup: Bool) -> some View {
         let hasTree = events.count > 1 || (!isolatedGroup && (connectsAbove || connectsBelow))
+        let resolvedPenName = penName
         return
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(messages) { message in
                     ForEach(message.toolEvents) { event in
-                        ToolCallCard(event: event, live: event.id == currentID, penName: penName)
+                        ToolCallCard(event: event, live: event.id == currentID, penName: resolvedPenName)
                             .padding(.leading, hasTree ? Caprine.Activity.treeInset : 0)
                             .background(alignment: .leading) {
                                 if hasTree {
@@ -82,22 +83,17 @@ private struct ToolTreeBranch: View {
 
     var body: some View {
         Canvas { context, size in
-            let stroke = StrokeStyle(lineWidth: Caprine.Activity.ruleWidth)
-            let color = model.theme.tokens.muted.opacity(Caprine.Activity.branchOpacity)
-            let x = size.width / 2
-            let midY = size.height / 2
-            if above {
-                var p = Path()
-                p.move(to: CGPoint(x: x, y: 0))
-                p.addLine(to: CGPoint(x: x, y: midY))
-                context.stroke(p, with: .color(color), style: stroke)
-            }
-            if below {
-                var p = Path()
-                p.move(to: CGPoint(x: x, y: midY))
-                p.addLine(to: CGPoint(x: x, y: size.height))
-                context.stroke(p, with: .color(color), style: stroke)
-            }
+            let x = Caprine.Activity.ruleWidth
+            let y = min(Caprine.Activity.branchHeight, size.height / 2)
+            var path = Path()
+            path.move(to: CGPoint(x: x, y: above ? 0 : y))
+            path.addLine(to: CGPoint(x: x, y: below ? size.height : y))
+            path.move(to: CGPoint(x: x, y: y))
+            path.addLine(to: CGPoint(x: size.width - Caprine.Activity.ruleWidth, y: y))
+            context.stroke(path, with: .foreground, lineWidth: Caprine.Activity.ruleWidth / 2)
         }
+        .foregroundStyle(model.theme.tokens.muted.opacity(Caprine.Activity.cardBorderOpacity))
+        .accessibilityHidden(true)
+        .allowsHitTesting(false)
     }
 }

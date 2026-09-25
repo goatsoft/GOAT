@@ -1,5 +1,6 @@
 import Bleet
 import Foundation
+import Inference
 import Persistence
 
 /// A display-only projection of the bounded message window. Stored messages and tool results
@@ -120,47 +121,29 @@ struct ToolEventPresentation: Sendable, Equatable {
 final class ToolEventPresentationCache: @unchecked Sendable {
     static let shared = ToolEventPresentationCache()
 
-    private struct Key: Hashable {
-        let id: String
-        let tool: String
-        let argsCount: Int
-        let argsHash: Int
-        let resultCount: Int?
-        let resultHash: Int?
-        let isError: Bool
-        let denied: Bool
-        let rootName: String?
+    private final class Box: @unchecked Sendable {
+        let value: ToolEventPresentation
+        init(_ value: ToolEventPresentation) { self.value = value }
     }
 
-    private let lock = NSLock()
-    private var entries: [Key: ToolEventPresentation] = [:]
+    private let cache = NSCache<NSString, Box>()
+
+    init() {
+        cache.countLimit = 500
+    }
+
+    private func makeKey(for event: ToolEventSnapshot, rootName: String?) -> NSString {
+        "\(event.id):\(event.tool):\(event.arguments.hashValue):\(event.result != nil):\(event.isError):\(event.denied):\(rootName ?? "")"
+            as NSString
+    }
 
     func presentation(for event: ToolEventSnapshot, rootName: String? = nil) -> ToolEventPresentation {
-        let key = Key(
-            id: event.id,
-            tool: event.tool,
-            argsCount: event.arguments.count,
-            argsHash: event.arguments.hashValue,
-            resultCount: event.result?.count,
-            resultHash: event.result?.hashValue,
-            isError: event.isError,
-            denied: event.denied,
-            rootName: rootName
-        )
-        lock.lock()
-        if let existing = entries[key] {
-            lock.unlock()
-            return existing
+        let key = makeKey(for: event, rootName: rootName)
+        if let existing = cache.object(forKey: key) {
+            return existing.value
         }
-        lock.unlock()
-
         let computed = compute(for: event, rootName: rootName)
-        lock.lock()
-        if entries.count > 1000 {
-            entries.removeAll(keepingCapacity: true)
-        }
-        entries[key] = computed
-        lock.unlock()
+        cache.setObject(Box(computed), forKey: key)
         return computed
     }
 
@@ -196,17 +179,20 @@ final class ToolEventPresentationCache: @unchecked Sendable {
         default: return "\(event.server) · \(event.tool)"
         }
         guard let key, event.arguments.utf8.count <= 65_536,
-            let data = event.arguments.data(using: .utf8),
-            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let json = JSONValue.parse(event.arguments),
+            case .object(let dict) = json
         else { return action }
 
-        var rawDetail = (object[key] as? String) ?? ""
-        if rawDetail.isEmpty && event.tool == "pen_glob", let fallback = object["path"] as? String {
+        var rawDetail = dict[key]?.stringValue ?? ""
+        if rawDetail.isEmpty && event.tool == "pen_glob", let fallback = dict["path"]?.stringValue {
             rawDetail = fallback
         }
         var detail = String(rawDetail.prefix(160))
-        if event.tool == "pen_run_command", let args = object["args"] as? [String] {
-            detail += " " + args.prefix(4).map { String($0.prefix(80)) }.joined(separator: " ")
+        if event.tool == "pen_run_command", let args = dict["args"], case .array(let list) = args {
+            let strArgs = list.compactMap(\.stringValue)
+            if !strArgs.isEmpty {
+                detail += " " + strArgs.prefix(4).map { String($0.prefix(80)) }.joined(separator: " ")
+            }
         }
         detail = detail.components(separatedBy: .newlines).joined(separator: " ").trimmingCharacters(in: .whitespaces)
 
@@ -250,9 +236,9 @@ final class ToolEventPresentationCache: @unchecked Sendable {
         default: (action, key) = (event.tool.replacingOccurrences(of: "_", with: " ").capitalized, nil)
         }
         guard let key, event.arguments.utf8.count <= 65_536,
-            let data = event.arguments.data(using: .utf8),
-            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let raw = object[key] as? String
+            let json = JSONValue.parse(event.arguments),
+            case .object(let dict) = json,
+            let raw = dict[key]?.stringValue
         else { return action }
         let detail = raw.components(separatedBy: .newlines).joined(separator: " ").trimmingCharacters(in: .whitespaces)
         return detail.isEmpty ? action : action + " · " + String(detail.prefix(160))
@@ -261,8 +247,23 @@ final class ToolEventPresentationCache: @unchecked Sendable {
 
 enum ToolCallPayload {
     static func containsValue(_ text: String?) -> Bool {
-        guard let text, !text.isEmpty else { return false }
-        return text.contains(where: { !$0.isWhitespace })
+        guard let text else { return false }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty || trimmed == "null" || trimmed == "{}" || trimmed == "[]" {
+            return false
+        }
+        if (trimmed.hasPrefix("{") && trimmed.hasSuffix("}")) || (trimmed.hasPrefix("[") && trimmed.hasSuffix("]")) {
+            if let parsed = JSONValue.parse(trimmed) {
+                switch parsed {
+                case .null: return false
+                case .object(let d): return !d.isEmpty
+                case .array(let a): return !a.isEmpty
+                case .string(let s): return !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                case .bool, .integer, .number: return true
+                }
+            }
+        }
+        return true
     }
 
     static func trimmed(_ text: String) -> String {

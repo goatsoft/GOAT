@@ -611,6 +611,8 @@ private extension JSONValue {
 
     var intValue: Int? {
         switch self {
+        case .integer(let value):
+            return Int(exactly: value)
         case .number(let value):
             guard value.isFinite, value > 0, value <= Double(Int.max) else { return nil }
             return Int(value)

@@ -1,4 +1,7 @@
+import Bleet
 import Foundation
+import Inference
+import Persistence
 import Testing
 
 @testable import GOAT
@@ -133,92 +136,95 @@ extension AppTests.Bleet {
     }
 
     @MainActor @Suite struct JSONTreeViewTests {
-        @Test func testOrderedKeyPreservation() {
+        @Test func testPresentationOrder() {
             let json = """
-            {
-                "path": "Sources/App.swift",
-                "old_text": "let x = 1",
-                "new_text": "let x = 2",
-                "context": "test"
-            }
-            """
-            guard let node = JSONNode.parse(json) else {
+                {
+                    "zebra": "z",
+                    "content": "bulky content",
+                    "path": "Sources/App.swift",
+                    "alpha": "a",
+                    "command": "swift build",
+                    "stdout": "output",
+                    "beta": "b"
+                }
+                """
+            guard let value = JSONValue.parse(json), case .object(let dict) = value else {
                 Issue.record("Failed to parse JSON")
                 return
             }
-            if case .object(let pairs) = node {
-                let keys = pairs.map(\.key)
-                #expect(keys == ["path", "old_text", "new_text", "context"])
-            } else {
-                Issue.record("Node is not an object")
-            }
+            let sortedPairs = JSONPresentationOrder.sortedPairs(from: dict)
+            let keys = sortedPairs.map(\.key)
+
+            // Identity keys first: ["path", "command"] (in defined rank order)
+            // Alphabetical keys middle: ["alpha", "beta", "zebra"]
+            // Bulky keys last: ["content", "stdout"] (in defined rank order)
+            #expect(keys == ["path", "command", "alpha", "beta", "zebra", "content", "stdout"])
         }
 
-        @Test func testLargeNumberFormattingDoesNotTrap() {
-            let huge = Double(1e25)
-            let formattedHuge = JSONNode.formatNumber(huge)
-            #expect(!formattedHuge.isEmpty)
-
-            let maxInt64 = Double(Int64.max)
-            let formattedMaxInt = JSONNode.formatNumber(maxInt64)
-            #expect(formattedMaxInt == "9223372036854775807")
-
-            let minInt64 = Double(Int64.min)
-            let formattedMinInt = JSONNode.formatNumber(minInt64)
-            #expect(formattedMinInt == "-9223372036854775808")
-
-            let nan = Double.nan
-            #expect(JSONNode.formatNumber(nan) == "NaN")
-
-            let posInf = Double.infinity
-            #expect(JSONNode.formatNumber(posInf) == "Infinity")
-
-            let negInf = -Double.infinity
-            #expect(JSONNode.formatNumber(negInf) == "-Infinity")
-        }
-
-        @Test func testParseLargeNumberPayload() {
+        @Test func testInt64MaxHandlingInJSONValue() {
             let json = """
-            {
-                "id": 9223372036854775807,
-                "big": 1e20,
-                "decimal": 42.5,
-                "zero": 0
-            }
-            """
-            guard let node = JSONNode.parse(json) else {
-                Issue.record("Failed to parse large numbers JSON")
+                {
+                    "max": 9223372036854775807,
+                    "min": -9223372036854775808,
+                    "regular": 42
+                }
+                """
+            guard let value = JSONValue.parse(json), case .object(let dict) = value else {
+                Issue.record("Failed to parse JSON with Int64 values")
                 return
             }
-            if case .object(let pairs) = node {
-                #expect(pairs.count == 4)
-                #expect(pairs[0].key == "id")
-                #expect(pairs[1].key == "big")
-                #expect(pairs[2].key == "decimal")
-                #expect(pairs[3].key == "zero")
-            } else {
-                Issue.record("Node is not an object")
-            }
+            #expect(dict["max"] == .integer(Int64.max))
+            #expect(dict["min"] == .integer(Int64.min))
+            #expect(dict["regular"] == .integer(42))
         }
 
-        @Test func testEscapedStringsInOrderedParser() {
-            let json = """
-            {
-                "string": "Line 1\\nLine 2\\tTabbed \\\"quoted\\\" \\\\backslash",
-                "unicode": "\\u0041\\u0042\\u0043"
-            }
-            """
-            guard let node = JSONNode.parse(json) else {
-                Issue.record("Failed to parse escaped strings")
-                return
-            }
-            if case .object(let pairs) = node {
-                #expect(pairs.count == 2)
-                #expect(pairs[0].value.stringValue == "Line 1\nLine 2\tTabbed \"quoted\" \\backslash")
-                #expect(pairs[1].value.stringValue == "ABC")
-            } else {
-                Issue.record("Node is not an object")
-            }
+        @Test func testToolCallPayloadContainsValue() {
+            #expect(!ToolCallPayload.containsValue(nil))
+            #expect(!ToolCallPayload.containsValue(""))
+            #expect(!ToolCallPayload.containsValue("   \n\t  "))
+            #expect(!ToolCallPayload.containsValue("null"))
+            #expect(!ToolCallPayload.containsValue("{}"))
+            #expect(!ToolCallPayload.containsValue("{   }"))
+            #expect(!ToolCallPayload.containsValue("[]"))
+            #expect(!ToolCallPayload.containsValue("[   ]"))
+
+            #expect(ToolCallPayload.containsValue("{\"key\": \"value\"}"))
+            #expect(ToolCallPayload.containsValue("[1, 2, 3]"))
+            #expect(ToolCallPayload.containsValue("non-json plain text"))
+        }
+
+        @Test func testPresentationTitlesAndRootNaming() {
+            let globWithPattern = ToolEventSnapshot(
+                id: "1", server: "Pens", tool: "pen_glob",
+                arguments: #"{"pattern": "**/*.swift"}"#,
+                result: nil, isError: false, denied: false
+            )
+            let pres1 = ToolActivityLabel.presentation(for: globWithPattern, rootName: "App")
+            #expect(pres1.title == "Find files · **/*.swift")
+
+            let globWithPathFallback = ToolEventSnapshot(
+                id: "2", server: "Pens", tool: "pen_glob",
+                arguments: #"{"path": "Sources"}"#,
+                result: nil, isError: false, denied: false
+            )
+            let pres2 = ToolActivityLabel.presentation(for: globWithPathFallback, rootName: "App")
+            #expect(pres2.title == "Find files · Sources")
+
+            let listWithDot = ToolEventSnapshot(
+                id: "3", server: "Pens", tool: "pen_list_files",
+                arguments: #"{"path": "."}"#,
+                result: nil, isError: false, denied: false
+            )
+            let pres3 = ToolActivityLabel.presentation(for: listWithDot, rootName: "MyProject")
+            #expect(pres3.title == "List files · MyProject")
+
+            let listWithEmptyRoot = ToolEventSnapshot(
+                id: "4", server: "Pens", tool: "pen_list_files",
+                arguments: #"{"path": "."}"#,
+                result: nil, isError: false, denied: false
+            )
+            let pres4 = ToolActivityLabel.presentation(for: listWithEmptyRoot, rootName: nil)
+            #expect(pres4.title == "List files · workspace")
         }
     }
 }

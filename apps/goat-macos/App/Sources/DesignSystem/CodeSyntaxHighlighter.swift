@@ -58,6 +58,8 @@ final class HighlightCache {
     }
 
     private let cache = NSCache<NSString, EntryBox>()
+    private let lineCounts = NSCache<NSString, NSNumber>()
+
     final class EntryBox: @unchecked Sendable {
         let entry: Entry
         init(_ entry: Entry) { self.entry = entry }
@@ -65,6 +67,7 @@ final class HighlightCache {
 
     init() {
         cache.countLimit = 200
+        lineCounts.countLimit = 500
     }
 
     private func makeKey(code: String, language: String?, dark: Bool) -> String {
@@ -82,10 +85,17 @@ final class HighlightCache {
     }
 
     func lineCount(for code: String) -> Int {
-        if let entry = peek(code: code, language: nil, dark: true) ?? peek(code: code, language: nil, dark: false) {
-            return entry.lineCount
+        let key = code as NSString
+        if let cached = lineCounts.object(forKey: key) {
+            return cached.intValue
         }
-        return max(1, code.reduce(1) { $0 + ($1 == "\n" ? 1 : 0) } - (code.hasSuffix("\n") ? 1 : 0))
+        var count = 1
+        for byte in code.utf8 {
+            if byte == 0x0A { count += 1 }
+        }
+        if code.hasSuffix("\n") { count = max(1, count - 1) }
+        lineCounts.setObject(NSNumber(value: count), forKey: key)
+        return count
     }
 }
 
@@ -153,27 +163,38 @@ struct PreparedCodeText: View {
         let dark = colorScheme == .dark
         let key = CacheKey(code: code, language: language, dark: dark)
         Text(currentText)
-            .task(id: key) {
-                if let cached = HighlightCache.shared.peek(code: code, language: language, dark: dark) {
-                    rendered = cached.text
-                    renderedKey = key
-                    return
-                }
+            .task(id: isStreaming ? "streaming" : "\(key.code.hashValue):\(key.language ?? ""):\(dark)") {
                 if isStreaming {
-                    // Debounce syntax highlighting while streaming to coalesce rapid token arrivals
-                    try? await Task.sleep(for: .milliseconds(120))
-                    guard !Task.isCancelled else { return }
-                }
-                do {
-                    let result = try await CodeSyntaxHighlighter.shared.render(
-                        code, language: language, dark: key.dark)
-                    try Task.checkCancellation()
-                    let lines = max(1, code.reduce(1) { $0 + ($1 == "\n" ? 1 : 0) } - (code.hasSuffix("\n") ? 1 : 0))
-                    HighlightCache.shared.set(code: code, language: language, dark: dark, text: result, lineCount: lines)
-                    rendered = result
-                    renderedKey = key
-                } catch {
-                    // Keep current, selectable source when preparation fails or is superseded.
+                    while isStreaming {
+                        let currentCode = code
+                        let currentDark = colorScheme == .dark
+                        if let result = try? await CodeSyntaxHighlighter.shared.render(
+                            currentCode, language: language, dark: currentDark)
+                        {
+                            rendered = result
+                            renderedKey = CacheKey(code: currentCode, language: language, dark: currentDark)
+                        }
+                        try? await Task.sleep(for: .milliseconds(150))
+                        guard !Task.isCancelled else { return }
+                    }
+                } else {
+                    if let cached = HighlightCache.shared.peek(code: code, language: language, dark: dark) {
+                        rendered = cached.text
+                        renderedKey = key
+                        return
+                    }
+                    do {
+                        let result = try await CodeSyntaxHighlighter.shared.render(
+                            code, language: language, dark: dark)
+                        try Task.checkCancellation()
+                        let lines = HighlightCache.shared.lineCount(for: code)
+                        HighlightCache.shared.set(
+                            code: code, language: language, dark: dark, text: result, lineCount: lines)
+                        rendered = result
+                        renderedKey = key
+                    } catch {
+                        // Keep current, selectable source when preparation fails or is superseded.
+                    }
                 }
             }
     }

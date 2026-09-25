@@ -61,7 +61,8 @@ struct AgentProgressView: View {
 
     var body: some View {
         let penName = session.projectID.flatMap { id in model.pens.first(where: { $0.id == id })?.name }
-        let state = AgentProgressState(session: session, awaitingApproval: model.mcp.pendingPermission != nil, penName: penName)
+        let state = AgentProgressState(
+            session: session, awaitingApproval: model.mcp.pendingPermission != nil, penName: penName)
         TimelineView(.periodic(from: state.startedAt, by: 1)) { context in
             HStack(spacing: Caprine.Activity.spacing) {
                 if state.awaitingApproval {

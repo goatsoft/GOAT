@@ -101,17 +101,16 @@ actor MarkdownRenderCache {
             sourceBytes -= replaced.sourceBytes
         }
 
-        // Fenced code blocks inside markdown text are parsed as regular markdown.
-        let normalized = GOATMarkdownSyntax.normalized(source)
-        let parsed = MarkdownContent(normalized)
+        let content = RenderSignposts.measure("MarkdownParse") {
+            PreparedMarkdownContent(value: MarkdownContent(GOATMarkdownSyntax.normalized(source)))
+        }
         guard !Task.isCancelled else { return .plainText }
 
-        let wrapped = PreparedMarkdownContent(value: parsed)
         parseCount &+= 1
-        entries[id] = Entry(source: source, content: wrapped, sourceBytes: bytes, access: access)
+        entries[id] = Entry(source: source, content: content, sourceBytes: bytes, access: access)
         sourceBytes += bytes
-        pruneIfNeeded()
-        return .parsed(wrapped)
+        evictIfNeeded()
+        return .parsed(content)
     }
 
     func removeAll() {
@@ -126,7 +125,7 @@ actor MarkdownRenderCache {
         Snapshot(entryCount: entries.count, sourceBytes: sourceBytes, parseCount: parseCount)
     }
 
-    private func pruneIfNeeded() {
+    private func evictIfNeeded() {
         while entries.count > maximumEntries || sourceBytes > maximumSourceBytes {
             guard let victim = entries.min(by: { $0.value.access < $1.value.access }) else {
                 return
@@ -229,7 +228,7 @@ struct StreamingMarkdownView: View {
     var body: some View {
         PreparedMarkdownView(
             id: message.id, source: snapshot, fallbackFontSize: model.chatFontSize,
-            onPrepared: { message.markRenderChanged() },
+            onPrepared: {},
             retainsPreviousContent: true
         ) { content in
             Markdown(content)
@@ -238,17 +237,20 @@ struct StreamingMarkdownView: View {
                 .goatMarkdownStyle(fontSize: model.chatFontSize, isStreaming: !message.complete)
                 .textSelection(.enabled)
         }
-        .task(id: message.renderRevision) {
-            if message.complete {
+        .task(id: message.id) {
+            while !message.complete {
                 if snapshot != message.text {
                     snapshot = message.text
                 }
-                return
+                try? await Task.sleep(for: .milliseconds(120))
+                guard !Task.isCancelled else { return }
             }
-            // Coalesce token bursts during streaming by debouncing ~120ms
-            try? await Task.sleep(for: .milliseconds(120))
-            guard !Task.isCancelled else { return }
             if snapshot != message.text {
+                snapshot = message.text
+            }
+        }
+        .onChange(of: message.complete) { _, complete in
+            if complete && snapshot != message.text {
                 snapshot = message.text
             }
         }
