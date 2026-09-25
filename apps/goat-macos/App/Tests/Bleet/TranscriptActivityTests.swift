@@ -306,6 +306,52 @@ import XCTest
 extension AppTests.Bleet {
     @Suite struct TranscriptActivityTests {
 
+        @Test @MainActor func lastVisibleIDSkipsTrailingToolAndEmptyRows() {
+            let user = ChatMessage(role: .user)
+            user.text = "Summarise the file."
+            let reply = ChatMessage(role: .assistant)
+            reply.text = "Here is the summary."
+            let tool = ChatMessage(role: .tool)
+            tool.text = "raw result"
+            let empty = ChatMessage(role: .assistant)
+            #expect(TranscriptActivity.lastVisibleID(in: [user, reply, tool, empty]) == reply.id)
+            #expect(TranscriptActivity.lastVisibleID(in: [user]) == user.id)
+            #expect(TranscriptActivity.lastVisibleID(in: []) == nil)
+        }
+
+        @Test @MainActor func footerShowsForEveryReplyWithTextOrErrorIncludingAgenticReplies() {
+            let event = ToolEventSnapshot(
+                id: "t1", server: "Pens", tool: "pen_read_file", arguments: "{}", result: "ok")
+            let agentic = ChatMessage(role: .assistant)
+            agentic.text = "Done."
+            agentic.toolEvents = [event]
+            #expect(MessageView.showsFooter(for: agentic))
+
+            let toolsOnly = ChatMessage(role: .assistant)
+            toolsOnly.toolEvents = [event]
+            #expect(!MessageView.showsFooter(for: toolsOnly))
+
+            let reasoningOnly = ChatMessage(role: .assistant)
+            reasoningOnly.thinking = "Considering options."
+            #expect(!MessageView.showsFooter(for: reasoningOnly))
+
+            let failed = ChatMessage(role: .assistant)
+            failed.error = "The model stopped."
+            #expect(MessageView.showsFooter(for: failed))
+
+            let user = ChatMessage(role: .user)
+            user.text = "Hello"
+            #expect(!MessageView.showsFooter(for: user))
+        }
+
+        @Test @MainActor func relativeTimeFollowsTheTimelineDate() {
+            let sent = Date(timeIntervalSince1970: 1_000_000)
+            #expect(MessageView.relativeTime(sent, now: sent.addingTimeInterval(10)) == "just now")
+            let later = MessageView.relativeTime(sent, now: sent.addingTimeInterval(180))
+            #expect(later != "just now")
+            #expect(later.contains("3"), "Three minutes later reads as three minutes ago, got \(later)")
+        }
+
         @Test @MainActor func activityRowsPreserveNarrationAndIdentityWhenToolCallsArrive() {
             let first = activityMessage()
             first.text = "I’ll inspect the current component."

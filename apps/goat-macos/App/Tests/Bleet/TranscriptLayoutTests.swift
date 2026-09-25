@@ -1,5 +1,6 @@
 import AppKit
 import Bleet
+import Persistence
 import SwiftUI
 import Testing
 
@@ -413,6 +414,42 @@ extension AppTests.Bleet {
             #expect(
                 settled != nil,
                 "An oversized completed reply must render a tall scrollable document and settle at the bottom")
+        }
+
+        /// #60 measurement 2 (A2): completing a reply with unchanged text must not change the row's height.
+        @Test(arguments: [false, true]) @MainActor func completionKeepsTheAssistantRowHeight(withTools: Bool)
+            async throws
+        {
+            let message = ChatMessage(role: .assistant)
+            message.text = "Here is an explanation of the layout.\n\n```swift\nlet value = 1\n```\n\nDone."
+            if withTools {
+                message.toolEvents = [
+                    ToolEventSnapshot(
+                        id: "t1", server: "Pens", tool: "pen_read_file", arguments: #"{"path":"a.swift"}"#, result: "ok"
+                    )
+                ]
+            }
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+                styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            let host = NSHostingView(
+                rootView: MessageView(message: message, isLast: true, projectID: nil)
+                    .frame(width: 600).environment(AppModel.shared))
+            window.contentView = host
+            defer {
+                window.contentView = nil
+                window.close()
+            }
+            try await Task.sleep(for: .milliseconds(300))
+            host.layoutSubtreeIfNeeded()
+            let before = host.fittingSize.height
+
+            message.complete = true
+            try await Task.sleep(for: .milliseconds(300))
+            host.layoutSubtreeIfNeeded()
+            let after = host.fittingSize.height
+            #expect(after == before, "Completion must not reflow the row (\(before) -> \(after) pt)")
         }
     }
 }

@@ -177,7 +177,7 @@ struct ChatTranscriptView: View {
                             }
                         }
                         let rows = TranscriptActivity.rows(session.messages[messageRange])
-                        let lastMessageID = session.messages.last?.id
+                        let lastMessageID = TranscriptActivity.lastVisibleID(in: session.messages)
                         let activeAssistant =
                             session.isStreaming
                             ? session.messages.last(where: { $0.role == .assistant }) : nil
