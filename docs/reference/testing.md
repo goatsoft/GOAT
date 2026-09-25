@@ -50,8 +50,15 @@ policy in [ADR-0083](../adrs/0083-selective-app-ci.md). Local `make verify` rema
 serial and complete. Each CI phase reports its duration in the run summary.
 
 Dependency downloads are cached by OS/toolchain, architecture, phase and resolved
-package versions. Compiled products and test homes are not cached. Tests always
-execute, and the production build keeps its normal testability settings. See
+package versions. The two Xcode phases also restore Xcode's compilation cache, a
+content-addressed store of compiler outputs keyed by every compiler input, so
+edits recompile rather than reuse stale work. DerivedData, build products and
+test homes are not cached. Tests always execute, and the production build keeps
+its normal testability settings. Each phase summary reports its cache state,
+size, compiler hits and misses and the largest build timing entries. Set the
+repository variable `GOAT_CI_COMPILATION_CACHE` to `off` to disable the cache.
+Locally, `make build CAS_PATH=/path/to/store` and `make test-app CAS_PATH=...`
+opt in to the same cache. See
 [ADR-0095](../adrs/0095-parallel-verification-and-preview-diagnostics.md).
 
 Hosted tests retain the full merged stdout/stderr next to their result bundle as
