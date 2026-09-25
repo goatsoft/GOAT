@@ -276,8 +276,12 @@ public actor OpenAICompatEngine: InferenceEngine {
 
     public func stream(_ r: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
         let config = self.config
+        // Child delegations (ADR-0096) carry a closure handle and use a bounded relay that fails
+        // closed if the consumer stalls. Parent chat streams keep the unbounded buffer they had.
+        let bufferingPolicy: AsyncThrowingStream<GenerationEvent, Error>.Continuation.BufferingPolicy =
+            r.transportClosureHandle == nil ? .unbounded : .bufferingNewest(32)
         let stream = AsyncThrowingStream<GenerationEvent, Error>(
-            bufferingPolicy: .bufferingNewest(32)
+            bufferingPolicy: bufferingPolicy
         ) { continuation in
             let task = Task {
                 var assembler = StreamAssembler(round: r.round)

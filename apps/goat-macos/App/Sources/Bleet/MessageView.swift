@@ -716,7 +716,10 @@ private struct ToolCallDetails: View {
     private var hasResult: Bool { ToolCallPayload.containsValue(event.result) }
 
     private var investigationReceipt: SubagentReceipt? {
-        guard event.tool == "subagent_delegate", let data = event.result?.data(using: .utf8) else { return nil }
+        // An MCP server may expose a tool with the same name; only GOAT's own extension owns receipts.
+        guard event.server == "GOATed", event.tool == "subagent_delegate",
+            let data = event.result?.data(using: .utf8)
+        else { return nil }
         return try? JSONDecoder().decode(SubagentReceipt.self, from: data)
     }
 

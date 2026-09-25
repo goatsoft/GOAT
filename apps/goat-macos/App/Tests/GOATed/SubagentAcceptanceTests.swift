@@ -1105,6 +1105,8 @@ extension AppTests.GOATed {
             let quarantine = SubagentTransportQuarantine()
             let guarded = QuarantineGuardedEngine(underlying: underlying, quarantine: quarantine)
 
+            // Quarantine describes a child transport that is still open and unacknowledged.
+            quarantine.markTransportActive()
             quarantine.markQuarantined()
             let request = GenerationRequest(
                 model: "qwen2.5-7b-instruct",
@@ -1122,6 +1124,23 @@ extension AppTests.GOATed {
             }
             #expect(errorThrown != nil)
             #expect(quarantine.isQuarantined)
+        }
+
+        // A quarantine mark that races behind the closure acknowledgement must not latch the
+        // engine closed: nothing else would clear it, blocking every chat until relaunch.
+        @Test func quarantine_markAfterClosureDoesNotLatch() {
+            let quarantine = SubagentTransportQuarantine()
+            quarantine.markTransportActive()
+            quarantine.markTransportClosed()
+            quarantine.markQuarantined()
+            #expect(!quarantine.isQuarantined)
+            #expect(!quarantine.isTransportActive)
+
+            quarantine.markTransportActive()
+            quarantine.markQuarantined()
+            #expect(quarantine.isQuarantined)
+            quarantine.markTransportClosed()
+            #expect(!quarantine.isQuarantined)
         }
 
         // Multi-call aggregate memory bounding test: stops before overflowing call

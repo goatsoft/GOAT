@@ -6,6 +6,7 @@ import Pens
 import Persistence
 import Tools
 
+/// `@unchecked Sendable`: the byte count is read and mutated only while holding `lock`.
 private final class QueuedByteTracker: @unchecked Sendable {
     private let lock = NSLock()
     private var bytes = 0
@@ -30,6 +31,7 @@ private final class QueuedByteTracker: @unchecked Sendable {
     }
 }
 
+/// `@unchecked Sendable`: the recorded error is read and written only while holding `lock`.
 final class StreamOverflowState: @unchecked Sendable {
     private let lock = NSLock()
     private var overflowError: Error?
@@ -792,6 +794,11 @@ public actor SubagentWorker {
             let roundPromptTokens = estimatedInputTokens
             self.currentTotalTokens = totalTokens + roundPromptTokens
             self.currentRoundsExecuted = roundsExecuted
+
+            // The watchdog or parent can revoke this run while tools and the prompt are prepared.
+            // Re-check immediately before opening a transport so a finished run never sends again.
+            try Task.checkCancellation()
+            try context.lease.checkValid()
 
             let quarantine = context.quarantine
             quarantine?.markTransportActive()

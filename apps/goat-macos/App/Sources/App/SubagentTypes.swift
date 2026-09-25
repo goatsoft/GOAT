@@ -401,6 +401,8 @@ public struct SubagentTurnAuthority: SubagentHostAuthority {
     }
 }
 
+/// `@unchecked Sendable`: every stored property is read and written only while holding `lock`;
+/// waiters are resumed outside the lock after removal, so each continuation resumes at most once.
 public final class SubagentTransportQuarantine: @unchecked Sendable {
     private let lock = NSLock()
     private var quarantined = false
@@ -442,10 +444,13 @@ public final class SubagentTransportQuarantine: @unchecked Sendable {
         }
     }
 
+    /// Quarantine only while a child transport is still open. `markTransportClosed()` clears both
+    /// flags under the same lock, so a mark that races behind the closure acknowledgement cannot
+    /// latch the engine closed for every chat until relaunch.
     public func markQuarantined() {
         lock.lock()
         defer { lock.unlock() }
-        quarantined = true
+        if transportActive { quarantined = true }
     }
 
     public func clearQuarantine() {
@@ -575,6 +580,7 @@ public actor QuarantineGuardedEngine: InferenceEngine {
 
 }
 
+/// `@unchecked Sendable`: counters are read and mutated only while holding `lock`.
 public final class SubagentTurnTokenAccounting: @unchecked Sendable {
     private let lock = NSLock()
     private var storedDelegationsCount: Int = 0
@@ -620,6 +626,7 @@ public final class SubagentTurnTokenAccounting: @unchecked Sendable {
     }
 }
 
+/// `@unchecked Sendable`: the revocation flag is read and written only while holding `lock`.
 public final class SubagentCapabilityLease: @unchecked Sendable {
     private let lock = NSLock()
     private var storedIsRevoked = false
