@@ -18,7 +18,7 @@ enum TranscriptActivity {
     static func rows(_ messages: ArraySlice<ChatMessage>) -> [Row] {
         var rows: [Row] = []
         for message in messages {
-            if message.role == .tool { continue }  // Results are already attached to their calls.
+            if message.role == .tool || isEmpty(message) { continue }  // Results are already attached to their calls.
             // Message identity and view ancestry never depend on arriving tool events.
             // Adjacent assistant rounds share visual alignment, not a disclosure container.
             let continuation = message.role == .assistant && rows.last?.messages.last?.role == .assistant
@@ -122,8 +122,14 @@ final class ToolEventPresentationCache: @unchecked Sendable {
     static let shared = ToolEventPresentationCache()
 
     private final class Box: @unchecked Sendable {
+        let event: ToolEventSnapshot
+        let rootName: String?
         let value: ToolEventPresentation
-        init(_ value: ToolEventPresentation) { self.value = value }
+        init(event: ToolEventSnapshot, rootName: String?, value: ToolEventPresentation) {
+            self.event = event
+            self.rootName = rootName
+            self.value = value
+        }
     }
 
     private let cache = NSCache<NSString, Box>()
@@ -133,18 +139,22 @@ final class ToolEventPresentationCache: @unchecked Sendable {
     }
 
     private func makeKey(for event: ToolEventSnapshot, rootName: String?) -> NSString {
-        "\(event.id):\(event.tool):\(event.arguments.hashValue):\(event.result != nil):\(event.isError):\(event.denied):\(rootName ?? "")"
+        "\(event.id):\(event.server):\(event.tool):\(event.arguments.hashValue):\(event.result?.hashValue ?? 0):\(event.isError):\(event.denied):\(rootName ?? "")"
             as NSString
     }
 
     func presentation(for event: ToolEventSnapshot, rootName: String? = nil) -> ToolEventPresentation {
         let key = makeKey(for: event, rootName: rootName)
-        if let existing = cache.object(forKey: key) {
+        if let existing = cache.object(forKey: key), existing.event == event, existing.rootName == rootName {
             return existing.value
         }
         let computed = compute(for: event, rootName: rootName)
-        cache.setObject(Box(computed), forKey: key)
+        cache.setObject(Box(event: event, rootName: rootName, value: computed), forKey: key)
         return computed
+    }
+
+    func removeAll() {
+        cache.removeAllObjects()
     }
 
     private func compute(for event: ToolEventSnapshot, rootName: String?) -> ToolEventPresentation {

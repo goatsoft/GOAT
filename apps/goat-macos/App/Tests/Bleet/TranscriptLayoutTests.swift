@@ -258,5 +258,161 @@ extension AppTests.Bleet {
             let restoredLater = viewport.messageRange(count: count, anchor: later.anchor, cost: cost)
             #expect(restoredLater == 98..<99, "Restoring with anchor must not revert to previous page")
         }
+
+        /// Regression for PR 66: a parts view must re-split when its source keeps growing past 8 KiB.
+        @Test @MainActor func textPartsViewUpdatesWhenSourceGrowsAfterSplitting() async throws {
+            let line = String(repeating: "x", count: 99) + "\n"  // 100 bytes
+            func source(_ kib: Int) -> String { String(repeating: line, count: kib * 1_024 / 100) }
+            func parts(_ source: String) -> some View {
+                TranscriptTextPartsView(source: source, fontSize: 13)
+                    .frame(width: 500)
+                    .environment(AppModel.shared)
+            }
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 500, height: 400),
+                styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            let host = NSHostingView(rootView: parts(source(10)))
+            window.contentView = host
+            defer {
+                window.contentView = nil
+                window.close()
+            }
+            func settledHeight() async throws -> CGFloat {
+                try await Task.sleep(for: .milliseconds(300))
+                host.layoutSubtreeIfNeeded()
+                return host.fittingSize.height
+            }
+            // 10 KiB splits into 8 KiB + 2 KiB; the last (short) part is shown.
+            let short = try await settledHeight()
+            // 16 KiB splits into 8 KiB + 8 KiB; the shown last part must grow to 8 KiB.
+            host.rootView = parts(source(16))
+            let full = try await settledHeight()
+            #expect(full > short * 2, "The visible part must re-split as the source grows (\(short) -> \(full))")
+        }
+
+        /// Issue #60 C0: a reply whose answer and reasoning both pass 8 KiB completes while streaming.
+        /// Both parts views must show their latest text, and the transcript must stay scrollable to
+        /// its bottom without reselecting the chat.
+        @Test @MainActor func oversizedAnswerAndReasoningCompleteIntoAReachableBottom() async throws {
+            let session = ChatSession(effort: .trot, modelID: nil)
+            session.messagesLoaded = true
+            let user = ChatMessage(role: .user)
+            user.text = "Write a long report."
+            user.complete = true
+            let assistant = ChatMessage(role: .assistant)
+            session.messages = [user, assistant]
+            session.isStreaming = true
+
+            let reasoningLine = String(repeating: "r", count: 79) + "\n"
+            let answerLine = String(repeating: "a", count: 79) + "\n"
+            assistant.appendStream(text: "", thinking: String(repeating: reasoningLine, count: 40))
+
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 700, height: 450),
+                styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            let host = NSHostingView(rootView: transcript(session).environment(\.reasoningStartsExpanded, true))
+            window.contentView = host
+            defer {
+                window.contentView = nil
+                window.close()
+            }
+            host.layoutSubtreeIfNeeded()
+
+            // Stream both sources well past one 8 KiB part, the way the worker publishes batches.
+            for _ in 0..<6 {
+                assistant.appendStream(
+                    text: String(repeating: answerLine, count: 40),
+                    thinking: String(repeating: reasoningLine, count: 30))
+                host.layoutSubtreeIfNeeded()
+                try await Task.sleep(for: .milliseconds(150))
+            }
+            assistant.appendStream(text: "ANSWER-END", thinking: "REASONING-END")
+            #expect(assistant.text.utf8.count > 16 * 1_024)
+            #expect(assistant.thinking.utf8.count > 16 * 1_024)
+
+            assistant.complete = true
+            session.isStreaming = false
+
+            // Each parts view publishes exactly what it prepared for display under its owner key.
+            let reasoning = TranscriptText.removingBoundaryBlankLines(assistant.thinking)
+            func shownAnswer() -> String? {
+                TranscriptPartsCache.shared.parts(for: "\(assistant.id.uuidString):text", source: assistant.text)?.last
+            }
+            func shownReasoning() -> String? {
+                TranscriptPartsCache.shared.parts(for: "\(assistant.id.uuidString):thinking", source: reasoning)?.last
+            }
+            var settled = false
+            for _ in 0..<150 {
+                host.layoutSubtreeIfNeeded()
+                if let scroll = findTranscriptScroll(host), let document = scroll.documentView,
+                    document.bounds.height > scroll.contentView.bounds.height,
+                    document.bounds.maxY - document.visibleRect.maxY < 100,
+                    shownAnswer()?.hasSuffix("ANSWER-END") == true,
+                    shownReasoning()?.hasSuffix("REASONING-END") == true
+                {
+                    settled = true
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            #expect(
+                settled,
+                "Latest parts render and the bottom is reachable; answer \(shownAnswer()?.suffix(12) ?? "none"), reasoning \(shownReasoning()?.suffix(12) ?? "none")"
+            )
+        }
+
+        @Test @MainActor func oversizedCompletedReplyRendersScrollableDocumentAndReachesBottomSentinel() async throws {
+            let session = ChatSession(effort: .trot, modelID: nil)
+            session.messagesLoaded = true
+            let user = ChatMessage(role: .user)
+            user.text = "Write a comprehensive report on transcript performance."
+            user.complete = true
+
+            let user2 = ChatMessage(role: .user)
+            user2.text = "Can you elaborate further?"
+            user2.complete = true
+
+            let assistant = ChatMessage(role: .assistant)
+            // Sized so that Part 2 is substantial (> 6 KiB)
+            assistant.text = String(
+                repeating:
+                    "Here is a detailed paragraph explaining architectural metrics and layout passes in Swift.\n\n",
+                count: 160)
+            assistant.thinking = String(
+                repeating: "Reasoning step evaluating trade-offs and performance implications.\n\n", count: 40)
+            assistant.complete = true
+            session.messages = [user, user2, assistant]
+
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 700, height: 450),
+                styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            let host = NSHostingView(rootView: transcript(session))
+            window.contentView = host
+            defer {
+                window.contentView = nil
+                window.close()
+            }
+
+            var settled: NSScrollView?
+            for _ in 0..<100 {
+                host.layoutSubtreeIfNeeded()
+                if let scroll = findTranscriptScroll(host), let document = scroll.documentView,
+                    document.bounds.height > 600,
+                    document.visibleRect.height > 0,
+                    document.bounds.height > scroll.contentView.bounds.height,
+                    document.bounds.maxY - document.visibleRect.maxY < 100
+                {
+                    settled = scroll
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            #expect(
+                settled != nil,
+                "An oversized completed reply must render a tall scrollable document and settle at the bottom")
+        }
     }
 }

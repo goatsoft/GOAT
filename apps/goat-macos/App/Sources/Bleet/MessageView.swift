@@ -51,11 +51,11 @@ struct MessageView: View {
             switch message.role {
             case .user: userBubble
             case .assistant:
-                assistantBlock
-                    .frame(
-                        height: TranscriptActivity.isEmpty(message) ? 0 : nil
-                    )
-                    .clipped()
+                if TranscriptActivity.isEmpty(message) {
+                    EmptyView()
+                } else {
+                    assistantBlock
+                }
             case .system, .tool: EmptyView()
             }
         }
@@ -883,9 +883,15 @@ private struct SubagentInvestigationDetails: View {
     }
 }
 
+extension EnvironmentValues {
+    /// Opens full reasoning instead of the recent excerpt when a disclosure first appears.
+    @Entry var reasoningStartsExpanded = false
+}
+
 /// Reasoning stays visible when calls arrive. User choices survive stream updates.
 struct ThinkingDisclosure: View {
     @Environment(\.transcriptInspection) private var inspection
+    @Environment(\.reasoningStartsExpanded) private var startsExpanded
     let message: ChatMessage
     @State private var visible = true
     @State private var showAll = false
@@ -919,7 +925,9 @@ struct ThinkingDisclosure: View {
             if visible {
                 ThinkingContentView(
                     source: TranscriptText.removingBoundaryBlankLines(
-                        showAll ? message.thinking : preview.text)
+                        showAll ? message.thinking : preview.text),
+                    cacheKey: "\(message.id.uuidString):thinking",
+                    onPrepared: { message.markRenderChanged() }
                 )
                 .padding(.leading, Caprine.Activity.inset)
                 .overlay(alignment: .leading) {
@@ -937,6 +945,7 @@ struct ThinkingDisclosure: View {
                 }
             }
         }
+        .onAppear { if startsExpanded { showAll = true } }
     }
 }
 

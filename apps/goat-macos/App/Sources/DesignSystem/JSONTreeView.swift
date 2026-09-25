@@ -25,6 +25,10 @@ final class JSONValueCache {
     func set(_ raw: String, value: JSONValue?) {
         cache.setObject(Box(value), forKey: raw as NSString)
     }
+
+    func removeAll() {
+        cache.removeAllObjects()
+    }
 }
 
 /// Presentation order for JSON object keys:

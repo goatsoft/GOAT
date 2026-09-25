@@ -93,6 +93,85 @@ final class TranscriptPerformanceTests: XCTestCase {
 
         """
 
+    @MainActor func testCompletionDeltaRowHeightUnchanged() async throws {
+        let message = ChatMessage(role: .assistant)
+        message.text = "Here is an explanation of the layout metrics.\n\n" + Self.block
+        message.complete = false
+
+        let host = NSHostingView(
+            rootView: MessageView(message: message, isLast: true, projectID: nil)
+                .environment(AppModel.shared))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer {
+            window.contentView = nil
+            window.close()
+        }
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(50))
+        let heightBefore = host.fittingSize.height
+
+        message.complete = true
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(50))
+        let heightAfter = host.fittingSize.height
+
+        let delta = abs(heightAfter - heightBefore)
+        XCTAssertEqual(delta, 0, "Assistant row height before and after complete with unchanged text must be 0 pt")
+    }
+
+    @MainActor func testOversizedCompletedReplyRendersScrollableDocument() async throws {
+        let session = ChatSession(effort: .trot, modelID: nil)
+        session.messagesLoaded = true
+        let user = ChatMessage(role: .user)
+        user.text = "Write a comprehensive report on transcript performance."
+        user.complete = true
+
+        let assistant = ChatMessage(role: .assistant)
+        assistant.text = String(
+            repeating: "Here is paragraph detailing architecture and layout metrics.\n\n", count: 180)
+        assistant.thinking = String(
+            repeating: "Reasoning step evaluating trade-offs and performance implications.\n\n", count: 80)
+        assistant.complete = true
+        session.messages = [user, assistant]
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 700, height: 450),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let host = NSHostingView(
+            rootView: ChatTranscriptView(session: session, initiallyFollowing: true)
+                .environment(AppModel.shared))
+        window.contentView = host
+        defer {
+            window.contentView = nil
+            window.close()
+        }
+
+        func findScroll(_ view: NSView) -> NSScrollView? {
+            if let scroll = view as? NSScrollView { return scroll }
+            return view.subviews.lazy.compactMap(findScroll).first
+        }
+
+        var settled: NSScrollView?
+        for _ in 0..<100 {
+            host.layoutSubtreeIfNeeded()
+            if let scroll = findScroll(host), let document = scroll.documentView,
+                document.bounds.height > 600,
+                document.visibleRect.height > 0,
+                document.bounds.height > scroll.contentView.bounds.height
+            {
+                settled = scroll
+                break
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertNotNil(settled, "Oversized completed reply must render a tall scrollable document")
+    }
+
     private static func usage() -> (cpu: Double, peakRSS: Int) {
         var usage = rusage()
         getrusage(RUSAGE_SELF, &usage)

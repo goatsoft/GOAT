@@ -28,7 +28,13 @@ public final class ChatMessage: Identifiable {
     /// Session-local worker status; never added to the model prompt.
     public var generationStatus: String?
     public var error: String?
-    public var complete = false
+    public var complete = false {
+        didSet {
+            if complete != oldValue {
+                markRenderChanged()
+            }
+        }
+    }
     public var attachmentPaths: [String] = []
     public var toolEvents: [ToolEventSnapshot] = []
     /// ADR-0087 message kind. A compaction row carries the folded summary in `text` and its
