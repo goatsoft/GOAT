@@ -116,6 +116,74 @@ extension AppTests.Bleet {
 extension AppTests.Bleet {
     @Suite(.serialized) struct SharedRenderingCacheTests {
 
+        @Test @MainActor func partsCacheDeclinesSourcesAboveTheEntryCeiling() {
+            let cache = TranscriptPartsCache(maximumEntries: 8, maximumTotalCost: 1_000, maximumEntryCost: 400)
+            let small = String(repeating: "s", count: 150)  // cost 300
+            let large = String(repeating: "l", count: 250)  // cost 500
+            #expect(!cache.store([large], for: "a", source: large))
+            #expect(cache.snapshot() == .init(entryCount: 0, totalCost: 0))
+            #expect(cache.store([small], for: "a", source: small))
+            #expect(cache.snapshot() == .init(entryCount: 1, totalCost: 300))
+            // Declining a newer, oversized source also drops the stale entry for that owner.
+            #expect(!cache.store([large], for: "a", source: large))
+            #expect(cache.parts(for: "a", source: small) == nil)
+            #expect(cache.snapshot() == .init(entryCount: 0, totalCost: 0))
+        }
+
+        @Test @MainActor func partsCacheAccountsReplacementAndEvictsLeastRecentlyUsed() {
+            let cache = TranscriptPartsCache(maximumEntries: 8, maximumTotalCost: 1_000, maximumEntryCost: 400)
+            let source = String(repeating: "x", count: 150)  // cost 300
+            for key in ["a", "b", "c"] { cache.store([source], for: key, source: source) }
+            #expect(cache.snapshot() == .init(entryCount: 3, totalCost: 900))
+            _ = cache.parts(for: "a", source: source)  // a is now more recent than b
+            cache.store([source], for: "d", source: source)
+            #expect(cache.parts(for: "b", source: source) == nil, "The least recently used entry is evicted")
+            #expect(cache.parts(for: "a", source: source) != nil)
+            #expect(cache.snapshot() == .init(entryCount: 3, totalCost: 900))
+
+            // Replacing an owner's source charges the new cost only.
+            let shorter = String(repeating: "y", count: 100)  // cost 200
+            cache.store([shorter], for: "a", source: shorter)
+            #expect(cache.snapshot() == .init(entryCount: 3, totalCost: 800))
+
+            // The entry count is bounded independently of cost.
+            let counted = TranscriptPartsCache(maximumEntries: 2, maximumTotalCost: 1_000, maximumEntryCost: 400)
+            for key in ["a", "b", "c"] { counted.store(["p"], for: key, source: "p") }
+            #expect(counted.snapshot().entryCount == 2)
+            #expect(counted.parts(for: "a", source: "p") == nil)
+        }
+
+        @Test @MainActor func oversizedPartsRenderFromTheViewAndEvictedPartsRebuild() async throws {
+            let line = String(repeating: "x", count: 99) + "\n"
+            let oversized = String(repeating: line, count: 600 * 1_024 / 100)  // cost above the 1 MiB ceiling
+            let key = "test-oversized-\(UUID().uuidString)"
+            let (window, host) = mounted(
+                TranscriptTextPartsView(source: oversized, fontSize: 13, cacheKey: key)
+                    .frame(width: 500).environment(AppModel.shared))
+            let placeholder = host.fittingSize.height
+            try await Task.sleep(for: .milliseconds(600))
+            host.layoutSubtreeIfNeeded()
+            #expect(host.fittingSize.height > placeholder * 4, "View-owned parts render without global retention")
+            #expect(TranscriptPartsCache.shared.parts(for: key, source: oversized) == nil)
+            window.contentView = nil
+            window.close()
+
+            // After eviction a remounted view prepares and retains the parts again.
+            let source = String(repeating: line, count: 16 * 1_024 / 100)
+            let rebuildKey = "test-rebuild-\(UUID().uuidString)"
+            TranscriptPartsCache.shared.store([source], for: rebuildKey, source: source)
+            TranscriptPartsCache.shared.removeAll()
+            let (again, _) = mounted(
+                TranscriptTextPartsView(source: source, fontSize: 13, cacheKey: rebuildKey)
+                    .frame(width: 500).environment(AppModel.shared))
+            defer {
+                again.contentView = nil
+                again.close()
+            }
+            try await Task.sleep(for: .milliseconds(400))
+            #expect(TranscriptPartsCache.shared.parts(for: rebuildKey, source: source)?.count == 2)
+        }
+
         @Test @MainActor func partsViewNeverSplitsInItsInitializerAndRemountsFromCache() async throws {
             let line = String(repeating: "x", count: 99) + "\n"
             let source = String(repeating: line, count: 16 * 1_024 / 100)
