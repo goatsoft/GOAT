@@ -105,27 +105,87 @@ enum TranscriptText {
     }
 }
 
-enum ToolActivityLabel {
-    static func progressTitle(_ event: ToolEventSnapshot) -> String {
-        let label = title(event)
-        let replacements = [
-            "List files": "Listing files", "Read file": "Reading file",
-            "Search files": "Searching files", "Create file": "Creating file",
-            "Edit file": "Editing file", "Run command": "Running command",
-            "Check command": "Checking command", "Stop command": "Stopping command",
-        ]
-        for (action, progress) in replacements where label == action || label.hasPrefix(action + " · ") {
-            return progress + label.dropFirst(action.count)
-        }
-        return "Using " + label
+// MARK: - Presentation and Caching
+
+/// Pre-computed presentation data for a tool event snapshot.
+struct ToolEventPresentation: Sendable, Equatable {
+    let title: String
+    let progressTitle: String
+    let action: String
+    let hasDetails: Bool
+    let diff: ToolFileDiff?
+}
+
+/// Cache precomputed presentations across renders so views do not repeatedly parse JSON in body.
+final class ToolEventPresentationCache: @unchecked Sendable {
+    static let shared = ToolEventPresentationCache()
+
+    private struct Key: Hashable {
+        let id: String
+        let tool: String
+        let argsCount: Int
+        let argsHash: Int
+        let resultCount: Int?
+        let resultHash: Int?
+        let isError: Bool
+        let denied: Bool
+        let rootName: String?
     }
 
-    static func title(_ event: ToolEventSnapshot) -> String {
-        if event.server == "Memory" { return "Memory · " + memoryAction(event) }
+    private let lock = NSLock()
+    private var entries: [Key: ToolEventPresentation] = [:]
+
+    func presentation(for event: ToolEventSnapshot, rootName: String? = nil) -> ToolEventPresentation {
+        let key = Key(
+            id: event.id,
+            tool: event.tool,
+            argsCount: event.arguments.count,
+            argsHash: event.arguments.hashValue,
+            resultCount: event.result?.count,
+            resultHash: event.result?.hashValue,
+            isError: event.isError,
+            denied: event.denied,
+            rootName: rootName
+        )
+        lock.lock()
+        if let existing = entries[key] {
+            lock.unlock()
+            return existing
+        }
+        lock.unlock()
+
+        let computed = compute(for: event, rootName: rootName)
+        lock.lock()
+        if entries.count > 1000 {
+            entries.removeAll(keepingCapacity: true)
+        }
+        entries[key] = computed
+        lock.unlock()
+        return computed
+    }
+
+    private func compute(for event: ToolEventSnapshot, rootName: String?) -> ToolEventPresentation {
+        let title = computeTitle(event, rootName: rootName)
+        let progressTitle = computeProgressTitle(for: title)
+        let action = event.server == "Memory" ? computeMemoryAction(event) : title
+        let hasDetails = ToolCallPayload.containsValue(event.arguments) || ToolCallPayload.containsValue(event.result)
+        let diff = ToolDiffParser.parse(tool: event.tool, arguments: event.arguments)
+        return ToolEventPresentation(
+            title: title,
+            progressTitle: progressTitle,
+            action: action,
+            hasDetails: hasDetails,
+            diff: diff
+        )
+    }
+
+    private func computeTitle(_ event: ToolEventSnapshot, rootName: String?) -> String {
+        if event.server == "Memory" { return "Memory · " + computeMemoryAction(event) }
         let action: String
         let key: String?
         switch event.tool {
         case "pen_list_files": (action, key) = ("List files", "path")
+        case "pen_glob": (action, key) = ("Find files", "pattern")
         case "pen_read_file": (action, key) = ("Read file", "path")
         case "pen_search": (action, key) = ("Search files", "query")
         case "pen_write_file": (action, key) = ("Create file", "path")
@@ -135,21 +195,44 @@ enum ToolActivityLabel {
         case "pen_stop_command": (action, key) = ("Stop command", "job_id")
         default: return "\(event.server) · \(event.tool)"
         }
-        // Labels never include file contents or tool output. Raw payloads remain in the disclosure.
         guard let key, event.arguments.utf8.count <= 65_536,
             let data = event.arguments.data(using: .utf8),
-            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let value = object[key] as? String
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return action }
-        var detail = String(value.prefix(160))
+
+        var rawDetail = (object[key] as? String) ?? ""
+        if rawDetail.isEmpty && event.tool == "pen_glob", let fallback = object["path"] as? String {
+            rawDetail = fallback
+        }
+        var detail = String(rawDetail.prefix(160))
         if event.tool == "pen_run_command", let args = object["args"] as? [String] {
             detail += " " + args.prefix(4).map { String($0.prefix(80)) }.joined(separator: " ")
         }
-        detail = detail.components(separatedBy: .newlines).joined(separator: " ")
+        detail = detail.components(separatedBy: .newlines).joined(separator: " ").trimmingCharacters(in: .whitespaces)
+
+        if detail == "." || (detail.isEmpty && event.tool == "pen_list_files") {
+            let pen = rootName?.trimmingCharacters(in: .whitespacesAndNewlines)
+            detail = (pen?.isEmpty == false) ? pen! : "workspace"
+        }
+
         return detail.isEmpty ? action : "\(action) · \(String(detail.prefix(240)))"
     }
 
-    static func memoryAction(_ event: ToolEventSnapshot) -> String {
+    private func computeProgressTitle(for label: String) -> String {
+        let replacements = [
+            "List files": "Listing files", "Find files": "Finding files",
+            "Read file": "Reading file", "Search files": "Searching files",
+            "Create file": "Creating file", "Edit file": "Editing file",
+            "Run command": "Running command", "Check command": "Checking command",
+            "Stop command": "Stopping command", "Subagent": "Running subagent",
+        ]
+        for (action, progress) in replacements where label == action || label.hasPrefix(action + " · ") {
+            return progress + label.dropFirst(action.count)
+        }
+        return "Using " + label
+    }
+
+    private func computeMemoryAction(_ event: ToolEventSnapshot) -> String {
         let action: String
         let key: String?
         switch event.tool {
@@ -171,7 +254,51 @@ enum ToolActivityLabel {
             let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let raw = object[key] as? String
         else { return action }
-        let detail = raw.components(separatedBy: .newlines).joined(separator: " ")
+        let detail = raw.components(separatedBy: .newlines).joined(separator: " ").trimmingCharacters(in: .whitespaces)
         return detail.isEmpty ? action : action + " · " + String(detail.prefix(160))
+    }
+}
+
+enum ToolCallPayload {
+    static func containsValue(_ text: String?) -> Bool {
+        guard let text, !text.isEmpty else { return false }
+        return text.contains(where: { !$0.isWhitespace })
+    }
+
+    static func trimmed(_ text: String) -> String {
+        var start = text.startIndex
+        while start < text.endIndex {
+            let newline = text[start...].firstIndex(of: "\n")
+            let lineStart = newline.map { text.index(after: $0) } ?? text.endIndex
+            guard text[start..<lineStart].allSatisfy(\.isWhitespace) else { break }
+            start = lineStart
+        }
+        var end = text.endIndex
+        while end > start {
+            let newline = text[..<end].lastIndex(of: "\n")
+            let lineStart = newline.map { text.index(after: $0) } ?? start
+            guard text[lineStart..<end].allSatisfy(\.isWhitespace) else { break }
+            end = newline ?? start
+        }
+        if start == text.startIndex && end == text.endIndex { return text }
+        return String(text[start..<end])
+    }
+}
+
+enum ToolActivityLabel {
+    static func presentation(for event: ToolEventSnapshot, rootName: String? = nil) -> ToolEventPresentation {
+        ToolEventPresentationCache.shared.presentation(for: event, rootName: rootName)
+    }
+
+    static func progressTitle(_ event: ToolEventSnapshot, rootName: String? = nil) -> String {
+        presentation(for: event, rootName: rootName).progressTitle
+    }
+
+    static func title(_ event: ToolEventSnapshot, rootName: String? = nil) -> String {
+        presentation(for: event, rootName: rootName).title
+    }
+
+    static func memoryAction(_ event: ToolEventSnapshot) -> String {
+        presentation(for: event).action
     }
 }

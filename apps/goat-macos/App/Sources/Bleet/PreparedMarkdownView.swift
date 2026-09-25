@@ -16,6 +16,39 @@ enum MarkdownPreparation: Sendable {
     case plainText
 }
 
+/// Synchronous MainActor cache for parsed markdown so already-seen or warm documents render on frame 0.
+@MainActor
+final class MarkdownContentCache {
+    static let shared = MarkdownContentCache()
+    private let cache = NSCache<NSUUID, CacheEntry>()
+
+    final class CacheEntry: @unchecked Sendable {
+        let source: String
+        let content: PreparedMarkdownContent
+        init(source: String, content: PreparedMarkdownContent) {
+            self.source = source
+            self.content = content
+        }
+    }
+
+    init() {
+        cache.countLimit = 128
+    }
+
+    func peek(id: UUID, source: String) -> PreparedMarkdownContent? {
+        guard let entry = cache.object(forKey: id as NSUUID), entry.source == source else { return nil }
+        return entry.content
+    }
+
+    func set(id: UUID, source: String, content: PreparedMarkdownContent) {
+        cache.setObject(CacheEntry(source: source, content: content), forKey: id as NSUUID)
+    }
+
+    func removeAll() {
+        cache.removeAllObjects()
+    }
+}
+
 /// Bounded LRU cache for completed Markdown. Parsing happens on this actor, never while SwiftUI is
 /// evaluating a transcript row. Cost uses source bytes as a stable admission proxy.
 actor MarkdownRenderCache {
@@ -68,34 +101,32 @@ actor MarkdownRenderCache {
             sourceBytes -= replaced.sourceBytes
         }
 
-        let content = RenderSignposts.measure("MarkdownParse") {
-            PreparedMarkdownContent(value: MarkdownContent(GOATMarkdownSyntax.normalized(source)))
-        }
+        // Fenced code blocks inside markdown text are parsed as regular markdown.
+        let normalized = GOATMarkdownSyntax.normalized(source)
+        let parsed = MarkdownContent(normalized)
         guard !Task.isCancelled else { return .plainText }
-        parseCount += 1
-        entries[id] = Entry(
-            source: source,
-            content: content,
-            sourceBytes: bytes,
-            access: access)
+
+        let wrapped = PreparedMarkdownContent(value: parsed)
+        parseCount &+= 1
+        entries[id] = Entry(source: source, content: wrapped, sourceBytes: bytes, access: access)
         sourceBytes += bytes
-        evictIfNeeded()
-        return .parsed(content)
+        pruneIfNeeded()
+        return .parsed(wrapped)
     }
 
     func removeAll() {
         entries.removeAll()
         sourceBytes = 0
+        Task { @MainActor in
+            MarkdownContentCache.shared.removeAll()
+        }
     }
 
     func snapshot() -> Snapshot {
-        Snapshot(
-            entryCount: entries.count,
-            sourceBytes: sourceBytes,
-            parseCount: parseCount)
+        Snapshot(entryCount: entries.count, sourceBytes: sourceBytes, parseCount: parseCount)
     }
 
-    private func evictIfNeeded() {
+    private func pruneIfNeeded() {
         while entries.count > maximumEntries || sourceBytes > maximumSourceBytes {
             guard let victim = entries.min(by: { $0.value.access < $1.value.access }) else {
                 return
@@ -138,6 +169,11 @@ struct PreparedMarkdownView<Rendered: View>: View {
         self.onPrepared = onPrepared
         self.retainsPreviousContent = retainsPreviousContent
         self.render = render
+
+        if let cached = MarkdownContentCache.shared.peek(id: id, source: source) {
+            _preparedRequest = State(initialValue: Request(id: id, source: source))
+            _preparation = State(initialValue: .parsed(cached))
+        }
     }
 
     var body: some View {
@@ -171,34 +207,49 @@ struct PreparedMarkdownView<Rendered: View>: View {
             guard !Task.isCancelled else { return }
             preparedRequest = request
             preparation = result
-            if case .parsed = result { onPrepared() }
+            if case .parsed(let content) = result {
+                MarkdownContentCache.shared.set(id: id, source: source, content: content)
+                onPrepared()
+            }
         }
     }
 }
 
-/// Present a bounded Markdown snapshot at most four times a second while streaming. Incomplete
-/// artifacts remain source-only, so a new token never reloads a WebKit document.
+/// Unified, stable Markdown view for both streaming and complete states without view-identity swapping.
 struct StreamingMarkdownView: View {
     @Bindable var message: ChatMessage
     @Environment(AppModel.self) private var model
-    @State private var snapshot = ""
+    @State private var snapshot: String
+
+    init(message: ChatMessage) {
+        self.message = message
+        _snapshot = State(initialValue: message.text)
+    }
 
     var body: some View {
         PreparedMarkdownView(
             id: message.id, source: snapshot, fallbackFontSize: model.chatFontSize,
+            onPrepared: { message.markRenderChanged() },
             retainsPreviousContent: true
         ) { content in
             Markdown(content)
                 .markdownImageProvider(BlockedMarkdownImageProvider())
                 .markdownInlineImageProvider(BlockedMarkdownInlineImageProvider())
-                .goatMarkdownStyle(fontSize: model.chatFontSize, isStreaming: true)
+                .goatMarkdownStyle(fontSize: model.chatFontSize, isStreaming: !message.complete)
                 .textSelection(.enabled)
         }
-        .task(id: message.id) {
-            while !Task.isCancelled {
+        .task(id: message.renderRevision) {
+            if message.complete {
+                if snapshot != message.text {
+                    snapshot = message.text
+                }
+                return
+            }
+            // Coalesce token bursts during streaming by debouncing ~120ms
+            try? await Task.sleep(for: .milliseconds(120))
+            guard !Task.isCancelled else { return }
+            if snapshot != message.text {
                 snapshot = message.text
-                if message.complete { return }
-                do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
             }
         }
     }

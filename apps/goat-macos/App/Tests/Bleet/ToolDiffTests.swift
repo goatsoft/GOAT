@@ -131,4 +131,94 @@ extension AppTests.Bleet {
             #expect(ToolDiffParser.parse(tool: "pen_write_file", arguments: #"{"path":"a"}"#) == nil)
         }
     }
+
+    @MainActor @Suite struct JSONTreeViewTests {
+        @Test func testOrderedKeyPreservation() {
+            let json = """
+            {
+                "path": "Sources/App.swift",
+                "old_text": "let x = 1",
+                "new_text": "let x = 2",
+                "context": "test"
+            }
+            """
+            guard let node = JSONNode.parse(json) else {
+                Issue.record("Failed to parse JSON")
+                return
+            }
+            if case .object(let pairs) = node {
+                let keys = pairs.map(\.key)
+                #expect(keys == ["path", "old_text", "new_text", "context"])
+            } else {
+                Issue.record("Node is not an object")
+            }
+        }
+
+        @Test func testLargeNumberFormattingDoesNotTrap() {
+            let huge = Double(1e25)
+            let formattedHuge = JSONNode.formatNumber(huge)
+            #expect(!formattedHuge.isEmpty)
+
+            let maxInt64 = Double(Int64.max)
+            let formattedMaxInt = JSONNode.formatNumber(maxInt64)
+            #expect(formattedMaxInt == "9223372036854775807")
+
+            let minInt64 = Double(Int64.min)
+            let formattedMinInt = JSONNode.formatNumber(minInt64)
+            #expect(formattedMinInt == "-9223372036854775808")
+
+            let nan = Double.nan
+            #expect(JSONNode.formatNumber(nan) == "NaN")
+
+            let posInf = Double.infinity
+            #expect(JSONNode.formatNumber(posInf) == "Infinity")
+
+            let negInf = -Double.infinity
+            #expect(JSONNode.formatNumber(negInf) == "-Infinity")
+        }
+
+        @Test func testParseLargeNumberPayload() {
+            let json = """
+            {
+                "id": 9223372036854775807,
+                "big": 1e20,
+                "decimal": 42.5,
+                "zero": 0
+            }
+            """
+            guard let node = JSONNode.parse(json) else {
+                Issue.record("Failed to parse large numbers JSON")
+                return
+            }
+            if case .object(let pairs) = node {
+                #expect(pairs.count == 4)
+                #expect(pairs[0].key == "id")
+                #expect(pairs[1].key == "big")
+                #expect(pairs[2].key == "decimal")
+                #expect(pairs[3].key == "zero")
+            } else {
+                Issue.record("Node is not an object")
+            }
+        }
+
+        @Test func testEscapedStringsInOrderedParser() {
+            let json = """
+            {
+                "string": "Line 1\\nLine 2\\tTabbed \\\"quoted\\\" \\\\backslash",
+                "unicode": "\\u0041\\u0042\\u0043"
+            }
+            """
+            guard let node = JSONNode.parse(json) else {
+                Issue.record("Failed to parse escaped strings")
+                return
+            }
+            if case .object(let pairs) = node {
+                #expect(pairs.count == 2)
+                #expect(pairs[0].value.stringValue == "Line 1\nLine 2\tTabbed \"quoted\" \\backslash")
+                #expect(pairs[1].value.stringValue == "ABC")
+            } else {
+                Issue.record("Node is not an object")
+            }
+        }
+    }
 }

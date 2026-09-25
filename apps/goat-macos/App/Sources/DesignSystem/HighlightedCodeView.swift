@@ -82,7 +82,7 @@ struct HighlightedCodeView: View {
     }
 
     private var lineCount: Int {
-        max(1, code.reduce(1) { $0 + ($1 == "\n" ? 1 : 0) } - (code.hasSuffix("\n") ? 1 : 0))
+        HighlightCache.shared.lineCount(for: code)
     }
 
     private var gutter: String {
@@ -217,10 +217,10 @@ struct HighlightedCodeView: View {
             if language == "vue" {
                 VueCodeText(code: code)
             } else {
-                PreparedCodeText(code: code, language: language)
+                PreparedCodeText(code: code, language: language, isStreaming: isStreaming)
             }
         } else {
-            PreparedCodeText(code: code, language: nil)
+            PreparedCodeText(code: code, language: nil, isStreaming: isStreaming)
         }
     }
 }
