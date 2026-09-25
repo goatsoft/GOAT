@@ -10,7 +10,6 @@ struct AssistantRowLayout: Layout {
 
     struct Cache {
         var avatar: CGSize?
-        var sizes: [CGFloat?: CGSize] = [:]
     }
 
     func makeCache(subviews: Subviews) -> Cache { Cache() }
@@ -18,18 +17,14 @@ struct AssistantRowLayout: Layout {
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
         guard subviews.count == 2 else { return .zero }
         let width = proposal.width.flatMap { $0.isFinite ? max(0, $0) : nil }
-        if let size = cache.sizes[width] { return size }
         let avatar = cache.avatar ?? subviews[0].sizeThatFits(.unspecified)
         cache.avatar = avatar
         let inset = avatar.width + spacing + trailingSpace
         let document = subviews[1].sizeThatFits(
             ProposedViewSize(width: width.map { max(0, $0 - inset) }, height: nil))
-        let size = CGSize(
+        return CGSize(
             width: width ?? (inset + document.width),
             height: max(avatar.height, document.height))
-        if cache.sizes.count >= 8 { cache.sizes.removeAll(keepingCapacity: true) }
-        cache.sizes[width] = size
-        return size
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {

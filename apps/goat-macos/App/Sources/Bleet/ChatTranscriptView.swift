@@ -176,20 +176,32 @@ struct ChatTranscriptView: View {
                                 }
                             }
                         }
-                        ForEach(TranscriptActivity.rows(session.messages[messageRange])) { row in
+                        let rows = TranscriptActivity.cachedRows(
+                            session.messages[messageRange],
+                            range: messageRange,
+                            count: session.messages.count,
+                            streamRevision: streamRevision)
+                        let lastMessageID = session.messages.last?.id
+                        let activeAssistant =
+                            session.isStreaming
+                            ? session.messages.last(where: { $0.role == .assistant }) : nil
+                        let activeAssistantID = activeAssistant?.id
+                        let activeToolID: String? = {
+                            guard let activeAssistant else { return nil }
+                            return TranscriptActivity.summary([activeAssistant], activeAssistantID: activeAssistant.id)
+                                .current?.id
+                        }()
+                        ForEach(rows) { row in
                             // Each message retains its identity and ancestry as tool events arrive.
                             // Keep projection inside the existing bounded, fully measured window.
                             VStack(alignment: .leading, spacing: 0) {
                                 if let message = row.messages.first {
                                     MessageView(
-                                        message: message, isLast: message.id == session.messages.last?.id,
+                                        message: message, isLast: message.id == lastMessageID,
                                         projectID: session.projectID, compactActivity: row.isContinuation,
                                         joinsPreviousTools: row.joinsPreviousTools,
                                         joinsNextTools: row.joinsNextTools,
-                                        activeToolID: session.isStreaming
-                                            && message.id == session.messages.last(where: { $0.role == .assistant })?.id
-                                            ? TranscriptActivity.summary([message], activeAssistantID: message.id)
-                                                .current?.id : nil,
+                                        activeToolID: message.id == activeAssistantID ? activeToolID : nil,
                                         deleteCompaction: CompactionDeletion.canRestore(
                                             message, in: session.messages)
                                             ? { Task { await model.deleteCompaction(message, in: session) } }
@@ -330,6 +342,11 @@ struct ChatTranscriptView: View {
                         requestFollowScroll(using: proxy)
                     } else if viewport.readerOwnsViewport {
                         preserveReaderPosition(using: proxy)
+                    }
+                }
+                .onChange(of: session.isStreaming) { wasStreaming, isStreaming in
+                    if wasStreaming && !isStreaming, viewport.autoFollow {
+                        requestFollowScroll(using: proxy)
                     }
                 }
                 // A newly sent turn always re-arms follow and snaps to the bottom.

@@ -258,5 +258,57 @@ extension AppTests.Bleet {
             let restoredLater = viewport.messageRange(count: count, anchor: later.anchor, cost: cost)
             #expect(restoredLater == 98..<99, "Restoring with anchor must not revert to previous page")
         }
+
+        @Test @MainActor func oversizedCompletedReplyRendersScrollableDocumentAndReachesBottomSentinel() async throws {
+            let session = ChatSession(effort: .trot, modelID: nil)
+            session.messagesLoaded = true
+            let user = ChatMessage(role: .user)
+            user.text = "Write a comprehensive report on transcript performance."
+            user.complete = true
+
+            let user2 = ChatMessage(role: .user)
+            user2.text = "Can you elaborate further?"
+            user2.complete = true
+
+            let assistant = ChatMessage(role: .assistant)
+            // Sized so that Part 2 is substantial (> 6 KiB)
+            assistant.text = String(
+                repeating:
+                    "Here is a detailed paragraph explaining architectural metrics and layout passes in Swift.\n\n",
+                count: 160)
+            assistant.thinking = String(
+                repeating: "Reasoning step evaluating trade-offs and performance implications.\n\n", count: 40)
+            assistant.complete = true
+            session.messages = [user, user2, assistant]
+
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 700, height: 450),
+                styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            let host = NSHostingView(rootView: transcript(session))
+            window.contentView = host
+            defer {
+                window.contentView = nil
+                window.close()
+            }
+
+            var settled: NSScrollView?
+            for _ in 0..<100 {
+                host.layoutSubtreeIfNeeded()
+                if let scroll = findTranscriptScroll(host), let document = scroll.documentView,
+                    document.bounds.height > 600,
+                    document.visibleRect.height > 0,
+                    document.bounds.height > scroll.contentView.bounds.height,
+                    document.bounds.maxY - document.visibleRect.maxY < 100
+                {
+                    settled = scroll
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            #expect(
+                settled != nil,
+                "An oversized completed reply must render a tall scrollable document and settle at the bottom")
+        }
     }
 }

@@ -64,5 +64,28 @@ extension AppTests.Bleet {
             #expect(probe.widths.allSatisfy { $0 == 238 || $0 == 418 })
             #expect(probe.view?.frame.height == 180)
         }
+
+        @Test @MainActor func assistantRowLayoutUpdatesHeightWhenDocumentHeightGrowsAtConstantWidth() async throws {
+            let probe = ColumnMeasurementProbe()
+            let host = NSHostingView(rootView: columnFixture(width: 500, height: 60, probe: probe))
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 500, height: 400),
+                styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            defer {
+                window.contentView = nil
+                window.close()
+            }
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(50))
+            #expect(probe.view?.frame.height == 60)
+
+            // When document height expands (e.g. streaming or parts loaded), layout must update immediately.
+            host.rootView = columnFixture(width: 500, height: 1200, probe: probe)
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(50))
+            #expect(probe.view?.frame.height == 1200)
+        }
     }
 }

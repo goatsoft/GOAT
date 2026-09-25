@@ -15,10 +15,41 @@ enum TranscriptActivity {
         var joinsNextTools = false
     }
 
+    private struct CacheKey: Hashable {
+        let lowerBound: Int
+        let upperBound: Int
+        let count: Int
+        let streamRevision: UInt64
+    }
+
+    private static var rowsCache: [CacheKey: [Row]] = [:]
+
+    static func cachedRows(
+        _ messages: ArraySlice<ChatMessage>,
+        range: Range<Int>,
+        count: Int,
+        streamRevision: UInt64
+    ) -> [Row] {
+        let key = CacheKey(
+            lowerBound: range.lowerBound,
+            upperBound: range.upperBound,
+            count: count,
+            streamRevision: streamRevision)
+        if let cached = rowsCache[key] {
+            return cached
+        }
+        let computed = rows(messages)
+        if rowsCache.count >= 16 {
+            rowsCache.removeAll(keepingCapacity: true)
+        }
+        rowsCache[key] = computed
+        return computed
+    }
+
     static func rows(_ messages: ArraySlice<ChatMessage>) -> [Row] {
         var rows: [Row] = []
         for message in messages {
-            if message.role == .tool { continue }  // Results are already attached to their calls.
+            if message.role == .tool || isEmpty(message) { continue }  // Results are already attached to their calls.
             // Message identity and view ancestry never depend on arriving tool events.
             // Adjacent assistant rounds share visual alignment, not a disclosure container.
             let continuation = message.role == .assistant && rows.last?.messages.last?.role == .assistant

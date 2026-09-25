@@ -93,6 +93,132 @@ final class TranscriptPerformanceTests: XCTestCase {
 
         """
 
+    @MainActor func testCompletionDeltaRowHeightUnchanged() async throws {
+        let message = ChatMessage(role: .assistant)
+        message.text = "Here is an explanation of the layout metrics.\n\n" + Self.block
+        message.complete = false
+
+        let host = NSHostingView(
+            rootView: MessageView(message: message, isLast: true, projectID: nil)
+                .environment(AppModel.shared))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer {
+            window.contentView = nil
+            window.close()
+        }
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(50))
+        let heightBefore = host.fittingSize.height
+
+        message.complete = true
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(50))
+        let heightAfter = host.fittingSize.height
+
+        let delta = abs(heightAfter - heightBefore)
+        XCTAssertEqual(delta, 0, "Assistant row height before and after complete with unchanged text must be 0 pt")
+    }
+
+    @MainActor func testHighlightFirstFrameHitRateCachedBlocks() async throws {
+        let code = """
+            struct CachedItem: Identifiable {
+                let id: UUID
+                let name: String
+            }
+            """
+        let language = "swift"
+        let dark = false
+
+        // Warm the cache
+        let highlighted = try await CodeSyntaxHighlighter.shared.render(code, language: language, dark: dark)
+        HighlightCache.shared.set(
+            code: code, language: language, dark: dark, text: highlighted, lineCount: 4)
+
+        // Simulate paging away (querying other entries) and paging back
+        for i in 0..<10 {
+            _ = HighlightCache.shared.peek(code: "let x = \(i)", language: "swift", dark: dark)
+        }
+
+        // Frame 0 synchronous hit test
+        let hit = HighlightCache.shared.peek(code: code, language: language, dark: dark)
+        XCTAssertNotNil(hit, "Cached block must return synchronous hit on frame 0")
+        XCTAssertEqual(hit?.lineCount, 4)
+    }
+
+    @MainActor func testCachedRowsMemoizationDuringStreaming() async throws {
+        let messages = (0..<40).map { index in
+            let msg = ChatMessage(role: index.isMultiple(of: 2) ? .user : .assistant)
+            msg.text = "Message \(index)"
+            msg.complete = true
+            return msg
+        }
+        let range = 0..<40
+        let revision: UInt64 = 100
+
+        let rows1 = TranscriptActivity.cachedRows(
+            messages[range], range: range, count: messages.count, streamRevision: revision)
+        let rows2 = TranscriptActivity.cachedRows(
+            messages[range], range: range, count: messages.count, streamRevision: revision)
+
+        XCTAssertEqual(rows1.count, rows2.count)
+        for (r1, r2) in zip(rows1, rows2) {
+            XCTAssertEqual(r1.id, r2.id)
+        }
+    }
+
+    @MainActor func testOversizedCompletedReplyRendersScrollableDocument() async throws {
+        let session = ChatSession(effort: .trot, modelID: nil)
+        session.messagesLoaded = true
+        let user = ChatMessage(role: .user)
+        user.text = "Write a comprehensive report on transcript performance."
+        user.complete = true
+
+        let assistant = ChatMessage(role: .assistant)
+        assistant.text = String(
+            repeating: "Here is paragraph detailing architecture and layout metrics.\n\n", count: 180)
+        assistant.thinking = String(
+            repeating: "Reasoning step evaluating trade-offs and performance implications.\n\n", count: 80)
+        assistant.complete = true
+        session.messages = [user, assistant]
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 700, height: 450),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let host = NSHostingView(
+            rootView: ChatTranscriptView(session: session, initiallyFollowing: true)
+                .environment(AppModel.shared))
+        window.contentView = host
+        defer {
+            window.contentView = nil
+            window.close()
+        }
+
+        func findScroll(_ view: NSView) -> NSScrollView? {
+            if let scroll = view as? NSScrollView { return scroll }
+            return view.subviews.lazy.compactMap(findScroll).first
+        }
+
+        var settled: NSScrollView?
+        for _ in 0..<100 {
+            host.layoutSubtreeIfNeeded()
+            if let scroll = findScroll(host), let document = scroll.documentView,
+                document.bounds.height > 600,
+                document.visibleRect.height > 0,
+                document.bounds.height > scroll.contentView.bounds.height
+            {
+                settled = scroll
+                break
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertNotNil(settled, "Oversized completed reply must render a tall scrollable document")
+    }
+
     private static func usage() -> (cpu: Double, peakRSS: Int) {
         var usage = rusage()
         getrusage(RUSAGE_SELF, &usage)

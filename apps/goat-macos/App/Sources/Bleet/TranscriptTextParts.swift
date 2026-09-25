@@ -45,6 +45,14 @@ struct TranscriptTextPartsView: View {
     @State private var parts: [String] = []
     @State private var selectedPart: Int?
 
+    init(source: String, fontSize: CGFloat, onPrepared: @escaping () -> Void = {}) {
+        self.source = source
+        self.fontSize = fontSize
+        self.onPrepared = onPrepared
+        let initialParts = (try? TranscriptTextParts.split(source)) ?? []
+        _parts = State(initialValue: initialParts)
+    }
+
     private var index: Int { min(selectedPart ?? max(0, parts.count - 1), max(0, parts.count - 1)) }
 
     var body: some View {
@@ -63,10 +71,13 @@ struct TranscriptTextPartsView: View {
             }
         }
         .task(id: source) {
-            guard let prepared = try? await TranscriptPartPreparation.shared.prepare(source), !Task.isCancelled else {
-                return
+            if parts.isEmpty {
+                guard let prepared = try? await TranscriptPartPreparation.shared.prepare(source), !Task.isCancelled
+                else {
+                    return
+                }
+                parts = prepared
             }
-            parts = prepared
             onPrepared()
         }
     }

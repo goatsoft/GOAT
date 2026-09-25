@@ -327,9 +327,13 @@ extension AppTests.Bleet {
             #expect(first.toolEvents[0].result == "Read successfully")
             let growing = TranscriptActivity.rows([first, second, activityMessage()][...])
             #expect(growing[0].id == first.id)
+            let emptyAssistant = ChatMessage(role: .assistant)
+            let emptyRows = TranscriptActivity.rows([first, emptyAssistant][...])
+            #expect(emptyRows.map(\.id) == [first.id], "Empty assistant messages are excluded from rows")
+
             let streaming = ChatMessage(role: .assistant)
-            let before = TranscriptActivity.rows([first, streaming][...])
             streaming.thinking = "Inspect the entry point first."
+            let before = TranscriptActivity.rows([first, streaming][...])
             streaming.toolEvents = second.toolEvents
             let after = TranscriptActivity.rows([first, streaming][...])
             #expect(before.map(\.id) == after.map(\.id))

@@ -121,13 +121,15 @@ private actor ThinkingPreparation {
 
 struct ThinkingContentView: View {
     let source: String
+    var onPrepared: () -> Void = {}
     @Environment(AppModel.self) private var model
     @State private var blocks: [ThinkingFenceParser.Block] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if source.utf8.count > TranscriptTextParts.maximumBytes {
-                TranscriptTextPartsView(source: source, fontSize: model.chatFontSize - 1)
+                TranscriptTextPartsView(
+                    source: source, fontSize: model.chatFontSize - 1, onPrepared: onPrepared)
             } else {
                 ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
                     if let language = block.language {
@@ -155,6 +157,7 @@ struct ThinkingContentView: View {
             guard source.utf8.count <= TranscriptTextParts.maximumBytes else { return }
             guard let prepared = try? await ThinkingPreparation.shared.blocks(source), !Task.isCancelled else { return }
             blocks = prepared
+            onPrepared()
         }
     }
 }
