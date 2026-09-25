@@ -299,14 +299,14 @@ private struct CommandBudgetClock: ExtensionClock {
     }
 }
 
-@Test(arguments: [false, true])
-func supervisedCommandCanReturnItsReceiptWithoutQuarantiningOtherTools(expire: Bool) async throws {
+@Test(arguments: [false, true], [false, true])
+func supervisedToolsCanReturnReceiptsOrExpire(expire: Bool, subagent: Bool) async throws {
     let scheduled = Barrier()
     let advance = Barrier()
     let entered = Barrier()
     let release = Barrier()
     let runtime = ExtensionRuntime(
-        clock: CommandBudgetClock(expected: .seconds(630), scheduled: scheduled, advance: advance))
+        clock: CommandBudgetClock(expected: .seconds(subagent ? 330 : 630), scheduled: scheduled, advance: advance))
     let journal = Journal()
     _ = try await runtime.activate(
         FixtureExtension(
@@ -314,7 +314,9 @@ func supervisedCommandCanReturnItsReceiptWithoutQuarantiningOtherTools(expire: B
     let snapshot = try await runtime.prepareTurn(context())
     let command = try #require(snapshot.tools.first { $0.handle.name == "hung_tool" })
     let call = Task {
-        try await runtime.invoke(command.handle, argumentsJSON: "{}", executionBudget: .supervisedCommand) { _, _ in
+        try await runtime.invoke(
+            command.handle, argumentsJSON: "{}", executionBudget: subagent ? .supervisedSubagent : .supervisedCommand
+        ) { _, _ in
             true
         }
     }

@@ -2,7 +2,7 @@
 
 Themes, colour rendering and reusable visual primitives.
 
-Public seams: `Caprine`, `ThemeSpec`, `ThemeStore`, `ThemeCatalog`.
+Public seams: `Caprine`, `ThemeSpec`, `ThemeStore`, `ThemeCatalog`, `caprineSecondaryMenu(color:)`, `CaprineCompactStepper`.
 
 Dependencies: Herd, Pens.
 

@@ -1,4 +1,5 @@
 import Bleet
+import Caprine
 import Inference
 import SwiftUI
 
@@ -12,8 +13,14 @@ struct InspectorView: View {
                 ChatMetricsReveal(hasStarted: !session.messages.isEmpty) {
                     NerdStatsView(session: session)
                 }
+                inspectorSection("Engine") {
+                    EngineStatusSummary()
+                    if model.enginePreset.metadataDialect == .omlx {
+                        InspectorEngineRuntimeDetails(session: session)
+                    }
+                }
                 inspectorSection("Model") {
-                    LabeledContent("Model", value: modelName)
+                    Text(modelName)
                     LabeledContent("Effort") {
                         HStack(spacing: 6) {
                             if model.presentation.isEnabled { GoatieView(pose: session.effort.goatie, size: 18) }
@@ -21,11 +28,26 @@ struct InspectorView: View {
                                 session.effort.presentationColor(in: model.theme))
                         }
                     }
-                    LabeledContent("Messages", value: "\(session.messages.count)")
-
+                    if let ref = model.models.first(where: { $0.id == model.resolvedModelID(for: session) }) {
+                        VStack(alignment: .leading, spacing: Caprine.Activity.compactSpacing) {
+                            capabilityRow("Tools", claim: ref.capabilities.tools)
+                            capabilityRow("Vision", claim: ref.capabilities.vision)
+                            capabilityRow("Reasoning", claim: ref.capabilities.reasoning)
+                        }
+                        .font(Caprine.Activity.font)
+                    }
                 }
-                inspectorSection("Engine") {
-                    EngineStatusSummary()
+                inspectorSection("Subagent") {
+                    SubagentModelMenu(
+                        model: model, parentModelID: model.resolvedModelID(for: session), showsSelection: true
+                    )
+                    .caprineSecondaryMenu(color: model.theme.tokens.muted)
+                    if model.selectedSubagentModelID != nil {
+                        DisclosureGroup("Options") {
+                            SubagentBudgetControls(model: model)
+                                .padding(.top, Caprine.Activity.spacing)
+                        }
+                    }
                 }
                 inspectorSection("MCP") {
                     if connectedMCPServers.isEmpty {
@@ -66,6 +88,19 @@ struct InspectorView: View {
                 .padding(12)
                 .background(model.theme.tokens.surface.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
         }
+    }
+
+    private func capabilityRow(_ title: String, claim: CapabilityClaim) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Text(
+                claim.isConflict
+                    ? "Conflicting reports"
+                    : claim.support == .supported
+                        ? "Supported" : claim.support == .unsupported ? "Unsupported" : "Unknown")
+        }
+        .foregroundStyle(model.theme.tokens.muted)
     }
 
     private var connectedMCPServers: [(name: String, toolCount: Int)] {

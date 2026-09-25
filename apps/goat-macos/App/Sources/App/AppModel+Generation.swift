@@ -7,6 +7,30 @@ import Pens
 import Shepherd
 
 extension AppModel {
+    var selectedSubagentModelID: String? {
+        memory.builtInSettings.subagentModelID(for: activeEngineProfile?.id)
+    }
+
+    private func permitGenerationAfterInvestigation() -> Bool {
+        guard !toolRouter.isEngineQuarantined else {
+            generationNotice =
+                "The previous investigation is still stopping. Your draft is preserved. Try again after the engine finishes stopping."
+            return false
+        }
+        generationNotice = nil
+        return true
+    }
+
+    var subagentAvailabilityMessage: String {
+        if !memory.builtInSettings.herderEnabled { return "Enable Herder to investigate files in a Pen." }
+        if !memory.builtInSettings.subagentsEnabled { return "Investigations are turned off." }
+        if toolRouter.isEngineQuarantined { return "Waiting for the previous investigation to stop." }
+        return SubagentAvailability.unavailableReason(
+            hasLocalEngine: toolRouter.isEngineLocal(), modelID: selectedSubagentModelID
+        )
+            ?? "Available in a folder-backed Pen when the local model is loaded and the engine has capacity. Files are read-only."
+    }
+
     // MARK: Generation (delegates to the Shepherd)
 
     @discardableResult
@@ -21,6 +45,7 @@ extension AppModel {
         else { return nil }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !attachments.isEmpty || !documents.isEmpty else { return nil }
+        guard permitGenerationAfterInvestigation() else { return nil }
         guard let turnID = shepherd.reserve(in: session) else { return nil }
         let user = ChatMessage(role: .user)
         user.text = trimmed.isEmpty ? (documents.isEmpty ? "What do you see?" : "Review the attached files.") : trimmed
@@ -133,7 +158,10 @@ extension AppModel {
             message.role == .assistant ? message : nil
         }
         let precedingRole = assistant == nil ? session.messages.last?.role : session.messages.dropLast().last?.role
-        guard precedingRole == .user, let turnID = shepherd.reserve(in: session) else { return }
+        guard permitGenerationAfterInvestigation(), precedingRole == .user, let turnID = shepherd.reserve(in: session)
+        else {
+            return
+        }
 
         if let assistant {
             do {

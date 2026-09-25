@@ -53,6 +53,8 @@ struct ModelMenuItems: View {
             }
             .disabled(others.isEmpty)
         }
+        Divider()
+        SubagentModelMenu(model: model, parentModelID: activeID)
     }
 
     private var activeID: String? { model.resolvedModelID(for: model.currentSession) }
@@ -73,23 +75,22 @@ struct ModelMenuItems: View {
     }
 
     private func modelRow(_ ref: ModelRef, favourite: Bool) -> some View {
-        Button {
-            model.selectModel(ref.id, in: model.currentSession)
-        } label: {
-            HStack(spacing: Caprine.ModelMenu.systemRowSpacing) {
-                Image(systemName: ref.menuTypeSymbol)
-                    .foregroundStyle(Caprine.Semantic.onAccent)
-                Text("\(ref.displayName) - \(subtitle(for: ref))")
-                Spacer(minLength: Caprine.ModelMenu.rowSpacer)
-                if favourite {
-                    Image(systemName: "star.fill").foregroundStyle(Caprine.Semantic.favourite)
-                }
-                if activeID == ref.id {
-                    Image(systemName: "checkmark").foregroundStyle(Caprine.Semantic.onAccent)
-                }
+        Toggle(
+            isOn: Binding(
+                get: { activeID == ref.id },
+                set: { selected in
+                    guard selected, !model.shepherd.hasActiveTurn, !model.engineTransitioning else { return }
+                    model.selectModel(ref.id, in: model.currentSession)
+                })
+        ) {
+            Text("\(ref.displayName) - \(subtitle(for: ref))")
+            if activeID == ref.id, let worker = model.selectedSubagentModelID {
+                Text("└─ " + ModelRef(id: worker).displayName)
             }
+            Image(systemName: favourite ? "star.fill" : ref.menuTypeSymbol)
         }
     }
+
 }
 
 /// The effort levels as checkable rows (⌘1-⌘n) - the effort goatie + "name - blurb".
@@ -122,5 +123,130 @@ struct EffortMenuItems: View {
                 guard isOn, let session = model.currentSession else { return }
                 model.selectEffort(effort, in: session)
             })
+    }
+}
+
+/// Shared by the composer, inspector and menu bar; selection remains engine-scoped.
+struct SubagentModelMenu: View {
+    @Bindable var model: AppModel
+    let parentModelID: String?
+    var showsSelection = false
+    private var selectionLocked: Bool {
+        model.shepherd.hasActiveTurn || model.engineTransitioning || model.extensionsChanging
+    }
+
+    var body: some View {
+        let projection = SubagentMenuProjection(
+            models: model.models, parentModelID: parentModelID, hasLocalEngine: model.toolRouter.isEngineLocal())
+        let selected = model.selectedSubagentModelID
+        Menu(showsSelection ? selected.map { ModelRef(id: $0).displayName } ?? "None" : "Subagent") {
+            Toggle("None", isOn: selection(for: nil))
+                .disabled(selectionLocked || model.activeEngineProfile == nil)
+            ForEach(projection.workers) { worker in
+                Toggle(worker.displayName, isOn: selection(for: worker.id))
+                    .disabled(selectionLocked || projection.unavailableReason != nil)
+            }
+            if let selected, !projection.workers.contains(where: { $0.id == selected }) {
+                Toggle(ModelRef(id: selected).displayName, isOn: .constant(true))
+                    .disabled(true)
+            }
+        }
+        .help(projection.unavailableReason ?? "Select a worker, or None to turn off delegation for this engine.")
+    }
+
+    private func selection(for modelID: String?) -> Binding<Bool> {
+        Binding(
+            get: { model.selectedSubagentModelID == modelID },
+            set: { isSelected in
+                guard isSelected, !selectionLocked, let engineID = model.activeEngineProfile?.id else { return }
+                let projection = SubagentMenuProjection(
+                    models: model.models, parentModelID: parentModelID, hasLocalEngine: model.toolRouter.isEngineLocal()
+                )
+                guard
+                    modelID == nil
+                        || (projection.unavailableReason == nil && projection.workers.contains { $0.id == modelID })
+                else { return }
+                model.memory.builtInSettings.setSubagentModelID(modelID, for: engineID)
+            })
+    }
+}
+
+/// A compact child label shared by the composer and model inspector.
+struct SubagentModelLabel: View {
+    let modelID: String
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        Text("└─ " + ModelRef(id: modelID).displayName)
+            .font(Caprine.ModelMenu.rowDetailFont)
+            .foregroundStyle(model.theme.tokens.muted)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .help(modelID)
+            .accessibilityLabel("Subagent: " + ModelRef(id: modelID).displayName)
+    }
+}
+
+/// One configuration editor for the inspector and Extensions settings.
+struct SubagentBudgetControls: View {
+    @Bindable var model: AppModel
+
+    private var locked: Bool {
+        model.shepherd.hasActiveTurn || model.extensionsChanging || model.engineTransitioning
+    }
+
+    var body: some View {
+        let settings = model.memory.builtInSettings
+        let budget = settings.subagentConfiguration.tokenBudget
+        VStack(alignment: .leading, spacing: Caprine.Activity.spacing) {
+            HStack(spacing: Caprine.Activity.spacing) {
+                Text("Budget")
+                Menu(settings.subagentAutomaticBudget ? "Auto" : "Custom") {
+                    Toggle(
+                        "Auto",
+                        isOn: Binding(
+                            get: { settings.subagentAutomaticBudget },
+                            set: { if !locked, $0 { settings.setSubagentAutomaticBudget(true) } }))
+                    Toggle(
+                        "Custom",
+                        isOn: Binding(
+                            get: { !settings.subagentAutomaticBudget },
+                            set: { if !locked, $0 { settings.setSubagentAutomaticBudget(false) } }))
+                }
+                .caprineSecondaryMenu(color: model.theme.tokens.muted)
+                .accessibilityLabel("Subagent budget")
+            }
+            if !settings.subagentAutomaticBudget {
+                CaprineCompactStepper(
+                    "Processing tokens: \(settings.subagentCustomTokenBudget.formatted())",
+                    value: Binding(
+                        get: { settings.subagentCustomTokenBudget },
+                        set: { if !locked { settings.setSubagentCustomTokenBudget($0) } }),
+                    in: 32_768...131_072, step: 8_192)
+            }
+            CaprineCompactStepper(
+                "Maximum rounds: \(settings.subagentMaxRounds)",
+                value: Binding(
+                    get: { settings.subagentMaxRounds },
+                    set: { if !locked { settings.setSubagentMaxRounds($0) } }),
+                in: 1...10)
+            CaprineCompactStepper(
+                "Time limit: \(settings.subagentTimeoutSeconds)s",
+                value: Binding(
+                    get: { settings.subagentTimeoutSeconds },
+                    set: { if !locked { settings.setSubagentTimeoutSeconds($0) } }),
+                in: 10...SubagentLimits.ceilingTimeoutSeconds, step: 5)
+            Text(
+                "Allowance: \(budget.delegationTokens.formatted()) tokens per investigation; \(budget.totalTokensPerTurn.formatted()) shared across this turn's investigations."
+            )
+            Text(
+                "Includes repeated input and output. Auto scales with rounds. The final summary has reserved capacity; context and memory limits stay separate."
+            )
+            Text("Rounds include the summary. Changes apply to the next chat turn.")
+            if locked { Text("Finish or stop the current chat turn to change the budget.") }
+        }
+        .font(Caprine.Activity.font)
+        .foregroundStyle(model.theme.tokens.muted)
+        .disabled(locked)
     }
 }

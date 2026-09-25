@@ -45,6 +45,8 @@ extension Caprine {
     }
 
     public enum ModelMenu {
+        public static let composerBottomInset: CGFloat = 16
+        public static let composerPairedBottomInset: CGFloat = 24
         public static let width: CGFloat = 290
         public static let horizontalInset: CGFloat = 12
         public static let verticalInset: CGFloat = 4

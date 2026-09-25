@@ -42,3 +42,26 @@ struct ModelMenuProjection: Equatable {
         return "Unavailable"
     }
 }
+
+/// Catalogue compatibility only. Loaded state and memory admission are checked at dispatch.
+struct SubagentMenuProjection {
+    let workers: [ModelRef]
+    let unavailableReason: String?
+
+    init(models: [ModelRef], parentModelID: String?, hasLocalEngine: Bool) {
+        workers = models.filter {
+            SubagentLimits.resolvedEnvelope(for: $0.id) != nil && $0.capabilities.tools.support != .unsupported
+        }
+        if !hasLocalEngine {
+            unavailableReason = "Choose a local engine to use subagents."
+        } else if let parent = models.first(where: { $0.id == parentModelID }) {
+            switch parent.capabilities.tools.support {
+            case .supported: unavailableReason = nil
+            case .unsupported: unavailableReason = "The parent model does not support tool calling."
+            case .unknown: unavailableReason = "The parent model's tool support is not verified."
+            }
+        } else {
+            unavailableReason = "Choose an available parent model first."
+        }
+    }
+}

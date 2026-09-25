@@ -10,14 +10,6 @@ import Testing
         .environment(AppModel.shared).frame(width: 700, height: 450)
 }
 
-@MainActor private func findView(matching predicate: (NSView) -> Bool, in view: NSView) -> NSView? {
-    if predicate(view) { return view }
-    for sub in view.subviews {
-        if let found = findView(matching: predicate, in: sub) { return found }
-    }
-    return nil
-}
-
 @MainActor private func click(at pointInHost: NSPoint, in host: NSView, window: NSWindow) {
     let pointInWindow = host.convert(pointInHost, to: nil)
     for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
@@ -95,9 +87,12 @@ extension AppTests.Bleet {
                 contentRect: NSRect(x: 0, y: 0, width: 700, height: 450),
                 styleMask: [.titled, .resizable], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
-            let host = NSHostingView(rootView: transcript(session))
+            let viewport = TranscriptViewport()
+            let host = NSHostingView(
+                rootView: ChatTranscriptView(session: session, viewport: viewport)
+                    .environment(AppModel.shared).frame(width: 700, height: 450))
             window.contentView = host
-            window.orderFront(nil)
+            window.makeKeyAndOrderFront(nil)
             defer {
                 window.contentView = nil
                 window.close()
@@ -125,19 +120,27 @@ extension AppTests.Bleet {
             NotificationCenter.default.post(name: NSView.boundsDidChangeNotification, object: scroll.contentView)
             host.layoutSubtreeIfNeeded()
 
-            try await Task.sleep(for: .milliseconds(60))
+            // Paging and the visibility observer publish asynchronously. Click only
+            // after the real button is available, without bypassing its action.
+            for _ in 0..<100 {
+                host.layoutSubtreeIfNeeded()
+                if !viewport.isScrolledToBottom { break }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            try #require(!viewport.isScrolledToBottom, "Scroll-to-bottom button must be visible")
             #expect(document.bounds.maxY - document.visibleRect.maxY > 500, "Should be scrolled away from bottom")
-
-            // Perform ONE single click on the scroll-to-bottom button at the bottom of host
-            let clickPoint = NSPoint(x: host.bounds.midX, y: host.isFlipped ? (host.bounds.height - 24) : 24)
+            let clickPoint = NSPoint(x: host.bounds.midX, y: host.isFlipped ? (host.bounds.height - 28) : 28)
             click(at: clickPoint, in: host, window: window)
+
+            #expect(viewport.autoFollow, "One click must invoke the bottom action")
+            #expect(viewport.heldRange == nil, "One click must restore the latest page")
 
             // Wait for scroll to settle at the bottom
             var reachedBottom = false
             for _ in 0..<50 {
                 host.layoutSubtreeIfNeeded()
                 let distFromBottom = document.bounds.maxY - document.visibleRect.maxY
-                if distFromBottom < 80 {
+                if abs(distFromBottom) <= 1 {
                     reachedBottom = true
                     break
                 }

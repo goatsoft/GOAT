@@ -190,3 +190,53 @@ public struct ToolEventSnapshot: Codable, Sendable, Equatable, Identifiable {
         self.denied = denied
     }
 }
+
+public struct SubagentRunRecord: Codable, FetchableRecord, PersistableRecord, Sendable, Equatable {
+    public static let databaseTableName = "subagent_run"
+    public var id: String
+    public var chatId: String
+    public var parentTurnId: String
+    public var status: String
+    public var taskBriefJson: String
+    public var roundsExecuted: Int
+    public var totalTokens: Int
+    public var transcriptBytes: Int
+    public var transcriptJson: String?
+    public var summary: String?
+    public var citationsJson: String?
+    public var receiptJson: String?
+    public var createdAt: Date
+    public var completedAt: Date?
+
+    public init(
+        id: String,
+        chatId: String,
+        parentTurnId: String,
+        status: String,
+        taskBriefJson: String,
+        roundsExecuted: Int = 0,
+        totalTokens: Int = 0,
+        transcriptBytes: Int = 0,
+        transcriptJson: String? = nil,
+        summary: String? = nil,
+        citationsJson: String? = nil,
+        receiptJson: String? = nil,
+        createdAt: Date = .now,
+        completedAt: Date? = nil
+    ) {
+        self.id = id
+        self.chatId = chatId
+        self.parentTurnId = parentTurnId
+        self.status = status
+        self.taskBriefJson = taskBriefJson
+        self.roundsExecuted = roundsExecuted
+        self.totalTokens = totalTokens
+        self.transcriptBytes = transcriptBytes
+        self.transcriptJson = transcriptJson
+        self.summary = summary
+        self.citationsJson = citationsJson
+        self.receiptJson = receiptJson
+        self.createdAt = createdAt
+        self.completedAt = completedAt
+    }
+}

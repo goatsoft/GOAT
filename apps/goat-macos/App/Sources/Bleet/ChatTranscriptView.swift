@@ -226,7 +226,7 @@ struct ChatTranscriptView: View {
                         }
                         // End sentinel the follower scrolls to as the transcript grows.
                         Color.clear
-                            .frame(height: 1)
+                            .frame(height: Caprine.Activity.doubleLineHeight + 1)
                             .id(Self.bottomAnchor)
                             .onScrollVisibilityChange(threshold: 0.1) { visible in
                                 updateBottomVisibility(visible, using: proxy)
@@ -236,7 +236,6 @@ struct ChatTranscriptView: View {
                     .scrollTargetLayout()
                     .padding(.horizontal, 24)
                     .padding(.top, 16)
-                    .padding(.bottom, Caprine.Activity.doubleLineHeight)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(
                         TranscriptScrollViewObserver(
@@ -270,6 +269,7 @@ struct ChatTranscriptView: View {
                                     )
                                 )
                                 .shadow(color: .black.opacity(0.25), radius: 4, y: 2)
+                                .contentShape(Circle())
                         }
                         .buttonStyle(.plain)
                         .help("Scroll to bottom")
@@ -534,11 +534,22 @@ struct ChatTranscriptView: View {
         scrollToBottom(using: proxy)
 
         pendingFollowScroll = Task { @MainActor in
-            for delay in [30, 80, 160] {
-                do { try await Task.sleep(for: .milliseconds(delay)) } catch { return }
-                guard viewport.autoFollow, !Task.isCancelled else { break }
+            // Clearing the held page changes the document on the next layout pass.
+            // Follow its measured bottom until the height settles; do not finish by
+            // scrolling back to a sentinel measured before that layout.
+            var previousHeight: CGFloat?
+            var stableSamples = 0
+            for _ in 0..<60 {
+                do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
+                guard viewport.autoFollow, !reader.isScrolling, !Task.isCancelled else { break }
+                guard let scroll = reader.enclosingScrollView, let document = scroll.documentView else { continue }
+                scroll.layoutSubtreeIfNeeded()
                 applyDirectBottomScroll()
-                scrollToBottom(using: proxy)
+                let height = document.bounds.height
+                let distance = abs(document.bounds.maxY - scroll.contentView.bounds.maxY)
+                stableSamples = previousHeight == height && distance <= 1 ? stableSamples + 1 : 0
+                previousHeight = height
+                if stableSamples >= 6 { break }
             }
             pendingFollowScroll = nil
         }

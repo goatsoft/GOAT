@@ -1,4 +1,5 @@
 import AppKit
+import Caprine
 import Foundation
 import GOATed
 import Herd
@@ -103,7 +104,7 @@ struct GOATedSettingsView: View {
                 Button {
                     chooseSkillFolder(for: globalRoot)
                 } label: {
-                    Label("Add Skill…", systemImage: "plus")
+                    Label("Add Skill\u{2026}", systemImage: "plus")
                 }
                 .buttonStyle(SecondaryChipButtonStyle())
 
@@ -128,7 +129,7 @@ struct GOATedSettingsView: View {
             }
 
             Text(
-                "Global skills apply to every chat and load progressively when their descriptions match a request. Add Pen skills from that Pen’s page."
+                "Global skills apply to every chat and load progressively when their descriptions match a request. Add Pen skills from that Pen\u{2019}s page."
             )
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -266,8 +267,16 @@ struct GOATedSettingsView: View {
             BuiltInExtension(
                 name: "Skills",
                 detail:
-                    "Required core functionality. Discover Global and Pen skills, load instructions when needed, and use chat commands. Manage your own skills from Skills; user extension skills follow their extension’s switch.",
+                    "Required core functionality. Discover Global and Pen skills, load instructions when needed, and use chat commands. Manage your own skills from Skills; user extension skills follow their extension\u{2019}s switch.",
                 symbol: "shippingbox.fill"),
+            BuiltInExtension(
+                name: "Subagents",
+                detail:
+                    "Enable read-only code search and repository investigation via subagent delegation within the active Pen.",
+                symbol: "person.2.badge.gearshape",
+                enabled: Binding(
+                    get: { model.memory.builtInSettings.subagentsEnabled },
+                    set: { model.memory.builtInSettings.subagentsEnabled = $0 })),
         ].sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
@@ -317,6 +326,7 @@ struct GOATedSettingsView: View {
                         .disabled(model.extensionsChanging || model.shepherd.activeTurnID != nil)
                 }
                 if item.name == "Herder" { herderConfiguration }
+                if item.name == "Subagents" { subagentsConfiguration }
                 if item.name == "Hindsight Memory" {
                     Text(
                         "On by default. Turning this off pauses Hindsight and hides it from Memory choices. Saved connections, selected banks and server data are preserved; affected memory stays paused until you enable Hindsight or choose a local provider."
@@ -388,6 +398,54 @@ struct GOATedSettingsView: View {
             .font(.caption).foregroundStyle(.secondary)
         }
         .disabled(!settings.herderEnabled || model.extensionsChanging || model.shepherd.activeTurnID != nil)
+    }
+
+    private var subagentsConfiguration: some View {
+        @Bindable var settings = model.memory.builtInSettings
+        return VStack(alignment: .leading, spacing: Caprine.Activity.spacing) {
+            Picker(
+                "Worker model",
+                selection: Binding(
+                    get: { model.selectedSubagentModelID ?? "" },
+                    set: { value in
+                        guard let engineID = model.activeEngineProfile?.id else { return }
+                        settings.setSubagentModelID(value.isEmpty ? nil : value, for: engineID)
+                    }
+                )
+            ) {
+                Text("Choose a worker model").tag("")
+                ForEach(model.models.filter { SubagentLimits.resolvedEnvelope(for: $0.id) != nil }) { worker in
+                    Text(worker.id).tag(worker.id)
+                }
+                if let selected = model.selectedSubagentModelID,
+                    !model.models.contains(where: {
+                        $0.id == selected && SubagentLimits.resolvedEnvelope(for: $0.id) != nil
+                    })
+                {
+                    Text("Unavailable: \(selected)").tag(selected)
+                }
+            }
+            .disabled(model.shepherd.activeTurnID != nil || !settings.subagentsEnabled)
+            Text(
+                "The chat model delegates focused read-only work to this model, waits, then continues with its findings. Load and pin both models in your engine before starting. Selection applies to this engine only."
+            )
+            .font(Caprine.Activity.font).foregroundStyle(.secondary)
+            Text(model.subagentAvailabilityMessage)
+                .font(Caprine.Activity.font)
+                .foregroundStyle(.secondary)
+            Toggle("Show subagent diagnostics", isOn: $settings.subagentDiagnosticsEnabled)
+                .help("Show request arguments and the saved worker transcript in investigation details.")
+            DisclosureGroup("Advanced") {
+                VStack(alignment: .leading, spacing: Caprine.Activity.spacing) {
+                    SubagentBudgetControls(model: model)
+                    Text(
+                        "Worker choices include verified Qwen 3.5 9B and Qwen 3.8 27B MLX 4-bit conversions, plus supported earlier models. Unknown variants remain unavailable."
+                    )
+                    .font(Caprine.Activity.font).foregroundStyle(.secondary)
+                }
+            }
+            .disabled(!settings.subagentsEnabled || model.extensionsChanging || model.shepherd.activeTurnID != nil)
+        }
     }
 
     private var allRoots: [SkillManagementRoot] {

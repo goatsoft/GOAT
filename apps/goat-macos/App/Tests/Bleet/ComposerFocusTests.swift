@@ -54,6 +54,10 @@ extension AppTests.Bleet {
                 try await Task.sleep(for: .milliseconds(10))
             }
             #expect(window.firstResponder === textView)
+            if #available(macOS 15.0, *) {
+                #expect(textView.writingToolsBehavior == .complete)
+                #expect(textView.allowedWritingToolsResultOptions == [.plainText])
+            }
         }
     }
 }

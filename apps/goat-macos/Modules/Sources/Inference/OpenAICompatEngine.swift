@@ -6,7 +6,6 @@ import JUDAS
 public actor OpenAICompatEngine: InferenceEngine {
     public private(set) var config: EngineConfig
     private var configRevision: UInt64 = 0
-
     public init(config: EngineConfig) {
         self.config = config
     }
@@ -277,9 +276,19 @@ public actor OpenAICompatEngine: InferenceEngine {
 
     public func stream(_ r: GenerationRequest) async -> AsyncThrowingStream<GenerationEvent, Error> {
         let config = self.config
-        return AsyncThrowingStream { continuation in
+        // Child delegations (ADR-0096) carry a closure handle and use a bounded relay that fails
+        // closed if the consumer stalls. Parent chat streams keep the unbounded buffer they had.
+        let bufferingPolicy: AsyncThrowingStream<GenerationEvent, Error>.Continuation.BufferingPolicy =
+            r.transportClosureHandle == nil ? .unbounded : .bufferingNewest(32)
+        let stream = AsyncThrowingStream<GenerationEvent, Error>(
+            bufferingPolicy: bufferingPolicy
+        ) { continuation in
             let task = Task {
                 var assembler = StreamAssembler(round: r.round)
+
+                defer {
+                    r.transportClosureHandle?.acknowledge()
+                }
 
                 do {
                     guard config.isValidEndpoint else { throw EngineError.notConfigured }
@@ -293,7 +302,9 @@ public actor OpenAICompatEngine: InferenceEngine {
                     req.httpBody = try Self.encodedBody(for: r)
 
                     let client = JudasHTTPClient(origin: config.baseURL, source: .engine, name: config.name)
-                    defer { client.invalidateAndCancel() }
+                    defer {
+                        client.invalidateAndCancel()
+                    }
                     let (bytes, resp) = try await client.bytes(for: req)
                     guard let http = resp as? HTTPURLResponse else { throw EngineError.http(-1) }
                     if http.statusCode != 200 {
@@ -322,12 +333,40 @@ public actor OpenAICompatEngine: InferenceEngine {
                         guard line.hasPrefix("data:") else { continue }
                         let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
                         if payload == "[DONE]" { break }
+                        if payload.utf8.count > 128 * 1024 {
+                            throw EngineError.httpDetail(
+                                500, "Upstream stream event payload exceeded bounds", retryAfter: nil)
+                        }
                         guard let data = payload.data(using: .utf8),
                             let chunk = try? JSONDecoder().decode(StreamChunk.self, from: data)
                         else { continue }
-                        for event in assembler.feed(chunk) { continuation.yield(event) }
+                        for event in assembler.feed(chunk) {
+                            switch continuation.yield(event) {
+                            case .enqueued:
+                                break
+                            case .dropped:
+                                continuation.finish(throwing: EngineError.streamBufferOverflow)
+                                return
+                            case .terminated:
+                                return
+                            @unknown default:
+                                break
+                            }
+                        }
                     }
-                    for event in assembler.finish() { continuation.yield(event) }
+                    for event in assembler.finish() {
+                        switch continuation.yield(event) {
+                        case .enqueued:
+                            break
+                        case .dropped:
+                            continuation.finish(throwing: EngineError.streamBufferOverflow)
+                            return
+                        case .terminated:
+                            return
+                        @unknown default:
+                            break
+                        }
+                    }
                     continuation.finish()
                 } catch is CancellationError {
                     continuation.finish()
@@ -337,6 +376,7 @@ public actor OpenAICompatEngine: InferenceEngine {
             }
             continuation.onTermination = { _ in task.cancel() }
         }
+        return stream
     }
 }
 

@@ -113,6 +113,11 @@
 		7C255A40306224A800F85B42 /* ToolDiffTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C255A3F306224A800F85B42 /* ToolDiffTests.swift */; };
 		7C61349818623A757F70ABB2 /* HindsightGraph.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66DF2B9001A47C5002249BBD /* HindsightGraph.swift */; };
 		7CAEB9589EC3F1F2FA4EDDE1 /* ThinkingFenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0789042D8250AC1AE65DF506 /* ThinkingFenceTests.swift */; };
+		7CD68D223064A7A300C5CC13 /* SubagentTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CD68D213064A7A300C5CC13 /* SubagentTypes.swift */; };
+		7CD68D243064A80A00C5CC13 /* SubagentCapabilityFence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CD68D233064A80A00C5CC13 /* SubagentCapabilityFence.swift */; };
+		7CD68D263064A81F00C5CC13 /* SubagentWorker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CD68D253064A81F00C5CC13 /* SubagentWorker.swift */; };
+		7CD68D283064A87700C5CC13 /* SubagentsExtension.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CD68D273064A87700C5CC13 /* SubagentsExtension.swift */; };
+		7CD68D2A3064B37800C5CC13 /* SubagentAcceptanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CD68D293064B37800C5CC13 /* SubagentAcceptanceTests.swift */; };
 		7FC89B80B4B2655DE236B507 /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16EAB67018FA94D938711156 /* SidebarView.swift */; };
 		8028E6D227FABD9F10B43298 /* TranscriptPerformanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5900EC0EA9A53E8F0060EA69 /* TranscriptPerformanceTests.swift */; };
 		829668A5CA4C802EA3404176 /* TranscriptActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEA9F0F6F670712EF924B7A5 /* TranscriptActivity.swift */; };
@@ -342,6 +347,11 @@
 		7B0D7F1E6815419124FB4875 /* ImageProcessingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageProcessingTests.swift; sourceTree = "<group>"; };
 		7C255A3D3062248A00F85B42 /* ToolDiffView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolDiffView.swift; sourceTree = "<group>"; };
 		7C255A3F306224A800F85B42 /* ToolDiffTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolDiffTests.swift; sourceTree = "<group>"; };
+		7CD68D213064A7A300C5CC13 /* SubagentTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubagentTypes.swift; sourceTree = "<group>"; };
+		7CD68D233064A80A00C5CC13 /* SubagentCapabilityFence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubagentCapabilityFence.swift; sourceTree = "<group>"; };
+		7CD68D253064A81F00C5CC13 /* SubagentWorker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubagentWorker.swift; sourceTree = "<group>"; };
+		7CD68D273064A87700C5CC13 /* SubagentsExtension.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubagentsExtension.swift; sourceTree = "<group>"; };
+		7CD68D293064B37800C5CC13 /* SubagentAcceptanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubagentAcceptanceTests.swift; sourceTree = "<group>"; };
 		7E302AC2B7250BF6FEC29847 /* PreparedMarkdownView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreparedMarkdownView.swift; sourceTree = "<group>"; };
 		81A286850BC378DE3FEE4269 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		82F4EC8B99BF5C2969B6E3C9 /* SidebarLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarLayoutTests.swift; sourceTree = "<group>"; };
@@ -660,6 +670,7 @@
 				5EE62740EFF47E81717D6C0D /* ExtensionRegistrationTests.swift */,
 				15B24D54AEC172C88EC51266 /* GOATedSkillFileWorkerTests.swift */,
 				FA092CB30EDC1051D45F163E /* UserExtensionTests.swift */,
+				7CD68D293064B37800C5CC13 /* SubagentAcceptanceTests.swift */,
 			);
 			path = GOATed;
 			sourceTree = "<group>";
@@ -708,6 +719,10 @@
 				D52CEB33B311D69C44B303E8 /* StartupCoordinator.swift */,
 				CDF6F719663C8365DECBEDBC /* StartupDiskLoader.swift */,
 				8D470D7D2C3B283A6B145FB3 /* UserExtensionManager.swift */,
+				7CD68D213064A7A300C5CC13 /* SubagentTypes.swift */,
+				7CD68D233064A80A00C5CC13 /* SubagentCapabilityFence.swift */,
+				7CD68D253064A81F00C5CC13 /* SubagentWorker.swift */,
+				7CD68D273064A87700C5CC13 /* SubagentsExtension.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -1118,6 +1133,7 @@
 				C435B605A29DA92A5FCC6F0F /* ChatLaunchTests.swift in Sources */,
 				73680B843D29CD877719F6BC /* CodeFenceHighlightTests.swift in Sources */,
 				23A5CBE585D82EDF87014322 /* CompactSlashCommandTests.swift in Sources */,
+				7CD68D2A3064B37800C5CC13 /* SubagentAcceptanceTests.swift in Sources */,
 				CAE92AEA9D6B62ED35603217 /* CompactionDeletionTests.swift in Sources */,
 				F13A8E232DA00D83C0BA1B43 /* CompactionPreferencesTests.swift in Sources */,
 				FA4F3B1BDCDF8B7B69BB4655 /* ComposerFocusTests.swift in Sources */,
@@ -1173,6 +1189,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				7CD68D283064A87700C5CC13 /* SubagentsExtension.swift in Sources */,
 				104529FF3E07BF6A0B3584D5 /* AboutView.swift in Sources */,
 				1DFD03515228C98F25002ECC /* ActivityLog.swift in Sources */,
 				EB24FE5C5363E66467352044 /* AgentProgressView.swift in Sources */,
@@ -1214,6 +1231,7 @@
 				717E3B11E47B9CB343DEED5B /* EngineStatusSummary.swift in Sources */,
 				AB0DBE785149B3B7FFCCCA4B /* ExtensionDisclosureStyle.swift in Sources */,
 				C531BA7325424937BBEA4A1F /* ExtensionRegistrationController.swift in Sources */,
+				7CD68D243064A80A00C5CC13 /* SubagentCapabilityFence.swift in Sources */,
 				F58336143AB54F322F52BB62 /* GOATApp.swift in Sources */,
 				716E2C5B779023F7C49EA9A9 /* GOATEntry.swift in Sources */,
 				ED197B21DB64554870924EE5 /* GOATMarkdown.swift in Sources */,
@@ -1277,6 +1295,7 @@
 				24B7AF4997E4912EBE0828C5 /* PreparedMarkdownView.swift in Sources */,
 				69F5B8E20D64B3782343BA1D /* PreparedWebArtifactView.swift in Sources */,
 				ED88B504FF9A2911FC68C4EA /* PresentationPreferences.swift in Sources */,
+				7CD68D223064A7A300C5CC13 /* SubagentTypes.swift in Sources */,
 				C2327BCA25F8B424B0C00212 /* PresentationStyle.swift in Sources */,
 				A97DBBDAA0175E469FF86946 /* ReadingFonts.swift in Sources */,
 				6303CA20EDBA3728983632EA /* RenderingCaches.swift in Sources */,
@@ -1293,6 +1312,7 @@
 				4A67818D5452B8EC7ABD98C5 /* ThroughputDial.swift in Sources */,
 				9580D8412AC5AC15E5AC46AF /* ToolActivityGroup.swift in Sources */,
 				829668A5CA4C802EA3404176 /* TranscriptActivity.swift in Sources */,
+				7CD68D263064A81F00C5CC13 /* SubagentWorker.swift in Sources */,
 				91C6189213525D36FA1B1E51 /* TranscriptTextParts.swift in Sources */,
 				9DA1C7ECDD06AA18185614A8 /* TranscriptWindow.swift in Sources */,
 				B5A5B94033F4FB7F944CB822 /* TypographySettings.swift in Sources */,
@@ -1414,7 +1434,8 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.leet.goat;
+				GOAT_APP_BUNDLE_IDENTIFIER = dev.leet.goat;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(GOAT_APP_BUNDLE_IDENTIFIER)";
 				PRODUCT_NAME = GOAT;
 				SDKROOT = macosx;
 			};
@@ -1511,7 +1532,8 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.leet.goat;
+				GOAT_APP_BUNDLE_IDENTIFIER = dev.leet.goat;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(GOAT_APP_BUNDLE_IDENTIFIER)";
 				PRODUCT_NAME = GOAT;
 				SDKROOT = macosx;
 			};

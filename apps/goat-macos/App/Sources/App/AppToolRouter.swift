@@ -6,6 +6,7 @@ import Inference
 import JUDAS
 import Memory
 import Pens
+import Persistence
 import Pronk
 import Shepherd
 import Tools
@@ -17,11 +18,21 @@ final class AppToolRouter: ShepherdToolSource {
     var nameForProject: (UUID) -> String = { _ in "this Pen" }
     let commandPermissions: PenCommandPermissionModel
     let filePermissions: PenFilePermissionModel
+    var engineProvider: () -> (any InferenceEngine)? = { nil }
+    var isEngineLocal: () -> Bool = { false }
+    var workerModelID: () -> String? = { nil }
+    var databaseProvider: () -> ChatDatabase? = { nil }
     private var penFileSession:
         (
             turnID: UUID, chatID: UUID, projectID: UUID, workspace: URL, provider: HerderFileProvider,
             registration: Registration, workspaceIdentity: String
         )?
+    private var subagentSession:
+        (
+            turnID: UUID, chatID: UUID, projectID: UUID, workspace: URL, provider: SubagentsProvider,
+            registration: Registration
+        )?
+    public let subagentQuarantine = SubagentTransportQuarantine()
     private let memory: MemoryModel
     private let activity: ActivityLog
     private let builtInSkillsRoot: URL
@@ -198,6 +209,10 @@ final class AppToolRouter: ShepherdToolSource {
             try? await extensions.unregister(session.registration)
         }
         penFileSession = nil
+        if let session = subagentSession {
+            try? await extensions.unregister(session.registration)
+        }
+        subagentSession = nil
         if memory.builtInSettings.herderEnabled, let projectID, let workspace = workspaceForProject(projectID) {
             do {
                 let files = try await Task.detached { try PenFileTools(workspace: workspace) }.value
@@ -214,6 +229,43 @@ final class AppToolRouter: ShepherdToolSource {
                     penFileSession = (
                         turnID, chatID, projectID, workspace, provider, registration, files.workspaceIdentity
                     )
+                    if memory.builtInSettings.subagentsEnabled {
+                        let isLocal = isEngineLocal()
+                        let subagentEngine = isLocal ? engineProvider() : nil
+                        let authority = SubagentTurnAuthority { [weak self] in
+                            guard let self else { throw CapabilityError.revoked }
+                            let (sessionTurnID, sessionReg, isEnabled, currentWorkspace) = await MainActor.run {
+                                let session = self.subagentSession
+                                return (
+                                    session?.turnID, session?.registration,
+                                    self.memory.builtInSettings.subagentsEnabled, self.workspaceForProject(projectID)
+                                )
+                            }
+                            guard isEnabled else { throw CapabilityError.unauthorized }
+                            guard let sessionTurnID, sessionTurnID == turnID, let sessionReg else {
+                                throw CapabilityError.revoked
+                            }
+                            guard currentWorkspace == workspace else { throw CapabilityError.revoked }
+                            guard await self.extensions.isRegistered(sessionReg) else {
+                                throw CapabilityError.revoked
+                            }
+                            return files
+                        }
+                        let subagentProvider = SubagentsProvider(
+                            turnID: turnID,
+                            fileTools: files,
+                            workspace: workspace,
+                            authority: authority,
+                            engine: subagentEngine,
+                            modelID: workerModelID(),
+                            configuration: memory.builtInSettings.subagentConfiguration,
+                            database: databaseProvider(),
+                            quarantine: subagentQuarantine
+                        )
+                        let subagentReg = try await extensions.activate(
+                            SubagentsExtension(provider: subagentProvider), scope: .pen(projectID))
+                        subagentSession = (turnID, chatID, projectID, workspace, subagentProvider, subagentReg)
+                    }
                 }
             } catch {
                 activity.log(.warn, "Pen file tools unavailable: \(error.localizedDescription)")
@@ -250,15 +302,20 @@ final class AppToolRouter: ShepherdToolSource {
     }
 
     func turnDidEnd(turnID: UUID, cancelled: Bool) async {
+        let outcome: TurnOutcome = cancelled ? .cancelled : (turnPersisted ? .completed : .failed)
+        let runtime = extensions
+        // Cleanup has its own bounded lifetime and must run even when the generation task was cancelled.
+        await Task.detached { await runtime.endTurn(turnID, outcome: outcome) }.value
+
         if let session = penFileSession, session.turnID == turnID {
             penFileSession = nil
             await session.provider.stopCommands()
             try? await extensions.unregister(session.registration)
         }
-        let outcome: TurnOutcome = cancelled ? .cancelled : (turnPersisted ? .completed : .failed)
-        let runtime = extensions
-        // Cleanup has its own bounded lifetime and must run even when the generation task was cancelled.
-        await Task.detached { await runtime.endTurn(turnID, outcome: outcome) }.value
+        if let session = subagentSession, session.turnID == turnID {
+            subagentSession = nil
+            try? await extensions.unregister(session.registration)
+        }
         if let snapshot = turnSnapshot { skillToolSessions.removeValue(forKey: snapshot.context.view.chatID) }
         turnSnapshot = nil
         turnMemoryConfiguration = nil
@@ -288,7 +345,11 @@ final class AppToolRouter: ShepherdToolSource {
                 let budget: ToolExecutionBudget =
                     handle.registration.extensionID.rawValue == "goat.herder"
                         && handle.name == "pen_run_command"
-                        && penFileSession?.turnID == handle.turnID ? .supervisedCommand : .standard
+                        && penFileSession?.turnID == handle.turnID
+                    ? .supervisedCommand
+                    : (handle.registration.extensionID.rawValue == "goat.subagents"
+                        && handle.name == "subagent_delegate"
+                        && penFileSession?.turnID == handle.turnID ? .supervisedSubagent : .standard)
                 let result = try await extensions.invoke(handle, argumentsJSON: argumentsJSON, executionBudget: budget)
                 {
                     [weak self] handle, arguments in
@@ -327,9 +388,6 @@ final class AppToolRouter: ShepherdToolSource {
     }
 
     func invokeConcurrently(_ calls: [ConcurrentToolCall]) async -> [ConcurrentToolOutcome] {
-        // Read-only calls are auto-allowed and their file I/O runs off the PenFileTools actor, so
-        // this router (a Sendable @MainActor type) fans them out concurrently and gathers the
-        // outcomes; the caller applies them in call order.
         await withTaskGroup(of: ConcurrentToolOutcome.self) { group in
             for call in calls {
                 group.addTask { [self] in
@@ -443,6 +501,12 @@ final class AppToolRouter: ShepherdToolSource {
             }
             return session.turnID == handle.turnID && session.registration == handle.registration
                 && workspaceForProject(session.projectID) == session.workspace
+        case "goat.subagents":
+            guard memory.builtInSettings.subagentsEnabled, let session = subagentSession else {
+                return false
+            }
+            return session.turnID == handle.turnID && session.registration == handle.registration
+                && workspaceForProject(session.projectID) == session.workspace
         case "goat.pronk": return pronkRegistration != nil
         case "goat.hindsight":
             return memory.builtInSettings.hindsightEnabled && turnMemoryConfiguration == memory.configuration
@@ -458,6 +522,10 @@ final class AppToolRouter: ShepherdToolSource {
         } else {
             mcp.logCall(server: server, tool: tool, status: status, duration: duration)
         }
+    }
+
+    var isEngineQuarantined: Bool {
+        subagentQuarantine.isQuarantined || subagentQuarantine.isTransportActive
     }
 
     func cancelPendingPermission() { mcp.cancelPendingPermission() }
@@ -493,8 +561,6 @@ final class AppToolRouter: ShepherdToolSource {
         }
     }
 
-    /// All callers join one registration operation per provider. A failed attempt can be retried;
-    /// no caller sees a partially initialized provider as ready just because another caller began.
     private func registerSkillProvider(
         _ provider: FileSkillProvider, extensionID: String, scope: ExtensionScope
     ) async {

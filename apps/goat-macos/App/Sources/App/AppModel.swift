@@ -41,7 +41,7 @@ enum MessageMemorySaveState: Equatable {
 
     var help: String {
         switch self {
-        case .saving: "Saving to memory…"
+        case .saving: "Saving to memory\u{2026}"
         case .queued: "Queued for memory"
         case .saved: "Saved to memory"
         case .failed(let reason): "Could not save to memory: \(reason). Click to retry."
@@ -185,6 +185,7 @@ final class AppModel {
     let engineRecovery = EngineRecoveryController()
     let modelCapabilityOwnership = ModelCapabilityProbeOwnership()
     var engineIntentRevision: UInt64 = 0
+    var generationNotice: String?
     var engineStopStatus: String?
     var engineStopRevision: UInt64?
     @ObservationIgnored var engineStopTask: Task<Void, Never>?
@@ -213,7 +214,7 @@ final class AppModel {
     var herdRootPath: String {
         didSet { UserDefaults.standard.set(herdRootPath, forKey: "herd.defaultRoot") }
     }
-    var health: EngineHealth = .offline("Starting…")
+    var health: EngineHealth = .offline("Starting\u{2026}")
     var engineTransitioning = false
     var modelCapabilitiesLoading = false
     var capabilityProbeModelID: String?
@@ -326,7 +327,7 @@ final class AppModel {
         let name =
             ReadingFonts.isAvailable(id, for: role)
             ? ReadingFonts.name(id, for: role) : (role == .chat ? "System" : "System Mono")
-        return selection == "theme" ? "Theme · \(name)" : name
+        return selection == "theme" ? "Theme \u{00b7} \(name)" : name
     }
 
     func readingFontNotice(_ selection: String, role: ReadingFontRole) -> String? {
@@ -472,7 +473,8 @@ final class AppModel {
         memory = MemoryModel(activity: activity)
         toolRouter = AppToolRouter(mcp: mcp, memory: memory, activity: activity)
         userExtensions = UserExtensionManager(runtime: toolRouter.extensions, activity: activity)
-        shepherd = ShepherdModel(engine: engine, tools: toolRouter, activity: activity)
+        let guardedEngine = QuarantineGuardedEngine(underlying: engine, quarantine: toolRouter.subagentQuarantine)
+        shepherd = ShepherdModel(engine: guardedEngine, tools: toolRouter, activity: activity)
         shepherd.env = self
         toolRouter.workspaceForProject = { [weak self] id in
             self?.pens.first(where: { $0.id == id })?.workspace.map { URL(fileURLWithPath: $0.path) }
@@ -480,5 +482,14 @@ final class AppModel {
         toolRouter.nameForProject = { [weak self] id in
             self?.pens.first(where: { $0.id == id })?.name ?? "this Pen"
         }
+        toolRouter.engineProvider = { [weak self] in self?.engine }
+        toolRouter.isEngineLocal = { [weak self] in
+            guard let profile = self?.activeEngineProfile, let url = URL(string: profile.url) else {
+                return false
+            }
+            return LocalNetworkAddress.contains(url)
+        }
+        toolRouter.workerModelID = { [weak self] in self?.selectedSubagentModelID }
+        toolRouter.databaseProvider = { [weak self] in self?.db }
     }
 }

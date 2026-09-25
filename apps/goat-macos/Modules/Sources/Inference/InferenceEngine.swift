@@ -195,6 +195,158 @@ public struct ToolCallEvent: Sendable, Equatable {
     }
 }
 
+/// All registration state is protected by the lock; continuations resume at most once.
+public final class GenerationTransportClosureRegistration: @unchecked Sendable {
+    public let id = UUID()
+    private let lock = NSLock()
+    private var isCancelled = false
+    private var isResumed = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    public init() {}
+
+    public func setContinuation(_ cont: CheckedContinuation<Void, Never>) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if isCancelled || isResumed {
+            return false
+        }
+        self.continuation = cont
+        return true
+    }
+
+    public func cancel() -> CheckedContinuation<Void, Never>? {
+        lock.lock()
+        defer { lock.unlock() }
+        isCancelled = true
+        guard !isResumed else { return nil }
+        isResumed = true
+        let cont = continuation
+        continuation = nil
+        return cont
+    }
+
+    public func resume() {
+        lock.lock()
+        guard !isResumed else {
+            lock.unlock()
+            return
+        }
+        isResumed = true
+        let cont = continuation
+        continuation = nil
+        lock.unlock()
+        cont?.resume()
+    }
+}
+
+/// The lock protects acknowledgement and registrations across producer and cancellation tasks.
+public final class GenerationTransportClosureHandle: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isAcknowledged = false
+    private var onAcknowledgeCallbacks: [@Sendable () -> Void] = []
+    private var waiters: [UUID: GenerationTransportClosureRegistration] = [:]
+
+    public init() {}
+
+    public var isClosed: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return isAcknowledged
+    }
+
+    public func onAcknowledge(_ callback: @escaping @Sendable () -> Void) {
+        lock.lock()
+        if isAcknowledged {
+            lock.unlock()
+            callback()
+            return
+        }
+        onAcknowledgeCallbacks.append(callback)
+        lock.unlock()
+    }
+
+    public func acknowledge() {
+        lock.lock()
+        guard !isAcknowledged else {
+            lock.unlock()
+            return
+        }
+        isAcknowledged = true
+        let callbacks = onAcknowledgeCallbacks
+        onAcknowledgeCallbacks.removeAll()
+        let pendingWaiters = Array(waiters.values)
+        waiters.removeAll()
+        lock.unlock()
+
+        for cb in callbacks {
+            cb()
+        }
+        for waiter in pendingWaiters {
+            waiter.resume()
+        }
+    }
+
+    private func checkClosed() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return isAcknowledged
+    }
+
+    private func registerWaiter(_ registration: GenerationTransportClosureRegistration) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if isAcknowledged {
+            return false
+        }
+        waiters[registration.id] = registration
+        return true
+    }
+
+    private func removeWaiter(id: UUID) {
+        lock.lock()
+        defer { lock.unlock() }
+        waiters.removeValue(forKey: id)
+    }
+
+    public func waitForClosure(timeoutSeconds: Int = 5) async -> Bool {
+        if checkClosed() { return true }
+        if timeoutSeconds <= 0 || Task.isCancelled { return false }
+
+        return await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                if Task.isCancelled { return self.checkClosed() }
+                let registration = GenerationTransportClosureRegistration()
+                let shouldWait = self.registerWaiter(registration)
+                if !shouldWait {
+                    return self.checkClosed()
+                }
+
+                await withTaskCancellationHandler {
+                    await withCheckedContinuation { cont in
+                        let inserted = registration.setContinuation(cont)
+                        if !inserted {
+                            cont.resume()
+                        }
+                    }
+                } onCancel: {
+                    self.removeWaiter(id: registration.id)
+                    let waiterCont = registration.cancel()
+                    waiterCont?.resume()
+                }
+                return self.checkClosed()
+            }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(timeoutSeconds))
+                return false
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
+        }
+    }
+}
+
 public struct GenerationRequest: Sendable {
     public var model: String
     public var turns: [ChatTurn]
@@ -208,10 +360,12 @@ public struct GenerationRequest: Sendable {
     /// tool-call identifiers unique across rounds.
     public var round: Int
     public var rejectedSamplingParameters: Set<String> = []
+    public var transportClosureHandle: GenerationTransportClosureHandle? = nil
     public init(
         model: String, turns: [ChatTurn], effort: Effort, maxTokens: Int? = nil,
         tools: [ToolSpec] = [], modelCapabilities: ModelCapabilities = .unknown,
-        compatibility: ResolvedModelCompatibility? = nil, round: Int = 0
+        compatibility: ResolvedModelCompatibility? = nil, round: Int = 0,
+        transportClosureHandle: GenerationTransportClosureHandle? = nil
     ) {
         self.model = model
         self.turns = turns
@@ -227,6 +381,7 @@ public struct GenerationRequest: Sendable {
                 effectiveStyle: .genericOpenAI,
                 source: .genericFallback,
                 capabilities: modelCapabilities)
+        self.transportClosureHandle = transportClosureHandle
     }
 }
 
@@ -294,10 +449,11 @@ public enum GenerationEvent: Sendable {
     case done(GenStats)
 }
 
-public enum EngineError: LocalizedError, Sendable {
+public enum EngineError: LocalizedError, Sendable, Equatable {
     case http(Int)
     case httpDetail(Int, String, retryAfter: TimeInterval?)
     case notConfigured
+    case streamBufferOverflow
 
     public var errorDescription: String? {
         switch self {
@@ -310,6 +466,7 @@ public enum EngineError: LocalizedError, Sendable {
                 ? "The engine wants an API key. Add one in Settings → Engine."
                 : "Engine returned HTTP \(code)\(detail.isEmpty ? "." : " - \(detail)")"
         case .notConfigured: "No engine configured."
+        case .streamBufferOverflow: "Stream buffer overflow: slow consumer could not keep up with engine generation."
         }
     }
 }

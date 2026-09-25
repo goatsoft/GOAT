@@ -9,6 +9,24 @@ public struct EngineRuntimeStatus: Sendable, Equatable {
     public let activeRequests: Int?
     public let waitingRequests: Int?
     public let models: [EngineModelRuntimeStatus]?
+
+    public init(
+        observedAt: Date = .now,
+        version: String? = nil,
+        modelMemoryUsed: Int64? = nil,
+        modelMemoryMaximum: Int64? = nil,
+        activeRequests: Int? = nil,
+        waitingRequests: Int? = nil,
+        models: [EngineModelRuntimeStatus]? = nil
+    ) {
+        self.observedAt = observedAt
+        self.version = version
+        self.modelMemoryUsed = modelMemoryUsed
+        self.modelMemoryMaximum = modelMemoryMaximum
+        self.activeRequests = activeRequests
+        self.waitingRequests = waitingRequests
+        self.models = models
+    }
 }
 
 public struct EngineModelRuntimeStatus: Sendable, Equatable, Identifiable {
@@ -18,6 +36,20 @@ public struct EngineModelRuntimeStatus: Sendable, Equatable, Identifiable {
     public let contextWindow: Int?
     /// Server configuration, not a claim about an immutable model maximum.
     public let configuredOutputLimit: Int?
+
+    public init(
+        id: String,
+        loaded: Bool? = nil,
+        loading: Bool? = nil,
+        contextWindow: Int? = nil,
+        configuredOutputLimit: Int? = nil
+    ) {
+        self.id = id
+        self.loaded = loaded
+        self.loading = loading
+        self.contextWindow = contextWindow
+        self.configuredOutputLimit = configuredOutputLimit
+    }
 }
 
 /// HTTP bounds are also enforced before decoding. Keep missing or invalid facts unavailable.

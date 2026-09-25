@@ -45,7 +45,7 @@ Themes, colour rendering and reusable visual primitives.
 
 Source: [Modules/Sources/Caprine](../apps/goat-macos/Modules/Sources/Caprine).
 
-Public seams: `Caprine`, `ThemeSpec`, `ThemeStore`, `ThemeCatalog`.
+Public seams: `Caprine`, `ThemeSpec`, `ThemeStore`, `ThemeCatalog`, `caprineSecondaryMenu(color:)`, `CaprineCompactStepper`.
 
 Theme files are bounded local data; font declarations never download assets.
 

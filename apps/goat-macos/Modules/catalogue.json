@@ -18,7 +18,7 @@
         "Pens"
       ],
       "summary": "Themes, colour rendering and reusable visual primitives.",
-      "interfaces": "Caprine, ThemeSpec, ThemeStore, ThemeCatalog",
+      "interfaces": "Caprine, ThemeSpec, ThemeStore, ThemeCatalog, caprineSecondaryMenu(color:), CaprineCompactStepper",
       "security": "Theme files are bounded local data; font declarations never download assets.",
       "validation": "CaprineTests covers theme catalogues, storage security and font persistence; hosted Caprine tests cover appearance and font rendering. Run `make test MODULE=Caprine`."
     },

@@ -1,4 +1,5 @@
 import Foundation
+import Inference
 import Testing
 
 @testable import GOAT
@@ -9,6 +10,59 @@ import Testing
 extension AppTests.GOATed {
     @Suite struct BuiltInExtensionTests {
 
+        @MainActor @Test func subagentBudgetPersistsAndTurnSnapshotDoesNotChange() throws {
+            let name = "goat-budget-tests-\(UUID())"
+            let defaults = try #require(UserDefaults(suiteName: name))
+            defer { defaults.removePersistentDomain(forName: name) }
+            let settings = BuiltInExtensionSettings(defaults: defaults)
+            #expect(settings.subagentAutomaticBudget)
+            let snapshot = settings.subagentConfiguration
+            #expect(snapshot.tokenBudget.delegationTokens == 71_680)
+            settings.setSubagentAutomaticBudget(false)
+            settings.setSubagentCustomTokenBudget(98_304)
+            let reloaded = BuiltInExtensionSettings(defaults: defaults)
+            #expect(!reloaded.subagentAutomaticBudget)
+            #expect(reloaded.subagentConfiguration.tokenBudget.delegationTokens == 98_304)
+            #expect(snapshot.tokenBudget.delegationTokens == 71_680)
+            settings.setSubagentCustomTokenBudget(Int.max)
+            #expect(settings.subagentCustomTokenBudget == 131_072)
+            settings.setSubagentCustomTokenBudget(-1)
+            #expect(settings.subagentCustomTokenBudget == 32_768)
+            settings.setSubagentAutomaticBudget(true)
+            settings.setSubagentMaxRounds(10)
+            #expect(settings.subagentConfiguration.tokenBudget.delegationTokens == 131_072)
+            let budget = SubagentTokenBudget.resolve(customTokens: 32_768, rounds: 5)
+            #expect(budget.shouldSummarize(remainingTotal: 16_000, promptTokens: 4_000, remainingGenerated: 8_000))
+            #expect(!budget.shouldSummarize(remainingTotal: 32_768, promptTokens: 4_000, remainingGenerated: 8_000))
+            #expect(budget.shouldSummarize(remainingTotal: 32_768, promptTokens: 1_000, remainingGenerated: 2_100))
+            let accounting = SubagentTurnTokenAccounting()
+            accounting.recordDelegation(generated: 100, total: 32_768)
+            #expect(!accounting.canDelegate)
+            #expect(accounting.canDelegate(budget: budget))
+        }
+
+        @Test func subagentMenuUsesCapabilitiesAndAuditedWorkersRatherThanMatchingModelFamilies() {
+            let parent = ModelRef(id: "another-family-parent", capabilities: .init(tools: .supported(by: .modelList)))
+            let worker = ModelRef(id: "Qwen3.5-9B-4bit")
+            let unsupported = ModelRef(id: "Qwen3-8B-4bit", capabilities: .init(tools: .unsupported(by: .modelList)))
+            let models = [parent, worker, unsupported, ModelRef(id: "unknown-worker")]
+            let available = SubagentMenuProjection(models: models, parentModelID: parent.id, hasLocalEngine: true)
+            #expect(available.unavailableReason == nil)
+            #expect(available.workers.map(\.id) == [worker.id])
+            #expect(
+                SubagentMenuProjection(models: models, parentModelID: parent.id, hasLocalEngine: false)
+                    .unavailableReason != nil)
+            #expect(
+                SubagentMenuProjection(models: models, parentModelID: unsupported.id, hasLocalEngine: true)
+                    .unavailableReason != nil)
+            #expect(
+                SubagentMenuProjection(models: models, parentModelID: worker.id, hasLocalEngine: true).unavailableReason
+                    != nil)
+            #expect(
+                SubagentMenuProjection(models: models, parentModelID: "missing", hasLocalEngine: true).unavailableReason
+                    != nil)
+        }
+
         @MainActor @Test func builtInPreferencesDefaultOnAndPersistWithoutGrantingPermissions() throws {
             let name = "goat-builtin-tests-\(UUID())"
             let defaults = try #require(UserDefaults(suiteName: name))
@@ -16,20 +70,47 @@ extension AppTests.GOATed {
             let settings = BuiltInExtensionSettings(defaults: defaults)
             #expect(settings.herderEnabled && settings.herderWritesEnabled && settings.herderCommandsEnabled)
             #expect(settings.hindsightEnabled && settings.commandTimeout == 120)
+            #expect(
+                settings.subagentsEnabled && settings.subagentMaxRounds == 5 && settings.subagentTimeoutSeconds == 180)
+            #expect(settings.subagentPreferredBackend == .localEngine)
+            settings.setSubagentModelID("Qwen3.5-9B-4bit", for: "studio")
+            #expect(settings.subagentModelID(for: "another-engine") == nil)
+            #expect(settings.subagentModelID(for: nil) == nil)
+            #expect(BuiltInExtensionSettings(defaults: defaults).subagentModelID(for: "studio") == "Qwen3.5-9B-4bit")
+            settings.setSubagentModelID(nil, for: "studio")
+            #expect(settings.subagentModelID(for: "studio") == nil)
+            #expect(settings.subagentsEnabled)
+            let cleared = BuiltInExtensionSettings(defaults: defaults)
+            #expect(cleared.subagentModelID(for: "studio") == nil && cleared.subagentsEnabled)
             settings.herderEnabled = false
             settings.herderWritesEnabled = false
             settings.herderCommandsEnabled = false
             settings.setHindsightEnabled(false)
             settings.setCommandTimeout(900)
+            settings.subagentsEnabled = false
+            settings.setSubagentMaxRounds(8)
+            settings.setSubagentTimeoutSeconds(45)
+            settings.setSubagentPreferredBackend(.systemLanguageModel)
             let loaded = BuiltInExtensionSettings(defaults: defaults)
             #expect(!loaded.herderEnabled && !loaded.herderWritesEnabled && !loaded.herderCommandsEnabled)
             #expect(!loaded.hindsightEnabled && loaded.commandTimeout == 600)
+            #expect(!loaded.subagentsEnabled && loaded.subagentMaxRounds == 8 && loaded.subagentTimeoutSeconds == 45)
+            #expect(loaded.subagentPreferredBackend == .systemLanguageModel)
             loaded.herderEnabled = true
             #expect(loaded.allowsHerderTool("pen_read_file"))
             #expect(!loaded.allowsHerderTool("pen_write_file"))
             #expect(!loaded.allowsHerderTool("pen_run_command"))
             loaded.setCommandTimeout(0)
             #expect(loaded.commandTimeout == 1)
+            loaded.setSubagentMaxRounds(100)
+            #expect(loaded.subagentMaxRounds == 10)
+            loaded.setSubagentTimeoutSeconds(5)
+            #expect(loaded.subagentTimeoutSeconds == 10)
+            loaded.setSubagentTimeoutSeconds(400)
+            #expect(loaded.subagentTimeoutSeconds == 300)
+            #expect(BuiltInExtensionSettings(defaults: defaults).subagentTimeoutSeconds == 300)
+            loaded.setSubagentTimeoutSeconds(60)
+            #expect(BuiltInExtensionSettings(defaults: defaults).subagentTimeoutSeconds == 60)
         }
 
         @MainActor @Test func herderCanBeReadOnlyOrDisabledAndOldRoutesCannotBypassIt() async throws {
