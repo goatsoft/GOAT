@@ -259,7 +259,53 @@ extension AppTests.Bleet {
             #expect(restoredLater == 98..<99, "Restoring with anchor must not revert to previous page")
         }
 
-        @Test @MainActor func oversizedCompletedReplyRendersScrollableDocumentAndReachesBottomSentinel() async throws {
+
+        @Test @MainActor func longMessageStreamingUpdatesPartsDynamically() async throws {
+            let session = ChatSession(effort: .trot, modelID: nil)
+            session.messagesLoaded = true
+            let user = ChatMessage(role: .user)
+            user.text = "Write a comprehensive report"
+            user.complete = true
+
+            let assistant = ChatMessage(role: .assistant)
+            assistant.text = String(repeating: "Here is a paragraph evaluating architectural layout.\n\n", count: 80) // 1st chunk, ~6KB
+            assistant.complete = false
+            session.messages = [user, assistant]
+
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 700, height: 450),
+                styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            let host = NSHostingView(rootView: transcript(session))
+            window.contentView = host
+            defer {
+                window.contentView = nil
+                window.close()
+            }
+
+            host.layoutSubtreeIfNeeded()
+            
+            // Wait for initial part load
+            try await Task.sleep(for: .milliseconds(500))
+
+            // Now append to the message so it crosses the 8KB limit
+            assistant.text += String(repeating: "And here is another paragraph explaining more details.\n\n", count: 80) // +6KB, crosses 8KB boundary
+            assistant.markRenderChanged()
+            
+            host.layoutSubtreeIfNeeded()
+            
+            // Allow time for .task to evaluate and re-split
+            try await Task.sleep(for: .milliseconds(500))
+            
+            // Check that we can scroll because it has rendered the second part, which means we now have enough height, or at least that it updated.
+            let scroll = findTranscriptScroll(host)
+            let document = try #require(scroll?.documentView)
+            
+            #expect(document.bounds.height > scroll!.contentView.bounds.height, "Document should have grown as the source updated.")
+            
+            assistant.complete = true
+        }
+\n        @Test @MainActor func oversizedCompletedReplyRendersScrollableDocumentAndReachesBottomSentinel() async throws {
             let session = ChatSession(effort: .trot, modelID: nil)
             session.messagesLoaded = true
             let user = ChatMessage(role: .user)

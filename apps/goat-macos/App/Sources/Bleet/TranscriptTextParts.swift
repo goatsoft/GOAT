@@ -43,6 +43,7 @@ struct TranscriptTextPartsView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.transcriptInspection) private var inspection
     @State private var parts: [String] = []
+    @State private var preparedSource: String = ""
     @State private var selectedPart: Int?
 
     init(source: String, fontSize: CGFloat, onPrepared: @escaping () -> Void = {}) {
@@ -51,6 +52,7 @@ struct TranscriptTextPartsView: View {
         self.onPrepared = onPrepared
         let initialParts = (try? TranscriptTextParts.split(source)) ?? []
         _parts = State(initialValue: initialParts)
+        _preparedSource = State(initialValue: source)
     }
 
     private var index: Int { min(selectedPart ?? max(0, parts.count - 1), max(0, parts.count - 1)) }
@@ -71,12 +73,20 @@ struct TranscriptTextPartsView: View {
             }
         }
         .task(id: source) {
-            if parts.isEmpty {
+            if preparedSource != source {
                 guard let prepared = try? await TranscriptPartPreparation.shared.prepare(source), !Task.isCancelled
                 else {
                     return
                 }
                 parts = prepared
+                preparedSource = source
+            } else if parts.isEmpty {
+                guard let prepared = try? await TranscriptPartPreparation.shared.prepare(source), !Task.isCancelled
+                else {
+                    return
+                }
+                parts = prepared
+                preparedSource = source
             }
             onPrepared()
         }
