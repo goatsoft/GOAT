@@ -85,6 +85,7 @@ lint:
 	python3 scripts/check-test-layout.py
 	python3 scripts/check-module-boundaries.py
 	python3 scripts/check-judas-boundaries.py
+	python3 scripts/check-transcript-colours.py
 	swift format lint --strict --recursive App/Sources App/Tests Modules/Sources Modules/Tests
 
 # A focused shell selection must never silently narrow the release gate.

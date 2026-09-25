@@ -200,7 +200,7 @@ struct MessageView: View {
                 if let error = message.error {
                     Text(error)
                         .font(.callout)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Caprine.Semantic.warning)
                 }
                 if isLast, message.complete, message.stats?.finishReason == "length" {
                     Button("Continue response") {
@@ -517,8 +517,8 @@ struct FeedbackButtons: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            button(1, "hand.thumbsup", .green)
-            button(-1, "hand.thumbsdown", .orange)
+            button(1, "hand.thumbsup", Caprine.Semantic.success)
+            button(-1, "hand.thumbsdown", Caprine.Semantic.warning)
         }
     }
 

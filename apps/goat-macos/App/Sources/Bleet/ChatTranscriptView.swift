@@ -149,7 +149,7 @@ struct ChatTranscriptView: View {
         } else if let error = session.messageLoadError {
             VStack(spacing: 10) {
                 Image(systemName: "exclamationmark.triangle")
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Caprine.Semantic.warning)
                 Text(error)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -276,7 +276,7 @@ struct ChatTranscriptView: View {
                                         lineWidth: 1
                                     )
                                 )
-                                .shadow(color: .black.opacity(0.25), radius: 4, y: 2)
+                                .shadow(color: Caprine.Semantic.shadow.opacity(0.25), radius: 4, y: 2)
                                 .contentShape(Circle())
                         }
                         .buttonStyle(.plain)

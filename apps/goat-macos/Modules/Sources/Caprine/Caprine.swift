@@ -11,6 +11,9 @@ public struct Caprine: Sendable {
         public static let success = Color.green
         public static let denied = Color.gray
         public static let onAccent = Color.white
+        /// Glyphs on a light accent fill, such as the send button in dark themes.
+        public static let onLightAccent = Color.black
+        public static let shadow = Color.black
     }
 
     public enum Activity {

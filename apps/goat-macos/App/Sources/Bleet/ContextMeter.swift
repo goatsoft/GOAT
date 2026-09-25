@@ -66,8 +66,8 @@ struct ContextStatus {
 
     var color: Color {
         guard let ratio else { return .secondary }
-        if ratio > 0.9 { return .red }
-        if ratio > 0.75 { return .orange }
+        if ratio > 0.9 { return Caprine.Semantic.danger }
+        if ratio > 0.75 { return Caprine.Semantic.warning }
         return .secondary
     }
 
