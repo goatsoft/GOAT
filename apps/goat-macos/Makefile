@@ -5,6 +5,9 @@ SWIFT_FLAGS ?=
 TEST_PLAN ?= All
 MODULE ?=
 XCODE_FLAGS ?=
+# Optional Xcode compilation cache store (ADR-0095). Empty keeps Xcode's default behaviour.
+CAS_PATH ?=
+CACHE_FLAGS = $(if $(CAS_PATH),COMPILATION_CACHE_ENABLE_CACHING=YES COMPILATION_CACHE_CAS_PATH="$(CAS_PATH)",)
 DERIVED := .build/DerivedData
 APP := $(DERIVED)/Build/Products/$(CONFIG)/GOAT.app
 MODULES := Modules
@@ -34,7 +37,7 @@ open: prepare
 # Command-line ARCHS also applies to Swift package dependencies.
 build: prepare
 	xcodebuild -project GOAT.xcodeproj -scheme GOAT -configuration $(CONFIG) \
-	  -derivedDataPath $(DERIVED) -destination 'platform=macOS,arch=arm64' ARCHS=arm64 -onlyUsePackageVersionsFromResolvedFile $(SIGNING_FLAGS) GOAT_RELEASE_CHANNEL="$(RELEASE_CHANNEL)" RELEASE_TAG="$(RELEASE_TAG)" build
+	  -derivedDataPath $(DERIVED) -destination 'platform=macOS,arch=arm64' ARCHS=arm64 -onlyUsePackageVersionsFromResolvedFile $(SIGNING_FLAGS) GOAT_RELEASE_CHANNEL="$(RELEASE_CHANNEL)" RELEASE_TAG="$(RELEASE_TAG)" $(CACHE_FLAGS) $(XCODE_FLAGS) build
 
 run: build
 	@osascript -e 'tell application id "dev.leet.goat" to quit' >/dev/null 2>&1 || true
@@ -69,7 +72,7 @@ test-web:
 
 test-app: prepare
 	python3 scripts/run-host-tests.py xcodebuild -project GOAT.xcodeproj -scheme GOAT -configuration $(CONFIG) \
-	  -derivedDataPath $(DERIVED) -destination 'platform=macOS,arch=arm64' ARCHS=arm64 -onlyUsePackageVersionsFromResolvedFile ENABLE_TESTABILITY=YES $(SIGNING_FLAGS) GOAT_RELEASE_CHANNEL="$(RELEASE_CHANNEL)" RELEASE_TAG="$(RELEASE_TAG)" -testPlan "$(TEST_PLAN)" GOAT_APP_BUNDLE_IDENTIFIER=dev.leet.goat.test-host $(XCODE_FLAGS) test
+	  -derivedDataPath $(DERIVED) -destination 'platform=macOS,arch=arm64' ARCHS=arm64 -onlyUsePackageVersionsFromResolvedFile ENABLE_TESTABILITY=YES $(SIGNING_FLAGS) GOAT_RELEASE_CHANNEL="$(RELEASE_CHANNEL)" RELEASE_TAG="$(RELEASE_TAG)" -testPlan "$(TEST_PLAN)" GOAT_APP_BUNDLE_IDENTIFIER=dev.leet.goat.test-host $(CACHE_FLAGS) $(XCODE_FLAGS) test
 
 format:
 	swift format --in-place --recursive App/Sources App/Tests Modules/Sources Modules/Tests

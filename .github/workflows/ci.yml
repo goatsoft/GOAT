@@ -78,18 +78,73 @@ jobs:
             apps/goat-macos/Modules/.build/checkouts
             apps/goat-macos/.build/DerivedData/SourcePackages
           key: swift-deps-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.identity }}-${{ matrix.phase }}-${{ hashFiles('**/Package.resolved') }}
+      # Xcode's compilation cache is content-addressed: every compiler input, flag and SDK is
+      # part of each entry's key, so edits miss rather than hit. The namespace keeps stores
+      # for different toolchains, phases (testability), dependency locks and Make flags
+      # apart. DerivedData, products and test homes are never cached (ADR-0095).
+      - name: Identify compilation cache
+        id: cas
+        if: ${{ matrix.phase != 'packages' }}
+        env:
+          ENABLED: ${{ vars.GOAT_CI_COMPILATION_CACHE != 'off' }}
+          NAMESPACE: xcode-cas-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.identity }}-${{ matrix.phase }}-${{ hashFiles('**/Package.resolved', 'apps/goat-macos/Makefile') }}
+        run: |
+          {
+            echo "enabled=$ENABLED"
+            echo "namespace=$NAMESPACE"
+            echo "path=$RUNNER_TEMP/goat-compilation-cache"
+          } >> "$GITHUB_OUTPUT"
+      - name: Restore compilation cache
+        id: restore-cas
+        if: ${{ steps.cas.outputs.enabled == 'true' }}
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ steps.cas.outputs.path }}
+          key: ${{ steps.cas.outputs.namespace }}-${{ github.sha }}
+          restore-keys: ${{ steps.cas.outputs.namespace }}-
+      - name: Bound compilation cache
+        if: ${{ steps.cas.outputs.enabled == 'true' }}
+        env:
+          CAS: ${{ steps.cas.outputs.path }}
+          LIMIT_MB: 3072
+        run: |
+          mkdir -p "$CAS"
+          size_mb=$(du -sm "$CAS" | cut -f1)
+          if [ "$size_mb" -gt "$LIMIT_MB" ]; then
+            echo "Compilation cache is ${size_mb} MB (limit ${LIMIT_MB} MB); building cold."
+            rm -rf "$CAS" && mkdir -p "$CAS"
+          fi
       - name: Verify ${{ matrix.phase }}
         env:
           PHASE: ${{ matrix.phase }}
+          CAS_PATH: ${{ steps.cas.outputs.enabled == 'true' && steps.cas.outputs.path || '' }}
+          CACHE_STATE: ${{ steps.cas.outputs.enabled != 'true' && 'disabled' || steps.restore-cas.outputs.cache-matched-key != '' && 'restored' || 'empty' }}
         run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/$PHASE.log"
           started=$SECONDS
-          trap 'echo "### $PHASE: $((SECONDS - started)) seconds (exit $?)" >> "$GITHUB_STEP_SUMMARY"' EXIT
+          summarize() {
+            status=$?
+            python3 ../../scripts/ci-build-summary.py --phase "$PHASE" --seconds $((SECONDS - started)) \
+              --exit "$status" --cache "${CAS_PATH:+$CACHE_STATE}" --cas "$CAS_PATH" --log "$log" \
+              >> "$GITHUB_STEP_SUMMARY"
+          }
+          trap summarize EXIT
+          timing='XCODE_FLAGS=-showBuildTimingSummary'
           case "$PHASE" in
-            packages) make test-package SWIFT_FLAGS='-c release' ;;
-            app-tests) make test-app CONFIG=Release ;;
-            release-build) make build CONFIG=Release ;;
+            packages) make test-package SWIFT_FLAGS='-c release' 2>&1 | tee "$log" ;;
+            app-tests) make test-app CONFIG=Release CAS_PATH="$CAS_PATH" "$timing" 2>&1 | tee "$log" ;;
+            release-build) make build CONFIG=Release CAS_PATH="$CAS_PATH" "$timing" 2>&1 | tee "$log" ;;
             *) exit 1 ;;
           esac
+      # Only successful runs save. Pushes to main warm the trusted cache; pull requests save
+      # to their own PR-scoped cache, which GitHub never exposes to main or other PRs.
+      - name: Save compilation cache
+        if: ${{ success() && steps.cas.outputs.enabled == 'true' && steps.restore-cas.outputs.cache-hit != 'true' && (github.event_name == 'pull_request' || github.ref == 'refs/heads/main') }}
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ steps.cas.outputs.path }}
+          key: ${{ steps.cas.outputs.namespace }}-${{ github.sha }}
       - name: Preserve app test diagnostics
         if: ${{ always() && matrix.phase == 'app-tests' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -99,6 +154,26 @@ jobs:
           include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 7
+
+  # Keep one compilation cache per namespace on main. Stale namespaces (toolchain or lock
+  # changes) expire through GitHub's seven-day unused-cache eviction.
+  prune-compilation-cache:
+    needs: verification
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.verification.result == 'success' && vars.GOAT_CI_COMPILATION_CACHE != 'off' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Prune superseded compilation caches
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: python3 scripts/ci-prune-caches.py --prefix xcode-cas-v1- --ref refs/heads/main
 
   # Preserve the required check name and reject failed or unexpectedly skipped phases.
   build-test:
