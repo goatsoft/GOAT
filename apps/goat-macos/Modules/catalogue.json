@@ -6,10 +6,10 @@
         "Inference",
         "Persistence"
       ],
-      "summary": "Observable session and transcript state with incremental live metrics.",
-      "interfaces": "ChatSession, ChatMessage, LiveGenerationMetrics",
+      "summary": "Observable session and transcript state, incremental live metrics and Markdown reply segmentation.",
+      "interfaces": "ChatSession, ChatMessage, LiveGenerationMetrics, MarkdownSegmenter, MarkdownSegmentation, MarkdownSegment",
       "security": "No transport or tool execution; streamed display state is coalesced by Shepherd.",
-      "validation": "BleetTests covers message revisions and live metrics; the Bleet test plan covers composer, transcript and status presentation. Run `make test MODULE=Bleet`."
+      "validation": "BleetTests covers message revisions, live metrics and Markdown segmentation (valid boundaries, oversized fences, tables and paragraphs, growth stability); the Bleet test plan covers composer, transcript and status presentation. Run `make test MODULE=Bleet`."
     },
     {
       "name": "Caprine",
