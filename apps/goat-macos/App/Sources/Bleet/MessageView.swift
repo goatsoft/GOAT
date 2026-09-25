@@ -202,26 +202,20 @@ struct MessageView: View {
                         .font(.callout)
                         .foregroundStyle(Caprine.Semantic.warning)
                 }
-                if isLast, message.complete, message.stats?.finishReason == "length" {
-                    Button("Continue response") {
-                        guard
-                            let session = model.chats.first(where: { chat in
-                                chat.messages.contains { $0.id == message.id }
-                            })
-                        else { return }
-                        _ = model.send(
-                            "Continue from where the previous response stopped. Do not repeat completed content.",
-                            in: session)
-                    }
-                    .disabled(model.shepherd.hasActiveTurn || model.engineTransitioning || !model.health.isOK)
-                }
                 if Self.showsFooter(for: message) {
-                    // The footer's space is reserved from the first answer text, so completion only
-                    // reveals actions and never changes the row height (#60 A2, measurement 2).
-                    footer
-                        .opacity(message.complete && (hovering || memorySaveState == .saving) ? 1 : 0)
-                        .allowsHitTesting(message.complete && hovering)
-                        .accessibilityHidden(!message.complete)
+                    // The footer row is reserved from the first answer text, so completion only reveals
+                    // actions and never changes the row height (#60 A2, measurement 2). Continue sits in
+                    // the same row and stays visible without hover when a reply stopped at its limit.
+                    HStack(spacing: 10) {
+                        if canContinue { continueButton }
+                        footer
+                            .opacity(message.complete && (hovering || memorySaveState == .saving) ? 1 : 0)
+                            .allowsHitTesting(message.complete && hovering)
+                            .accessibilityHidden(!message.complete)
+                    }
+                } else if canContinue {
+                    // A reply truncated before any answer text has no footer row to share.
+                    continueButton
                 }
             }
         }
@@ -232,6 +226,27 @@ struct MessageView: View {
     static func showsFooter(for message: ChatMessage) -> Bool {
         message.role == .assistant && !TranscriptActivity.isEmpty(message)
             && (TranscriptText.hasContent(message.text) || message.error != nil)
+    }
+
+    private var canContinue: Bool {
+        isLast && message.complete && message.stats?.finishReason == "length"
+    }
+
+    private var continueButton: some View {
+        Button("Continue response", systemImage: "arrow.right.circle") {
+            guard
+                let session = model.chats.first(where: { chat in
+                    chat.messages.contains { $0.id == message.id }
+                })
+            else { return }
+            _ = model.send(
+                "Continue from where the previous response stopped. Do not repeat completed content.",
+                in: session)
+        }
+        .buttonStyle(.plain)
+        .font(Caprine.Activity.font)
+        .foregroundStyle(model.theme.tokens.tint)
+        .disabled(model.shepherd.hasActiveTurn || model.engineTransitioning || !model.health.isOK)
     }
 
     private var footer: some View {

@@ -328,6 +328,12 @@ public final class ChatDatabase: Sendable {
         try await pool.write { db in _ = try MessageRecord.deleteOne(db, key: id) }
     }
 
+    /// Deletes a whole turn in one transaction, so a failure never leaves part of it behind.
+    public func deleteMessages(ids: [String]) async throws {
+        guard !ids.isEmpty else { return }
+        try await pool.write { db in _ = try MessageRecord.deleteAll(db, keys: ids) }
+    }
+
     /// Pens are file-backed, so deleting one clears every soft chat link in one DB transaction.
     @discardableResult
     public func clearPenLinks(id: String) async throws -> Int {

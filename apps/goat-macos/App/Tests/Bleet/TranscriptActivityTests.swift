@@ -319,6 +319,38 @@ extension AppTests.Bleet {
             #expect(TranscriptActivity.lastVisibleID(in: []) == nil)
         }
 
+        @Test @MainActor func regenerationReplacesTheWholeTurnTheReaderSeesAsLast() {
+            let user = ChatMessage(role: .user)
+            user.text = "Summarise the file."
+            let firstRound = ChatMessage(role: .assistant)
+            firstRound.toolEvents = [
+                ToolEventSnapshot(id: "t1", server: "Pens", tool: "pen_read_file", arguments: "{}", result: "ok")
+            ]
+            let toolRow = ChatMessage(role: .tool)
+            toolRow.text = "raw result"
+            let reply = ChatMessage(role: .assistant)
+            reply.text = "Here is the summary."
+            let empty = ChatMessage(role: .assistant)
+
+            // The review's history: a trailing tool row and empty assistant follow the visible reply.
+            let trailing = [user, reply, toolRow, empty]
+            #expect(TranscriptActivity.lastVisibleID(in: trailing) == reply.id)
+            #expect(AppModel.regenerationTurn(in: trailing)?.map(\.id) == [reply.id, toolRow.id, empty.id])
+
+            // A final reply after other agent rounds regenerates every round of that turn.
+            let agentic = [user, firstRound, toolRow, reply]
+            #expect(AppModel.regenerationTurn(in: agentic)?.map(\.id) == [firstRound.id, toolRow.id, reply.id])
+
+            // An unanswered user message regenerates with nothing to remove.
+            #expect(AppModel.regenerationTurn(in: [user])?.isEmpty == true)
+
+            // No user turn, or a turn holding anything but replies and tool rows, is not regenerated.
+            #expect(AppModel.regenerationTurn(in: [reply]) == nil)
+            let compaction = ChatMessage(role: .assistant)
+            compaction.kind = .compaction
+            #expect(AppModel.regenerationTurn(in: [user, reply, compaction]) == nil)
+        }
+
         @Test @MainActor func footerShowsForEveryReplyWithTextOrErrorIncludingAgenticReplies() {
             let event = ToolEventSnapshot(
                 id: "t1", server: "Pens", tool: "pen_read_file", arguments: "{}", result: "ok")

@@ -1,3 +1,4 @@
+import Bleet
 import Foundation
 import Testing
 
@@ -18,6 +19,32 @@ private func persistenceChat(id: String = UUID().uuidString, penID: String? = ni
 }
 extension AppTests.Persistence {
     @Suite struct PersistenceWriterTests {
+
+        @Test @MainActor func regeneratedTurnIsRemovedFromTheDatabaseAndSessionTogether() async throws {
+            let database = try persistenceTestDatabase()
+            let writer = AppDatabaseWriter(database: database)
+            let chat = persistenceChat()
+            try await database.save(chat)
+            let session = ChatSession(effort: .trot, modelID: nil)
+            var messages: [ChatMessage] = []
+            for (position, role) in [ChatTurn.Role.user, .assistant, .tool, .assistant].enumerated() {
+                let message = ChatMessage(role: role)
+                message.text = "\(role)"
+                messages.append(message)
+                try await database.save(
+                    MessageRecord(
+                        id: message.id.uuidString, chatId: chat.id, role: role.rawValue, text: message.text,
+                        thinking: "", error: nil, statsTtft: nil, statsTokens: nil, statsDuration: nil,
+                        complete: true, position: position, createdAt: .now))
+            }
+            session.messages = messages
+
+            let turn = try #require(AppModel.regenerationTurn(in: session.messages))
+            try await AppModel.removeRegeneratedTurn(turn, from: session, writer: writer)
+
+            #expect(session.messages.map(\.id) == [messages[0].id])
+            #expect(try await database.messages(chatId: chat.id).map(\.id) == [messages[0].id.uuidString])
+        }
 
         @Test func equalOrOlderChatRevisionCannotReplayAfterDelete() async throws {
             let database = try persistenceTestDatabase()
