@@ -159,14 +159,26 @@ struct PreparedCodeText: View {
         )
     }
 
+    struct TaskKey: Equatable {
+        let key: CacheKey
+        let isStreaming: Bool
+    }
+
     var body: some View {
         let dark = colorScheme == .dark
         let key = CacheKey(code: code, language: language, dark: dark)
+        let taskId = TaskKey(key: key, isStreaming: isStreaming)
         Text(currentText)
-            .task(id: key) {
+            .task(id: taskId) {
                 if !isStreaming, let cached = HighlightCache.shared.peek(code: code, language: language, dark: dark) {
                     rendered = cached.text
                     renderedKey = key
+                    return
+                }
+                if !isStreaming, renderedKey == key, let currentRendered = rendered {
+                    let lines = HighlightCache.shared.lineCount(for: code)
+                    HighlightCache.shared.set(
+                        code: code, language: language, dark: dark, text: currentRendered, lineCount: lines)
                     return
                 }
                 do {

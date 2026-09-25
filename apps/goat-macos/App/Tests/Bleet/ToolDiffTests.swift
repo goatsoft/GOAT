@@ -161,6 +161,28 @@ extension AppTests.Bleet {
             #expect(keys == ["path", "command", "alpha", "beta", "zebra", "content", "stdout"])
         }
 
+        @Test func testFormatNumberBoundaries() {
+            #expect(formatNumber(12.5) == "12.5")
+            #expect(formatNumber(12.0) == "12")
+            #expect(formatNumber(Double.nan) == "nan")
+            #expect(formatNumber(1e19) == "1e+19")
+            #expect(formatNumber(9223372036854775808.0) == "9.223372036854776e+18")
+            #expect(formatNumber(-9223372036854775809.0) == "-9223372036854775808")
+
+            let u64Json = """
+                { "u64_max": 9223372036854775808 }
+                """
+            guard let val = JSONValue.parse(u64Json), case .object(let dict) = val, let item = dict["u64_max"] else {
+                Issue.record("Failed to parse u64 JSON")
+                return
+            }
+            if case .number(let d) = item {
+                #expect(formatNumber(d) == "9.223372036854776e+18")
+            } else {
+                Issue.record("Expected u64 past Int64.max to be parsed as .number")
+            }
+        }
+
         @Test func testInt64MaxHandlingInJSONValue() {
             let json = """
                 {

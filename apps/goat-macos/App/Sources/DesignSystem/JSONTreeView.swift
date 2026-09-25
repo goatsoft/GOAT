@@ -321,9 +321,7 @@ private extension JSONValue {
     }
 }
 
-private func formatNumber(_ n: Double) -> String {
-    if n.isFinite && n == n.rounded() && n >= Double(Int.min) && n <= Double(Int.max) {
-        return "\(Int(n))"
-    }
+func formatNumber(_ n: Double) -> String {
+    if let whole = Int64(exactly: n) { return "\(whole)" }
     return "\(n)"
 }
