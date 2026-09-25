@@ -73,18 +73,20 @@ extension AppTests.Bleet {
             #expect(TranscriptWindow.clamped(held, count: 60, anchor: 41, cost: { _ in 5_000 }) == held)
         }
 
-        @Test @MainActor func transcriptWindowRangeStartsAndEndsCleanly() throws {
-            let messages = [ChatMessage(role: .user), ChatMessage(role: .assistant)]
-            let viewport = TranscriptViewport()
-            let count = messages.count
-            
-            // start == count
-            let pastEnd = viewport.messageRange(count: count, anchor: .bottom(offset: 0), cost: { _ in 100 })
-            #expect(pastEnd == count..<count)
-            
-            // Reverse loop hitting budget
-            let bounded = viewport.messageRange(count: count, anchor: .message(index: 1, offset: 0), cost: { _ in TranscriptWindow.maximumCost })
-            #expect(bounded == 1..<count) // It drops index 0 if index 1 takes the whole budget
+        @Test func rangeStartingPastTheEndIsEmpty() {
+            #expect(TranscriptWindow.range(count: 5, startingAt: 5, cost: { _ in 0 }).isEmpty)
+            #expect(TranscriptWindow.range(count: 0, startingAt: 0, cost: { _ in 0 }).isEmpty)
+        }
+
+        @Test func oversizedStartIsAdmittedAlone() {
+            let budget = TranscriptWindow.sourceBudget
+            #expect(TranscriptWindow.range(count: 5, startingAt: 2, cost: { _ in budget }) == 2..<3)
+        }
+
+        @Test func rangeFillsBackwardUntilTheBudget() {
+            let quarter = TranscriptWindow.sourceBudget / 4
+            // Forward admits 8 and 9 (half the budget); backward admits 7 and 6, then 5 would exceed it.
+            #expect(TranscriptWindow.range(count: 10, startingAt: 8, cost: { _ in quarter }) == 6..<10)
         }
     }
 }

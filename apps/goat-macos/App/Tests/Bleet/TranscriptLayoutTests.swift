@@ -259,53 +259,39 @@ extension AppTests.Bleet {
             #expect(restoredLater == 98..<99, "Restoring with anchor must not revert to previous page")
         }
 
-
-        @Test @MainActor func longMessageStreamingUpdatesPartsDynamically() async throws {
-            let session = ChatSession(effort: .trot, modelID: nil)
-            session.messagesLoaded = true
-            let user = ChatMessage(role: .user)
-            user.text = "Write a comprehensive report"
-            user.complete = true
-
-            let assistant = ChatMessage(role: .assistant)
-            assistant.text = String(repeating: "Here is a paragraph evaluating architectural layout.\n\n", count: 80) // 1st chunk, ~6KB
-            assistant.complete = false
-            session.messages = [user, assistant]
-
+        /// Regression for PR 66: a parts view must re-split when its source keeps growing past 8 KiB.
+        @Test @MainActor func textPartsViewUpdatesWhenSourceGrowsAfterSplitting() async throws {
+            let line = String(repeating: "x", count: 99) + "\n"  // 100 bytes
+            func source(_ kib: Int) -> String { String(repeating: line, count: kib * 1_024 / 100) }
+            func parts(_ source: String) -> some View {
+                TranscriptTextPartsView(source: source, fontSize: 13)
+                    .frame(width: 500)
+                    .environment(AppModel.shared)
+            }
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 700, height: 450),
+                contentRect: NSRect(x: 0, y: 0, width: 500, height: 400),
                 styleMask: [.titled], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
-            let host = NSHostingView(rootView: transcript(session))
+            let host = NSHostingView(rootView: parts(source(10)))
             window.contentView = host
             defer {
                 window.contentView = nil
                 window.close()
             }
-
-            host.layoutSubtreeIfNeeded()
-            
-            // Wait for initial part load
-            try await Task.sleep(for: .milliseconds(500))
-
-            // Now append to the message so it crosses the 8KB limit
-            assistant.text += String(repeating: "And here is another paragraph explaining more details.\n\n", count: 80) // +6KB, crosses 8KB boundary
-            assistant.markRenderChanged()
-            
-            host.layoutSubtreeIfNeeded()
-            
-            // Allow time for .task to evaluate and re-split
-            try await Task.sleep(for: .milliseconds(500))
-            
-            // Check that we can scroll because it has rendered the second part, which means we now have enough height, or at least that it updated.
-            let scroll = findTranscriptScroll(host)
-            let document = try #require(scroll?.documentView)
-            
-            #expect(document.bounds.height > scroll!.contentView.bounds.height, "Document should have grown as the source updated.")
-            
-            assistant.complete = true
+            func settledHeight() async throws -> CGFloat {
+                try await Task.sleep(for: .milliseconds(300))
+                host.layoutSubtreeIfNeeded()
+                return host.fittingSize.height
+            }
+            // 10 KiB splits into 8 KiB + 2 KiB; the last (short) part is shown.
+            let short = try await settledHeight()
+            // 16 KiB splits into 8 KiB + 8 KiB; the shown last part must grow to 8 KiB.
+            host.rootView = parts(source(16))
+            let full = try await settledHeight()
+            #expect(full > short * 2, "The visible part must re-split as the source grows (\(short) -> \(full))")
         }
-\n        @Test @MainActor func oversizedCompletedReplyRendersScrollableDocumentAndReachesBottomSentinel() async throws {
+
+        @Test @MainActor func oversizedCompletedReplyRendersScrollableDocumentAndReachesBottomSentinel() async throws {
             let session = ChatSession(effort: .trot, modelID: nil)
             session.messagesLoaded = true
             let user = ChatMessage(role: .user)

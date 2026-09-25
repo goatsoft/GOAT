@@ -176,11 +176,7 @@ struct ChatTranscriptView: View {
                                 }
                             }
                         }
-                        let rows = TranscriptActivity.cachedRows(
-                            session.messages[messageRange],
-                            range: messageRange,
-                            count: session.messages.count,
-                            streamRevision: streamRevision)
+                        let rows = TranscriptActivity.rows(session.messages[messageRange])
                         let lastMessageID = session.messages.last?.id
                         let activeAssistant =
                             session.isStreaming

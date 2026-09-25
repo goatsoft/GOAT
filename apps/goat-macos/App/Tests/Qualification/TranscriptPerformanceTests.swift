@@ -149,27 +149,6 @@ final class TranscriptPerformanceTests: XCTestCase {
         XCTAssertEqual(hit?.lineCount, 4)
     }
 
-    @MainActor func testCachedRowsMemoizationDuringStreaming() async throws {
-        let messages = (0..<40).map { index in
-            let msg = ChatMessage(role: index.isMultiple(of: 2) ? .user : .assistant)
-            msg.text = "Message \(index)"
-            msg.complete = true
-            return msg
-        }
-        let range = 0..<40
-        let revision: UInt64 = 100
-
-        let rows1 = TranscriptActivity.cachedRows(
-            messages[range], range: range, count: messages.count, streamRevision: revision)
-        let rows2 = TranscriptActivity.cachedRows(
-            messages[range], range: range, count: messages.count, streamRevision: revision)
-
-        XCTAssertEqual(rows1.count, rows2.count)
-        for (r1, r2) in zip(rows1, rows2) {
-            XCTAssertEqual(r1.id, r2.id)
-        }
-    }
-
     @MainActor func testOversizedCompletedReplyRendersScrollableDocument() async throws {
         let session = ChatSession(effort: .trot, modelID: nil)
         session.messagesLoaded = true
