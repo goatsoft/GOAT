@@ -1,3 +1,4 @@
+import Bleet
 import Testing
 
 @testable import GOAT
@@ -71,6 +72,26 @@ extension AppTests.Bleet {
             let restored = TranscriptWindow.clamped(held, count: 60, anchor: 20, cost: { _ in 5_000 })
             #expect(restored == 20..<23)
             #expect(TranscriptWindow.clamped(held, count: 60, anchor: 41, cost: { _ in 5_000 }) == held)
+        }
+
+        @Test @MainActor func displayCostChargesExpandedAndMultibyteReasoningInBytes() {
+            let heavy = ChatMessage(role: .assistant)
+            heavy.text = String(repeating: "a", count: 8 * 1_024)
+            heavy.thinking = String(repeating: "b", count: 8 * 1_024)
+            #expect(TranscriptWindow.displayCost(heavy) == 16 * 1_024)
+
+            // 1,400 characters of two-byte reasoning are 2,800 source bytes, not 1,400.
+            let unicode = ChatMessage(role: .assistant)
+            unicode.thinking = String(repeating: "\u{E9}", count: 1_400)
+            #expect(TranscriptWindow.displayCost(unicode) == 2_800)
+
+            // An 8 KiB answer with expanded 8 KiB reasoning fills the budget; a 6 KiB row cannot join it.
+            let light = ChatMessage(role: .assistant)
+            light.text = String(repeating: "c", count: 6 * 1_024)
+            let rows = [heavy, light]
+            #expect(
+                TranscriptWindow.range(count: 2, startingAt: 0, cost: { TranscriptWindow.displayCost(rows[$0]) })
+                    == 0..<1)
         }
 
         @Test func rangeStartingPastTheEndIsEmpty() {

@@ -123,32 +123,6 @@ final class TranscriptPerformanceTests: XCTestCase {
         XCTAssertEqual(delta, 0, "Assistant row height before and after complete with unchanged text must be 0 pt")
     }
 
-    @MainActor func testHighlightFirstFrameHitRateCachedBlocks() async throws {
-        let code = """
-            struct CachedItem: Identifiable {
-                let id: UUID
-                let name: String
-            }
-            """
-        let language = "swift"
-        let dark = false
-
-        // Warm the cache
-        let highlighted = try await CodeSyntaxHighlighter.shared.render(code, language: language, dark: dark)
-        HighlightCache.shared.set(
-            code: code, language: language, dark: dark, text: highlighted, lineCount: 4)
-
-        // Simulate paging away (querying other entries) and paging back
-        for i in 0..<10 {
-            _ = HighlightCache.shared.peek(code: "let x = \(i)", language: "swift", dark: dark)
-        }
-
-        // Frame 0 synchronous hit test
-        let hit = HighlightCache.shared.peek(code: code, language: language, dark: dark)
-        XCTAssertNotNil(hit, "Cached block must return synchronous hit on frame 0")
-        XCTAssertEqual(hit?.lineCount, 4)
-    }
-
     @MainActor func testOversizedCompletedReplyRendersScrollableDocument() async throws {
         let session = ChatSession(effort: .trot, modelID: nil)
         session.messagesLoaded = true

@@ -291,6 +291,78 @@ extension AppTests.Bleet {
             #expect(full > short * 2, "The visible part must re-split as the source grows (\(short) -> \(full))")
         }
 
+        /// Issue #60 C0: a reply whose answer and reasoning both pass 8 KiB completes while streaming.
+        /// Both parts views must show their latest text, and the transcript must stay scrollable to
+        /// its bottom without reselecting the chat.
+        @Test @MainActor func oversizedAnswerAndReasoningCompleteIntoAReachableBottom() async throws {
+            let session = ChatSession(effort: .trot, modelID: nil)
+            session.messagesLoaded = true
+            let user = ChatMessage(role: .user)
+            user.text = "Write a long report."
+            user.complete = true
+            let assistant = ChatMessage(role: .assistant)
+            session.messages = [user, assistant]
+            session.isStreaming = true
+
+            let reasoningLine = String(repeating: "r", count: 79) + "\n"
+            let answerLine = String(repeating: "a", count: 79) + "\n"
+            assistant.appendStream(text: "", thinking: String(repeating: reasoningLine, count: 40))
+
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 700, height: 450),
+                styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            let host = NSHostingView(rootView: transcript(session).environment(\.reasoningStartsExpanded, true))
+            window.contentView = host
+            defer {
+                window.contentView = nil
+                window.close()
+            }
+            host.layoutSubtreeIfNeeded()
+
+            // Stream both sources well past one 8 KiB part, the way the worker publishes batches.
+            for _ in 0..<6 {
+                assistant.appendStream(
+                    text: String(repeating: answerLine, count: 40),
+                    thinking: String(repeating: reasoningLine, count: 30))
+                host.layoutSubtreeIfNeeded()
+                try await Task.sleep(for: .milliseconds(150))
+            }
+            assistant.appendStream(text: "ANSWER-END", thinking: "REASONING-END")
+            #expect(assistant.text.utf8.count > 16 * 1_024)
+            #expect(assistant.thinking.utf8.count > 16 * 1_024)
+
+            assistant.complete = true
+            session.isStreaming = false
+
+            // Each parts view publishes exactly what it prepared for display under its owner key.
+            let reasoning = TranscriptText.removingBoundaryBlankLines(assistant.thinking)
+            func shownAnswer() -> String? {
+                TranscriptPartsCache.shared.parts(for: "\(assistant.id.uuidString):text", source: assistant.text)?.last
+            }
+            func shownReasoning() -> String? {
+                TranscriptPartsCache.shared.parts(for: "\(assistant.id.uuidString):thinking", source: reasoning)?.last
+            }
+            var settled = false
+            for _ in 0..<150 {
+                host.layoutSubtreeIfNeeded()
+                if let scroll = findTranscriptScroll(host), let document = scroll.documentView,
+                    document.bounds.height > scroll.contentView.bounds.height,
+                    document.bounds.maxY - document.visibleRect.maxY < 100,
+                    shownAnswer()?.hasSuffix("ANSWER-END") == true,
+                    shownReasoning()?.hasSuffix("REASONING-END") == true
+                {
+                    settled = true
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            #expect(
+                settled,
+                "Latest parts render and the bottom is reachable; answer \(shownAnswer()?.suffix(12) ?? "none"), reasoning \(shownReasoning()?.suffix(12) ?? "none")"
+            )
+        }
+
         @Test @MainActor func oversizedCompletedReplyRendersScrollableDocumentAndReachesBottomSentinel() async throws {
             let session = ChatSession(effort: .trot, modelID: nil)
             session.messagesLoaded = true

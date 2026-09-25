@@ -35,24 +35,66 @@ private actor TranscriptPartPreparation {
     }
 }
 
+/// Prepared parts keyed by their owner (for example a message's text or reasoning). A hit requires the
+/// exact source, so a stale entry is never shown. Lookups are O(1) for an unchanged source because
+/// Swift string equality short-circuits on shared storage and on differing lengths; the view never
+/// splits on the main actor. NSCache may evict entries, so a hit is an optimisation, not a promise.
+@MainActor
+final class TranscriptPartsCache {
+    static let shared = TranscriptPartsCache()
+
+    private final class Entry {
+        let source: String
+        let parts: [String]
+        init(source: String, parts: [String]) {
+            self.source = source
+            self.parts = parts
+        }
+    }
+
+    private let cache = NSCache<NSString, Entry>()
+
+    init(countLimit: Int = 64) {
+        cache.countLimit = countLimit
+    }
+
+    func parts(for key: String, source: String) -> [String]? {
+        guard let entry = cache.object(forKey: key as NSString), entry.source == source else { return nil }
+        return entry.parts
+    }
+
+    func store(_ parts: [String], for key: String, source: String) {
+        cache.setObject(Entry(source: source, parts: parts), forKey: key as NSString)
+    }
+
+    func removeAll() {
+        cache.removeAllObjects()
+    }
+}
+
 /// Full source stays available for copying; only the selected part enters native text layout.
 struct TranscriptTextPartsView: View {
     let source: String
     let fontSize: CGFloat
+    var cacheKey: String?
     var onPrepared: () -> Void = {}
     @Environment(AppModel.self) private var model
     @Environment(\.transcriptInspection) private var inspection
     @State private var parts: [String] = []
-    @State private var preparedSource: String = ""
+    @State private var preparedSource: String?
     @State private var selectedPart: Int?
 
-    init(source: String, fontSize: CGFloat, onPrepared: @escaping () -> Void = {}) {
+    init(source: String, fontSize: CGFloat, cacheKey: String? = nil, onPrepared: @escaping () -> Void = {}) {
         self.source = source
         self.fontSize = fontSize
+        self.cacheKey = cacheKey
         self.onPrepared = onPrepared
-        let initialParts = (try? TranscriptTextParts.split(source)) ?? []
-        _parts = State(initialValue: initialParts)
-        _preparedSource = State(initialValue: source)
+        // Seed only from an exact, already-prepared hit. SwiftUI evaluates this initializer on every
+        // parent update, so it must stay a lookup; splitting happens on the preparation actor.
+        if let cacheKey, let cached = TranscriptPartsCache.shared.parts(for: cacheKey, source: source) {
+            _parts = State(initialValue: cached)
+            _preparedSource = State(initialValue: source)
+        }
     }
 
     private var index: Int { min(selectedPart ?? max(0, parts.count - 1), max(0, parts.count - 1)) }
@@ -73,21 +115,13 @@ struct TranscriptTextPartsView: View {
             }
         }
         .task(id: source) {
-            if preparedSource != source {
-                guard let prepared = try? await TranscriptPartPreparation.shared.prepare(source), !Task.isCancelled
-                else {
-                    return
-                }
-                parts = prepared
-                preparedSource = source
-            } else if parts.isEmpty {
-                guard let prepared = try? await TranscriptPartPreparation.shared.prepare(source), !Task.isCancelled
-                else {
-                    return
-                }
-                parts = prepared
-                preparedSource = source
-            }
+            // The previous parts stay on screen until the new source is prepared off the main actor.
+            guard preparedSource != source else { return }
+            guard let prepared = try? await TranscriptPartPreparation.shared.prepare(source), !Task.isCancelled
+            else { return }
+            parts = prepared
+            preparedSource = source
+            if let cacheKey { TranscriptPartsCache.shared.store(prepared, for: cacheKey, source: source) }
             onPrepared()
         }
     }

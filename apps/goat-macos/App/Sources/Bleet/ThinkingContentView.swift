@@ -121,6 +121,7 @@ private actor ThinkingPreparation {
 
 struct ThinkingContentView: View {
     let source: String
+    var cacheKey: String?
     var onPrepared: () -> Void = {}
     @Environment(AppModel.self) private var model
     @State private var blocks: [ThinkingFenceParser.Block] = []
@@ -129,7 +130,7 @@ struct ThinkingContentView: View {
         VStack(alignment: .leading, spacing: 8) {
             if source.utf8.count > TranscriptTextParts.maximumBytes {
                 TranscriptTextPartsView(
-                    source: source, fontSize: model.chatFontSize - 1, onPrepared: onPrepared)
+                    source: source, fontSize: model.chatFontSize - 1, cacheKey: cacheKey, onPrepared: onPrepared)
             } else {
                 ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
                     if let language = block.language {

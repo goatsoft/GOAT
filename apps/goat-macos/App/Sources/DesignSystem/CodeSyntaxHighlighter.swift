@@ -7,8 +7,15 @@ import SwiftUI
 actor CodeSyntaxHighlighter {
     static let shared = CodeSyntaxHighlighter()
 
+    /// Bounded per-source count of preparations started; lets tests prove a warm consumer skipped the work.
+    private var preparationCounts: [Int: Int] = [:]
+
+    func preparations(of source: String) -> Int { preparationCounts[source.hashValue, default: 0] }
+
     func render(_ source: String, language: String?, dark: Bool) async throws -> AttributedString {
         try Task.checkCancellation()
+        if preparationCounts.count >= 512 { preparationCounts.removeAll(keepingCapacity: true) }
+        preparationCounts[source.hashValue, default: 0] += 1
         guard source.utf8.count <= HighlightedCodeView.maximumHighlightedBytes else {
             return AttributedString(source)
         }
@@ -60,9 +67,14 @@ final class HighlightCache {
     private let cache = NSCache<NSString, EntryBox>()
     private let lineCounts = NSCache<NSString, NSNumber>()
 
+    /// Keeps the exact source so a hash collision can never return another block's highlighting.
     final class EntryBox: @unchecked Sendable {
+        let code: String
         let entry: Entry
-        init(_ entry: Entry) { self.entry = entry }
+        init(code: String, entry: Entry) {
+            self.code = code
+            self.entry = entry
+        }
     }
 
     init() {
@@ -76,12 +88,13 @@ final class HighlightCache {
 
     func peek(code: String, language: String?, dark: Bool) -> Entry? {
         let k = makeKey(code: code, language: language, dark: dark) as NSString
-        return cache.object(forKey: k)?.entry
+        guard let box = cache.object(forKey: k), box.code == code else { return nil }
+        return box.entry
     }
 
     func set(code: String, language: String?, dark: Bool, text: AttributedString, lineCount: Int) {
         let k = makeKey(code: code, language: language, dark: dark) as NSString
-        cache.setObject(EntryBox(Entry(text: text, lineCount: lineCount)), forKey: k)
+        cache.setObject(EntryBox(code: code, entry: Entry(text: text, lineCount: lineCount)), forKey: k)
     }
 
     func lineCount(for code: String) -> Int {
@@ -96,6 +109,11 @@ final class HighlightCache {
         if code.hasSuffix("\n") { count = max(1, count - 1) }
         lineCounts.setObject(NSNumber(value: count), forKey: key)
         return count
+    }
+
+    func removeAll() {
+        cache.removeAllObjects()
+        lineCounts.removeAllObjects()
     }
 }
 
@@ -117,12 +135,26 @@ struct PreparedCodeText: View {
         self.code = code
         self.language = language
         self.isStreaming = isStreaming
+    }
 
-        let isDark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        if let cached = HighlightCache.shared.peek(code: code, language: language, dark: isDark) {
-            _rendered = State(initialValue: cached.text)
-            _renderedKey = State(initialValue: CacheKey(code: code, language: language, dark: isDark))
+    /// First-frame text for the scheme SwiftUI will actually render (the app can prefer a scheme that
+    /// differs from the system appearance). A resident cache entry wins over plain text; NSCache may
+    /// have evicted it, in which case the task prepares it again.
+    static func displayText(
+        code: String,
+        language: String?,
+        dark: Bool,
+        isStreaming: Bool,
+        rendered: AttributedString?,
+        renderedKey: CacheKey?
+    ) -> AttributedString {
+        let key = CacheKey(code: code, language: language, dark: dark)
+        if renderedKey != key, !isStreaming,
+            let cached = HighlightCache.shared.peek(code: code, language: language, dark: dark)
+        {
+            return cached.text
         }
+        return resolveText(code: code, language: language, dark: dark, rendered: rendered, renderedKey: renderedKey)
     }
 
     static func resolveText(
@@ -150,10 +182,11 @@ struct PreparedCodeText: View {
     }
 
     private var currentText: AttributedString {
-        Self.resolveText(
+        Self.displayText(
             code: code,
             language: language,
             dark: colorScheme == .dark,
+            isStreaming: isStreaming,
             rendered: rendered,
             renderedKey: renderedKey
         )

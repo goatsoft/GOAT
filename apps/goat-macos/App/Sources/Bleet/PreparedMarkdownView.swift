@@ -113,12 +113,10 @@ actor MarkdownRenderCache {
         return .parsed(content)
     }
 
-    func removeAll() {
+    func removeAll() async {
         entries.removeAll()
         sourceBytes = 0
-        Task { @MainActor in
-            MarkdownContentCache.shared.removeAll()
-        }
+        await MainActor.run { MarkdownContentCache.shared.removeAll() }
     }
 
     func snapshot() -> Snapshot {
@@ -178,7 +176,9 @@ struct PreparedMarkdownView<Rendered: View>: View {
     var body: some View {
         Group {
             if source.utf8.count > TranscriptTextParts.maximumBytes {
-                TranscriptTextPartsView(source: source, fontSize: fallbackFontSize, onPrepared: onPrepared)
+                TranscriptTextPartsView(
+                    source: source, fontSize: fallbackFontSize, cacheKey: "\(id.uuidString):text",
+                    onPrepared: onPrepared)
             } else {
                 switch preparedRequest == request || retainsPreviousContent ? preparation : nil {
                 case .parsed(let content):

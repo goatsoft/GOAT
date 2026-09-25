@@ -1,7 +1,10 @@
+import AppKit
 import Caprine
 import CoreGraphics
 import Foundation
 import Paddock
+import Persistence
+import SwiftUI
 import Testing
 
 @testable import Bleet
@@ -95,6 +98,138 @@ extension AppTests.Bleet {
             #expect(await cache.snapshot().sourceBytes == 0)
             _ = await cache.prepare(id: id, source: "**Revised**")
             #expect(await cache.snapshot().parseCount == 3)
+        }
+    }
+}
+
+@MainActor private func mounted<V: View>(_ view: V, width: CGFloat = 500) -> (NSWindow, NSHostingView<V>) {
+    let window = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: width, height: 400),
+        styleMask: [.titled], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    let host = NSHostingView(rootView: view)
+    window.contentView = host
+    host.layoutSubtreeIfNeeded()
+    return (window, host)
+}
+
+extension AppTests.Bleet {
+    @Suite(.serialized) struct SharedRenderingCacheTests {
+
+        @Test @MainActor func partsViewNeverSplitsInItsInitializerAndRemountsFromCache() async throws {
+            let line = String(repeating: "x", count: 99) + "\n"
+            let source = String(repeating: line, count: 16 * 1_024 / 100)
+            let key = "test-parts-\(UUID().uuidString)"
+            func parts() -> some View {
+                TranscriptTextPartsView(source: source, fontSize: 13, cacheKey: key)
+                    .frame(width: 500).environment(AppModel.shared)
+            }
+            // First mount: nothing is prepared yet, so the first frame is the short placeholder.
+            let (firstWindow, first) = mounted(parts())
+            let placeholder = first.fittingSize.height
+            try await Task.sleep(for: .milliseconds(400))
+            first.layoutSubtreeIfNeeded()
+            let prepared = first.fittingSize.height
+            #expect(
+                prepared > placeholder * 4,
+                "Preparation must happen off the initializer (\(placeholder) -> \(prepared))")
+            firstWindow.contentView = nil
+            firstWindow.close()
+
+            // Remount: the exact cached parts render on the first frame.
+            let (window, again) = mounted(parts())
+            defer {
+                window.contentView = nil
+                window.close()
+            }
+            #expect(again.fittingSize.height == prepared)
+            #expect(
+                TranscriptPartsCache.shared.parts(for: key, source: source + "y") == nil, "A changed source never hits")
+        }
+
+        @Test @MainActor func highlightFirstFrameUsesTheEnvironmentSchemeAndSkipsPreparation() async throws {
+            let code = "let marker = \"\(UUID().uuidString)\""
+            let dark = try await CodeSyntaxHighlighter.shared.render(code, language: "swift", dark: true)
+            HighlightCache.shared.set(code: code, language: "swift", dark: true, text: dark, lineCount: 1)
+            let warmed = await CodeSyntaxHighlighter.shared.preparations(of: code)
+
+            // The app prefers dark while the system appearance is light.
+            let previous = NSApp.appearance
+            NSApp.appearance = NSAppearance(named: .aqua)
+            defer { NSApp.appearance = previous }
+            #expect(
+                PreparedCodeText.displayText(
+                    code: code, language: "swift", dark: true, isStreaming: false, rendered: nil, renderedKey: nil)
+                    == dark)
+
+            let (window, _) = mounted(
+                PreparedCodeText(code: code, language: "swift").environment(\.colorScheme, .dark))
+            try await Task.sleep(for: .milliseconds(300))
+            #expect(
+                await CodeSyntaxHighlighter.shared.preparations(of: code) == warmed,
+                "A resident entry is not prepared again")
+            window.contentView = nil
+            window.close()
+
+            // After eviction the consumer prepares again rather than assuming the entry is resident.
+            HighlightCache.shared.removeAll()
+            let (evictedWindow, _) = mounted(
+                PreparedCodeText(code: code, language: "swift").environment(\.colorScheme, .dark))
+            defer {
+                evictedWindow.contentView = nil
+                evictedWindow.close()
+            }
+            try await Task.sleep(for: .milliseconds(500))
+            #expect(await CodeSyntaxHighlighter.shared.preparations(of: code) > warmed)
+        }
+
+        @Test @MainActor func highlightCacheRequiresTheExactKey() {
+            let text = AttributedString("x")
+            HighlightCache.shared.set(code: "let a = 1", language: "swift", dark: false, text: text, lineCount: 1)
+            #expect(HighlightCache.shared.peek(code: "let a = 1", language: "swift", dark: false)?.text == text)
+            #expect(HighlightCache.shared.peek(code: "let a = 2", language: "swift", dark: false) == nil)
+            #expect(HighlightCache.shared.peek(code: "let a = 1", language: "swift", dark: true) == nil)
+            #expect(HighlightCache.shared.peek(code: "let a = 1", language: "python", dark: false) == nil)
+        }
+
+        @Test func toolPresentationCacheKeysEveryOutputAffectingInput() {
+            let id = "presentation-\(UUID().uuidString)"
+            let external = ToolEventSnapshot(id: id, server: "Files", tool: "lookup", arguments: #"{"q":"a"}"#)
+            let memory = ToolEventSnapshot(id: id, server: "Memory", tool: "lookup", arguments: #"{"q":"a"}"#)
+            #expect(
+                ToolActivityLabel.presentation(for: external).title != ToolActivityLabel.presentation(for: memory).title
+            )
+
+            let emptyArguments = ToolEventSnapshot(
+                id: id, server: "Files", tool: "lookup", arguments: "{}", result: "{}")
+            let valuedResult = ToolEventSnapshot(
+                id: id, server: "Files", tool: "lookup", arguments: "{}", result: #"{"hits":1}"#)
+            #expect(!ToolActivityLabel.presentation(for: emptyArguments).hasDetails)
+            #expect(ToolActivityLabel.presentation(for: valuedResult).hasDetails)
+        }
+
+        @Test @MainActor func clearingEmptiesEveryOwnedLayerBeforeReturning() async throws {
+            let id = UUID()
+            let source = "**clear** \(id.uuidString)"
+            let cache = MarkdownRenderCache(maximumEntries: 4, maximumSourceBytes: 4_096)
+            guard case .parsed(let content) = await cache.prepare(id: id, source: source) else {
+                Issue.record("Markdown did not parse")
+                return
+            }
+            MarkdownContentCache.shared.set(id: id, source: source, content: content)
+            HighlightCache.shared.set(
+                code: source, language: nil, dark: false, text: AttributedString(source), lineCount: 1)
+            TranscriptPartsCache.shared.store([source], for: "clear-\(id)", source: source)
+            JSONValueCache.shared.set(source, value: .string(source))
+
+            await RenderingCaches.clear()
+            await cache.removeAll()
+
+            #expect(MarkdownContentCache.shared.peek(id: id, source: source) == nil)
+            #expect(HighlightCache.shared.peek(code: source, language: nil, dark: false) == nil)
+            #expect(TranscriptPartsCache.shared.parts(for: "clear-\(id)", source: source) == nil)
+            #expect(JSONValueCache.shared.peek(source) == nil)
+            #expect(await cache.snapshot().entryCount == 0)
         }
     }
 }

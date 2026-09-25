@@ -73,9 +73,10 @@ enum TranscriptWindow {
 
     @MainActor static func displayCost(_ message: ChatMessage) -> Int {
         // Do not scan tool payloads or all reasoning merely to decide which rows to admit.
-        // A single message's rendered source is bounded by parts pagination (8 KiB) and reasoning preview (1.4 KiB).
+        // Answer and reasoning each render at most one parts page. Reasoning is charged at its expanded
+        // size (not the character-based preview) because the reader can show all of it in place.
         min(TranscriptTextParts.maximumBytes, message.text.utf8.count)
-            + min(ReasoningPreview.characterLimit, message.thinking.utf8.count)
+            + min(TranscriptTextParts.maximumBytes, message.thinking.utf8.count)
             + min(capacity, message.toolEvents.count) * 256
     }
 }

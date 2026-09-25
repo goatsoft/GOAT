@@ -21,5 +21,11 @@ enum RenderingCaches {
         await MarkdownRenderCache.shared.removeAll()
         await ImageFileWorker.shared.clearCache()
         await PaddockDocumentCache.shared.removeAll()
+        ToolEventPresentationCache.shared.removeAll()
+        await MainActor.run {
+            HighlightCache.shared.removeAll()
+            TranscriptPartsCache.shared.removeAll()
+            JSONValueCache.shared.removeAll()
+        }
     }
 }
