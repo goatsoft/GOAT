@@ -1,4 +1,7 @@
+import Bleet
 import Foundation
+import Inference
+import Persistence
 import Testing
 
 @testable import GOAT
@@ -129,6 +132,121 @@ extension AppTests.Bleet {
             #expect(ToolDiffParser.parse(tool: "pen_edit_file", arguments: "not a json") == nil)
             #expect(ToolDiffParser.parse(tool: "pen_edit_file", arguments: "{}") == nil)
             #expect(ToolDiffParser.parse(tool: "pen_write_file", arguments: #"{"path":"a"}"#) == nil)
+        }
+    }
+
+    @MainActor @Suite struct JSONTreeViewTests {
+        @Test func testPresentationOrder() {
+            let json = """
+                {
+                    "zebra": "z",
+                    "content": "bulky content",
+                    "path": "Sources/App.swift",
+                    "alpha": "a",
+                    "command": "swift build",
+                    "stdout": "output",
+                    "beta": "b"
+                }
+                """
+            guard let value = JSONValue.parse(json), case .object(let dict) = value else {
+                Issue.record("Failed to parse JSON")
+                return
+            }
+            let sortedPairs = JSONPresentationOrder.sortedPairs(from: dict)
+            let keys = sortedPairs.map(\.key)
+
+            // Identity keys first: ["path", "command"] (in defined rank order)
+            // Alphabetical keys middle: ["alpha", "beta", "zebra"]
+            // Bulky keys last: ["content", "stdout"] (in defined rank order)
+            #expect(keys == ["path", "command", "alpha", "beta", "zebra", "content", "stdout"])
+        }
+
+        @Test func testFormatNumberBoundaries() {
+            #expect(formatNumber(12.5) == "12.5")
+            #expect(formatNumber(12.0) == "12")
+            #expect(formatNumber(Double.nan) == "nan")
+            #expect(formatNumber(1e19) == "1e+19")
+            #expect(formatNumber(9223372036854775808.0) == "9.223372036854776e+18")
+            #expect(formatNumber(-9223372036854775809.0) == "-9223372036854775808")
+
+            let u64Json = """
+                { "u64_max": 9223372036854775808 }
+                """
+            guard let val = JSONValue.parse(u64Json), case .object(let dict) = val, let item = dict["u64_max"] else {
+                Issue.record("Failed to parse u64 JSON")
+                return
+            }
+            if case .number(let d) = item {
+                #expect(formatNumber(d) == "9.223372036854776e+18")
+            } else {
+                Issue.record("Expected u64 past Int64.max to be parsed as .number")
+            }
+        }
+
+        @Test func testInt64MaxHandlingInJSONValue() {
+            let json = """
+                {
+                    "max": 9223372036854775807,
+                    "min": -9223372036854775808,
+                    "regular": 42
+                }
+                """
+            guard let value = JSONValue.parse(json), case .object(let dict) = value else {
+                Issue.record("Failed to parse JSON with Int64 values")
+                return
+            }
+            #expect(dict["max"] == .integer(Int64.max))
+            #expect(dict["min"] == .integer(Int64.min))
+            #expect(dict["regular"] == .integer(42))
+        }
+
+        @Test func testToolCallPayloadContainsValue() {
+            #expect(!ToolCallPayload.containsValue(nil))
+            #expect(!ToolCallPayload.containsValue(""))
+            #expect(!ToolCallPayload.containsValue("   \n\t  "))
+            #expect(!ToolCallPayload.containsValue("null"))
+            #expect(!ToolCallPayload.containsValue("{}"))
+            #expect(!ToolCallPayload.containsValue("{   }"))
+            #expect(!ToolCallPayload.containsValue("[]"))
+            #expect(!ToolCallPayload.containsValue("[   ]"))
+
+            #expect(ToolCallPayload.containsValue("{\"key\": \"value\"}"))
+            #expect(ToolCallPayload.containsValue("[1, 2, 3]"))
+            #expect(ToolCallPayload.containsValue("non-json plain text"))
+        }
+
+        @Test func testPresentationTitlesAndRootNaming() {
+            let globWithPattern = ToolEventSnapshot(
+                id: "1", server: "Pens", tool: "pen_glob",
+                arguments: #"{"pattern": "**/*.swift"}"#,
+                result: nil, isError: false, denied: false
+            )
+            let pres1 = ToolActivityLabel.presentation(for: globWithPattern, rootName: "App")
+            #expect(pres1.title == "Find files · **/*.swift")
+
+            let globWithPathFallback = ToolEventSnapshot(
+                id: "2", server: "Pens", tool: "pen_glob",
+                arguments: #"{"path": "Sources"}"#,
+                result: nil, isError: false, denied: false
+            )
+            let pres2 = ToolActivityLabel.presentation(for: globWithPathFallback, rootName: "App")
+            #expect(pres2.title == "Find files · Sources")
+
+            let listWithDot = ToolEventSnapshot(
+                id: "3", server: "Pens", tool: "pen_list_files",
+                arguments: #"{"path": "."}"#,
+                result: nil, isError: false, denied: false
+            )
+            let pres3 = ToolActivityLabel.presentation(for: listWithDot, rootName: "MyProject")
+            #expect(pres3.title == "List files · MyProject")
+
+            let listWithEmptyRoot = ToolEventSnapshot(
+                id: "4", server: "Pens", tool: "pen_list_files",
+                arguments: #"{"path": "."}"#,
+                result: nil, isError: false, denied: false
+            )
+            let pres4 = ToolActivityLabel.presentation(for: listWithEmptyRoot, rootName: nil)
+            #expect(pres4.title == "List files · workspace")
         }
     }
 }

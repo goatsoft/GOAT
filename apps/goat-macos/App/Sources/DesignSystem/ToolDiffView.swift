@@ -50,11 +50,11 @@ struct ToolFileDiff: Equatable, Sendable {
 }
 
 /// Parses tool invocation arguments into a structured file diff.
-@MainActor enum ToolDiffParser {
+enum ToolDiffParser: Sendable {
     public static let maxDiffLines = 500
     public static let maxLCSDimension = 500
 
-    private static let cache = NSCache<NSString, DiffCacheEntry>()
+    nonisolated(unsafe) private static let cache = NSCache<NSString, DiffCacheEntry>()
 
     private final class DiffCacheEntry: @unchecked Sendable {
         let arguments: String
@@ -164,22 +164,22 @@ struct ToolFileDiff: Equatable, Sendable {
             )
         }
 
-        var dp: [[Int]] = Array(repeating: Array(repeating: 0, count: n + 1), count: m + 1)
-        for i in 0..<m {
-            for j in 0..<n {
-                if oldLines[i] == newLines[j] {
-                    dp[i + 1][j + 1] = dp[i][j] + 1
+        // Longest Common Subsequence (LCS) matrix
+        var dp = [[Int]](repeating: [Int](repeating: 0, count: n + 1), count: m + 1)
+        for i in 1...m {
+            for j in 1...n {
+                if oldLines[i - 1] == newLines[j - 1] {
+                    dp[i][j] = dp[i - 1][j - 1] + 1
                 } else {
-                    let a = dp[i + 1][j]
-                    let b = dp[i][j + 1]
-                    dp[i + 1][j + 1] = a > b ? a : b
+                    dp[i][j] = max(dp[i - 1][j], dp[i][j - 1])
                 }
             }
         }
 
+        // Backtrack to generate diff lines
+        var temp: [ToolFileDiff.DiffLine] = []
         var i = m
         var j = n
-        var temp: [ToolFileDiff.DiffLine] = []
         var additions = 0
         var deletions = 0
 

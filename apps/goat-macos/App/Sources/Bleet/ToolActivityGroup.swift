@@ -14,6 +14,10 @@ struct ToolActivityGroup: View {
     @Environment(\.transcriptInspection) private var inspection
     @State private var memoryExpanded = false
 
+    private var penName: String? {
+        projectID.flatMap { id in model.pens.first(where: { $0.id == id })?.name }
+    }
+
     var body: some View {
         let summary = TranscriptActivity.summary(messages, activeAssistantID: activeAssistantID)
         let events = messages.flatMap(\.toolEvents)
@@ -48,11 +52,12 @@ struct ToolActivityGroup: View {
 
     private func actions(events: [ToolEventSnapshot], currentID: String?, isolatedGroup: Bool) -> some View {
         let hasTree = events.count > 1 || (!isolatedGroup && (connectsAbove || connectsBelow))
+        let resolvedPenName = penName
         return
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(messages) { message in
                     ForEach(message.toolEvents) { event in
-                        ToolCallCard(event: event, live: event.id == currentID)
+                        ToolCallCard(event: event, live: event.id == currentID, penName: resolvedPenName)
                             .padding(.leading, hasTree ? Caprine.Activity.treeInset : 0)
                             .background(alignment: .leading) {
                                 if hasTree {

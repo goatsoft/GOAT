@@ -1,99 +1,284 @@
+import Caprine
+import Foundation
+import Inference
 import SwiftUI
+
+/// Cache parsed JSON representations to avoid re-parsing on every view evaluation.
+@MainActor
+final class JSONValueCache {
+    static let shared = JSONValueCache()
+    private let cache = NSCache<NSString, Box>()
+
+    final class Box: @unchecked Sendable {
+        let value: JSONValue?
+        init(_ value: JSONValue?) { self.value = value }
+    }
+
+    init() {
+        cache.countLimit = 250
+    }
+
+    func peek(_ raw: String) -> JSONValue?? {
+        cache.object(forKey: raw as NSString).map(\.value)
+    }
+
+    func set(_ raw: String, value: JSONValue?) {
+        cache.setObject(Box(value), forKey: raw as NSString)
+    }
+}
+
+/// Presentation order for JSON object keys:
+/// Identity keys first (`path`, `pattern`, etc.), bulky payloads last (`content`, `stdout`, etc.),
+/// and remaining keys in alphabetical order.
+enum JSONPresentationOrder {
+    private static let identityKeys: [String] = [
+        "path", "pattern", "query", "command", "args", "job_id", "id", "name",
+    ]
+    private static let bulkyKeys: [String] = [
+        "content", "old_text", "new_text", "text", "stdout", "stderr",
+    ]
+
+    private static let identityRank: [String: Int] = {
+        Dictionary(uniqueKeysWithValues: identityKeys.enumerated().map { ($1, $0) })
+    }()
+
+    private static let bulkyRank: [String: Int] = {
+        Dictionary(uniqueKeysWithValues: bulkyKeys.enumerated().map { ($1, $0) })
+    }()
+
+    static func compare(_ a: String, _ b: String) -> Bool {
+        let aIdentity = identityRank[a]
+        let bIdentity = identityRank[b]
+        if let aIdentity, let bIdentity {
+            return aIdentity < bIdentity
+        }
+        if aIdentity != nil { return true }
+        if bIdentity != nil { return false }
+
+        let aBulky = bulkyRank[a]
+        let bBulky = bulkyRank[b]
+        if let aBulky, let bBulky {
+            return aBulky < bBulky
+        }
+        if aBulky != nil { return false }
+        if bBulky != nil { return true }
+
+        return a.localizedStandardCompare(b) == .orderedAscending
+    }
+
+    static func sortedPairs(from dict: [String: JSONValue]) -> [(key: String, value: JSONValue)] {
+        dict.map { (key: $0.key, value: $0.value) }
+            .sorted { compare($0.key, $1.key) }
+    }
+}
 
 /// Displays JSON as a collapsible key/value tree.
 /// Objects and arrays are disclosure rows; scalars sit inline, colored by type.
 struct JSONTreeView: View {
     let raw: String
     @Environment(AppModel.self) private var model
+    @State private var parsedRaw: String?
+    @State private var value: JSONValue?
+
+    init(raw: String) {
+        self.raw = raw
+        if let cached = JSONValueCache.shared.peek(raw) {
+            _parsedRaw = State(initialValue: raw)
+            _value = State(initialValue: cached)
+        } else if raw.utf8.count <= 4096 {
+            let parsed = JSONValue.parse(raw)
+            JSONValueCache.shared.set(raw, value: parsed)
+            _parsedRaw = State(initialValue: raw)
+            _value = State(initialValue: parsed)
+        }
+    }
+
+    private var codeFont: Font {
+        Font(ReadingFonts.nsFont(model.effectiveCodeFontID, size: 11, role: .code))
+    }
 
     var body: some View {
-        if let node = JSONNode.parse(raw) {
-            JSONRowsView(node: node, depth: 0)
-                .font(.system(size: 11, design: .monospaced))
-        } else {
-            // Not JSON - show it plainly.
-            Text(raw)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .lineSpacing(3)
-                .textSelection(.enabled)
+        Group {
+            if parsedRaw == raw, let value {
+                JSONRowsView(value: value, depth: 0)
+            } else if parsedRaw != raw {
+                ProgressView()
+                    .controlSize(.mini)
+            } else {
+                // Not JSON - show it plainly.
+                Text(raw)
+                    .foregroundStyle(.secondary)
+                    .lineSpacing(3)
+                    .textSelection(.enabled)
+            }
+        }
+        .font(codeFont)
+        .task(id: raw) {
+            if parsedRaw == raw { return }
+            if let cached = JSONValueCache.shared.peek(raw) {
+                parsedRaw = raw
+                value = cached
+                return
+            }
+            let parsed = await Task.detached(priority: .userInitiated) {
+                JSONValue.parse(raw)
+            }.value
+            guard !Task.isCancelled else { return }
+            JSONValueCache.shared.set(raw, value: parsed)
+            parsedRaw = raw
+            value = parsed
         }
     }
 }
 
 private struct JSONRowsView: View {
-    let node: JSONNode
+    let value: JSONValue
     let depth: Int
+    var pathContext: String? = nil
 
     var body: some View {
-        switch node {
-        case .object(let pairs):
+        switch value {
+        case .object(let dict):
+            let context = dict["path"]?.stringValue ?? pathContext
+            let pairs = JSONPresentationOrder.sortedPairs(from: dict)
             VStack(alignment: .leading, spacing: 3) {
-                ForEach(pairs) { pair in
-                    JSONEntryRow(key: pair.key, value: pair.value, depth: depth)
+                ForEach(pairs, id: \.key) { pair in
+                    JSONEntryRow(key: pair.key, value: pair.value, depth: depth, pathContext: context)
                 }
             }
         case .array(let items):
             VStack(alignment: .leading, spacing: 3) {
-                ForEach(Array(items.enumerated()), id: \.offset) { index, value in
-                    JSONEntryRow(key: "\(index)", value: value, depth: depth)
+                ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                    JSONEntryRow(key: "\(index)", value: item, depth: depth, pathContext: pathContext)
                 }
             }
         default:
-            JSONEntryRow(key: nil, value: node, depth: depth)
+            JSONScalarView(value: value)
         }
     }
 }
 
 private struct JSONEntryRow: View {
-    let key: String?
-    let value: JSONNode
+    let key: String
+    let value: JSONValue
     let depth: Int
-    @State private var expanded: Bool
+    var pathContext: String? = nil
+    @State private var isExpanded: Bool
     @Environment(AppModel.self) private var model
 
-    init(key: String?, value: JSONNode, depth: Int) {
+    init(key: String, value: JSONValue, depth: Int, pathContext: String? = nil) {
         self.key = key
         self.value = value
         self.depth = depth
-        _expanded = State(initialValue: depth < 1)  // top level open, nested collapsed
+        self.pathContext = pathContext
+        _isExpanded = State(initialValue: depth < 1)
+    }
+
+    private var isCodeContent: Bool {
+        if key == "stdout" || key == "stderr" { return true }
+        if pathContext != nil && (key == "content" || key == "old_text" || key == "new_text" || key == "text") {
+            return true
+        }
+        return false
+    }
+
+    private var codeLanguage: String? {
+        if let pathContext {
+            let ext = (pathContext as NSString).pathExtension
+            return ext.isEmpty ? nil : ext
+        }
+        return nil
     }
 
     var body: some View {
-        if value.isContainer {
+        switch value {
+        case .object:
             VStack(alignment: .leading, spacing: 3) {
                 Button {
-                    withAnimation(.easeOut(duration: 0.12)) { expanded.toggle() }
+                    withAnimation(.easeOut(duration: 0.12)) {
+                        isExpanded.toggle()
+                    }
                 } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "chevron.right")
                             .font(.system(size: 8, weight: .bold))
-                            .rotationEffect(.degrees(expanded ? 90 : 0))
+                            .rotationEffect(.degrees(isExpanded ? 90 : 0))
                             .foregroundStyle(.tertiary)
-                        if let key { Text(key).foregroundStyle(model.theme.tokens.accent) }
-                        Text(value.summary).foregroundStyle(.tertiary)
+                        Text(key)
+                            .foregroundStyle(model.theme.tokens.accent)
+                        Text(value.summary)
+                            .foregroundStyle(.tertiary)
                     }
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
 
-                if expanded {
-                    JSONRowsView(node: value, depth: depth + 1)
+                if isExpanded {
+                    JSONRowsView(value: value, depth: depth + 1, pathContext: pathContext)
                         .padding(.leading, 14)
                 }
             }
-        } else {
-            HStack(alignment: .top, spacing: 5) {
-                if let key {
-                    Text("\(key):").foregroundStyle(model.theme.tokens.accent)
+
+        case .array:
+            VStack(alignment: .leading, spacing: 3) {
+                Button {
+                    withAnimation(.easeOut(duration: 0.12)) {
+                        isExpanded.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 8, weight: .bold))
+                            .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                            .foregroundStyle(.tertiary)
+                        Text(key)
+                            .foregroundStyle(model.theme.tokens.accent)
+                        Text(value.summary)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .contentShape(Rectangle())
                 }
-                scalar
+                .buttonStyle(.plain)
+
+                if isExpanded {
+                    JSONRowsView(value: value, depth: depth + 1, pathContext: pathContext)
+                        .padding(.leading, 14)
+                }
             }
-            .padding(.leading, key == nil ? 0 : 12)
+
+        case .string(let s) where isCodeContent && (s.contains("\n") || s.count > 60):
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 4) {
+                    Text("\(key):")
+                        .foregroundStyle(model.theme.tokens.accent)
+                    if let codeLanguage {
+                        Text(codeLanguage)
+                            .foregroundStyle(.tertiary)
+                            .font(.caption2)
+                    }
+                }
+                .padding(.leading, 12)
+
+                HighlightedCodeView(code: s, language: codeLanguage, isStreaming: false)
+                    .padding(.leading, 12)
+            }
+
+        default:
+            HStack(alignment: .top, spacing: 5) {
+                Text("\(key):")
+                    .foregroundStyle(model.theme.tokens.accent)
+                JSONScalarView(value: value)
+            }
+            .padding(.leading, 12)
         }
     }
+}
 
-    @ViewBuilder private var scalar: some View {
+private struct JSONScalarView: View {
+    let value: JSONValue
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
         switch value {
         case .string(let s):
             Text(s)
@@ -101,77 +286,42 @@ private struct JSONEntryRow: View {
                 .lineSpacing(3)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
-        case .number(let n):
-            Text(n == n.rounded() ? String(Int(n)) : String(n))
+        case .integer(let i):
+            Text("\(i)")
                 .foregroundStyle(model.theme.tokens.glow)
+                .textSelection(.enabled)
+        case .number(let n):
+            Text(formatNumber(n))
+                .foregroundStyle(model.theme.tokens.glow)
+                .textSelection(.enabled)
         case .bool(let b):
-            Text(b ? "true" : "false").foregroundStyle(model.theme.tokens.accent2)
+            Text(b ? "true" : "false")
+                .foregroundStyle(model.theme.tokens.accent2)
+                .textSelection(.enabled)
         case .null:
-            Text("null").foregroundStyle(.secondary)
-        default:
-            EmptyView()
+            Text("null")
+                .foregroundStyle(.secondary)
+        case .object, .array:
+            Text(value.summary)
+                .foregroundStyle(.tertiary)
         }
     }
 }
 
-// MARK: - Parsed JSON model
-
-indirect enum JSONNode {
-    case string(String)
-    case number(Double)
-    case bool(Bool)
-    case null
-    case array([JSONNode])
-    case object([Pair])
-
-    struct Pair: Identifiable {
-        let key: String
-        let value: JSONNode
-        var id: String { key }
-    }
-
-    var isContainer: Bool {
-        switch self {
-        case .array, .object: true
-        default: false
-        }
-    }
-
+private extension JSONValue {
     var summary: String {
         switch self {
-        case .object(let p): "{ \(p.count) field\(p.count == 1 ? "" : "s") }"
-        case .array(let a): "[ \(a.count) item\(a.count == 1 ? "" : "s") ]"
-        default: ""
-        }
-    }
-
-    static func parse(_ raw: String) -> JSONNode? {
-        guard let data = raw.data(using: .utf8),
-            let obj = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
-        else { return nil }
-        return convert(obj)
-    }
-
-    private static func convert(_ any: Any) -> JSONNode {
-        switch any {
-        case let dict as [String: Any]:
-            return .object(dict.sorted { $0.key < $1.key }.map { Pair(key: $0.key, value: convert($0.value)) })
-        case let arr as [Any]:
-            return .array(arr.map(convert))
-        case let s as String:
-            return .string(s)
-        case let b as Bool where type(of: any) == type(of: NSNumber(value: true)) && (any as? NSNumber)?.isBool == true:
-            return .bool(b)
-        case let n as NSNumber:
-            return n.isBool ? .bool(n.boolValue) : .number(n.doubleValue)
-        case is NSNull:
-            return .null
+        case .object(let dict):
+            "{ \(dict.count) field\(dict.count == 1 ? "" : "s") }"
+        case .array(let items):
+            "[ \(items.count) item\(items.count == 1 ? "" : "s") ]"
         default:
-            return .string(String(describing: any))
+            ""
         }
     }
 }
 
-private extension NSNumber {
-    var isBool: Bool { CFGetTypeID(self) == CFBooleanGetTypeID() }
+func formatNumber(_ n: Double) -> String {
+    if let whole = Int64(exactly: n) { return "\(whole)" }
+    return "\(n)"
 }

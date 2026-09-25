@@ -10,7 +10,7 @@ import SwiftUI
     let awaitingApproval: Bool
     private let canPause: Bool
 
-    init(session: ChatSession, awaitingApproval: Bool = false) {
+    init(session: ChatSession, awaitingApproval: Bool = false, penName: String? = nil) {
         self.awaitingApproval = awaitingApproval
         let user = session.messages.last(where: { $0.role == .user })
         let assistant = session.messages.last(where: { $0.role == .assistant })
@@ -30,7 +30,7 @@ import SwiftUI
         } else if let current,
             let tool = current.toolEvents.first(where: { $0.result == nil && !$0.isError && !$0.denied })
         {
-            title = ToolActivityLabel.progressTitle(tool)
+            title = ToolActivityLabel.progressTitle(tool, rootName: penName)
         } else if let current, !current.complete {
             if let status = current.generationStatus {
                 title = status
@@ -60,7 +60,9 @@ struct AgentProgressView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        let state = AgentProgressState(session: session, awaitingApproval: model.mcp.pendingPermission != nil)
+        let penName = session.projectID.flatMap { id in model.pens.first(where: { $0.id == id })?.name }
+        let state = AgentProgressState(
+            session: session, awaitingApproval: model.mcp.pendingPermission != nil, penName: penName)
         TimelineView(.periodic(from: state.startedAt, by: 1)) { context in
             HStack(spacing: Caprine.Activity.spacing) {
                 if state.awaitingApproval {

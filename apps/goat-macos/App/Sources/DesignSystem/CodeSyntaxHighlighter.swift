@@ -1,9 +1,9 @@
+import AppKit
 import Foundation
 import HighlightKit
 import SwiftUI
 
-/// HighlightKit provides pure-Swift syntax highlighting on background tasks without
-/// JavaScriptCore, HTML round-tripping, or memory bloat.
+/// Pure-Swift syntax highlighting on background tasks without JavaScriptCore or HTML round-tripping.
 actor CodeSyntaxHighlighter {
     static let shared = CodeSyntaxHighlighter()
 
@@ -47,9 +47,62 @@ actor CodeSyntaxHighlighter {
     }
 }
 
+/// Bounded synchronous cache for highlighted code so blocks render highlighted on frame 0 without popping.
+@MainActor
+final class HighlightCache {
+    static let shared = HighlightCache()
+
+    struct Entry: Sendable {
+        let text: AttributedString
+        let lineCount: Int
+    }
+
+    private let cache = NSCache<NSString, EntryBox>()
+    private let lineCounts = NSCache<NSString, NSNumber>()
+
+    final class EntryBox: @unchecked Sendable {
+        let entry: Entry
+        init(_ entry: Entry) { self.entry = entry }
+    }
+
+    init() {
+        cache.countLimit = 200
+        lineCounts.countLimit = 500
+    }
+
+    private func makeKey(code: String, language: String?, dark: Bool) -> String {
+        "\(code.hashValue):\(code.utf8.count):\(language ?? ""):\(dark)"
+    }
+
+    func peek(code: String, language: String?, dark: Bool) -> Entry? {
+        let k = makeKey(code: code, language: language, dark: dark) as NSString
+        return cache.object(forKey: k)?.entry
+    }
+
+    func set(code: String, language: String?, dark: Bool, text: AttributedString, lineCount: Int) {
+        let k = makeKey(code: code, language: language, dark: dark) as NSString
+        cache.setObject(EntryBox(Entry(text: text, lineCount: lineCount)), forKey: k)
+    }
+
+    func lineCount(for code: String) -> Int {
+        let key = code as NSString
+        if let cached = lineCounts.object(forKey: key) {
+            return cached.intValue
+        }
+        var count = 1
+        for byte in code.utf8 {
+            if byte == 0x0A { count += 1 }
+        }
+        if code.hasSuffix("\n") { count = max(1, count - 1) }
+        lineCounts.setObject(NSNumber(value: count), forKey: key)
+        return count
+    }
+}
+
 struct PreparedCodeText: View {
     let code: String
     let language: String?
+    var isStreaming: Bool = false
     @Environment(\.colorScheme) private var colorScheme
     @State private var rendered: AttributedString?
     @State private var renderedKey: CacheKey?
@@ -58,6 +111,18 @@ struct PreparedCodeText: View {
         let code: String
         let language: String?
         let dark: Bool
+    }
+
+    init(code: String, language: String?, isStreaming: Bool = false) {
+        self.code = code
+        self.language = language
+        self.isStreaming = isStreaming
+
+        let isDark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        if let cached = HighlightCache.shared.peek(code: code, language: language, dark: isDark) {
+            _rendered = State(initialValue: cached.text)
+            _renderedKey = State(initialValue: CacheKey(code: code, language: language, dark: isDark))
+        }
     }
 
     static func resolveText(
@@ -94,14 +159,37 @@ struct PreparedCodeText: View {
         )
     }
 
+    struct TaskKey: Equatable {
+        let key: CacheKey
+        let isStreaming: Bool
+    }
+
     var body: some View {
-        let key = CacheKey(code: code, language: language, dark: colorScheme == .dark)
+        let dark = colorScheme == .dark
+        let key = CacheKey(code: code, language: language, dark: dark)
+        let taskId = TaskKey(key: key, isStreaming: isStreaming)
         Text(currentText)
-            .task(id: key) {
+            .task(id: taskId) {
+                if !isStreaming, let cached = HighlightCache.shared.peek(code: code, language: language, dark: dark) {
+                    rendered = cached.text
+                    renderedKey = key
+                    return
+                }
+                if !isStreaming, renderedKey == key, let currentRendered = rendered {
+                    let lines = HighlightCache.shared.lineCount(for: code)
+                    HighlightCache.shared.set(
+                        code: code, language: language, dark: dark, text: currentRendered, lineCount: lines)
+                    return
+                }
                 do {
                     let result = try await CodeSyntaxHighlighter.shared.render(
-                        code, language: language, dark: key.dark)
+                        code, language: language, dark: dark)
                     try Task.checkCancellation()
+                    if !isStreaming {
+                        let lines = HighlightCache.shared.lineCount(for: code)
+                        HighlightCache.shared.set(
+                            code: code, language: language, dark: dark, text: result, lineCount: lines)
+                    }
                     rendered = result
                     renderedKey = key
                 } catch {

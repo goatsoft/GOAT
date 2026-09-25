@@ -184,23 +184,7 @@ struct MessageView: View {
                 if TranscriptText.hasContent(message.thinking) {
                     ThinkingDisclosure(message: message)
                 }
-                if message.complete && TranscriptText.hasContent(message.text) {
-                    PreparedMarkdownView(
-                        id: message.id,
-                        source: message.text,
-                        fallbackFontSize: model.chatFontSize,
-                        onPrepared: { message.markRenderChanged() }
-                    ) { content in
-                        Markdown(content)
-                            .markdownImageProvider(BlockedMarkdownImageProvider())
-                            .markdownInlineImageProvider(BlockedMarkdownInlineImageProvider())
-                            .goatMarkdownStyle(fontSize: model.chatFontSize)
-                            .markdownBlockStyle(\.codeBlock) { configuration in
-                                CodeBlockView(configuration: configuration)
-                            }
-                            .textSelection(.enabled)
-                    }
-                } else if TranscriptText.hasContent(message.text) {
+                if TranscriptText.hasContent(message.text) {
                     StreamingMarkdownView(message: message)
                 }
                 if !message.toolEvents.isEmpty {
@@ -531,12 +515,13 @@ struct FeedbackButtons: View {
 struct ToolCallCard: View {
     let event: ToolEventSnapshot
     let live: Bool
+    var penName: String? = nil
 
     var body: some View {
         if event.server == "Memory" {
-            MemoryToolCallCard(event: event, live: live)
+            MemoryToolCallCard(event: event, live: live, penName: penName)
         } else {
-            ExternalToolCallCard(event: event, live: live)
+            ExternalToolCallCard(event: event, live: live, penName: penName)
         }
     }
 }
@@ -548,7 +533,12 @@ private struct ExternalToolCallCard: View {
     @Environment(AppModel.self) private var model
     let event: ToolEventSnapshot
     let live: Bool
+    var penName: String? = nil
     @State private var expanded = false
+
+    private var presentation: ToolEventPresentation {
+        ToolActivityLabel.presentation(for: event, rootName: penName)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Caprine.Activity.compactSpacing) {
@@ -558,7 +548,7 @@ private struct ExternalToolCallCard: View {
             } label: {
                 HStack(spacing: Caprine.Activity.spacing) {
                     ToolCallStateIndicator(event: event, live: live)
-                    Text(ToolActivityLabel.title(event))
+                    Text(presentation.title)
                         .font(Caprine.Activity.emphasizedFont)
                         .strikethrough(event.denied)
                         .lineLimit(1)
@@ -583,7 +573,7 @@ private struct ExternalToolCallCard: View {
             .accessibilityIdentifier("tool-event-" + event.id)
             .help("\(event.server) · \(event.tool)")
             if expanded {
-                ToolCallDetails(event: event)
+                ToolCallDetails(event: event, penName: penName)
             }
         }
         .padding(.vertical, 4)
@@ -595,15 +585,18 @@ private struct ExternalToolCallCard: View {
 private struct MemoryToolCallCard: View {
     let event: ToolEventSnapshot
     let live: Bool
+    var penName: String? = nil
     @Environment(AppModel.self) private var model
     @State private var detailsPresented = false
 
     @Environment(\.transcriptInspection) private var inspection
 
-    private var action: String { ToolActivityLabel.memoryAction(event) }
-    private var hasDetails: Bool {
-        ToolCallPayload.containsValue(event.arguments) || ToolCallPayload.containsValue(event.result)
+    private var presentation: ToolEventPresentation {
+        ToolActivityLabel.presentation(for: event, rootName: penName)
     }
+
+    private var action: String { presentation.action }
+    private var hasDetails: Bool { presentation.hasDetails }
 
     var body: some View {
         HStack(spacing: Caprine.Activity.spacing) {
@@ -624,7 +617,7 @@ private struct MemoryToolCallCard: View {
                     isPresented: $detailsPresented,
                     attachmentAnchor: .point(.bottomLeading), arrowEdge: .bottom
                 ) {
-                    MemoryOperationDetails(event: event, action: action)
+                    MemoryOperationDetails(event: event, action: action, penName: penName)
                 }
             } else {
                 label
@@ -660,6 +653,7 @@ private struct MemoryToolCallCard: View {
 private struct MemoryOperationDetails: View {
     let event: ToolEventSnapshot
     let action: String
+    var penName: String? = nil
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -671,7 +665,7 @@ private struct MemoryOperationDetails: View {
                     .labelStyle(.iconOnly).buttonStyle(.plain)
                     .keyboardShortcut(.cancelAction)
             }
-            ToolCallDetails(event: event)
+            ToolCallDetails(event: event, penName: penName)
         }
         .padding(Caprine.Activity.treeInset)
         .frame(width: Caprine.Activity.operationDetailsWidth, alignment: .leading)
@@ -705,11 +699,10 @@ private struct ToolCallStateIndicator: View {
 private struct ToolCallDetails: View {
     @Environment(AppModel.self) private var model
     let event: ToolEventSnapshot
-    private let diff: ToolFileDiff?
+    var penName: String? = nil
 
-    init(event: ToolEventSnapshot) {
-        self.event = event
-        self.diff = ToolDiffParser.parse(tool: event.tool, arguments: event.arguments)
+    private var presentation: ToolEventPresentation {
+        ToolActivityLabel.presentation(for: event, rootName: penName)
     }
 
     private var hasArguments: Bool { ToolCallPayload.containsValue(event.arguments) }
@@ -730,7 +723,7 @@ private struct ToolCallDetails: View {
             VStack(alignment: .leading, spacing: Caprine.Activity.compactSpacing) {
                 if hasArguments {
                     labeled("Arguments")
-                    if model.showToolDiffs, let diff {
+                    if model.showToolDiffs, let diff = presentation.diff {
                         ToolDiffView(diff: diff, rawJSON: event.arguments)
                     } else {
                         JSONTreeView(raw: event.arguments)
@@ -887,24 +880,6 @@ private struct SubagentInvestigationDetails: View {
             return nil
         }
         return target
-    }
-}
-
-private enum ToolCallPayload {
-    /// A JSON `{}` or `[]` is a valid tool payload, but it does not convey anything worth
-    /// rendering. `memory_list`, for example, intentionally needs no arguments.
-    static func containsValue(_ raw: String?) -> Bool {
-        guard let raw else { return false }
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return false }
-        guard let data = trimmed.data(using: .utf8),
-            let value = try? JSONSerialization.jsonObject(with: data)
-        else {
-            return true
-        }
-        if let dictionary = value as? [String: Any] { return !dictionary.isEmpty }
-        if let array = value as? [Any] { return !array.isEmpty }
-        return !(value is NSNull)
     }
 }
 
