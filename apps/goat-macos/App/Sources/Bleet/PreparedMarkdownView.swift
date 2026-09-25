@@ -228,7 +228,7 @@ struct StreamingMarkdownView: View {
     var body: some View {
         PreparedMarkdownView(
             id: message.id, source: snapshot, fallbackFontSize: model.chatFontSize,
-            onPrepared: {},
+            onPrepared: { message.markRenderChanged() },
             retainsPreviousContent: true
         ) { content in
             Markdown(content)

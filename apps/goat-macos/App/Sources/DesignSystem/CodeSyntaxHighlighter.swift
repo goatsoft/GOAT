@@ -163,38 +163,25 @@ struct PreparedCodeText: View {
         let dark = colorScheme == .dark
         let key = CacheKey(code: code, language: language, dark: dark)
         Text(currentText)
-            .task(id: isStreaming ? "streaming" : "\(key.code.hashValue):\(key.language ?? ""):\(dark)") {
-                if isStreaming {
-                    while isStreaming {
-                        let currentCode = code
-                        let currentDark = colorScheme == .dark
-                        if let result = try? await CodeSyntaxHighlighter.shared.render(
-                            currentCode, language: language, dark: currentDark)
-                        {
-                            rendered = result
-                            renderedKey = CacheKey(code: currentCode, language: language, dark: currentDark)
-                        }
-                        try? await Task.sleep(for: .milliseconds(150))
-                        guard !Task.isCancelled else { return }
-                    }
-                } else {
-                    if let cached = HighlightCache.shared.peek(code: code, language: language, dark: dark) {
-                        rendered = cached.text
-                        renderedKey = key
-                        return
-                    }
-                    do {
-                        let result = try await CodeSyntaxHighlighter.shared.render(
-                            code, language: language, dark: dark)
-                        try Task.checkCancellation()
+            .task(id: key) {
+                if !isStreaming, let cached = HighlightCache.shared.peek(code: code, language: language, dark: dark) {
+                    rendered = cached.text
+                    renderedKey = key
+                    return
+                }
+                do {
+                    let result = try await CodeSyntaxHighlighter.shared.render(
+                        code, language: language, dark: dark)
+                    try Task.checkCancellation()
+                    if !isStreaming {
                         let lines = HighlightCache.shared.lineCount(for: code)
                         HighlightCache.shared.set(
                             code: code, language: language, dark: dark, text: result, lineCount: lines)
-                        rendered = result
-                        renderedKey = key
-                    } catch {
-                        // Keep current, selectable source when preparation fails or is superseded.
                     }
+                    rendered = result
+                    renderedKey = key
+                } catch {
+                    // Keep current, selectable source when preparation fails or is superseded.
                 }
             }
     }

@@ -163,9 +163,16 @@ private struct JSONEntryRow: View {
     let value: JSONValue
     let depth: Int
     var pathContext: String? = nil
-    @State private var isExpanded = true
+    @State private var isExpanded: Bool
+    @Environment(AppModel.self) private var model
 
-    private var indent: CGFloat { CGFloat(depth) * 12 }
+    init(key: String, value: JSONValue, depth: Int, pathContext: String? = nil) {
+        self.key = key
+        self.value = value
+        self.depth = depth
+        self.pathContext = pathContext
+        _isExpanded = State(initialValue: depth < 1)
+    }
 
     private var isCodeContent: Bool {
         if key == "stdout" || key == "stderr" { return true }
@@ -185,136 +192,138 @@ private struct JSONEntryRow: View {
 
     var body: some View {
         switch value {
-        case .object(let dict):
+        case .object:
             VStack(alignment: .leading, spacing: 3) {
                 Button {
-                    isExpanded.toggle()
+                    withAnimation(.easeOut(duration: 0.12)) {
+                        isExpanded.toggle()
+                    }
                 } label: {
                     HStack(spacing: 4) {
-                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                            .font(.system(size: 8, weight: .semibold))
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 8, weight: .bold))
+                            .rotationEffect(.degrees(isExpanded ? 90 : 0))
                             .foregroundStyle(.tertiary)
-                            .frame(width: 10)
                         Text(key)
-                            .foregroundStyle(.secondary)
-                        Text("{\(dict.count)}")
+                            .foregroundStyle(model.theme.tokens.accent)
+                        Text(value.summary)
                             .foregroundStyle(.tertiary)
-                            .font(.caption2)
                     }
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .padding(.leading, indent)
 
                 if isExpanded {
                     JSONRowsView(value: value, depth: depth + 1, pathContext: pathContext)
+                        .padding(.leading, 14)
                 }
             }
 
-        case .array(let items):
+        case .array:
             VStack(alignment: .leading, spacing: 3) {
                 Button {
-                    isExpanded.toggle()
+                    withAnimation(.easeOut(duration: 0.12)) {
+                        isExpanded.toggle()
+                    }
                 } label: {
                     HStack(spacing: 4) {
-                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                            .font(.system(size: 8, weight: .semibold))
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 8, weight: .bold))
+                            .rotationEffect(.degrees(isExpanded ? 90 : 0))
                             .foregroundStyle(.tertiary)
-                            .frame(width: 10)
                         Text(key)
-                            .foregroundStyle(.secondary)
-                        Text("[\(items.count)]")
+                            .foregroundStyle(model.theme.tokens.accent)
+                        Text(value.summary)
                             .foregroundStyle(.tertiary)
-                            .font(.caption2)
                     }
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .padding(.leading, indent)
 
                 if isExpanded {
                     JSONRowsView(value: value, depth: depth + 1, pathContext: pathContext)
+                        .padding(.leading, 14)
                 }
             }
 
         case .string(let s) where isCodeContent && (s.contains("\n") || s.count > 60):
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 4) {
-                    Text(key)
-                        .foregroundStyle(.secondary)
-                    Text(":")
-                        .foregroundStyle(.tertiary)
+                    Text("\(key):")
+                        .foregroundStyle(model.theme.tokens.accent)
                     if let codeLanguage {
                         Text(codeLanguage)
                             .foregroundStyle(.tertiary)
                             .font(.caption2)
                     }
                 }
-                .padding(.leading, indent + 14)
+                .padding(.leading, 12)
 
                 HighlightedCodeView(code: s, language: codeLanguage, isStreaming: false)
-                    .padding(.leading, indent + 14)
+                    .padding(.leading, 12)
             }
 
         default:
-            HStack(alignment: .top, spacing: 4) {
-                Text(key)
-                    .foregroundStyle(.secondary)
-                Text(":")
-                    .foregroundStyle(.tertiary)
+            HStack(alignment: .top, spacing: 5) {
+                Text("\(key):")
+                    .foregroundStyle(model.theme.tokens.accent)
                 JSONScalarView(value: value)
             }
-            .padding(.leading, indent + 14)
+            .padding(.leading, 12)
         }
     }
 }
 
 private struct JSONScalarView: View {
     let value: JSONValue
+    @Environment(AppModel.self) private var model
 
     var body: some View {
         switch value {
         case .string(let s):
-            Text("\"\(s)\"")
-                .foregroundStyle(Color(nsColor: .systemGreen))
+            Text(s)
+                .foregroundStyle(model.theme.tokens.ink)
+                .lineSpacing(3)
                 .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
         case .integer(let i):
             Text("\(i)")
-                .foregroundStyle(Color(nsColor: .systemBlue))
+                .foregroundStyle(model.theme.tokens.glow)
                 .textSelection(.enabled)
         case .number(let n):
             Text(formatNumber(n))
-                .foregroundStyle(Color(nsColor: .systemBlue))
+                .foregroundStyle(model.theme.tokens.glow)
                 .textSelection(.enabled)
         case .bool(let b):
             Text(b ? "true" : "false")
-                .foregroundStyle(Color(nsColor: .systemOrange))
+                .foregroundStyle(model.theme.tokens.accent2)
                 .textSelection(.enabled)
         case .null:
             Text("null")
-                .foregroundStyle(.tertiary)
-                .italic()
-        case .object(let dict):
-            Text("{\(dict.count)}")
-                .foregroundStyle(.tertiary)
-        case .array(let items):
-            Text("[\(items.count)]")
+                .foregroundStyle(.secondary)
+        case .object, .array:
+            Text(value.summary)
                 .foregroundStyle(.tertiary)
         }
-    }
-
-    private func formatNumber(_ n: Double) -> String {
-        guard n.isFinite else {
-            return n.isNaN ? "NaN" : (n > 0 ? "Infinity" : "-Infinity")
-        }
-        if floor(n) == n, abs(n) < 1e15 {
-            return String(Int64(n))
-        }
-        return String(n)
     }
 }
 
-extension JSONValue {
-    var stringValue: String? {
-        if case .string(let s) = self { return s }
-        return nil
+private extension JSONValue {
+    var summary: String {
+        switch self {
+        case .object(let dict):
+            "{ \(dict.count) field\(dict.count == 1 ? "" : "s") }"
+        case .array(let items):
+            "[ \(items.count) item\(items.count == 1 ? "" : "s") ]"
+        default:
+            ""
+        }
     }
+}
+
+private func formatNumber(_ n: Double) -> String {
+    if n.isFinite && n == n.rounded() && n >= Double(Int.min) && n <= Double(Int.max) {
+        return "\(Int(n))"
+    }
+    return "\(n)"
 }
