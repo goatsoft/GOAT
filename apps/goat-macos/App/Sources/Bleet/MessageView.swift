@@ -27,7 +27,8 @@ struct MessageView: View {
         content
             .contentShape(Rectangle())  // whole row (incl. the area below the text) is hoverable
             .onHover { h in
-                withAnimation(.easeOut(duration: 0.12)) { hovering = h }
+                // Reduce Motion, the animations setting and inactive scenes all skip the fade (#60 D9).
+                withAnimation(liveAnimations ? .easeOut(duration: 0.12) : nil) { hovering = h }
             }
             .sheet(isPresented: $showingResponseDetails) {
                 ResponseDetailsView(message: message)
@@ -113,9 +114,12 @@ struct MessageView: View {
                     CopyButton(text: message.text)
                         .labelStyle(.iconOnly)
                         .font(.caption2)
-                    Text(relativeTime(message.createdAt))
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                    TimelineView(.periodic(from: .now, by: 30)) { context in
+                        Text(Self.relativeTime(message.createdAt, now: context.date))
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .help(message.createdAt.formatted(date: .abbreviated, time: .standard))
                 }
                 .padding(.trailing, 2)
                 .opacity(hovering ? 1 : 0)
@@ -196,35 +200,64 @@ struct MessageView: View {
                 if let error = message.error {
                     Text(error)
                         .font(.callout)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Caprine.Semantic.warning)
                 }
-                if isLast, message.complete, message.stats?.finishReason == "length" {
-                    Button("Continue response") {
-                        guard
-                            let session = model.chats.first(where: { chat in
-                                chat.messages.contains { $0.id == message.id }
-                            })
-                        else { return }
-                        _ = model.send(
-                            "Continue from where the previous response stopped. Do not repeat completed content.",
-                            in: session)
+                if Self.showsFooter(for: message) {
+                    // The footer row is reserved from the first answer text, so completion only reveals
+                    // actions and never changes the row height (#60 A2, measurement 2). Continue sits in
+                    // the same row and stays visible without hover when a reply stopped at its limit.
+                    HStack(spacing: 10) {
+                        if canContinue { continueButton }
+                        footer
+                            .opacity(message.complete && (hovering || memorySaveState == .saving) ? 1 : 0)
+                            .allowsHitTesting(message.complete && hovering)
+                            .accessibilityHidden(!message.complete)
                     }
-                    .disabled(model.shepherd.hasActiveTurn || model.engineTransitioning || !model.health.isOK)
-                }
-                if message.complete && message.toolEvents.isEmpty && !TranscriptActivity.isEmpty(message) {
-                    footer
-                        .opacity(hovering || memorySaveState == .saving ? 1 : 0)
-                        .allowsHitTesting(hovering)
+                } else if canContinue {
+                    // A reply truncated before any answer text has no footer row to share.
+                    continueButton
                 }
             }
         }
     }
 
+    /// Every reply with answer text or an error has actions, including replies that also called tools
+    /// (#60 D1). Replies with only reasoning or tool calls have nothing to copy or rate.
+    static func showsFooter(for message: ChatMessage) -> Bool {
+        message.role == .assistant && !TranscriptActivity.isEmpty(message)
+            && (TranscriptText.hasContent(message.text) || message.error != nil)
+    }
+
+    private var canContinue: Bool {
+        isLast && message.complete && message.stats?.finishReason == "length"
+    }
+
+    private var continueButton: some View {
+        Button("Continue response", systemImage: "arrow.right.circle") {
+            guard
+                let session = model.chats.first(where: { chat in
+                    chat.messages.contains { $0.id == message.id }
+                })
+            else { return }
+            _ = model.send(
+                "Continue from where the previous response stopped. Do not repeat completed content.",
+                in: session)
+        }
+        .buttonStyle(.plain)
+        .font(Caprine.Activity.font)
+        .foregroundStyle(model.theme.tokens.tint)
+        .disabled(model.shepherd.hasActiveTurn || model.engineTransitioning || !model.health.isOK)
+    }
+
     private var footer: some View {
         HStack(spacing: 10) {
-            Text(relativeTime(message.createdAt))
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+            // Scoped refresh: only this label re-renders as time passes (#60 B3).
+            TimelineView(.periodic(from: .now, by: 30)) { context in
+                Text(Self.relativeTime(message.createdAt, now: context.date))
+            }
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+            .help(message.createdAt.formatted(date: .abbreviated, time: .standard))
             if let stats = message.stats {
                 Text(statsLine(stats))
                     .font(.caption)
@@ -296,10 +329,17 @@ struct MessageView: View {
         .help(memorySaveState?.help ?? "Remember This")
     }
 
-    private func relativeTime(_ date: Date) -> String {
-        let seconds = Date.now.timeIntervalSince(date)
-        if seconds < 45 { return "just now" }
-        return date.formatted(.relative(presentation: .named))
+    private static let relativeFormatter: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.dateTimeStyle = .named
+        formatter.unitsStyle = .full
+        return formatter
+    }()
+
+    /// Relative to the timeline's date, so the label keeps moving without other invalidations.
+    static func relativeTime(_ date: Date, now: Date) -> String {
+        if now.timeIntervalSince(date) < 45 { return "just now" }
+        return relativeFormatter.localizedString(for: date, relativeTo: now)
     }
 
     private func statsLine(_ stats: GenStats) -> String {
@@ -492,8 +532,8 @@ struct FeedbackButtons: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            button(1, "hand.thumbsup", .green)
-            button(-1, "hand.thumbsdown", .orange)
+            button(1, "hand.thumbsup", Caprine.Semantic.success)
+            button(-1, "hand.thumbsdown", Caprine.Semantic.warning)
         }
     }
 

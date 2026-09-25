@@ -1,3 +1,4 @@
+import Caprine
 import GOATed
 import SwiftUI
 
@@ -171,7 +172,7 @@ struct ComposerSlashMenu: View {
                             systemImage: "exclamationmark.triangle"
                         )
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Caprine.Semantic.warning)
                         .padding(.horizontal, 9)
                         .padding(.bottom, 5)
                         .help("Conflicting or invalid skills fail closed. Check the Global and Pen skill folders.")
@@ -193,7 +194,7 @@ struct ComposerSlashMenu: View {
                 .stroke(model.theme.tokens.tint.opacity(0.22), lineWidth: 1)
                 .allowsHitTesting(false)
         }
-        .shadow(color: .black.opacity(0.3), radius: 22, y: 10)
+        .shadow(color: Caprine.Semantic.shadow.opacity(0.3), radius: 22, y: 10)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Commands and skills")
     }

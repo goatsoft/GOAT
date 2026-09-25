@@ -15,6 +15,13 @@ enum TranscriptActivity {
         var joinsNextTools = false
     }
 
+    /// The id of the last row the transcript actually shows. Trailing tool rows and empty assistant
+    /// messages are invisible, so they must not take `isLast` (Regenerate, Continue) from the reply
+    /// the reader sees (#60 D1).
+    static func lastVisibleID(in messages: [ChatMessage]) -> UUID? {
+        messages.last(where: { $0.role != .tool && !isEmpty($0) })?.id
+    }
+
     static func rows(_ messages: ArraySlice<ChatMessage>) -> [Row] {
         var rows: [Row] = []
         for message in messages {

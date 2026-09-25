@@ -146,6 +146,30 @@ extension AppModel {
         }
     }
 
+    /// The messages Regenerate replaces: every assistant round and tool row after the last user
+    /// message, including empty rows the transcript does not show, so the reply the reader sees as
+    /// last (`TranscriptActivity.lastVisibleID`) is always the one regenerated (#60 D1). Nil when
+    /// there is no user turn to answer again or the turn holds anything else, such as a compaction.
+    static func regenerationTurn(in messages: [ChatMessage]) -> [ChatMessage]? {
+        guard let userIndex = messages.lastIndex(where: { $0.role == .user }) else { return nil }
+        let turn = Array(messages[(userIndex + 1)...])
+        guard turn.allSatisfy({ ($0.role == .assistant || $0.role == .tool) && $0.kind == .regular }) else {
+            return nil
+        }
+        return turn
+    }
+
+    /// Deletes the turn in one transaction, then removes it from the session. Nothing changes in
+    /// memory unless the database accepted the whole turn.
+    static func removeRegeneratedTurn(
+        _ turn: [ChatMessage], from session: ChatSession, writer: AppDatabaseWriter
+    ) async throws {
+        guard !turn.isEmpty else { return }
+        let ids = Set(turn.map(\.id))
+        try await writer.deleteMessages(ids: ids.map(\.uuidString))
+        session.messages.removeAll { ids.contains($0.id) }
+    }
+
     func regenerate() async {
         guard startupPhase.hasLocalState,
             let session = currentSession, let databaseWriter,
@@ -154,24 +178,18 @@ extension AppModel {
             canGenerateWithSelectedModel(for: session)
         else { return }
 
-        let assistant = session.messages.last.flatMap { message in
-            message.role == .assistant ? message : nil
-        }
-        let precedingRole = assistant == nil ? session.messages.last?.role : session.messages.dropLast().last?.role
-        guard permitGenerationAfterInvestigation(), precedingRole == .user, let turnID = shepherd.reserve(in: session)
+        guard let turn = Self.regenerationTurn(in: session.messages), permitGenerationAfterInvestigation(),
+            let turnID = shepherd.reserve(in: session)
         else {
             return
         }
 
-        if let assistant {
-            do {
-                try await databaseWriter.deleteMessage(id: assistant.id.uuidString)
-            } catch {
-                shepherd.stop(sessionID: session.id, turnID: turnID)
-                dbWarning = "Message was not deleted: \(error.localizedDescription)"
-                return
-            }
-            session.messages.removeAll { $0.id == assistant.id }
+        do {
+            try await Self.removeRegeneratedTurn(turn, from: session, writer: databaseWriter)
+        } catch {
+            shepherd.stop(sessionID: session.id, turnID: turnID)
+            dbWarning = "Reply was not removed: \(error.localizedDescription)"
+            return
         }
         guard shepherd.activeTurnID == turnID, shepherd.activeSessionID == session.id else { return }
         shepherd.startReserved(in: session, turnID: turnID)

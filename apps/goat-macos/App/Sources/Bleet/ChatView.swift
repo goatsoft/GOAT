@@ -131,7 +131,7 @@ struct ChatView: View {
                 }
             }
             if let leadFailure {
-                Text(leadFailure).font(.caption).foregroundStyle(.orange)
+                Text(leadFailure).font(.caption).foregroundStyle(Caprine.Semantic.warning)
                     .padding(.horizontal, 22)
             }
             if model.showActivityLog {
@@ -634,7 +634,7 @@ struct Composer: View {
                 if pending.contains(where: { $0.imageData != nil }) && !activeModelLooksVision {
                     Label("This model may not support images", systemImage: "eye.trianglebadge.exclamationmark")
                         .font(.caption)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Caprine.Semantic.warning)
                 }
                 Spacer()
                 if isStreaming {
@@ -653,7 +653,7 @@ struct Composer: View {
                     Button(action: onStop) {
                         Image(systemName: "stop.fill")
                             .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(.white)
+                            .foregroundStyle(Caprine.Semantic.onAccent)
                             .frame(width: 30, height: 30)
                             .background(model.theme.tokens.accentGradient, in: Circle())
                             .shadow(color: model.theme.tokens.glow.opacity(0.55), radius: 6)
@@ -769,7 +769,7 @@ struct Composer: View {
                         } label: {
                             Image(systemName: "xmark.circle.fill")
                                 .font(.system(size: 13))
-                                .foregroundStyle(.white, .black.opacity(0.6))
+                                .foregroundStyle(Caprine.Semantic.onAccent, Caprine.Semantic.shadow.opacity(0.6))
                         }
                         .buttonStyle(.plain)
                         .help("Remove \(attachment.name)")

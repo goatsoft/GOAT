@@ -38,11 +38,11 @@ struct CopyButton: View {
         } label: {
             if compact {
                 Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                    .foregroundStyle(copied ? Color.green : Color.secondary)
+                    .foregroundStyle(copied ? Caprine.Semantic.success : Color.secondary)
                     .contentTransition(.symbolEffect(.replace))
             } else {
                 Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
-                    .foregroundStyle(copied ? Color.green : Color.secondary)
+                    .foregroundStyle(copied ? Caprine.Semantic.success : Color.secondary)
                     .contentTransition(.symbolEffect(.replace))
             }
         }
@@ -72,7 +72,7 @@ struct FeatheredRing: View {
 
 /// Three dots that ripple as a travelling wave - each lifts and settles, staggered.
 struct WaveDots: View {
-    var color: Color = .white
+    var color: Color = Caprine.Semantic.onAccent
     var dot: CGFloat = 4
     var animates = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -105,7 +105,7 @@ struct WaveDots: View {
 
 /// The goatie's "typing…" speech bubble - neon glass bubble art with a wave of themed dots.
 struct ThinkingBubble: View {
-    var tint: Color = .white
+    var tint: Color = Caprine.Semantic.onAccent
     var height: CGFloat = 30
     var animates = true
 
@@ -182,7 +182,7 @@ struct SendButton: View {
         } label: {
             Image(systemName: "arrow.up")
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(model.theme.isDark ? Color.black : Color.white)
+                .foregroundStyle(model.theme.isDark ? Caprine.Semantic.onLightAccent : Caprine.Semantic.onAccent)
                 .frame(width: 30, height: 30)
                 .background(gradient, in: Circle())
                 .scaleEffect(hovering && enabled && animates && !reduceMotion ? 1.06 : 1)
@@ -256,7 +256,7 @@ private struct SecondaryChipBody: View {
 
     private var tokens: Caprine { model.theme.tokens }
     private var highlighted: Bool { isEnabled && (hovering || isFocused || configuration.isPressed) }
-    private var interactionColor: Color { configuration.role == .destructive ? .red : tokens.tint }
+    private var interactionColor: Color { configuration.role == .destructive ? Caprine.Semantic.danger : tokens.tint }
 
     var body: some View {
         configuration.label
@@ -302,7 +302,7 @@ struct DialogCancelButtonStyle: ButtonStyle {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(.white.opacity(0.18), lineWidth: 0.75)
+                    .strokeBorder(Caprine.Semantic.onAccent.opacity(0.18), lineWidth: 0.75)
             )
             .opacity(configuration.isPressed ? 0.78 : 1)
     }

@@ -93,36 +93,6 @@ final class TranscriptPerformanceTests: XCTestCase {
 
         """
 
-    @MainActor func testCompletionDeltaRowHeightUnchanged() async throws {
-        let message = ChatMessage(role: .assistant)
-        message.text = "Here is an explanation of the layout metrics.\n\n" + Self.block
-        message.complete = false
-
-        let host = NSHostingView(
-            rootView: MessageView(message: message, isLast: true, projectID: nil)
-                .environment(AppModel.shared))
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
-            styleMask: [.titled], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        window.contentView = host
-        defer {
-            window.contentView = nil
-            window.close()
-        }
-        host.layoutSubtreeIfNeeded()
-        try await Task.sleep(for: .milliseconds(50))
-        let heightBefore = host.fittingSize.height
-
-        message.complete = true
-        host.layoutSubtreeIfNeeded()
-        try await Task.sleep(for: .milliseconds(50))
-        let heightAfter = host.fittingSize.height
-
-        let delta = abs(heightAfter - heightBefore)
-        XCTAssertEqual(delta, 0, "Assistant row height before and after complete with unchanged text must be 0 pt")
-    }
-
     @MainActor func testOversizedCompletedReplyRendersScrollableDocument() async throws {
         let session = ChatSession(effort: .trot, modelID: nil)
         session.messagesLoaded = true

@@ -1,5 +1,7 @@
 import AppKit
 import Bleet
+import Inference
+import Persistence
 import SwiftUI
 import Testing
 
@@ -413,6 +415,50 @@ extension AppTests.Bleet {
             #expect(
                 settled != nil,
                 "An oversized completed reply must render a tall scrollable document and settle at the bottom")
+        }
+
+        enum CompletionCase: String, CaseIterable, Sendable {
+            case plain, agentic, truncated
+        }
+
+        /// #60 measurement 2 (A2): completing a reply with unchanged text must not change the row's height,
+        /// including when the worker publishes final stats and when a length stop offers Continue.
+        @Test(arguments: CompletionCase.allCases) @MainActor func completionKeepsTheAssistantRowHeight(
+            _ completion: CompletionCase
+        ) async throws {
+            let message = ChatMessage(role: .assistant)
+            message.text = "Here is an explanation of the layout.\n\n```swift\nlet value = 1\n```\n\nDone."
+            if completion == .agentic {
+                message.toolEvents = [
+                    ToolEventSnapshot(
+                        id: "t1", server: "Pens", tool: "pen_read_file", arguments: #"{"path":"a.swift"}"#, result: "ok"
+                    )
+                ]
+            }
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+                styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            let host = NSHostingView(
+                rootView: MessageView(message: message, isLast: true, projectID: nil)
+                    .frame(width: 600).environment(AppModel.shared))
+            window.contentView = host
+            defer {
+                window.contentView = nil
+                window.close()
+            }
+            try await Task.sleep(for: .milliseconds(300))
+            host.layoutSubtreeIfNeeded()
+            let before = host.fittingSize.height
+
+            var stats = GenStats(ttft: 0.2, tokens: 2_048, duration: 12)
+            stats.finishReason = completion == .truncated ? "length" : "stop"
+            message.stats = stats
+            message.complete = true
+            try await Task.sleep(for: .milliseconds(300))
+            host.layoutSubtreeIfNeeded()
+            let after = host.fittingSize.height
+            #expect(after == before, "Completion must not reflow a \(completion) reply (\(before) -> \(after) pt)")
         }
     }
 }
