@@ -48,6 +48,7 @@ private struct GoatMarkdownStyle: ViewModifier {
     @Environment(AppModel.self) private var model
 
     func body(content: Content) -> some View {
+        let measure = ReadingMeasure.prose(fontID: model.effectiveChatFontID, size: fontSize)
         content.markdownTextStyle(\.text) {
             FontSize(fontSize)
             FontFamily(ReadingFonts.family(model.effectiveChatFontID, role: .chat))
@@ -64,6 +65,15 @@ private struct GoatMarkdownStyle: ViewModifier {
             configuration.label.labelStyle(MarkdownListLabelStyle())
         }
         .markdownTextStyle(\.link) { ForegroundColor(model.theme.tokens.tint) }
+        // MarkdownUI's basic paragraph, capped at the reading measure; code and tables may run wider
+        // (#60 D3, DESIGN.md §4).
+        .markdownBlockStyle(\.paragraph) { configuration in
+            configuration.label
+                .fixedSize(horizontal: false, vertical: true)
+                .relativeLineSpacing(.em(0.15))
+                .markdownMargin(top: .zero, bottom: .em(1))
+                .frame(maxWidth: measure, alignment: .leading)
+        }
         .markdownBlockStyle(\.blockquote) { configuration in
             configuration.label
                 .padding(.horizontal, 12)
@@ -74,6 +84,7 @@ private struct GoatMarkdownStyle: ViewModifier {
                         .fill(model.theme.tokens.tint)
                         .frame(width: 3)
                 }
+                .frame(maxWidth: measure, alignment: .leading)
                 .markdownTextStyle { ForegroundColor(.primary) }
         }
     }

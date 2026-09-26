@@ -378,3 +378,77 @@ extension AppTests.Bleet {
         }
     }
 }
+
+extension AppTests.Bleet {
+    /// #60 D3: a 68ch reading measure from the chat font, a shared centred column and bounded bubbles.
+    @Suite(.serialized) struct ReadingMeasureTests {
+        @Test @MainActor func theMeasureFollowsTheChatFontAndSize() {
+            let font = ReadingFonts.nsFont("system", size: 14, role: .chat)
+            let zero = ("0" as NSString).size(withAttributes: [.font: font]).width
+            let measure = ReadingMeasure.prose(fontID: "system", size: 14)
+            #expect(abs(measure - zero * 68) <= 1)
+            #expect(ReadingMeasure.prose(fontID: "system", size: 24) > measure * 1.6)
+            #expect(ReadingMeasure.prose(fontID: "monospaced", size: 14) != measure)
+            let column = ReadingMeasure.column(fontID: "system", size: 14, presentation: false)
+            #expect(column >= Caprine.Code.maxWidth + Caprine.Activity.assistantGutter)
+        }
+
+        @Test @MainActor func userBubblesTakeAtMostThreeQuartersOfTheColumn() async throws {
+            final class Box { var frame = CGRect.zero }
+            let box = Box()
+            let host = NSHostingView(
+                rootView: FractionalWidthLayout(fraction: Caprine.Reading.userBubbleFraction) {
+                    Color.clear.frame(maxWidth: .infinity, minHeight: 10, maxHeight: 10)
+                        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { box.frame = $0 }
+                }
+                .frame(width: 800))
+            host.frame = NSRect(x: 0, y: 0, width: 800, height: 40)
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(100))
+            host.layoutSubtreeIfNeeded()
+            #expect(box.frame.width == 600, "A bubble may fill three quarters of 800 pt: \(box.frame)")
+            #expect(box.frame.maxX == 800, "Bubbles sit at the trailing edge: \(box.frame)")
+        }
+
+        /// In a wide window a long paragraph wraps at the measure, not the window.
+        @Test @MainActor func proseWrapsAtTheMeasureInAWideWindow() async throws {
+            let message = ChatMessage(role: .assistant)
+            message.text = String(repeating: "Words of a long paragraph that should wrap at the measure. ", count: 30)
+            message.complete = true
+            let width: CGFloat = 1_600
+            let host = NSHostingView(
+                rootView: MessageView(message: message, isLast: false, projectID: nil)
+                    .frame(width: width).background(Color.white).environment(AppModel.shared)
+                    .environment(\.colorScheme, .light))
+            host.appearance = NSAppearance(named: .aqua)
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: width, height: 600), styleMask: [.titled], backing: .buffered,
+                defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            defer {
+                window.contentView = nil
+                window.close()
+            }
+            try await Task.sleep(for: .milliseconds(500))
+            host.layoutSubtreeIfNeeded()
+            let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            let scale = CGFloat(bitmap.pixelsWide) / host.bounds.width
+            var rightmost = 0
+            for y in stride(from: 0, to: bitmap.pixelsHigh, by: 2) {
+                for x in stride(from: bitmap.pixelsWide - 1, to: rightmost, by: -2) {
+                    if let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB), color.redComponent < 0.5 {
+                        rightmost = x
+                        break
+                    }
+                }
+            }
+            let model = AppModel.shared
+            let measure = ReadingMeasure.prose(fontID: model.effectiveChatFontID, size: model.chatFontSize)
+            let limit = Caprine.Activity.presentationAvatarWidth + Caprine.Activity.assistantGutter + measure + 4
+            #expect(CGFloat(rightmost) / scale <= limit, "Prose ends at \(CGFloat(rightmost) / scale) pt")
+            #expect(CGFloat(rightmost) / scale > measure * 0.8, "Prose fills the measure")
+        }
+    }
+}

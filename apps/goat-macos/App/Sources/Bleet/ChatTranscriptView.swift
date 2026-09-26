@@ -242,9 +242,11 @@ struct ChatTranscriptView: View {
 
                     }
                     .scrollTargetLayout()
+                    // One centred reading column shared with the composer (#60 D3).
+                    .frame(maxWidth: readingColumn, alignment: .leading)
                     .padding(.horizontal, 24)
                     .padding(.top, 16)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(maxWidth: .infinity)
                     .background(
                         TranscriptScrollViewObserver(
                             onScrollChanged: { scroll in
@@ -381,6 +383,11 @@ struct ChatTranscriptView: View {
     }
 
     private var tokens: Caprine { model.theme.tokens }
+
+    private var readingColumn: CGFloat {
+        ReadingMeasure.column(
+            fontID: model.effectiveChatFontID, size: model.chatFontSize, presentation: model.presentation.isEnabled)
+    }
 
     var visibleMessageRange: Range<Int> { messageRange }
 

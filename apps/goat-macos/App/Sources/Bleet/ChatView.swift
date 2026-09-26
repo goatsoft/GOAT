@@ -517,7 +517,14 @@ struct Composer: View {
                 ModelEffortControl(session: session, showMenu: $showModelMenu)
             }
         }
+        // The composer shares the transcript's reading column (#60 D3).
+        .frame(
+            maxWidth: ReadingMeasure.column(
+                fontID: model.effectiveChatFontID, size: model.chatFontSize,
+                presentation: model.presentation.isEnabled)
+        )
         .padding(.horizontal, 22)
+        .frame(maxWidth: .infinity)
         .padding(
             .bottom,
             Caprine.ModelMenu.composerBottomInset

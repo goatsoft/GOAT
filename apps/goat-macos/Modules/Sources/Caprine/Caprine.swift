@@ -16,6 +16,14 @@ public struct Caprine: Sendable {
         public static let shadow = Color.black
     }
 
+    /// The transcript's reading measure (#60 D3, DESIGN.md §4).
+    public enum Reading {
+        /// Prose runs at most this many `ch` (the advance of "0") of the chat font.
+        public static let characters = 68.0
+        /// User bubbles take at most this share of the transcript column.
+        public static let userBubbleFraction = 0.75
+    }
+
     /// Fenced code blocks and inline artifacts in the transcript (#60 A6).
     public enum Code {
         /// Code and artifacts may extend past the reading measure, up to this width.
