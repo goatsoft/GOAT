@@ -129,8 +129,8 @@ extension EnvironmentValues {
             blocks[key] = list
         }
         // MarkdownUI may drop the literal's final newline; match either way.
-        func trimmed(_ text: some StringProtocol) -> Substring {
-            text[...].dropLast(text.reversed().prefix(while: { $0 == "\n" }).count)
+        func trimmed(_ text: String) -> Substring {
+            text.dropLast(text.reversed().prefix(while: { $0 == "\n" }).count)
         }
         guard
             let position = list.firstIndex(of: code)
