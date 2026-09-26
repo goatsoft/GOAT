@@ -30,6 +30,11 @@ struct TranscriptSegmentNavigation: Equatable, Sendable {
         { _, _, _, _ in }
     /// A reply's segment count changed as it streamed.
     var recordSegmentCount: @MainActor @Sendable (_ messageID: UUID, _ segmentCount: Int) -> Void = { _, _ in }
+    /// The reader took the viewport while a reply showed `window` of its `segmentCount` segments,
+    /// which it keeps.
+    var hold: @MainActor @Sendable (_ messageID: UUID, _ window: Range<Int>, _ segmentCount: Int) -> Void = {
+        _, _, _ in
+    }
     /// A shown segment's frame in viewport coordinates, or nil when it is no longer laid out.
     var recordFrame: @MainActor @Sendable (_ messageID: UUID, _ segment: Int, _ frame: CGRect?) -> Void = {
         _, _, _ in
@@ -146,6 +151,17 @@ private enum TranscriptPagingPhase: Equatable, Sendable {
         segmentWindows[messageID] = window
         segmentCounts[messageID] = segmentCount
         restore(anchor)
+    }
+
+    /// The reader took the viewport while `messageID` showed `window` of its `segmentCount` segments.
+    /// The reply keeps them, as the message window keeps its messages, so the owner holds them as if
+    /// paged there, without a scroll: otherwise, once more output arrives, settling at the bottom of
+    /// the kept segments would resume following with newer ones hidden.
+    func holdSegments(of messageID: UUID, at window: Range<Int>, segmentCount: Int) {
+        guard readerOwnsViewport, segmentWindows[messageID] == nil else { return }
+        if segmentWindows.count >= Self.maximumSegmentWindows { segmentWindows.removeAll() }
+        segmentWindows[messageID] = window
+        segmentCounts[messageID] = segmentCount
     }
 
     /// A held reply now has `segmentCount` segments. Replies without a held window are not recorded.
@@ -487,6 +503,9 @@ struct ChatTranscriptView: View {
                         pageSegments(of: id, to: window, keeping: kept, segmentCount: segmentCount)
                     },
                     recordSegmentCount: { id, segmentCount in viewport.recordSegmentCount(segmentCount, of: id) },
+                    hold: { id, window, segmentCount in
+                        viewport.holdSegments(of: id, at: window, segmentCount: segmentCount)
+                    },
                     recordFrame: { id, segment, frame in recordFrame(frame, of: id, segment: segment) })
             )
             // SwiftUI re-applies its initial bottom offset on later size changes until a gesture positions

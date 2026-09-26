@@ -264,14 +264,23 @@ struct StreamingMarkdownView: View {
                 ?? (message.complete ? nil : cache.latest(for: message.id)))
     }
 
-    /// The segments to show: the window the reader paged this reply to, else its latest segments.
+    /// The segments to show: the window the owner holds for this reply, else its latest segments.
     /// While the reader owns the viewport, a reply showing its latest segments keeps the ones shown,
-    /// as the owner keeps the message window: output below them waits behind the later loader.
+    /// as the owner keeps the message window: output below them waits behind the later loader. The
+    /// owner holds them from the next turn (`holdIfKept`).
     private var requestedWindow: SegmentWindow {
         guard let viewport = navigation.viewport else { return localWindow.map(SegmentWindow.segments) ?? .latest }
         if let held = viewport.segmentWindow(for: message.id) { return .segments(held) }
-        if viewport.readerOwnsViewport, let shown = document?.window { return .segments(shown) }
+        if let kept = keptWindow { return .segments(kept) }
         return .latest
+    }
+
+    /// The shown window this reply keeps because the reader owns the viewport, until the owner holds it.
+    private var keptWindow: Range<Int>? {
+        guard let viewport = navigation.viewport, viewport.readerOwnsViewport,
+            viewport.segmentWindow(for: message.id) == nil
+        else { return nil }
+        return document?.window
     }
 
     var body: some View {
@@ -323,6 +332,13 @@ struct StreamingMarkdownView: View {
             sample()
         }
         .onChange(of: message.complete) { sample() }
+        .onChange(of: keptWindow, initial: true) { holdIfKept() }
+    }
+
+    /// Registers a kept window with the owner, so the owner, not this view, knows the reply is held.
+    private func holdIfKept() {
+        guard let kept = keptWindow, let document else { return }
+        navigation.hold(message.id, kept, document.segments.count)
     }
 
     /// Pages the shown window to `target` of the reply's `segmentCount` segments, keeping segment

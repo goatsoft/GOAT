@@ -632,6 +632,15 @@ extension AppTests.Bleet {
                 viewport.holdsEarlierSegments(of: reply), "A window that reached the end goes stale as the reply grows")
             viewport.recordSegmentCount(3, of: UUID())
             #expect(viewport.segmentWindows.count == 1, "Only held replies record a count")
+
+            // A reply the reader kept by scrolling, not paging, is held the same way.
+            let kept2 = UUID()
+            viewport.holdSegments(of: kept2, at: 20..<30, segmentCount: 30)
+            #expect(viewport.segmentWindow(for: kept2) == 20..<30 && !viewport.holdsEarlierSegments(of: kept2))
+            viewport.recordSegmentCount(33, of: kept2)
+            #expect(viewport.holdsEarlierSegments(of: kept2), "A kept window goes stale as the reply grows")
+            viewport.holdSegments(of: kept2, at: 0..<5, segmentCount: 33)
+            #expect(viewport.segmentWindow(for: kept2) == 20..<30, "A held window is not replaced by a kept one")
             viewport.readerSettled(atTrueBottom: true, anchor: nil)
             #expect(viewport.autoFollow && viewport.segmentWindows.isEmpty, "Following shows latest segments again")
 
@@ -641,6 +650,58 @@ extension AppTests.Bleet {
             }
             viewport.jumpToLatest()
             #expect(viewport.segmentWindows.isEmpty && viewport.autoFollow)
+            viewport.holdSegments(of: UUID(), at: 0..<1, segmentCount: 1)
+            #expect(viewport.segmentWindows.isEmpty, "While following, no reply is kept")
+        }
+
+        /// #78: a reader who scrolls up without paging keeps a streaming reply's shown segments, and
+        /// the owner holds them, so newer output below does not let the transcript's bottom count as
+        /// the reply's end.
+        @Test @MainActor func scrollingUpHoldsAStreamingReplysSegmentsWithTheOwner() async throws {
+            let session = ChatSession(effort: .trot, modelID: nil)
+            session.messagesLoaded = true
+            let reply = ChatMessage(role: .assistant)
+            reply.text = (0..<900).map { "Paragraph \($0) of a long reply, with words enough to wrap once or twice." }
+                .joined(separator: "\n\n")
+            reply.complete = false
+            session.messages = [reply]
+            let viewport = TranscriptViewport()
+            let (window, host) = hostedWindow(session, viewport: viewport)
+            defer {
+                window.contentView = nil
+                window.close()
+            }
+            func prepared() -> PreparedMarkdownDocument? {
+                PreparedMarkdownDocumentCache.shared.document(for: reply.id, revision: reply.textRevision)
+            }
+            for _ in 0..<150 where prepared()?.window == nil {
+                try await Task.sleep(for: .milliseconds(20))
+                host.layoutSubtreeIfNeeded()
+            }
+            try await settle(viewport, host: host)
+            let document = try #require(prepared())
+            try #require(document.window?.upperBound == document.segments.count, "The latest segments are shown")
+            let scroll = try #require(findTranscriptScroll(host))
+
+            // The reader moves up a little, short of the earlier loader.
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: scroll.contentView.bounds.minY - 200))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            try await settle(viewport, host: host)
+            let trace = { viewport.diagnostics.suffix(16) }
+            #expect(viewport.readerOwnsViewport, "\(trace())")
+            #expect(
+                viewport.segmentWindow(for: reply.id) == document.window,
+                "The owner holds the kept segments; \(trace())")
+            #expect(!viewport.holdsEarlierSegments(of: reply.id), "They reach the reply's end so far")
+
+            // More output arrives below the kept segments.
+            reply.text += (900..<1_000).map { "\n\nParagraph \($0), streamed after the reader moved up." }.joined()
+            for _ in 0..<150 where !viewport.holdsEarlierSegments(of: reply.id) {
+                try await Task.sleep(for: .milliseconds(20))
+                host.layoutSubtreeIfNeeded()
+            }
+            #expect(viewport.holdsEarlierSegments(of: reply.id), "Newer segments are hidden below; \(trace())")
+            #expect(viewport.readerOwnsViewport && viewport.segmentWindow(for: reply.id) == document.window)
         }
 
         /// Paging earlier keeps the reader's view in place: the message at the top of the old window
