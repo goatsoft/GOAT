@@ -68,24 +68,26 @@ private struct GoatMarkdownStyle: ViewModifier {
         // MarkdownUI's basic paragraph, capped at the reading measure; code and tables may run wider
         // (#60 D3, DESIGN.md §4).
         .markdownBlockStyle(\.paragraph) { configuration in
-            configuration.label
-                .fixedSize(horizontal: false, vertical: true)
-                .relativeLineSpacing(.em(0.15))
-                .markdownMargin(top: .zero, bottom: .em(1))
-                .frame(maxWidth: measure, alignment: .leading)
+            BoundedWidthLayout(maximumWidth: measure) {
+                configuration.label
+                    .fixedSize(horizontal: false, vertical: true)
+                    .relativeLineSpacing(.em(0.15))
+            }
+            .markdownMargin(top: .zero, bottom: .em(1))
         }
         .markdownBlockStyle(\.blockquote) { configuration in
-            configuration.label
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
-                .background(model.theme.tokens.tint.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
-                .overlay(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(model.theme.tokens.tint)
-                        .frame(width: 3)
-                }
-                .frame(maxWidth: measure, alignment: .leading)
-                .markdownTextStyle { ForegroundColor(.primary) }
+            BoundedWidthLayout(maximumWidth: measure) {
+                configuration.label
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+                    .background(model.theme.tokens.tint.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+                    .overlay(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(model.theme.tokens.tint)
+                            .frame(width: 3)
+                    }
+            }
+            .markdownTextStyle { ForegroundColor(.primary) }
         }
     }
 }

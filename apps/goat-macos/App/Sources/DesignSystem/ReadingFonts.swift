@@ -114,6 +114,37 @@ enum ReadingMeasure {
     }
 }
 
+/// Caps its content at `maximumWidth`, taking the proposed width up to it (or the maximum when none
+/// is proposed). Unlike a flexible frame it never asks its content for an ideal width, which for text
+/// means laying it out on one line, so its size never depends on the content's width.
+struct BoundedWidthLayout: Layout {
+    var maximumWidth: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let child = subviews.first else { return .zero }
+        let width = min(proposal.width ?? maximumWidth, maximumWidth)
+        let size = child.sizeThatFits(ProposedViewSize(width: width, height: proposal.height))
+        return CGSize(width: width, height: size.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let child = subviews.first else { return }
+        child.place(
+            at: bounds.origin, anchor: .topLeading,
+            proposal: ProposedViewSize(width: min(bounds.width, maximumWidth), height: bounds.height))
+    }
+
+    /// Text baselines and other vertical guides are the content's, as through a frame.
+    func explicitAlignment(
+        of guide: VerticalAlignment, in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews,
+        cache: inout ()
+    ) -> CGFloat? {
+        guard let child = subviews.first else { return nil }
+        let size = ProposedViewSize(width: min(bounds.width, maximumWidth), height: bounds.height)
+        return bounds.minY + child.dimensions(in: size)[guide]
+    }
+}
+
 /// Fills the offered width and places its content at the trailing edge, offering it at most a
 /// fraction of that width (#60 D3: user bubbles).
 struct FractionalWidthLayout: Layout {
