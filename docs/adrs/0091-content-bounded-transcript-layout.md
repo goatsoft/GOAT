@@ -116,7 +116,15 @@ segment rather than per message. Deliver it in three reviewable steps:
 2. **Stable-prefix rendering** inside the existing message window. Settled segments are prepared
    once; only provisional segments are re-prepared as the reply streams. Rendered segments and
    prepared-content cache bytes are bounded independently of total reply length. The streaming caret
-   (B1) marks only the tail.
+   (B1) marks only the tail. Integration contracts from the step 1 review:
+   - Each streaming message holds one uniquely referenced `MarkdownSegmentation` and mutates it with
+     `extend`; an edit or replacement starts a new one. The copying `resegment` API and
+     materialising the whole `segments` array are not the hot path. Release builds do not check
+     that committed text is unchanged.
+   - `verbatimPiece` renders as plain text. Budgets charge the prepared representation actually
+     rendered, including whole artifacts and the definition suffix, which sit outside the body bound.
+   - Pieces of oversized blocks are not full Markdown semantic preservation (see step 1), so A1 stays
+     open until this step's acceptance passes.
 3. **Segment-level windowing**, built on the single transcript navigation owner from
    [#54](https://github.com/goatsoft/GOAT/issues/54) section 2. The window admits segments rather
    than whole messages, so a long reply renders rich and pages within itself, with one scroll
