@@ -69,7 +69,7 @@ struct PenSheet: View {
                     Text("Colour")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    OKLCHPicker(color: $color, tint: model.theme.tokens.tint)
+                    PenColorPicker(color: $color)
                 }
 
                 if !isEditing {

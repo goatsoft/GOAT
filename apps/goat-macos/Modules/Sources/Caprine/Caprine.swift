@@ -27,6 +27,12 @@ public struct Caprine: Sendable {
         public static let surfaceOpacity = 0.22
     }
 
+    public enum ColorEditing {
+        public static let pickerWidth: CGFloat = 320
+        public static let sheetWidth: CGFloat = 520
+        public static let sheetHeight: CGFloat = 640
+    }
+
     public enum Activity {
         public static let ruleWidth: CGFloat = 2
         public static let spacing: CGFloat = 8
