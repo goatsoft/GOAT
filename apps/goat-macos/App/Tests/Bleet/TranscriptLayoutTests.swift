@@ -606,14 +606,14 @@ extension AppTests.Bleet {
         }
 
         /// #60 A1 step 3: a long reply's segment window belongs to the navigation owner. Paging it makes
-        /// the reader the owner and restores a segment anchor; only a window short of the reply's end
-        /// keeps the transcript's bottom from being its end, and following clears every held window.
+        /// the reader the owner and restores a segment anchor; only a window short of the reply's current
+        /// end keeps the transcript's bottom from being its end, and following clears every held window.
         @Test @MainActor func segmentPagingIsAnOwnerTransition() throws {
             let reply = UUID()
             let viewport = TranscriptViewport()
             #expect(viewport.segmentWindow(for: reply) == nil)
             let kept = Anchor(messageID: reply, offset: 14, segment: 40)
-            viewport.pageSegments(of: reply, to: 30..<41, reachesEnd: false, currentRange: 0..<3, keeping: kept)
+            viewport.pageSegments(of: reply, to: 30..<41, segmentCount: 52, currentRange: 0..<3, keeping: kept)
             #expect(viewport.readerOwnsViewport && viewport.heldRange == 0..<3)
             #expect(viewport.segmentWindow(for: reply) == 30..<41 && viewport.holdsEarlierSegments(of: reply))
             #expect(viewport.anchor == kept && viewport.request?.target == .anchor(kept))
@@ -621,15 +621,22 @@ extension AppTests.Bleet {
             #expect(viewport.request == nil, "Reader input cancels the segment restore like any other")
 
             viewport.pageSegments(
-                of: reply, to: 40..<52, reachesEnd: true, currentRange: 0..<3,
+                of: reply, to: 40..<52, segmentCount: 52, currentRange: 0..<3,
                 keeping: Anchor(messageID: reply, offset: 0, segment: 40))
             #expect(viewport.segmentWindow(for: reply) == 40..<52 && !viewport.holdsEarlierSegments(of: reply))
             #expect(viewport.readerOwnsViewport)
+            // The reply streams on: the held window no longer reaches its end, so the transcript's
+            // bottom is not the reply's end and settling there must not resume following.
+            viewport.recordSegmentCount(55, of: reply)
+            #expect(
+                viewport.holdsEarlierSegments(of: reply), "A window that reached the end goes stale as the reply grows")
+            viewport.recordSegmentCount(3, of: UUID())
+            #expect(viewport.segmentWindows.count == 1, "Only held replies record a count")
             viewport.readerSettled(atTrueBottom: true, anchor: nil)
             #expect(viewport.autoFollow && viewport.segmentWindows.isEmpty, "Following shows latest segments again")
 
             for index in 0...TranscriptViewport.maximumSegmentWindows {
-                viewport.pageSegments(of: UUID(), to: 0..<1, reachesEnd: false, currentRange: 0..<3, keeping: kept)
+                viewport.pageSegments(of: UUID(), to: 0..<1, segmentCount: 2, currentRange: 0..<3, keeping: kept)
                 #expect(viewport.segmentWindows.count <= TranscriptViewport.maximumSegmentWindows, "\(index)")
             }
             viewport.jumpToLatest()

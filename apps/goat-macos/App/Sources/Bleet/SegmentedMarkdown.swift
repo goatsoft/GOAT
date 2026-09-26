@@ -897,9 +897,9 @@ struct SegmentedMarkdownView: View {
     let fontSize: CGFloat
     let isStreaming: Bool
     var messageID: UUID?
-    /// Pages a windowed reply: the new window, the segment to keep in place, and whether the window
-    /// reaches the reply's end.
-    var page: (_ window: Range<Int>, _ kept: Int, _ reachesEnd: Bool) -> Void = { _, _, _ in }
+    /// Pages a windowed reply: the new window, the segment to keep in place, and the reply's segment
+    /// count.
+    var page: (_ window: Range<Int>, _ kept: Int, _ segmentCount: Int) -> Void = { _, _, _ in }
     @Environment(\.transcriptSegments) private var navigation
 
     var body: some View {
@@ -909,7 +909,7 @@ struct SegmentedMarkdownView: View {
             if isWindowed, shown.lowerBound > 0 {
                 SegmentLoader(label: "Earlier text") {
                     let earlier = ReplyWindow.earlier(shown, count: document.segments.count, cost: cost)
-                    page(earlier, shown.lowerBound, false)
+                    page(earlier, shown.lowerBound, document.segments.count)
                 }
             }
             ForEach(shown, id: \.self) { index in
@@ -932,9 +932,13 @@ struct SegmentedMarkdownView: View {
             if isWindowed, shown.upperBound < document.segments.count {
                 SegmentLoader(label: "Later text") {
                     let later = ReplyWindow.later(shown, count: document.segments.count, cost: cost)
-                    page(later, shown.upperBound - 1, later.upperBound == document.segments.count)
+                    page(later, shown.upperBound - 1, document.segments.count)
                 }
             }
+        }
+        // A held window that reached the end stops reaching it as the reply grows.
+        .onChange(of: document.segments.count) { _, count in
+            if let messageID { navigation.recordSegmentCount(messageID, count) }
         }
     }
 

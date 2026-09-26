@@ -284,7 +284,7 @@ struct StreamingMarkdownView: View {
             } else if let document {
                 SegmentedMarkdownView(
                     document: document, fontSize: model.chatFontSize, isStreaming: !message.complete,
-                    messageID: message.id, page: { page(to: $0, keeping: $1, reachesEnd: $2) })
+                    messageID: message.id, page: { page(to: $0, keeping: $1, segmentCount: $2) })
             } else {
                 // Never flash raw Markdown while a saved reply is being prepared off the main actor.
                 Label("Formatting response…", systemImage: "text.badge.checkmark")
@@ -325,12 +325,14 @@ struct StreamingMarkdownView: View {
         .onChange(of: message.complete) { sample() }
     }
 
-    /// Pages the shown window to `target`, keeping segment `kept` where the reader sees it.
-    private func page(to target: Range<Int>, keeping kept: Int, reachesEnd: Bool) {
+    /// Pages the shown window to `target` of the reply's `segmentCount` segments, keeping segment
+    /// `kept` where the reader sees it.
+    private func page(to target: Range<Int>, keeping kept: Int, segmentCount: Int) {
         if navigation.viewport != nil {
-            navigation.page(message.id, target, kept, reachesEnd)
+            navigation.page(message.id, target, kept, segmentCount)
         } else {
-            localWindow = reachesEnd ? nil : target
+            // Without an owner, a window at the end shows the latest segments again.
+            localWindow = target.upperBound >= segmentCount ? nil : target
         }
     }
 

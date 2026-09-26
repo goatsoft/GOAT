@@ -24,10 +24,12 @@ extension EnvironmentValues {
 /// transcript's state when they run.
 struct TranscriptSegmentNavigation: Equatable, Sendable {
     var viewport: TranscriptViewport?
-    /// Shows `window` of a reply's segments, keeping segment `kept` where the reader sees it.
-    /// `reachesEnd` says the window reaches the reply's end.
-    var page: @MainActor @Sendable (_ messageID: UUID, _ window: Range<Int>, _ kept: Int, _ reachesEnd: Bool) -> Void =
+    /// Shows `window` of a reply's segments, keeping segment `kept` where the reader sees it. The
+    /// reply has `segmentCount` segments now.
+    var page: @MainActor @Sendable (_ messageID: UUID, _ window: Range<Int>, _ kept: Int, _ segmentCount: Int) -> Void =
         { _, _, _, _ in }
+    /// A reply's segment count changed as it streamed.
+    var recordSegmentCount: @MainActor @Sendable (_ messageID: UUID, _ segmentCount: Int) -> Void = { _, _ in }
     /// A shown segment's frame in viewport coordinates, or nil when it is no longer laid out.
     var recordFrame: @MainActor @Sendable (_ messageID: UUID, _ segment: Int, _ frame: CGRect?) -> Void = {
         _, _, _ in
@@ -85,14 +87,13 @@ private enum TranscriptPagingPhase: Equatable, Sendable {
     var isScrolledToBottom: Bool
     private(set) var anchor: Anchor?
     private(set) var request: Request?
-    /// A long reply's window the reader paged to, and whether it reached the reply's end then.
-    struct SegmentHold: Equatable, Sendable {
-        var window: Range<Int>
-        var reachedEnd: Bool
-    }
-
     /// Segment windows the reader paged long replies to, by message. Following clears them.
-    private(set) var segmentWindows: [UUID: SegmentHold] = [:]
+    private(set) var segmentWindows: [UUID: Range<Int>] = [:] {
+        didSet { segmentCounts = segmentCounts.filter { segmentWindows[$0.key] != nil } }
+    }
+    /// The current segment count of each held reply, which grows while it streams. Read only when a
+    /// gesture settles, so a streaming refresh does not invalidate every reply.
+    @ObservationIgnored private var segmentCounts: [UUID: Int] = [:]
     static let maximumSegmentWindows = 16
     private var generation: UInt64 = 0
     /// Scroll commands issued and requests abandoned after the bounded attempts, for instrumentation.
@@ -122,25 +123,35 @@ private enum TranscriptPagingPhase: Equatable, Sendable {
 
     /// The window the reader paged a long reply to, if any. Without one a reply shows its latest
     /// segments, or keeps those shown while the reader owns the viewport.
-    func segmentWindow(for messageID: UUID) -> Range<Int>? { segmentWindows[messageID]?.window }
+    func segmentWindow(for messageID: UUID) -> Range<Int>? { segmentWindows[messageID] }
 
-    /// Whether the reader paged `messageID` to earlier segments, so the transcript's bottom is not
-    /// the reply's end.
+    /// Whether the reader holds `messageID` short of its current end, so the transcript's bottom is
+    /// not the reply's end. A window that reached the end stops reaching it as the reply grows.
     func holdsEarlierSegments(of messageID: UUID) -> Bool {
-        segmentWindows[messageID].map { !$0.reachedEnd } ?? false
+        guard let window = segmentWindows[messageID] else { return false }
+        // Without a known count, never treat the held window as the end.
+        guard let count = segmentCounts[messageID] else { return true }
+        return window.upperBound < count
     }
 
-    /// The reader paged a long reply to `window`, which `reachesEnd` of the reply or not. The reader
-    /// owns the viewport and keeps `anchor`, a segment inside both windows.
+    /// The reader paged a long reply of `segmentCount` segments to `window`. The reader owns the
+    /// viewport and keeps `anchor`, a segment inside both windows.
     func pageSegments(
-        of messageID: UUID, to window: Range<Int>, reachesEnd: Bool, currentRange: Range<Int>, keeping anchor: Anchor
+        of messageID: UUID, to window: Range<Int>, segmentCount: Int, currentRange: Range<Int>, keeping anchor: Anchor
     ) {
         readerMoved(currentRange: currentRange)
         if segmentWindows[messageID] == nil, segmentWindows.count >= Self.maximumSegmentWindows {
             segmentWindows.removeAll()
         }
-        segmentWindows[messageID] = SegmentHold(window: window, reachedEnd: reachesEnd)
+        segmentWindows[messageID] = window
+        segmentCounts[messageID] = segmentCount
         restore(anchor)
+    }
+
+    /// A held reply now has `segmentCount` segments. Replies without a held window are not recorded.
+    func recordSegmentCount(_ segmentCount: Int, of messageID: UUID) {
+        guard segmentWindows[messageID] != nil else { return }
+        segmentCounts[messageID] = segmentCount
     }
 
     /// A reader gesture, keyboard or scroller movement, or an inspection took the viewport. The
@@ -472,9 +483,10 @@ struct ChatTranscriptView: View {
                 \.transcriptSegments,
                 TranscriptSegmentNavigation(
                     viewport: viewport,
-                    page: { id, window, kept, reachesEnd in
-                        pageSegments(of: id, to: window, keeping: kept, reachesEnd: reachesEnd)
+                    page: { id, window, kept, segmentCount in
+                        pageSegments(of: id, to: window, keeping: kept, segmentCount: segmentCount)
                     },
+                    recordSegmentCount: { id, segmentCount in viewport.recordSegmentCount(segmentCount, of: id) },
                     recordFrame: { id, segment, frame in recordFrame(frame, of: id, segment: segment) })
             )
             // SwiftUI re-applies its initial bottom offset on later size changes until a gesture positions
@@ -616,12 +628,12 @@ struct ChatTranscriptView: View {
 
     /// Moves a long reply's segment window, keeping segment `kept` where the reader sees it.
     /// Only a reader pages a reply: while following, a loader seen during layout is transient.
-    private func pageSegments(of id: UUID, to window: Range<Int>, keeping kept: Int, reachesEnd: Bool) {
+    private func pageSegments(of id: UUID, to window: Range<Int>, keeping kept: Int, segmentCount: Int) {
         guard pagingPhase == .idle, viewport.readerOwnsViewport else { return }
         let offset = reader.offset(of: id, segment: kept) ?? 0
         pagingPhase = .pagingSegments
         viewport.pageSegments(
-            of: id, to: window, reachesEnd: reachesEnd, currentRange: messageRange,
+            of: id, to: window, segmentCount: segmentCount, currentRange: messageRange,
             keeping: TranscriptViewport.Anchor(messageID: id, offset: offset, segment: kept))
     }
 
