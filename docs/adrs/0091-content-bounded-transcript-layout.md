@@ -166,8 +166,9 @@ segment rather than per message. Deliver it in three reviewable steps:
      Markdown, long single-line paragraphs, fences including oversized ones, tables including oversized
      ones, and 16 reference definitions arriving at the end) streamed at a fixed 4 KiB per refresh from
      32 KiB to 2 MiB. Scanned, copied, compared, parsed and HTML bytes per reply byte stay flat (about
-     9 to 15 in total, per shape, at every size). Per-refresh preparation time stays flat (median 0.4 to
-     0.9 ms, about 2 ms for tables; 95th percentile under 1 ms, about 3 ms for tables), at most three
+     9 to 15 in total, per shape, at every size). Per-refresh preparation time does not grow with the
+     reply (median 0.4 to 0.9 ms, 1.7 to 2.1 ms for tables; 95th percentile 0.6 to 1.9 ms, 3.0 to
+     3.4 ms for tables), at most three
      segments are visited per refresh, and handing a document to the main actor takes under 0.1 ms.
      Compared bytes are under 0.75 per reply byte (no prefix comparison). Exceptions, stated rather
      than hidden: the refresh that delivers late reference definitions re-parses every settled segment
