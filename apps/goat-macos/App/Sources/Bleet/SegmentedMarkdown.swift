@@ -22,8 +22,10 @@ struct PreparedMarkdownSegment: Sendable {
     /// MarkdownUI margins of the first and last block, in base font sizes (see `MarkdownSegmentSpacing`).
     let leadingMargin: Double?
     let trailingMargin: Double?
-    /// While this segment is the streaming tail, whether its last leaf block is a paragraph, which then
-    /// carries the caret (#60 B1); nil for any other segment.
+    /// Whether the segment's last leaf block is a paragraph, read from its parsed structure once.
+    let lastLeafIsParagraph: Bool
+    /// While this segment is the streaming tail, whether it carries the caret (#60 B1): its last leaf
+    /// block is a paragraph. Nil for any other segment.
     let endsInParagraph: Bool?
     /// Whether reference definitions can change how the segment renders. A reference always has a
     /// closing bracket, so a parsed segment without one renders the same with any definitions.
@@ -36,7 +38,8 @@ struct PreparedMarkdownSegment: Sendable {
             index: index, text: text, definitionSuffix: definitionSuffix, kind: kind,
             continuesPrevious: continuesPrevious, isSettled: isSettled, preparation: preparation,
             preparationID: preparationID, leadingMargin: leadingMargin, trailingMargin: trailingMargin,
-            endsInParagraph: endsInParagraph, usesDefinitions: usesDefinitions, bodyBytes: bodyBytes)
+            lastLeafIsParagraph: lastLeafIsParagraph, endsInParagraph: endsInParagraph,
+            usesDefinitions: usesDefinitions, bodyBytes: bodyBytes)
     }
 }
 
@@ -148,8 +151,8 @@ actor MarkdownSegmentCache {
         /// Bytes the segmenter read and copied.
         var scannedBytes = 0
         var copiedBytes = 0
-        /// HTML rendered to decide whether the tail carries the caret.
-        var caretBytes = 0
+        /// HTML rendered once per parse to read block margins and the caret's structure.
+        var htmlBytes = 0
         var segmentationTime = Duration.zero
         var parseTime = Duration.zero
         var assemblyTime = Duration.zero
@@ -316,7 +319,7 @@ actor MarkdownSegmentCache {
             let segment = stream.segmentation[index]
             let old = index < stream.prepared.count ? stream.prepared[index] : nil
             let prepared = old.flatMap { renders($0, segment) ? $0 : nil } ?? parse(segment)
-            let caret = index == tailIndex ? (prepared.endsInParagraph ?? tailEndsInParagraph(prepared)) : nil
+            let caret = index == tailIndex ? prepared.lastLeafIsParagraph : nil
             let revised = prepared.updating(
                 isSettled: segment.isSettled, continuesPrevious: segment.continuesPrevious, endsInParagraph: caret)
             replace(&stream, at: index, with: revised)
@@ -355,35 +358,32 @@ actor MarkdownSegmentCache {
         let text = segment.text
         preparationCount &+= 1
         let preparation: MarkdownPreparation
+        let structure: MarkdownSegmentSpacing.Structure
         if segment.kind == .verbatimPiece {
             preparation = .plainText
+            structure = .verbatim
         } else {
             // Only the reply's first segment can be an HTML or SVG artifact, as in the whole reply.
-            preparation = .parsed(
-                RenderSignposts.measure("MarkdownSegmentParse") {
-                    PreparedMarkdownContent(
-                        value: MarkdownContent(
-                            GOATMarkdownSyntax.normalized(text, detectsArtifacts: segment.index == 0)))
-                })
+            let content = RenderSignposts.measure("MarkdownSegmentParse") {
+                PreparedMarkdownContent(
+                    value: MarkdownContent(GOATMarkdownSyntax.normalized(text, detectsArtifacts: segment.index == 0)))
+            }
+            preparation = .parsed(content)
+            // One HTML rendering gives the parsed blocks' margins and the last leaf block's kind.
+            let html = content.value.renderHTML()
+            work.htmlBytes += html.utf8.count
+            structure = MarkdownSegmentSpacing.structure(html: html)
             parseCount += 1
             parsedBytes += text.utf8.count
         }
         return PreparedMarkdownSegment(
             index: segment.index, text: text, definitionSuffix: segment.definitionSuffix, kind: segment.kind,
             continuesPrevious: segment.continuesPrevious, isSettled: segment.isSettled, preparation: preparation,
-            preparationID: preparationCount,
-            leadingMargin: MarkdownSegmentSpacing.leadingMargin(of: segment.body, kind: segment.kind),
-            trailingMargin: MarkdownSegmentSpacing.trailingMargin(of: segment.body, kind: segment.kind),
+            preparationID: preparationCount, leadingMargin: structure.leadingMargin,
+            trailingMargin: structure.trailingMargin, lastLeafIsParagraph: structure.lastLeafIsParagraph,
             endsInParagraph: nil,
             usesDefinitions: segment.kind != .verbatimPiece && segment.body.utf8.contains(UInt8(ascii: "]")),
             bodyBytes: segment.body.utf8.count)
-    }
-
-    private func tailEndsInParagraph(_ segment: PreparedMarkdownSegment) -> Bool {
-        guard case .parsed(let content) = segment.preparation else { return false }
-        let html = content.value.renderHTML()
-        work.caretBytes += html.utf8.count
-        return Self.endsInParagraph(html: html)
     }
 
     private func takeEntry(_ id: UUID) -> Entry? {
@@ -536,11 +536,25 @@ final class PreparedMarkdownDocumentCache {
 
 /// Spaces segments as MarkdownUI's block sequence spaces the same blocks in one document: the larger
 /// of the previous block's bottom margin and the next block's top margin, or SwiftUI's default padding
-/// when neither block specifies one. Margins follow MarkdownUI's basic theme with GOAT's styles:
-/// paragraphs, lists, quotes and tables end 1 em below, headings start 1.5 rem above, thematic
-/// breaks take 2 em on both sides, and GOAT's code blocks specify none. Margins are classified once,
-/// when a segment is parsed, from its first and last non-blank lines.
+/// when neither block specifies one (#60 A1).
+///
+/// Margins come from the parsed blocks, as MarkdownUI computes them: a block's margin is a preference
+/// reduced over its whole subtree, so a quote or list takes the largest margin any block inside it
+/// sets, and nil when none does (a quote holding only code). GOAT's theme sets, in base font sizes:
+/// paragraphs (including tight list items, image paragraphs and HTML blocks, which MarkdownUI renders
+/// as paragraphs) and tables 0 above and 1 below, headings 1.5 above and 1 below, thematic breaks 2
+/// on both sides, and nothing for code blocks, quotes and lists themselves.
 enum MarkdownSegmentSpacing {
+    /// A parsed segment's first and last top-level margins, and whether its last leaf is a paragraph.
+    struct Structure: Equatable {
+        var leadingMargin: Double?
+        var trailingMargin: Double?
+        var lastLeafIsParagraph: Bool
+
+        /// A verbatim piece renders as plain text: flush above, a paragraph's margin below.
+        static let verbatim = Structure(leadingMargin: 0, trailingMargin: 1, lastLeafIsParagraph: false)
+    }
+
     static func gap(after previous: PreparedMarkdownSegment, before next: PreparedMarkdownSegment, fontSize: CGFloat)
         -> CGFloat?
     {
@@ -549,73 +563,117 @@ enum MarkdownSegmentSpacing {
         return (margin * fontSize).rounded()
     }
 
-    static func leadingMargin(of body: String, kind: MarkdownSegment.Kind) -> Double? {
-        switch kind {
-        case .fencedCodePiece: return nil
-        case .tablePiece, .verbatimPiece: return 0
-        case .blocks, .blockPiece: break
+    /// Reads a segment's structure from its HTML. cmark renders raw HTML as an omission comment and
+    /// escapes text, so every `<` starts a tag cmark wrote for a block or inline node.
+    static func structure(html: String) -> Structure {
+        var blocks: [(top: Double?, bottom: Double?)] = []
+        var depth = 0
+        // Set after `<li>` until the item's first content shows whether it is a tight paragraph.
+        var itemOpened = false
+        var bytes = Substring(html).utf8[...]
+        func include(_ top: Double?, _ bottom: Double?) {
+            guard var current = blocks.popLast() else { return }
+            current.top = [current.top, top].compactMap { $0 }.max()
+            current.bottom = [current.bottom, bottom].compactMap { $0 }.max()
+            blocks.append(current)
         }
-        let lines = body.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
-        guard let start = lines.firstIndex(where: { !isBlank($0) }) else { return 0 }
-        let first = lines[start]
-        if fenceRun(first) >= 3 { return nil }
-        if isHeading(first) { return 1.5 }
-        if isThematicBreak(first) { return 2 }
-        if start + 1 < lines.count, isSetextUnderline(lines[start + 1]), !"->*+|".contains(first.first ?? "-") {
-            return 1.5
+        while let open = bytes.firstIndex(of: UInt8(ascii: "<")) {
+            let text = bytes[..<open]
+            if itemOpened, text.contains(where: { !" \t\r\n".utf8.contains($0) }) {
+                include(0, 1)
+                itemOpened = false
+            }
+            bytes = bytes[open...]
+            if bytes.starts(with: "<!--".utf8) {
+                // An omitted HTML block or inline HTML: MarkdownUI renders both as a paragraph.
+                if depth == 0 { blocks.append((nil, nil)) }
+                include(0, 1)
+                itemOpened = false
+                let end = Self.end(of: "-->", in: bytes) ?? bytes.endIndex
+                bytes = bytes[end...]
+                continue
+            }
+            let close = bytes.firstIndex(of: UInt8(ascii: ">")).map { bytes.index(after: $0) } ?? bytes.endIndex
+            let tag = Tag(bytes[..<close])
+            bytes = bytes[close...]
+            guard let tag, let kind = BlockKind(tag.name) else {
+                // An inline tag (emphasis, code, a link, an image, a task checkbox) starts item text.
+                if itemOpened, !(tag?.isClosing ?? true) {
+                    include(0, 1)
+                    itemOpened = false
+                }
+                continue
+            }
+            if tag.isClosing {
+                depth = max(0, depth - 1)
+                itemOpened = false
+                continue
+            }
+            if depth == 0 { blocks.append((nil, nil)) }
+            itemOpened = kind == .item
+            let margins = kind.margins
+            include(margins.top, margins.bottom)
+            if kind != .thematicBreak, !tag.isSelfClosing { depth += 1 }
         }
-        return 0
+        return Structure(
+            leadingMargin: blocks.first?.top ?? nil, trailingMargin: blocks.last?.bottom ?? nil,
+            lastLeafIsParagraph: MarkdownSegmentCache.endsInParagraph(html: html))
     }
 
-    static func trailingMargin(of body: String, kind: MarkdownSegment.Kind) -> Double? {
-        switch kind {
-        case .fencedCodePiece: return nil
-        case .tablePiece, .verbatimPiece: return 1
-        case .blocks, .blockPiece: break
+    /// The index just past the first `marker` in `bytes`.
+    private static func end(of marker: String, in bytes: Substring.UTF8View.SubSequence) -> Substring.Index? {
+        var search = bytes
+        while let start = search.firstIndex(of: marker.utf8.first ?? 0) {
+            if search[start...].starts(with: marker.utf8) {
+                return bytes.index(start, offsetBy: marker.utf8.count)
+            }
+            search = search[search.index(after: start)...]
         }
-        let lines = body.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
-        guard let end = lines.lastIndex(where: { !isBlank($0) }) else { return 1 }
-        let last = lines[end]
-        // A column-0 fence ends a top-level code block (an indented one ends a list item).
-        if fenceRun(last) >= 3, isBlank(last.drop(while: { $0 == last.first })) { return nil }
-        // `---` directly under text is a setext heading underline, not a thematic break.
-        if isThematicBreak(last), end == 0 || isBlank(lines[end - 1]) { return 2 }
-        return 1
+        return nil
     }
 
-    private static func isBlank(_ line: Substring) -> Bool { line.allSatisfy(\.isWhitespace) }
+    private enum BlockKind: Equatable {
+        case paragraph, heading, table, thematicBreak, container, item, code
 
-    private static func indentation(_ line: Substring) -> Substring? {
-        let spaces = line.prefix(while: { $0 == " " })
-        return spaces.count <= 3 ? line.dropFirst(spaces.count) : nil
-    }
-
-    /// The length of a column-0 backtick or tilde run.
-    private static func fenceRun(_ line: Substring) -> Int {
-        guard let marker = line.first, marker == "`" || marker == "~" else { return 0 }
-        return line.prefix(while: { $0 == marker }).count
-    }
-
-    private static func isHeading(_ line: Substring) -> Bool {
-        guard let text = indentation(line) else { return false }
-        let hashes = text.prefix(while: { $0 == "#" }).count
-        guard (1...6).contains(hashes) else { return false }
-        let rest = text.dropFirst(hashes)
-        return rest.isEmpty || rest.first == " " || rest.first == "\t"
-    }
-
-    private static func isThematicBreak(_ line: Substring) -> Bool {
-        guard let text = indentation(line) else { return false }
-        let marks = text.filter { $0 != " " && $0 != "\t" && !$0.isNewline }
-        guard let marker = marks.first, "-*_".contains(marker) else { return false }
-        return marks.count >= 3 && marks.allSatisfy { $0 == marker }
-    }
-
-    private static func isSetextUnderline(_ line: Substring) -> Bool {
-        guard let text = indentation(line), let marker = text.first, marker == "=" || marker == "-" else {
-            return false
+        init?(_ name: Substring) {
+            switch name.lowercased() {
+            case "p": self = .paragraph
+            case "h1", "h2", "h3", "h4", "h5", "h6": self = .heading
+            case "table": self = .table
+            case "hr": self = .thematicBreak
+            case "blockquote", "ul", "ol": self = .container
+            case "li": self = .item
+            case "pre": self = .code
+            default: return nil
+            }
         }
-        return isBlank(text.drop(while: { $0 == marker }))
+
+        var margins: (top: Double?, bottom: Double?) {
+            switch self {
+            case .paragraph, .table: return (0, 1)
+            case .heading: return (1.5, 1)
+            case .thematicBreak: return (2, 2)
+            case .container, .item, .code: return (nil, nil)
+            }
+        }
+    }
+
+    private struct Tag {
+        let name: Substring
+        let isClosing: Bool
+        let isSelfClosing: Bool
+
+        init?(_ bytes: Substring.UTF8View.SubSequence) {
+            let text = Substring(bytes)
+            guard text.hasPrefix("<") else { return nil }
+            var body = text.dropFirst()
+            isClosing = body.hasPrefix("/")
+            if isClosing { body = body.dropFirst() }
+            let name = body.prefix { $0.isLetter || $0.isNumber }
+            guard !name.isEmpty else { return nil }
+            self.name = name
+            isSelfClosing = text.hasSuffix("/>")
+        }
     }
 }
 

@@ -195,6 +195,26 @@ extension AppTests.Bleet {
             #expect(complete.segments.map(\.endsInParagraph) == [nil])
         }
 
+        /// #60 A1: a parsed segment's first and last margins are the largest any block inside each
+        /// top-level block sets (nil when none does), read from cmark's structure, not its text.
+        @Test(arguments: [
+            ("Paragraph.", 0, 1, true), ("# Title\n\nText", 1.5, 1, true),
+            ("\(fence)\ncode\n\(fence)", nil, nil, false), ("> \(fence)\n> code\n> \(fence)", nil, nil, false),
+            ("> # Title\n> text", 1.5, 1, true), ("> text\n>\n> > nested", 0, 1, true), ("- a\n- b", 0, 1, true),
+            ("- \(fence)\n  code\n  \(fence)", nil, nil, false), ("---", 2, 2, false), ("Text\n\n---", 0, 2, false),
+            ("| a |\n| - |\n| 1 |", 0, 1, false), ("<div>x</div>", 0, 1, false), ("- [ ] task", 0, 1, true),
+            ("- item\n\n  ---", 2, 2, false), ("Title\n=====", 1.5, 1, false), ("![alt](x.png)", 0, 1, false),
+        ] as [(String, Double?, Double?, Bool)])
+        func parsedStructureGivesMarginsAndTheLastLeaf(
+            source: String, leading: Double?, trailing: Double?, lastLeafIsParagraph: Bool
+        ) {
+            let html = MarkdownContent(GOATMarkdownSyntax.normalized(source, detectsArtifacts: false)).renderHTML()
+            let structure = MarkdownSegmentSpacing.structure(html: html)
+            #expect(structure.leadingMargin == leading, "\(html)")
+            #expect(structure.trailingMargin == trailing, "\(html)")
+            #expect(structure.lastLeafIsParagraph == lastLeafIsParagraph, "\(html)")
+        }
+
         @Test func cacheChargesRenderedBytesAndEvictsWithinBounds() async throws {
             let cache = MarkdownSegmentCache(maximumEntries: 2, maximumCost: 600, maximumEntryCost: 400, targetBytes: 1)
             let reference = "Use [a][x].\n\nThen [a][x] again.\n\n[x]: https://example.com/x\n"
@@ -448,6 +468,46 @@ extension AppTests.Bleet {
             }
         }
 
+        /// #60 A1: margins come from the parsed blocks, reduced over each block's subtree as MarkdownUI
+        /// does, so shapes whose first or last line misleads still space as the whole reply.
+        @Test(arguments: [
+            ["> # Quoted title\n> quoted text", "After the quote."],
+            ["Before.", "> \(fence)\n> code only\n> \(fence)", "After."],
+            ["> outer\n>\n> > nested quote", "A paragraph."],
+            ["- item\n\n  ---\n\n- next item", "A paragraph."],
+            ["# Heading", "- a\n- b", "---", "Text after a break."],
+            ["\(fence)\ncode\n\(fence)", "> quoted", "\(fence)\nmore code\n\(fence)"],
+            ["<div>html block</div>", "Text.", "- [ ] a task", "Setext\n---", "Closing."],
+            ["1. one\n2. two", "| a | b |\n| - | - |\n| 1 | 2 |", "## Section", "- \(fence)\n  code\n  \(fence)"],
+        ])
+        @MainActor func parsedMarginsSpaceShapesAsTheWholeReply(blocks: [String]) async throws {
+            let fontSize = AppModel.shared.chatFontSize
+            let source = blocks.joined(separator: "\n\n")
+            let document = try #require(
+                await MarkdownSegmentCache(targetBytes: 1).prepare(id: UUID(), source: source, isComplete: true))
+            #expect(document.segments.count == blocks.count, "One segment per top-level block")
+            let segmented = try await height(
+                SegmentedMarkdownView(document: document, fontSize: fontSize, isStreaming: false))
+            let whole = try await height(wholeReply(source, fontSize: fontSize))
+            #expect(abs(segmented - whole) < 1, "Segmented \(segmented) pt, whole \(whole) pt")
+        }
+
+        /// Pieces of one oversized block join without a gap. They are not the whole block (a split
+        /// paragraph ends its line early; each code piece has its own chrome), so this checks the gap
+        /// rather than the height.
+        @Test func continuationPiecesJoinWithoutAGap() async throws {
+            let paragraph = String(repeating: "word ", count: 400)
+            let document = try #require(
+                await MarkdownSegmentCache(targetBytes: 256, maximumBytes: 512).prepare(
+                    id: UUID(), source: "Intro.\n\n" + paragraph, isComplete: true))
+            let pieces = document.segments.filter(\.continuesPrevious)
+            #expect(!pieces.isEmpty)
+            for piece in pieces {
+                let previous = document.segments[piece.index - 1]
+                #expect(MarkdownSegmentSpacing.gap(after: previous, before: piece, fontSize: 14) == 0)
+            }
+        }
+
         /// Completion without reflow: a two-segment reply keeps its height when it completes.
         @Test @MainActor func completingASegmentedReplyKeepsItsHeight() async throws {
             let message = ChatMessage(role: .assistant)
@@ -670,12 +730,12 @@ extension AppTests.Bleet {
             }
             let replyBytes = reply.utf8.count
             let total =
-                streaming.parsedBytes + work.scannedBytes + work.copiedBytes + work.comparedBytes + work.caretBytes
+                streaming.parsedBytes + work.scannedBytes + work.copiedBytes + work.comparedBytes + work.htmlBytes
             print(
                 "SEGMENT_PREPARATION shape=\(shape) reply_bytes=\(replyBytes) refreshes=\(work.refreshes) "
                     + "parse_count=\(streaming.parseCount) parsed_bytes=\(streaming.parsedBytes) "
                     + "scanned_bytes=\(work.scannedBytes) copied_bytes=\(work.copiedBytes) "
-                    + "compared_bytes=\(work.comparedBytes) caret_html_bytes=\(work.caretBytes) "
+                    + "compared_bytes=\(work.comparedBytes) html_bytes=\(work.htmlBytes) "
                     + "visited_segments=\(work.visitedSegments) max_visited=\(work.maximumVisitedSegments) "
                     + "definition_visits=\(work.definitionVisits) segments=\(document.segments.count) "
                     + "segmentation_ms=\(millis(work.segmentationTime)) parse_ms=\(millis(work.parseTime)) "
