@@ -818,3 +818,86 @@ extension AppTests.Bleet {
         }
     }
 }
+
+/// Fixed rows in a SwiftUI scroll view with the transcript's default anchors. Clearing
+/// `initialOffsetAnchored` turns the initial-offset anchor off, as the transcript does after its first
+/// placement.
+@MainActor @Observable private final class ScrollLimitationModel {
+    var rows = 200
+    var initialOffsetAnchored = true
+}
+
+private struct ScrollLimitationProbe: View {
+    let model: ScrollLimitationModel
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 0) {
+                ForEach(0..<model.rows, id: \.self) { index in
+                    Text("Row \(index)").frame(maxWidth: .infinity, minHeight: 40, maxHeight: 40)
+                }
+            }
+        }
+        .defaultScrollAnchor(model.initialOffsetAnchored ? .bottom : nil, for: .initialOffset)
+        .defaultScrollAnchor(.bottom, for: .alignment)
+        .defaultScrollAnchor(.top, for: .sizeChanges)
+    }
+}
+
+extension AppTests.Bleet {
+    /// The SwiftUI limitation behind `TranscriptScrollExecutor` and the transcript's one-time initial
+    /// offset (#54 section 2). When the known issue is no longer recorded, revisit both.
+    @Suite(.serialized) struct ScrollPositionLimitationTests {
+        /// Scrolls fixed rows at the bottom to 5000 without a gesture, as a keyboard, scroller or
+        /// AppKit executor move does, then appends one row. Returns where the viewport ends up.
+        @MainActor private func offsetAfterGrowth(initialOffsetAnchoredThroughout: Bool) async throws -> CGFloat {
+            let model = ScrollLimitationModel()
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 400, height: 400), styleMask: [.titled],
+                backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            let host = NSHostingView(rootView: ScrollLimitationProbe(model: model).frame(width: 400, height: 400))
+            window.contentView = host
+            window.orderFront(nil)
+            defer {
+                window.contentView = nil
+                window.close()
+            }
+            func settle() async throws {
+                for _ in 0..<10 {
+                    host.layoutSubtreeIfNeeded()
+                    try await Task.sleep(for: .milliseconds(20))
+                }
+            }
+            try await settle()
+            let scroll = try #require(findTranscriptScroll(host))
+            try #require(scroll.contentView.bounds.minY > 7_000, "The rows start at the bottom")
+            if !initialOffsetAnchoredThroughout {
+                model.initialOffsetAnchored = false
+                try await settle()
+            }
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: 5_000))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            try await settle()
+            try #require(scroll.contentView.bounds.minY == 5_000)
+            model.rows += 1
+            try await settle()
+            return scroll.contentView.bounds.minY
+        }
+
+        /// SwiftUI re-applies the initial bottom offset on a size change after a move without a
+        /// gesture, taking a reader who moved by keyboard or scroller to the bottom.
+        @Test @MainActor func initialOffsetReappliesAfterAMoveWithoutAGesture() async throws {
+            let offset = try await offsetAfterGrowth(initialOffsetAnchoredThroughout: true)
+            withKnownIssue("SwiftUI re-applies .defaultScrollAnchor(_:for: .initialOffset) after a non-gesture move") {
+                #expect(offset == 5_000, "The viewport moved to \(offset) when one row was appended")
+            }
+        }
+
+        /// Turning the initial offset off after the first placement keeps the viewport where it was
+        /// moved, which is why the transcript does.
+        @Test @MainActor func initialOffsetTurnedOffAfterPlacementKeepsTheViewport() async throws {
+            let offset = try await offsetAfterGrowth(initialOffsetAnchoredThroughout: false)
+            #expect(offset == 5_000, "The viewport moved to \(offset) when one row was appended")
+        }
+    }
+}
