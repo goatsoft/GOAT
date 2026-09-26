@@ -36,6 +36,17 @@ private func longReply(bytes: Int) -> String {
     return String(reply.utf8.prefix(bytes)) ?? reply
 }
 
+/// Segment sources with their expected leading and trailing margins and whether the last leaf is a
+/// paragraph (#60 A1).
+private let structureCases: [(String, Double?, Double?, Bool)] = [
+    ("Paragraph.", 0, 1, true), ("# Title\n\nText", 1.5, 1, true),
+    ("\(fence)\ncode\n\(fence)", nil, nil, false), ("> \(fence)\n> code\n> \(fence)", nil, nil, false),
+    ("> # Title\n> text", 1.5, 1, true), ("> text\n>\n> > nested", 0, 1, true), ("- a\n- b", 0, 1, true),
+    ("- \(fence)\n  code\n  \(fence)", nil, nil, false), ("---", 2, 2, false), ("Text\n\n---", 0, 2, false),
+    ("| a |\n| - |\n| 1 |", 0, 1, false), ("<div>x</div>", 0, 1, false), ("- [ ] task", 0, 1, true),
+    ("- item\n\n  ---", 2, 2, false), ("Title\n=====", 1.5, 1, false), ("![alt](x.png)", 0, 1, false),
+]
+
 /// `reply` in appends of about `bytes` UTF-8 bytes, each ending on a scalar boundary.
 private func chunks(of reply: String, bytes step: Int) -> [String] {
     let bytes = Array(reply.utf8)
@@ -197,14 +208,7 @@ extension AppTests.Bleet {
 
         /// #60 A1: a parsed segment's first and last margins are the largest any block inside each
         /// top-level block sets (nil when none does), read from cmark's structure, not its text.
-        @Test(arguments: [
-            ("Paragraph.", 0, 1, true), ("# Title\n\nText", 1.5, 1, true),
-            ("\(fence)\ncode\n\(fence)", nil, nil, false), ("> \(fence)\n> code\n> \(fence)", nil, nil, false),
-            ("> # Title\n> text", 1.5, 1, true), ("> text\n>\n> > nested", 0, 1, true), ("- a\n- b", 0, 1, true),
-            ("- \(fence)\n  code\n  \(fence)", nil, nil, false), ("---", 2, 2, false), ("Text\n\n---", 0, 2, false),
-            ("| a |\n| - |\n| 1 |", 0, 1, false), ("<div>x</div>", 0, 1, false), ("- [ ] task", 0, 1, true),
-            ("- item\n\n  ---", 2, 2, false), ("Title\n=====", 1.5, 1, false), ("![alt](x.png)", 0, 1, false),
-        ] as [(String, Double?, Double?, Bool)])
+        @Test(arguments: structureCases)
         func parsedStructureGivesMarginsAndTheLastLeaf(
             source: String, leading: Double?, trailing: Double?, lastLeafIsParagraph: Bool
         ) {
