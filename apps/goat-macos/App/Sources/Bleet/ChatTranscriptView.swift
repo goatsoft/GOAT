@@ -35,10 +35,12 @@ struct TranscriptSegmentNavigation: Equatable, Sendable {
     var hold: @MainActor @Sendable (_ messageID: UUID, _ window: Range<Int>, _ segmentCount: Int) -> Void = {
         _, _, _ in
     }
-    /// A shown segment's frame in viewport coordinates, or nil when it is no longer laid out.
-    var recordFrame: @MainActor @Sendable (_ messageID: UUID, _ segment: Int, _ frame: CGRect?) -> Void = {
-        _, _, _ in
-    }
+    /// A shown segment's frame in content coordinates, or nil when it is no longer laid out, and the
+    /// window of segments that layout shows.
+    var recordFrame:
+        @MainActor @Sendable (_ messageID: UUID, _ segment: Int, _ frame: CGRect?, _ window: Range<Int>) -> Void = {
+            _, _, _, _ in
+        }
 
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.viewport === rhs.viewport }
 }
@@ -506,7 +508,9 @@ struct ChatTranscriptView: View {
                     hold: { id, window, segmentCount in
                         viewport.holdSegments(of: id, at: window, segmentCount: segmentCount)
                     },
-                    recordFrame: { id, segment, frame in recordFrame(frame, of: id, segment: segment) })
+                    recordFrame: { id, segment, frame, window in
+                        recordFrame(frame, of: id, segment: segment, laidOutIn: window)
+                    })
             )
             // SwiftUI re-applies its initial bottom offset on later size changes until a gesture positions
             // the view, even after the executor or a direct reader move did; it holds only until the first
@@ -686,9 +690,13 @@ struct ChatTranscriptView: View {
         }
     }
 
-    private func recordFrame(_ frame: CGRect?, of id: UUID, segment: Int) {
+    private func recordFrame(_ frame: CGRect?, of id: UUID, segment: Int, laidOutIn window: Range<Int>) {
         reader.segmentFrames[id, default: [:]][segment] = frame
-        if reader.segmentFrames[id]?.isEmpty == true { reader.segmentFrames[id] = nil }
+        if frame != nil { reader.segmentFrameWindows[id] = window }
+        if reader.segmentFrames[id]?.isEmpty == true {
+            reader.segmentFrames[id] = nil
+            reader.segmentFrameWindows[id] = nil
+        }
         if frame != nil, case .anchor(let anchor) = viewport.request?.target, anchor.messageID == id {
             // The awaited segment arrived: run now rather than at the retry.
             cancelFrameWait()
@@ -769,7 +777,7 @@ struct ChatTranscriptView: View {
                 if !Task.isCancelled, let pending = viewport.request, pending != request { executePendingRequest() }
             }
             guard !Task.isCancelled, viewport.request == request, !reader.isScrolling else { return }
-            if reader.shows(request.target) {
+            if reader.shows(request.target, heldWindow: viewport.segmentWindow(for:)) {
                 viewport.note("fulfilled \(request.generation) at \(Int(reader.metrics.offset))")
                 viewport.fulfilled(request)
                 if pagingPhase != .idle { pagingPhase = .idle }
@@ -794,7 +802,10 @@ struct ChatTranscriptView: View {
             case .anchor(let anchor):
                 // Not laid out yet: the row's or segment's first geometry report runs this again, else a
                 // retry does, within the same bound.
-                guard let frame = reader.frame(of: anchor) else { return awaitLayout(request, for: "row") }
+                // A segment's frame counts only once the reply lays out the window the owner holds: right
+                // after paging it is still the previous window's, which the anchor was measured from.
+                guard let frame = reader.frame(of: anchor, heldWindow: viewport.segmentWindow(for: anchor.messageID))
+                else { return awaitLayout(request, for: anchor.segment == nil ? "row" : "segment") }
                 target = frame.minY + anchor.offset
             }
             target = min(max(target, metrics.offset - metrics.topGap), metrics.offset + metrics.bottomGap)
@@ -1011,6 +1022,8 @@ let transcriptContentSpace = "transcript-content"
     /// Frames of the shown segments of windowed long replies in content coordinates, by message and
     /// segment index.
     var segmentFrames: [UUID: [Int: CGRect]] = [:]
+    /// The window of segments each reply's reported frames were laid out in.
+    var segmentFrameWindows: [UUID: Range<Int>] = [:]
     /// The transcript's only scroll writer.
     let executor = TranscriptScrollExecutor()
     var executorTask: Task<Void, Never>?
@@ -1029,9 +1042,12 @@ let transcriptContentSpace = "transcript-content"
         segmentFrames[id]?[segment].map { metrics.offset - $0.minY }
     }
 
-    /// The frame an anchor is measured from: its segment's when it names one, else its row's.
-    func frame(of anchor: TranscriptViewport.Anchor) -> CGRect? {
+    /// The frame an anchor is measured from: its segment's when it names one, else its row's. A
+    /// segment's frame is used only when laid out in `heldWindow`, the window the owner holds for the
+    /// reply, if any.
+    func frame(of anchor: TranscriptViewport.Anchor, heldWindow: Range<Int>?) -> CGRect? {
         guard let segment = anchor.segment else { return rowFrames[anchor.messageID] }
+        if let heldWindow, segmentFrameWindows[anchor.messageID] != heldWindow { return nil }
         return segmentFrames[anchor.messageID]?[segment]
     }
 
@@ -1050,12 +1066,13 @@ let transcriptContentSpace = "transcript-content"
 
     /// Whether the viewport already shows `target`: the anchor's top within 1 pt of its offset, or
     /// scrolled as far as the content allows toward it.
-    func shows(_ target: TranscriptViewport.Target) -> Bool {
+    /// A segment anchor is never acknowledged against a window other than the one the owner holds.
+    func shows(_ target: TranscriptViewport.Target, heldWindow: (UUID) -> Range<Int>?) -> Bool {
         switch target {
         case .bottom:
             return metrics.distanceFromBottom <= 1
         case .anchor(let anchor):
-            guard let frame = frame(of: anchor) else { return false }
+            guard let frame = frame(of: anchor, heldWindow: heldWindow(anchor.messageID)) else { return false }
             let error = frame.minY - metrics.offset + anchor.offset
             if abs(error) <= 1 { return true }
             // The target lies past an end of the scrollable range: the nearest end is fulfilment.
