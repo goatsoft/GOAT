@@ -56,7 +56,17 @@ the window's segments (and two on each side) keep their parses. The message
 window charges a prepared response the bytes of its shown segments, including
 repeated reference definitions.
 
-A response above 2 MiB, and expanded reasoning above 8 KiB, is presented as
+Reasoning shown in full is windowed the same way through 2 MiB: its fence-aware
+blocks are split at line boundaries into segments of at most 6 KiB, and a window
+of at most 32 segments and 16 KiB is laid out, paged under its own key. It is
+prepared off the main actor from a 120 ms sample of its text revision. While the
+revision only appends, the held segmentation lexes each appended character once,
+including within one long unfinished line, and a refresh copies at most one open
+piece and one chunk of segments, so total work grows linearly with the reasoning
+(`streamingPreparationWorkGrowsLinearly` checks completed lines, unbroken prose,
+one long code line and long fence info through 2 MiB).
+
+A response or expanded reasoning above 2 MiB is presented as
 selectable plain-text parts, prepared off the main actor. Earlier text and Later
 text navigate those parts; Latest text follows the newest part. Choosing an
 older part holds that choice as output arrives. Copy retains the full original

@@ -210,8 +210,30 @@ segment rather than per message. Deliver it in three reviewable steps:
      segments is not the true bottom.
    - **Above the limit.** Longer replies keep bounded selectable text parts with full-source copy.
      Until the parts are prepared the reply shows its last 8 KiB of text instead of a placeholder;
-     the final part can be shorter, so the text can reflow once when the parts arrive. Expanded
-     reasoning keeps its 8 KiB parts fallback until it is windowed the same way.
+     the final part can be shorter, so the text can reflow once when the parts arrive.
+   - **Expanded reasoning.** Reasoning shown in full is windowed the same way through 2 MiB, and
+     its 8 KiB parts fallback is removed. Reasoning is not Markdown: its fence-aware blocks (muted
+     prose, plain highlighted code without code-block chrome) are split at line boundaries into
+     segments of at most 6 KiB, pieces of one block joining without a gap, and a line longer than
+     that at scalar boundaries. A window of at most 32 segments and 16 KiB is laid out, and the
+     navigation owner pages it under a key derived from the message ID, so reasoning and answer are
+     held, counted and cleared independently and the reader's measured anchor can be a reasoning
+     segment. Preparation happens off the main actor, sampled every 120 ms while the reply streams
+     and keyed by the reasoning's text revision. Like answers, streaming reasoning extends a held
+     segmentation (`ThinkingSegmentation`) while its revision only appends. It lexes each appended
+     character once (the source's last character is lexed on a copy, since it can still combine):
+     fence syntax is recognised as characters arrive, and a line's text is split into parts as it
+     grows, so a long unfinished line (unbroken prose, one long code line, long fence info) is never
+     lexed again. Only the last non-blank line stays open, because trailing blank lines are trimmed.
+     Segments are kept in fixed-size chunks, so a refresh copies at most one open piece and one chunk.
+     The result equals preparing the whole text; an edit or trim starts again. At most four streams
+     are held. Past 4,096 blocks the rest of the reasoning is one prose block, which bounds
+     pathological fences without re-reading earlier text. Segments keep a fence's language as its
+     first word, at most 32 characters, and `PreparedThinkingCache` charges each segment's text,
+     language and storage under its own budget (one entry through the rich limit, 8 MiB in all). The
+     message window charges expanded reasoning at most one reply window. The bounded
+     excerpt shown while reasoning streams is unchanged. Reasoning above 2 MiB keeps bounded text
+     parts; the disclosure's copy action copies all of it.
 
 **Acceptance per step.** Tests for boundary crossings while streaming, oversized fences, tables and
 paragraphs, completion without reflow, paging reachability, anchor preservation, and parse work

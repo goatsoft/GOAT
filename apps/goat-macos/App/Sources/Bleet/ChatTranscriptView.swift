@@ -49,6 +49,22 @@ extension EnvironmentValues {
     @Entry var transcriptSegments = TranscriptSegmentNavigation()
 }
 
+/// The keys long text pages under with the navigation owner (#60 A1). A reply's answer uses its
+/// message ID; its expanded reasoning pages independently under a key derived from that ID.
+enum TranscriptSegmentOwner {
+    /// The key a message's expanded reasoning pages under. Applying it twice gives the message ID back.
+    static func reasoning(of messageID: UUID) -> UUID {
+        var bytes = messageID.uuid
+        bytes.15 ^= 0xA5
+        return UUID(uuid: bytes)
+    }
+
+    /// Whether `key` is the message itself or its reasoning.
+    static func key(_ key: UUID, belongsTo messageID: UUID) -> Bool {
+        key == messageID || key == reasoning(of: messageID)
+    }
+}
+
 private enum TranscriptPagingPhase: Equatable, Sendable {
     case idle
     case pagingEarlier
@@ -541,8 +557,7 @@ struct ChatTranscriptView: View {
                     guard readerFinishedScrolling else { return }
                     viewport.note("gesture settled at \(Int(reader.metrics.offset))")
                     // A last reply held on earlier segments is not the conversation's end.
-                    let holdsLastReply =
-                        session.messages.last.map { viewport.holdsEarlierSegments(of: $0.id) } ?? false
+                    let holdsLastReply = session.messages.last.map { holdsEarlierSegments(of: $0) } ?? false
                     viewport.readerSettled(
                         atTrueBottom: messageRange.upperBound == session.messages.count && reader.isAtBottom
                             && !holdsLastReply,
@@ -595,7 +610,7 @@ struct ChatTranscriptView: View {
 
     private var anchorIndex: Int? {
         viewport.anchor.flatMap { anchor in
-            session.messages.firstIndex(where: { $0.id == anchor.messageID })
+            session.messages.firstIndex(where: { TranscriptSegmentOwner.key(anchor.messageID, belongsTo: $0.id) })
         }
     }
 
@@ -656,6 +671,14 @@ struct ChatTranscriptView: View {
             return
         }
         viewport.restore(TranscriptViewport.Anchor(messageID: id, offset: id == kept ? keptOffset ?? 0 : 0))
+    }
+
+    /// Whether the reader holds `message` short of its end: its answer, or its reasoning while no
+    /// answer follows it.
+    private func holdsEarlierSegments(of message: ChatMessage) -> Bool {
+        if viewport.holdsEarlierSegments(of: message.id) { return true }
+        guard message.textRevision.utf8Count == 0 else { return false }
+        return viewport.holdsEarlierSegments(of: TranscriptSegmentOwner.reasoning(of: message.id))
     }
 
     /// Moves a long reply's segment window, keeping segment `kept` where the reader sees it.
@@ -1061,14 +1084,23 @@ let transcriptContentSpace = "transcript-content"
     }
 
     /// The reader's position: the topmost row still visible, and how far into it the viewport starts.
-    /// In a windowed long reply, the topmost segment still visible.
+    /// In a windowed long reply or expanded reasoning, the topmost segment still visible.
     func measuredAnchor() -> TranscriptViewport.Anchor? {
         let top = metrics.offset
         guard
             let row = rowFrames.filter({ $0.value.maxY > top }).min(by: { $0.value.minY < $1.value.minY })
         else { return nil }
-        if let segment = segmentFrames[row.key]?.filter({ $0.value.maxY > top }).min(by: { $0.key < $1.key }) {
-            return TranscriptViewport.Anchor(messageID: row.key, offset: top - segment.value.minY, segment: segment.key)
+        var topmost: (key: UUID, segment: Int, frame: CGRect)?
+        for key in [row.key, TranscriptSegmentOwner.reasoning(of: row.key)] {
+            for (segment, frame) in segmentFrames[key] ?? [:] where frame.maxY > top {
+                if topmost.map({ frame.minY < $0.frame.minY }) ?? true {
+                    topmost = (key: key, segment: segment, frame: frame)
+                }
+            }
+        }
+        if let topmost {
+            return TranscriptViewport.Anchor(
+                messageID: topmost.key, offset: top - topmost.frame.minY, segment: topmost.segment)
         }
         return TranscriptViewport.Anchor(messageID: row.key, offset: top - row.value.minY)
     }
