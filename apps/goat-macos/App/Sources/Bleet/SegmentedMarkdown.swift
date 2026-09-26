@@ -436,12 +436,26 @@ struct SegmentedMarkdownView: View {
             ForEach(document.segments, id: \.index) { segment in
                 MarkdownSegmentView(
                     segment: segment, fontSize: fontSize, isStreaming: isStreaming,
-                    isTail: isStreaming && segment.index == document.segments.count - 1
+                    isTail: isStreaming && segment.index == document.segments.count - 1,
+                    codeSegment: Self.codeSegment(of: segment.index, in: document.segments)
                 )
                 .equatable()
                 .padding(.top, gap(before: segment))
             }
         }
+    }
+
+    /// The segment code-block choices are kept by: a piece of an oversized fence uses the fence's
+    /// first piece, so a choice applies to the whole fence.
+    static func codeSegment<Segments: RandomAccessCollection>(of index: Int, in segments: Segments) -> Int
+    where Segments.Element == PreparedMarkdownSegment, Segments.Index == Int {
+        var index = index
+        while index > 0, index < segments.count, segments[index].kind == .fencedCodePiece,
+            segments[index].continuesPrevious, segments[index - 1].kind == .fencedCodePiece
+        {
+            index -= 1
+        }
+        return index
     }
 
     private func gap(before segment: PreparedMarkdownSegment) -> CGFloat? {
@@ -457,12 +471,14 @@ private struct MarkdownSegmentView: View, Equatable {
     let fontSize: CGFloat
     let isStreaming: Bool
     let isTail: Bool
+    let codeSegment: Int
     @Environment(AppModel.self) private var model
+    @Environment(\.codeBlockMessageID) private var messageID
 
     nonisolated static func == (lhs: MarkdownSegmentView, rhs: MarkdownSegmentView) -> Bool {
         lhs.segment.preparationID == rhs.segment.preparationID
             && lhs.segment.endsInParagraph == rhs.segment.endsInParagraph && lhs.fontSize == rhs.fontSize
-            && lhs.isStreaming == rhs.isStreaming && lhs.isTail == rhs.isTail
+            && lhs.isStreaming == rhs.isStreaming && lhs.isTail == rhs.isTail && lhs.codeSegment == rhs.codeSegment
     }
 
     var body: some View {
@@ -474,6 +490,13 @@ private struct MarkdownSegmentView: View, Equatable {
                 .markdownInlineImageProvider(BlockedMarkdownInlineImageProvider())
                 .goatMarkdownStyle(fontSize: fontSize, isStreaming: isStreaming)
                 .textSelection(.enabled)
+                .environment(
+                    \.codeBlockScope,
+                    messageID.map {
+                        CodeBlockScope(
+                            messageID: $0, segment: codeSegment, content: content,
+                            preparationID: segment.preparationID, isFencePiece: segment.kind == .fencedCodePiece)
+                    })
                 // Text layouts arrive in view order, so when the segment ends in a paragraph the last
                 // one is that paragraph's, wherever its text also appears earlier.
                 .overlayPreferenceValue(Text.LayoutKey.self) { layouts in

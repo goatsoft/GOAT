@@ -250,6 +250,7 @@ struct StreamingMarkdownView: View {
                     onPrepared: { message.markRenderChanged() })
             } else if let document {
                 SegmentedMarkdownView(document: document, fontSize: model.chatFontSize, isStreaming: !message.complete)
+                    .environment(\.codeBlockMessageID, message.id)
             } else {
                 // Never flash raw Markdown while a saved reply is being prepared off the main actor.
                 Label("Formatting response…", systemImage: "text.badge.checkmark")

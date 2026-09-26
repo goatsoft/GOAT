@@ -61,9 +61,104 @@ struct FenceInfo: Equatable, Sendable {
     }
 }
 
-/// The reader's per-block choices (word wrap, expansion), kept for the session so a block that
-/// SwiftUI recreates keeps them (#60 A6). A block is identified by its language and first bytes,
-/// which stay the same while it streams. Bounded; the oldest are dropped.
+/// Where a code block is rendered: a segment of a reply. The reader's choices for a block are kept
+/// by `CodeBlockIdentity`, which stays the same while the block streams and differs between blocks
+/// (#60 A6). Blocks rendered without a scope (user messages, previews) keep their choices only while
+/// their view lives.
+struct CodeBlockScope: Equatable, Sendable {
+    let messageID: UUID
+    /// The segment, or for a piece of an oversized fence the fence's first piece, so a choice applies
+    /// to the whole fence.
+    let segment: Int
+    /// The segment's parse, whose code blocks give each block's position.
+    let content: PreparedMarkdownContent
+    let preparationID: UInt64
+    /// A piece of an oversized fence holds exactly one block.
+    let isFencePiece: Bool
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.messageID == rhs.messageID && lhs.segment == rhs.segment && lhs.preparationID == rhs.preparationID
+            && lhs.isFencePiece == rhs.isFencePiece
+    }
+}
+
+/// A code block's message, segment and position among the segment's code blocks. The blocks before
+/// a streaming block are settled, so its position does not change as it grows. Identical blocks in
+/// one segment share a position, and so a choice.
+struct CodeBlockIdentity: Hashable, Sendable {
+    let messageID: UUID
+    let segment: Int
+    let position: Int
+}
+
+extension EnvironmentValues {
+    @Entry var codeBlockScope: CodeBlockScope? = nil
+    /// The reply whose segments render below, for their code blocks' scope.
+    @Entry var codeBlockMessageID: UUID? = nil
+}
+
+/// The code blocks of each parsed segment, in order, read once per preparation from the parse's HTML
+/// (the same literal MarkdownUI gives a code block). Bounded; cleared when full.
+@MainActor final class CodeBlockPositions {
+    static let shared = CodeBlockPositions()
+
+    private struct Key: Hashable {
+        let messageID: UUID
+        let segment: Int
+        let preparationID: UInt64
+    }
+
+    let limit: Int
+    private var blocks: [Key: [String]] = [:]
+
+    init(limit: Int = 256) {
+        self.limit = max(1, limit)
+    }
+
+    func identity(of code: String, in scope: CodeBlockScope) -> CodeBlockIdentity? {
+        if scope.isFencePiece {
+            return CodeBlockIdentity(messageID: scope.messageID, segment: scope.segment, position: 0)
+        }
+        let key = Key(messageID: scope.messageID, segment: scope.segment, preparationID: scope.preparationID)
+        let list: [String]
+        if let cached = blocks[key] {
+            list = cached
+        } else {
+            list = Self.codeBlocks(html: scope.content.value.renderHTML())
+            if blocks.count >= limit { blocks.removeAll() }
+            blocks[key] = list
+        }
+        // MarkdownUI may drop the literal's final newline; match either way.
+        func trimmed(_ text: some StringProtocol) -> Substring {
+            text[...].dropLast(text.reversed().prefix(while: { $0 == "\n" }).count)
+        }
+        guard
+            let position = list.firstIndex(of: code)
+                ?? list.firstIndex(where: { trimmed($0) == trimmed(code) })
+        else { return nil }
+        return CodeBlockIdentity(messageID: scope.messageID, segment: scope.segment, position: position)
+    }
+
+    /// The literal of every `<pre><code>` element, in order. cmark escapes `&`, `<`, `>` and `"`.
+    nonisolated static func codeBlocks(html: String) -> [String] {
+        var result: [String] = []
+        var rest = html[...]
+        while let open = rest.range(of: "<pre><code") {
+            guard let start = rest[open.upperBound...].firstIndex(of: ">"),
+                let close = rest[start...].range(of: "</code></pre>")
+            else { break }
+            let escaped = rest[rest.index(after: start)..<close.lowerBound]
+            result.append(
+                escaped.replacingOccurrences(of: "&lt;", with: "<").replacingOccurrences(of: "&gt;", with: ">")
+                    .replacingOccurrences(of: "&quot;", with: "\"").replacingOccurrences(of: "&amp;", with: "&"))
+            rest = rest[close.upperBound...]
+        }
+        return result
+    }
+}
+
+/// The reader's per-block choices (word wrap, expansion), kept for the session by block identity so a
+/// block that SwiftUI recreates keeps them (#60 A6). Bounded; the oldest are dropped.
 @MainActor final class CodeBlockStateStore {
     static let shared = CodeBlockStateStore()
 
@@ -73,21 +168,17 @@ struct FenceInfo: Equatable, Sendable {
     }
 
     let limit: Int
-    private var states: [String: State] = [:]
-    private var order: [String] = []
+    private var states: [CodeBlockIdentity: State] = [:]
+    private var order: [CodeBlockIdentity] = []
 
     init(limit: Int = 512) {
         self.limit = max(1, limit)
     }
 
-    static func key(language: String?, code: String) -> String {
-        (language ?? "") + "\u{1}" + (String(code.utf8.prefix(256)) ?? String(code.prefix(64)))
-    }
+    func state(for identity: CodeBlockIdentity) -> State { states[identity] ?? State() }
 
-    func state(for key: String) -> State { states[key] ?? State() }
-
-    func set(_ state: State, for key: String) {
-        if states.updateValue(state, forKey: key) == nil { order.append(key) }
+    func set(_ state: State, for identity: CodeBlockIdentity) {
+        if states.updateValue(state, forKey: identity) == nil { order.append(identity) }
         while order.count > limit { states[order.removeFirst()] = nil }
     }
 }
@@ -113,15 +204,20 @@ struct CodeBlockView: View {
     private var info: FenceInfo { FenceInfo(configuration.language) }
     private var code: String { configuration.content }
     private var kind: PaddockArtifact.Kind { PaddockArtifact.kind(forFenceLanguage: info.language) }
-    private var stateKey: String { CodeBlockStateStore.key(language: info.language, code: code) }
-    private var state: CodeBlockStateStore.State { blockState ?? CodeBlockStateStore.shared.state(for: stateKey) }
+    @Environment(\.codeBlockScope) private var scope
+    private var identity: CodeBlockIdentity? {
+        scope.flatMap { CodeBlockPositions.shared.identity(of: code, in: $0) }
+    }
+    private var state: CodeBlockStateStore.State {
+        blockState ?? identity.map(CodeBlockStateStore.shared.state(for:)) ?? CodeBlockStateStore.State()
+    }
     private var wordWrap: Bool { state.wordWrap ?? model.codeWordWrap }
 
     private func update(_ change: (inout CodeBlockStateStore.State) -> Void) {
         var next = state
         change(&next)
         blockState = next
-        CodeBlockStateStore.shared.set(next, for: stateKey)
+        if let identity { CodeBlockStateStore.shared.set(next, for: identity) }
     }
 
     var body: some View {

@@ -327,9 +327,11 @@ extension AppTests.Bleet {
             #expect(CodeBlockView.prefix(of: "short\n", lines: 40) == "short\n")
         }
 
-        @MainActor private func height(_ source: String) async throws -> CGFloat {
+        @MainActor private func height(_ source: String, scope: CodeBlockScope? = nil) async throws -> CGFloat {
+            let content = scope?.content.value ?? MarkdownContent(source)
             let host = NSHostingView(
-                rootView: Markdown(MarkdownContent(source)).goatMarkdownStyle(fontSize: 14)
+                rootView: Markdown(content).goatMarkdownStyle(fontSize: 14)
+                    .environment(\.codeBlockScope, scope)
                     .frame(width: 600).environment(AppModel.shared))
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled], backing: .buffered,
@@ -358,23 +360,107 @@ extension AppTests.Bleet {
             // The collapsed block is the 40-line block plus one action row.
             #expect(collapsed > exactlyAtLimit && collapsed < exactlyAtLimit + 40, "\(collapsed) vs \(exactlyAtLimit)")
 
-            let key = CodeBlockStateStore.key(language: "swift", code: lines.joined(separator: "\n") + "\n")
-            CodeBlockStateStore.shared.set(.init(wordWrap: nil, isExpanded: true), for: key)
-            let expanded = try await height(source)
+            let scope = Self.scope(source)
+            let identity = try #require(
+                CodeBlockPositions.shared.identity(of: lines.joined(separator: "\n") + "\n", in: scope))
+            CodeBlockStateStore.shared.set(.init(wordWrap: nil, isExpanded: true), for: identity)
+            let expanded = try await height(source, scope: scope)
             #expect(expanded > collapsed + 200, "The remembered expansion shows every line: \(expanded)")
+        }
+
+        private static func scope(_ source: String, messageID: UUID = UUID()) -> CodeBlockScope {
+            CodeBlockScope(
+                messageID: messageID, segment: 0, content: PreparedMarkdownContent(value: MarkdownContent(source)),
+                preparationID: 1, isFencePiece: false)
+        }
+
+        /// Review of #75: a choice made while a block is shorter than any prefix key survives the block
+        /// growing and being recreated, because its identity is its position, not its text.
+        @Test @MainActor func aChoiceMadeEarlyInAStreamingBlockSurvivesItsGrowth() async throws {
+            let fence = "```"
+            let messageID = UUID()
+            let cache = MarkdownSegmentCache()
+            let opening = "Intro.\n\n\(fence)swift\nlet a = 1\n"
+            let early = try #require(await cache.prepare(id: messageID, source: opening, isComplete: false))
+            let body = (0..<40).map { "let v\($0) = \($0)" }.joined(separator: "\n") + "\n"
+            let grown = opening + body + "\(fence)\n\nDone."
+            let later = try #require(await cache.prepare(id: messageID, source: grown, isComplete: true))
+            func identity(_ document: PreparedMarkdownDocument, _ code: String) throws -> CodeBlockIdentity? {
+                let segment = try #require(document.segments.first { $0.text.contains("let a = 1") })
+                guard case .parsed(let content) = segment.preparation else { return nil }
+                let scope = CodeBlockScope(
+                    messageID: messageID, segment: segment.index, content: content,
+                    preparationID: segment.preparationID, isFencePiece: false)
+                return CodeBlockPositions.shared.identity(of: code, in: scope)
+            }
+            let before = try #require(try identity(early, "let a = 1\n"))
+            CodeBlockStateStore.shared.set(.init(wordWrap: true, isExpanded: true), for: before)
+            let after = try #require(try identity(later, "let a = 1\n" + body))
+            #expect(after == before)
+            #expect(CodeBlockStateStore.shared.state(for: after) == .init(wordWrap: true, isExpanded: true))
+        }
+
+        /// Blocks that share a long opening (a license header) keep independent choices within a reply and
+        /// across replies.
+        @Test @MainActor func blocksWithEqualOpeningsKeepIndependentChoices() throws {
+            let fence = "```"
+            let header = (0..<12).map { "// Licensed under the Example License, line \($0) of the header." }
+                .joined(separator: "\n")
+            #expect(header.utf8.count > 256)
+            let first = header + "\nlet first = 1\n"
+            let second = header + "\nlet second = 2\n"
+            let source = "\(fence)swift\n\(first)\(fence)\n\nBetween.\n\n\(fence)swift\n\(second)\(fence)\n"
+            let scope = Self.scope(source)
+            let one = try #require(CodeBlockPositions.shared.identity(of: first, in: scope))
+            let two = try #require(CodeBlockPositions.shared.identity(of: second, in: scope))
+            #expect(one != two && one.position == 0 && two.position == 1)
+            let elsewhere = try #require(CodeBlockPositions.shared.identity(of: first, in: Self.scope(source)))
+            #expect(elsewhere != one, "Another reply's equal block has its own identity")
+
+            let store = CodeBlockStateStore()
+            store.set(.init(wordWrap: true), for: one)
+            #expect(store.state(for: two) == CodeBlockStateStore.State())
+            #expect(store.state(for: elsewhere) == CodeBlockStateStore.State())
+        }
+
+        /// Every piece of an oversized fence keeps its choices by the fence's first piece.
+        @Test @MainActor func piecesOfAnOversizedFenceShareTheirFirstPiecesIdentity() async throws {
+            let fence = "```"
+            let code = (0..<400).map { "let value\($0) = \($0)" }.joined(separator: "\n")
+            let source = "Before.\n\n\(fence)swift\n\(code)\n\(fence)\n\nAfter."
+            let cache = MarkdownSegmentCache(targetBytes: 256, maximumBytes: 1_024)
+            let document = try #require(await cache.prepare(id: UUID(), source: source, isComplete: true))
+            let pieces = document.segments.filter { $0.kind == .fencedCodePiece }.map(\.index)
+            #expect(pieces.count > 3)
+            let first = try #require(pieces.first)
+            for piece in pieces {
+                #expect(SegmentedMarkdownView.codeSegment(of: piece, in: document.segments) == first)
+            }
+            let after = try #require(document.segments.last?.index)
+            #expect(SegmentedMarkdownView.codeSegment(of: after, in: document.segments) == after)
+        }
+
+        @Test func codeBlockLiteralsAreReadFromTheParse() {
+            let escaped = "if a &lt; b &amp;&amp; c { print(&quot;&gt;&quot;) }\n"
+            let html =
+                "<p>x</p>\n<pre><code class=\"language-swift\">\(escaped)</code></pre>\n"
+                + "<pre><code>plain\n</code></pre>\n"
+            #expect(CodeBlockPositions.codeBlocks(html: html) == ["if a < b && c { print(\">\") }\n", "plain\n"])
         }
 
         @Test @MainActor func choicesAreBoundedAndDefaultToTheGlobalWrap() {
             let store = CodeBlockStateStore(limit: 2)
-            #expect(store.state(for: "a") == CodeBlockStateStore.State())
-            #expect(store.state(for: "a").wordWrap == nil, "Without a choice the global preference applies")
-            store.set(.init(wordWrap: true), for: "a")
-            store.set(.init(isExpanded: true), for: "b")
-            store.set(.init(isExpanded: true), for: "c")
-            #expect(store.state(for: "a") == CodeBlockStateStore.State())
-            #expect(store.state(for: "c").isExpanded)
-            let swift = CodeBlockStateStore.key(language: "swift", code: "abc")
-            #expect(swift != CodeBlockStateStore.key(language: "py", code: "abc"))
+            let message = UUID()
+            let a = CodeBlockIdentity(messageID: message, segment: 0, position: 0)
+            let b = CodeBlockIdentity(messageID: message, segment: 0, position: 1)
+            let c = CodeBlockIdentity(messageID: message, segment: 0, position: 2)
+            #expect(store.state(for: a) == CodeBlockStateStore.State())
+            #expect(store.state(for: a).wordWrap == nil, "Without a choice the global preference applies")
+            store.set(.init(wordWrap: true), for: a)
+            store.set(.init(isExpanded: true), for: b)
+            store.set(.init(isExpanded: true), for: c)
+            #expect(store.state(for: a) == CodeBlockStateStore.State())
+            #expect(store.state(for: c).isExpanded)
         }
     }
 }
