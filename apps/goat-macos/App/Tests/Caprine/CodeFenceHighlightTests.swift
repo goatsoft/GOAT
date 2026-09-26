@@ -246,6 +246,32 @@ extension AppTests.Caprine {
             }
         }
 
+        /// Independent WCAG 2.1 reference values, so the shared utilities are never checked only against
+        /// themselves: #767676 is the lightest grey that passes AA on white, #777777 just misses.
+        @Test func contrastMatchesWCAGReferenceValuesAtTheAABoundary() {
+            let passing = SyntaxPalette.contrast(0x767676, 0xFFFFFF)
+            let failing = SyntaxPalette.contrast(0x777777, 0xFFFFFF)
+            #expect(abs(passing - 4.542) < 0.01 && passing >= SyntaxPalette.minimumContrast)
+            #expect(abs(failing - 4.478) < 0.01 && failing < SyntaxPalette.minimumContrast)
+            #expect(abs(SyntaxPalette.contrast(0x000000, 0xFFFFFF) - 21) < 0.01)
+            // A colour already at AA is kept; one just below it moves one step toward the ink.
+            let white = SyntaxPalette.value(0xFFFFFF)
+            #expect(SyntaxPalette.readable(0x767676, on: white, toward: 0x000000) == 0x767676)
+            #expect(SyntaxPalette.readable(0x777777, on: white, toward: 0x000000) == 0x6B6B6B)
+        }
+
+        /// Moving toward the ink reaches AA only when the ink does: with a low-contrast custom ink, a
+        /// colour that never reaches 4.5:1 ends at the ink, as readable as the theme's own text.
+        @Test func lowContrastCustomInkEndsAtTheInk() {
+            var theme = ThemeCatalog.light
+            theme.bg = "#808080"
+            theme.ink = "#909090"
+            theme.accent = "#858585"
+            #expect(SyntaxPalette.contrast(0x909090, 0x808080) < SyntaxPalette.minimumContrast)
+            let palette = SyntaxPalette(theme: theme)
+            #expect(palette.keyword == 0x909090)
+        }
+
         /// Themes highlight the same code in their own colours.
         @Test func themesHighlightCodeInTheirOwnColours() async throws {
             let light = SyntaxPalette(theme: try Self.theme("light"))

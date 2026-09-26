@@ -109,7 +109,9 @@ and dark schemes to syntax tokens, so every theme shared Xcode's colours.
   types and titles from the tint, and plain text from the ink. Diff additions and deletions use the
   semantic success and danger tokens.
 - Each colour moves toward the theme's ink until it reaches 4.5:1 contrast on the theme's
-  background (DESIGN.md §10). A colour that already does is used unchanged.
+  background (DESIGN.md §10), measured with OKLabColorPicker's shared WCAG utilities (ADR-0098).
+  A colour that already does is used unchanged. This guarantees AA only when the ink itself reaches
+  4.5:1; with a lower-contrast custom ink, a colour that never reaches it ends at the ink.
 - The window root provides the palette as an environment value from the active theme, so System
   follows its light or dark theme. Views outside a themed window keep the Xcode palette.
 - The palette's colours are part of every highlight cache key (the shared highlight cache, prepared

@@ -2,12 +2,15 @@ import AppKit
 import Caprine
 import Foundation
 import HighlightKit
+import OKLabColorPicker
 import SwiftUI
 
 /// Syntax colours derived from the active Caprine theme (#60 A5): keywords take the accent, strings
 /// the second accent, numbers and literals the glow, comments the muted ink, types and titles the tint,
 /// and plain code keeps the environment's ink. Each colour is moved toward the theme's ink until it
-/// reaches 4.5:1 contrast on the theme background, so every theme keeps AA-readable code.
+/// reaches 4.5:1 contrast on the theme background, using the shared WCAG utilities (ADR-0098). That
+/// guarantees AA-readable code only when the ink itself reaches 4.5:1; with a lower-contrast custom ink
+/// the colour ends at the ink, which is as readable as the theme's own text.
 ///
 /// The stored colours are everything that changes highlighted output, so equal palettes render
 /// identically and the highlight cache keys on them.
@@ -21,8 +24,9 @@ struct SyntaxPalette: Hashable, Sendable {
     static let minimumContrast = 4.5
 
     init(theme: ThemeSpec) {
-        let background = Self.rgb(theme.bg) ?? 0x000000
-        let ink = Self.rgb(theme.ink) ?? (Self.luminance(background) < 0.5 ? 0xFFFFFF : 0x000000)
+        // The background is converted once per palette, not inside the mixing loop.
+        let background = Self.value(Self.rgb(theme.bg) ?? 0x000000)
+        let ink = Self.rgb(theme.ink) ?? (background.relativeLuminance < 0.5 ? 0xFFFFFF : 0x000000)
         func readable(_ hex: String) -> UInt32 {
             Self.readable(Self.rgb(hex) ?? ink, on: background, toward: ink)
         }
@@ -75,24 +79,23 @@ struct SyntaxPalette: Hashable, Sendable {
             blue: CGFloat(rgb & 0xFF) / 255, alpha: 1)
     }
 
-    /// WCAG relative luminance of an sRGB colour.
-    static func luminance(_ rgb: UInt32) -> Double {
-        func channel(_ value: UInt32) -> Double {
-            let c = Double(value & 0xFF) / 255
-            return c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
-        }
-        return 0.2126 * channel(rgb >> 16) + 0.7152 * channel(rgb >> 8) + 0.0722 * channel(rgb)
+    /// An 8-bit sRGB colour as the shared colour value, for its WCAG utilities.
+    static func value(_ rgb: UInt32) -> OKLabColorValue {
+        OKLabColorValue.from(
+            srgbRed: Double((rgb >> 16) & 0xFF) / 255, green: Double((rgb >> 8) & 0xFF) / 255,
+            blue: Double(rgb & 0xFF) / 255)
     }
 
+    /// WCAG 2.1 contrast ratio of two sRGB colours.
     static func contrast(_ a: UInt32, _ b: UInt32) -> Double {
-        let (x, y) = (luminance(a), luminance(b))
-        return (max(x, y) + 0.05) / (min(x, y) + 0.05)
+        value(a).contrastRatio(with: value(b))
     }
 
-    /// `rgb`, or the least mix of it toward `ink` that reaches the minimum contrast on `background`.
-    static func readable(_ rgb: UInt32, on background: UInt32, toward ink: UInt32) -> UInt32 {
+    /// `rgb`, or the least mix of it toward `ink` that reaches the minimum contrast on `background`;
+    /// `ink` itself when no mix does.
+    static func readable(_ rgb: UInt32, on background: OKLabColorValue, toward ink: UInt32) -> UInt32 {
         var mixed = rgb
-        for step in 1...10 where contrast(mixed, background) < minimumContrast {
+        for step in 1...10 where value(mixed).contrastRatio(with: background) < minimumContrast {
             let t = Double(step) / 10
             func blend(_ shift: UInt32) -> UInt32 {
                 let from = Double((rgb >> shift) & 0xFF)
