@@ -554,7 +554,7 @@ struct ChatTranscriptView: View {
             if metrics.contentHeight != previous.contentHeight || metrics.width != previous.width {
                 // Content grew or reflowed: follow it, or put the reader's anchor back.
                 viewport.contentChanged()
-            } else if metrics.offset != previous.offset, !reader.executorScrolled {
+            } else if metrics.offset != previous.offset, !reader.executorReached(metrics.offset) {
                 // The keyboard, a scroller or another direct move changed the offset without a gesture
                 // phase and without a content change; it cancels any pending scroll.
                 viewport.note("reader offset \(Int(previous.offset))->\(Int(metrics.offset))")
@@ -562,7 +562,7 @@ struct ChatTranscriptView: View {
                     viewport.readerMoved(currentRange: messageRange, anchor: reader.measuredAnchor())
                 }
             }
-            reader.executorScrolled = false
+            if metrics.offset != previous.offset { reader.executorTarget = nil }
         }
         // Following shows the latest output even while a growth step is still being chased.
         let showsLatest = viewport.autoFollow || atBottom
@@ -639,7 +639,7 @@ struct ChatTranscriptView: View {
             transaction.disablesAnimations = true
             withTransaction(transaction) { position.scrollTo(y: target) }
             reader.attempts += 1
-            reader.executorScrolled = true
+            reader.executorTarget = target
             viewport.recordScrollCommand()
         }
     }
@@ -680,10 +680,15 @@ private let transcriptContentSpace = "transcript-content"
     /// Row frames in content coordinates, keyed by message identity.
     var rowFrames: [UUID: CGRect] = [:]
     var executorTask: Task<Void, Never>?
-    /// The executor's own command moved the viewport; the next offset change is not the reader's.
-    var executorScrolled = false
+    /// The offset the executor's last command scrolled to. An offset change is the executor's only when
+    /// it lands there; any other direct move is the reader's, even when a command produced no change.
+    var executorTarget: CGFloat?
     var attemptGeneration: UInt64 = 0
     var attempts = 0
+
+    func executorReached(_ offset: CGFloat) -> Bool {
+        executorTarget.map { abs(offset - $0) <= 1 } ?? false
+    }
 
     /// The distance from `id`'s top edge to the viewport's top edge, when laid out.
     func offset(of id: UUID) -> CGFloat? {
