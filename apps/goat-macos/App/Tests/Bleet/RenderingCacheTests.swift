@@ -160,10 +160,13 @@ extension AppTests.Bleet {
             let (window, host) = mounted(
                 TranscriptTextPartsView(source: oversized, fontSize: 13, cacheKey: key)
                     .frame(width: 500).environment(AppModel.shared))
-            let placeholder = host.fittingSize.height
+            // The first frame shows the latest text, never a placeholder. The source splits into whole
+            // 8 KiB parts, so the last part is that same text, and preparation adds the part controls.
+            let latest = host.fittingSize.height
+            #expect(latest > 1_000, "The latest text shows before the parts are prepared (\(latest))")
             try await Task.sleep(for: .milliseconds(600))
             host.layoutSubtreeIfNeeded()
-            #expect(host.fittingSize.height > placeholder * 4, "View-owned parts render without global retention")
+            #expect(host.fittingSize.height > latest, "View-owned parts render without global retention")
             #expect(TranscriptPartsCache.shared.parts(for: key, source: oversized) == nil)
             window.contentView = nil
             window.close()
@@ -192,15 +195,17 @@ extension AppTests.Bleet {
                 TranscriptTextPartsView(source: source, fontSize: 13, cacheKey: key)
                     .frame(width: 500).environment(AppModel.shared)
             }
-            // First mount: nothing is prepared yet, so the first frame is the short placeholder.
+            // First mount: nothing is prepared yet, so the first frame shows the latest text while the
+            // parts are split off the main actor, and the initializer retains nothing.
             let (firstWindow, first) = mounted(parts())
-            let placeholder = first.fittingSize.height
+            #expect(first.fittingSize.height > 1_000, "The latest text shows, never a placeholder")
+            #expect(
+                TranscriptPartsCache.shared.parts(for: key, source: source) == nil,
+                "Preparation must happen off the initializer")
             try await Task.sleep(for: .milliseconds(400))
             first.layoutSubtreeIfNeeded()
             let prepared = first.fittingSize.height
-            #expect(
-                prepared > placeholder * 4,
-                "Preparation must happen off the initializer (\(placeholder) -> \(prepared))")
+            #expect(TranscriptPartsCache.shared.parts(for: key, source: source)?.count == 2)
             firstWindow.contentView = nil
             firstWindow.close()
 

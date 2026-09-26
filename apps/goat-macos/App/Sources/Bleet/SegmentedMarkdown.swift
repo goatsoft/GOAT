@@ -884,13 +884,15 @@ struct SegmentedMarkdownView: View {
                     isTail: isStreaming && segment.index == document.segments.count - 1
                 )
                 .equatable()
-                .padding(.top, index == shown.lowerBound ? 0 : gap(before: segment))
-                .onGeometryChange(for: CGRect?.self, of: { isWindowed ? $0.frame(in: .scrollView) : nil }) { frame in
+                // Measured before the gap, which changes when the segment stops being the first shown,
+                // and in the transcript's content coordinates, which scrolling does not change.
+                .onGeometryChange(for: CGRect?.self, of: { isWindowed ? Self.contentFrame($0) : nil }) { frame in
                     if let messageID, isWindowed { navigation.recordFrame(messageID, index, frame) }
                 }
                 .onDisappear {
                     if let messageID, isWindowed { navigation.recordFrame(messageID, index, nil) }
                 }
+                .padding(.top, index == shown.lowerBound ? 0 : gap(before: segment))
             }
             if isWindowed, shown.upperBound < document.segments.count {
                 SegmentLoader(label: "Later text") {
@@ -903,6 +905,10 @@ struct SegmentedMarkdownView: View {
 
     private func cost(_ index: Int) -> Int { document.segments[index].text.utf8.count }
 
+    nonisolated private static func contentFrame(_ proxy: GeometryProxy) -> CGRect {
+        proxy.frame(in: .named(transcriptContentSpace))
+    }
+
     private func gap(before segment: PreparedMarkdownSegment) -> CGFloat? {
         guard segment.index > 0, segment.index <= document.segments.count else { return 0 }
         return MarkdownSegmentSpacing.gap(
@@ -911,7 +917,8 @@ struct SegmentedMarkdownView: View {
 }
 
 /// Pages a windowed reply as it comes into view, like the transcript's message loaders. It never
-/// scrolls: the navigation owner keeps the reader's segment in place.
+/// scrolls: the navigation owner keeps the reader's segment in place. It acts on the next turn of
+/// the main actor, after the scroll that revealed it has been attributed to the reader.
 private struct SegmentLoader: View {
     let label: String
     let action: () -> Void
@@ -924,7 +931,11 @@ private struct SegmentLoader: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, Caprine.Activity.spacing)
         .onScrollVisibilityChange(threshold: 0.01) { visible in
-            if visible { action() }
+            guard visible else { return }
+            Task { @MainActor in
+                await Task.yield()
+                action()
+            }
         }
         .accessibilityElement()
         .accessibilityLabel(label)

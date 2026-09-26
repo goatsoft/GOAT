@@ -377,11 +377,9 @@ struct ChatTranscriptView: View {
                             row.joinsPreviousTools || row.messages.allSatisfy(TranscriptActivity.isEmpty)
                                 ? 0 : Caprine.Activity.messageSpacing
                         )
-                        // Row frames in viewport coordinates locate anchors; they are raw measurements,
+                        // Row frames in content coordinates locate anchors; they are raw measurements,
                         // kept out of observable state.
-                        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .scrollView) }) { frame in
-                            recordFrame(frame, of: row.id)
-                        }
+                        .onGeometryChange(for: CGRect.self, of: Self.contentFrame) { recordFrame($0, of: row.id) }
                         .onDisappear { reader.rowFrames[row.id] = nil }
                         .id(row.id)
                     }
@@ -409,6 +407,7 @@ struct ChatTranscriptView: View {
                 .padding(.horizontal, 24)
                 .padding(.top, 16)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .coordinateSpace(.named(transcriptContentSpace))
             }
             .overlay(alignment: .bottom) {
                 if !viewport.isScrolledToBottom {
@@ -582,8 +581,9 @@ struct ChatTranscriptView: View {
     }
 
     /// Moves a long reply's segment window, keeping segment `kept` where the reader sees it.
+    /// Only a reader pages a reply: while following, a loader seen during layout is transient.
     private func pageSegments(of id: UUID, to window: Range<Int>, keeping kept: Int, reachesEnd: Bool) {
-        guard pagingPhase == .idle else { return }
+        guard pagingPhase == .idle, viewport.readerOwnsViewport else { return }
         let offset = reader.offset(of: id, segment: kept) ?? 0
         pagingPhase = .pagingSegments
         viewport.pageSegments(
@@ -603,6 +603,10 @@ struct ChatTranscriptView: View {
             (start..<range.upperBound).first(where: rendered)
             ?? (range.lowerBound..<start).last(where: rendered)
         return found.map { session.messages[$0].id }
+    }
+
+    nonisolated private static func contentFrame(_ proxy: GeometryProxy) -> CGRect {
+        proxy.frame(in: .named(transcriptContentSpace))
     }
 
     private func recordFrame(_ frame: CGRect, of id: UUID) {
@@ -701,7 +705,7 @@ struct ChatTranscriptView: View {
                     reader.attempts += 1
                     return
                 }
-                target = metrics.offset + frame.minY + anchor.offset
+                target = frame.minY + anchor.offset
             }
             target = min(max(target, metrics.offset - metrics.topGap), metrics.offset + metrics.bottomGap)
             // SwiftUI ignores a position equal to the one it holds, which it still holds after
@@ -743,14 +747,19 @@ struct TranscriptScrollMetrics: Equatable {
     var distanceFromBottom: CGFloat { bottomGap }
 }
 
+/// The scroll content's coordinate space. Frames measured in it change only with layout, never with
+/// scrolling, so an anchor measured as the reader scrolls is never read from a stale frame.
+let transcriptContentSpace = "transcript-content"
+
 /// Raw scroll measurements and executor bookkeeping. Deliberately not observable view state.
 @MainActor private final class TranscriptReaderState {
     var isAtBottom = true
     var isScrolling = false
     var metrics = TranscriptScrollMetrics()
-    /// Row frames in viewport coordinates, keyed by message identity.
+    /// Row frames in content coordinates, keyed by message identity.
     var rowFrames: [UUID: CGRect] = [:]
-    /// Frames of the shown segments of windowed long replies, by message and segment index.
+    /// Frames of the shown segments of windowed long replies in content coordinates, by message and
+    /// segment index.
     var segmentFrames: [UUID: [Int: CGRect]] = [:]
     var executorTask: Task<Void, Never>?
     /// The executor's own command moved the viewport; the next offset change is not the reader's.
@@ -760,12 +769,12 @@ struct TranscriptScrollMetrics: Equatable {
 
     /// The distance from `id`'s top edge to the viewport's top edge, when laid out.
     func offset(of id: UUID) -> CGFloat? {
-        rowFrames[id].map { -$0.minY }
+        rowFrames[id].map { metrics.offset - $0.minY }
     }
 
     /// The distance from a shown segment's top edge to the viewport's top edge, when laid out.
     func offset(of id: UUID, segment: Int) -> CGFloat? {
-        segmentFrames[id]?[segment].map { -$0.minY }
+        segmentFrames[id]?[segment].map { metrics.offset - $0.minY }
     }
 
     /// The frame an anchor is measured from: its segment's when it names one, else its row's.
@@ -777,13 +786,14 @@ struct TranscriptScrollMetrics: Equatable {
     /// The reader's position: the topmost row still visible, and how far into it the viewport starts.
     /// In a windowed long reply, the topmost segment still visible.
     func measuredAnchor() -> TranscriptViewport.Anchor? {
+        let top = metrics.offset
         guard
-            let row = rowFrames.filter({ $0.value.maxY > 0 }).min(by: { $0.value.minY < $1.value.minY })
+            let row = rowFrames.filter({ $0.value.maxY > top }).min(by: { $0.value.minY < $1.value.minY })
         else { return nil }
-        if let segment = segmentFrames[row.key]?.filter({ $0.value.maxY > 0 }).min(by: { $0.key < $1.key }) {
-            return TranscriptViewport.Anchor(messageID: row.key, offset: -segment.value.minY, segment: segment.key)
+        if let segment = segmentFrames[row.key]?.filter({ $0.value.maxY > top }).min(by: { $0.key < $1.key }) {
+            return TranscriptViewport.Anchor(messageID: row.key, offset: top - segment.value.minY, segment: segment.key)
         }
-        return TranscriptViewport.Anchor(messageID: row.key, offset: -row.value.minY)
+        return TranscriptViewport.Anchor(messageID: row.key, offset: top - row.value.minY)
     }
 
     /// Whether the viewport already shows `target`: the anchor's top within 1 pt of its offset, or
@@ -794,7 +804,7 @@ struct TranscriptScrollMetrics: Equatable {
             return metrics.distanceFromBottom <= 1
         case .anchor(let anchor):
             guard let frame = frame(of: anchor) else { return false }
-            let error = frame.minY + anchor.offset
+            let error = frame.minY - metrics.offset + anchor.offset
             if abs(error) <= 1 { return true }
             // The target lies past an end of the scrollable range: the nearest end is fulfilment.
             return (error > 0 && metrics.bottomGap <= 1) || (error < 0 && metrics.topGap <= 1)
