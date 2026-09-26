@@ -169,13 +169,15 @@ struct ThinkingContentView: View {
 actor ThinkingCodeHighlighter {
     static let shared = ThinkingCodeHighlighter()
 
-    func render(_ code: String, language: String, dark: Bool) async throws -> AttributedString {
+    func render(_ code: String, language: String, dark: Bool, palette: SyntaxPalette? = nil) async throws
+        -> AttributedString
+    {
         let alias = language.split(whereSeparator: \.isWhitespace).first.map(String.init)?.lowercased() ?? ""
         guard code.utf8.count <= HighlightedCodeView.maximumHighlightedBytes,
             !["", "text", "plain", "plaintext"].contains(alias)
         else { return AttributedString(code) }
-        if alias == "vue" { return try await VueSyntaxHighlighter.shared.render(code, dark: dark) }
-        return try await CodeSyntaxHighlighter.shared.render(code, language: alias, dark: dark)
+        if alias == "vue" { return try await VueSyntaxHighlighter.shared.render(code, dark: dark, palette: palette) }
+        return try await CodeSyntaxHighlighter.shared.render(code, language: alias, dark: dark, palette: palette)
     }
 }
 
@@ -183,22 +185,28 @@ private struct ThinkingCodeText: View {
     let code: String
     let language: String
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.syntaxPalette) private var palette
     @State private var rendered: AttributedString?
     @State private var renderedKey: Key?
     private struct Key: Equatable {
         let code: String
         let language: String
         let dark: Bool
+        let palette: SyntaxPalette?
     }
 
     private var currentText: AttributedString {
-        let key = Key(code: code, language: language, dark: colorScheme == .dark)
+        let key = Key(code: code, language: language, dark: colorScheme == .dark, palette: palette)
         if renderedKey == key, let rendered {
+            return rendered
+        }
+        // A theme change keeps the previous colours until the new ones are ready.
+        if let rendered, let prevKey = renderedKey, prevKey.language == language, prevKey.code == code {
             return rendered
         }
         if let rendered, let prevKey = renderedKey,
             prevKey.language == language,
-            prevKey.dark == (colorScheme == .dark),
+            prevKey.dark == key.dark, prevKey.palette == key.palette,
             code.hasPrefix(prevKey.code)
         {
             var combined = rendered
@@ -210,7 +218,7 @@ private struct ThinkingCodeText: View {
     }
 
     var body: some View {
-        let key = Key(code: code, language: language, dark: colorScheme == .dark)
+        let key = Key(code: code, language: language, dark: colorScheme == .dark, palette: palette)
         Text(currentText)
             .fixedSize(horizontal: false, vertical: true)
             .task(id: key) {
@@ -219,7 +227,7 @@ private struct ThinkingCodeText: View {
                     // retain their highlights as later reasoning streams into other blocks.
                     try await Task.sleep(for: .milliseconds(120))
                     let result = try await ThinkingCodeHighlighter.shared.render(
-                        code, language: language, dark: key.dark)
+                        code, language: language, dark: key.dark, palette: key.palette)
                     try Task.checkCancellation()
                     rendered = result
                     renderedKey = key
