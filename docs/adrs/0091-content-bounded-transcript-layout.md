@@ -152,6 +152,31 @@ segment rather than per message. Deliver it in three reviewable steps:
      segment array, so total preparation CPU work is not yet shown to be linear. Before step 3 lifts
      the fallback, profile the complete path and carry explicit source-revision and append
      information instead of rescanning the prefix, so step 1's scanner gains hold end to end.
+   - **Whole-path preparation (as implemented after step 2).** `ChatMessage` carries a `TextRevision`
+     for its text and reasoning: streamed appends keep the revision's epoch, and any other change (an
+     edit, the completion trim, a restore or replacement) starts a new, process-unique epoch. The cache
+     extends the held segmentation when the new revision extends the held one, so a refresh never
+     compares the reply's prefix. A refresh visits only segments settled since the last refresh and the
+     provisional tail; prepared segments live in fixed-size chunks shared with documents already handed
+     to views, so a refresh copies only the chunk index and the chunks it changes. When the reply's
+     reference definitions change, only settled segments containing a closing bracket (the only ones a
+     definition can affect) are parsed again. Views, the front cache and the window charge match
+     documents by revision.
+   - **Measured whole path (Release, engine-free, CI macOS 26 runner).** Five reply shapes (mixed
+     Markdown, long single-line paragraphs, fences including oversized ones, tables including oversized
+     ones, and 16 reference definitions arriving at the end) streamed at a fixed 4 KiB per refresh from
+     32 KiB to 2 MiB. Scanned, copied, compared, parsed and HTML bytes per reply byte stay flat (about
+     9 to 15 in total, per shape, at every size). Per-refresh preparation time does not grow with the
+     reply (median 0.4 to 0.9 ms, 1.7 to 2.1 ms for tables; 95th percentile 0.6 to 1.9 ms, 3.0 to
+     3.4 ms for tables), at most three
+     segments are visited per refresh, and handing a document to the main actor takes under 0.1 ms.
+     Compared bytes are under 0.75 per reply byte (no prefix comparison). Exceptions, stated rather
+     than hidden: the refresh that delivers late reference definitions re-parses every settled segment
+     with a bracket once (106 ms at 2 MiB, off the main actor); a completion trim that changes the
+     text starts a new epoch and costs one pass over the reply (about 15 ms at 2 MiB). A streaming
+     reply retains about three times its source bytes (rendered segments, source and the scanner's
+     bodies). These measure the preparation layer; the live view still uses the 8 KiB fallback, so
+     live rendering at these sizes is measured with step 3.
 3. **Segment-level windowing**, built on the single transcript navigation owner from
    [#54](https://github.com/goatsoft/GOAT/issues/54) section 2. The window admits segments rather
    than whole messages, so a long reply renders rich and pages within itself, with one scroll
