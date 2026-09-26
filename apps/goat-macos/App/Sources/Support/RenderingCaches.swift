@@ -22,6 +22,7 @@ enum RenderingCaches {
         await MarkdownSegmentCache.shared.removeAll()
         await ImageFileWorker.shared.clearCache()
         await PaddockDocumentCache.shared.removeAll()
+        await ThinkingPreparation.shared.removeAll()
         ToolEventPresentationCache.shared.removeAll()
         await MainActor.run {
             HighlightCache.shared.removeAll()

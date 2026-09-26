@@ -12,7 +12,7 @@ enum ThinkingFenceParser {
         let language: String?
     }
 
-    private struct Fence {
+    struct Fence {
         let marker: Character
         let count: Int
         let quoteDepth: Int
@@ -62,7 +62,7 @@ enum ThinkingFenceParser {
 
     static func isFenceLine(_ line: String) -> Bool { fence(in: line) != nil }
 
-    private static func fence(in line: String) -> Fence? {
+    static func fence(in line: String) -> Fence? {
         var rest = line[...]
         var depth = 0
         var indent = 0
@@ -90,7 +90,7 @@ enum ThinkingFenceParser {
         return Fence(marker: marker, count: count, quoteDepth: depth, indent: indent, info: info)
     }
 
-    private static func codeLine(_ line: String, fence: Fence) -> String {
+    static func codeLine(_ line: String, fence: Fence) -> String {
         var rest = line[...]
         if fence.quoteDepth > 0 {
             var quoted = rest
@@ -123,12 +123,22 @@ struct ThinkingSegment: Equatable, Sendable {
     /// A later piece of the same block, which joins the piece before it without a gap.
     let continuesPrevious: Bool
     let bytes: Int
+
+    /// What caches charge for retaining this segment: its text, its language and its own storage.
+    var cost: Int { bytes + (language?.utf8.count ?? 0) + MemoryLayout<ThinkingSegment>.stride }
 }
 
 /// Splits parsed reasoning into bounded segments (#60 A1, ADR-0091). Joining the segments' text
 /// reproduces the blocks' text exactly.
 enum ThinkingSegmenter {
     static let targetBytes = MarkdownSegmenter.targetBytes
+    static let maximumLanguageCharacters = 32
+
+    /// A fence's language as segments keep it: the info string's first word, bounded. The highlighter
+    /// reads nothing else, so an unbounded info string is never retained.
+    static func language(_ info: String?) -> String? {
+        info.map { String($0.prefix(maximumLanguageCharacters).prefix(while: { !$0.isWhitespace })) }
+    }
 
     static func segments(_ blocks: [ThinkingFenceParser.Block], targetBytes: Int = targetBytes) -> [ThinkingSegment] {
         var segments: [ThinkingSegment] = []
@@ -136,8 +146,8 @@ enum ThinkingSegmenter {
             for (offset, piece) in pieces(block.text, targetBytes: targetBytes).enumerated() {
                 segments.append(
                     ThinkingSegment(
-                        index: segments.count, text: piece, language: block.language, continuesPrevious: offset > 0,
-                        bytes: piece.utf8.count))
+                        index: segments.count, text: piece, language: language(block.language),
+                        continuesPrevious: offset > 0, bytes: piece.utf8.count))
             }
         }
         return segments
@@ -178,10 +188,19 @@ struct PreparedThinking: Sendable {
     /// The reasoning revision prepared. Views and caches match it instead of comparing text.
     let revision: TextRevision
     let segments: [ThinkingSegment]
-    /// UTF-8 bytes of every segment, which caches charge.
+    /// UTF-8 bytes of every segment's text.
     let bytes: Int
+    /// What caches charge: every segment's `cost`.
+    let cost: Int
     /// The segments laid out; nil when every segment is.
     var window: Range<Int>? = nil
+
+    init(revision: TextRevision, segments: [ThinkingSegment]) {
+        self.revision = revision
+        self.segments = segments
+        bytes = segments.reduce(0) { $0 + $1.bytes }
+        cost = segments.reduce(0) { $0 + $1.cost }
+    }
 
     var shownSegments: Range<Int> { window ?? 0..<segments.count }
 
@@ -191,22 +210,210 @@ struct PreparedThinking: Sendable {
     }
 }
 
-/// Parses and segments reasoning off the main actor.
+/// Parses and segments reasoning as it streams (#60 A1). The result equals
+/// `ThinkingSegmenter.segments(ThinkingFenceParser.parse(TranscriptText.removingBoundaryBlankLines(source)))`.
+///
+/// Lines before the last non-blank line are final: each is parsed once and its completed segments are
+/// kept. A refresh parses the lines completed since the last one, then the last line and the open
+/// piece on a copy, so its work is bounded by the appended bytes, the last line and one piece, not
+/// by the reasoning. Extend it only with text that extends the text it last saw (an append
+/// revision); an edit or trim starts a new one.
+struct ThinkingSegmentation {
+    /// UTF-8 bytes parsed since this segmentation was created: completed lines once each, and every
+    /// refresh's last line.
+    private(set) var scannedBytes = 0
+    private var state = LineState()
+    /// UTF-8 offset of the first non-blank line, once there is one.
+    private var start: Int?
+    /// UTF-8 offset up to which lines are parsed into `state`: the start of the last non-blank line.
+    private var committed = 0
+
+    mutating func extend(to source: String) -> [ThinkingSegment] {
+        let utf8 = source.utf8
+        var lower = utf8.index(utf8.startIndex, offsetBy: min(committed, utf8.count))
+        if start == nil {
+            // Leading blank lines are trimmed. An unterminated blank line can still gain text.
+            while let lineEnd = source[lower...].firstIndex(of: "\n"),
+                source[lower..<lineEnd].allSatisfy(\.isWhitespace)
+            {
+                lower = source.index(after: lineEnd)
+            }
+            committed = utf8.distance(from: utf8.startIndex, to: lower)
+            guard !source[lower...].allSatisfy(\.isWhitespace) else { return [] }
+            start = committed
+        }
+        // Trailing blank lines are trimmed with the line break before them. The line at `lower` was
+        // the last non-blank line, and appending keeps it non-blank.
+        var end = source.endIndex
+        while lower < end {
+            let newline = source[lower..<end].lastIndex(of: "\n")
+            let lineStart = newline.map { source.index(after: $0) } ?? lower
+            guard source[lineStart..<end].allSatisfy(\.isWhitespace) else { break }
+            end = newline ?? lower
+        }
+        guard lower < end else {
+            // Not an extension of the text last seen: start again.
+            self = ThinkingSegmentation()
+            return extend(to: source)
+        }
+        let lastLine = source[lower..<end].lastIndex(of: "\n").map { source.index(after: $0) } ?? lower
+        let first = utf8.index(utf8.startIndex, offsetBy: start ?? 0)
+        // Lines before the last are final.
+        while lower < lastLine, let lineEnd = source[lower..<lastLine].firstIndex(of: "\n") {
+            let line = source[lower..<lineEnd]
+            scannedBytes += line.utf8.count + 1
+            if !state.feed(line, newline: true) {
+                // Past the block cap everything is prose, as `ThinkingFenceParser.parse` falls back.
+                state = LineState(proseOnly: true)
+                refeed(source, from: first, to: source.index(after: lineEnd))
+            }
+            lower = source.index(after: lineEnd)
+        }
+        committed = utf8.distance(from: utf8.startIndex, to: lastLine)
+        // The last line can still change, so it is parsed on a copy.
+        let line = source[lastLine..<end]
+        scannedBytes += line.utf8.count
+        var tail = state
+        guard tail.feed(line, newline: false) else {
+            let text = String(source[first..<end])
+            scannedBytes += text.utf8.count
+            return ThinkingSegmenter.segments([ThinkingFenceParser.Block(text: text, language: nil)])
+        }
+        tail.endBlock()
+        return tail.segments
+    }
+
+    private mutating func refeed(_ source: String, from lower: String.Index, to upper: String.Index) {
+        var cursor = lower
+        while cursor < upper, let lineEnd = source[cursor..<upper].firstIndex(of: "\n") {
+            let line = source[cursor..<lineEnd]
+            scannedBytes += line.utf8.count + 1
+            _ = state.feed(line, newline: true)
+            cursor = source.index(after: lineEnd)
+        }
+    }
+
+    /// The parser's and segmenter's state after whole lines: the steps of `ThinkingFenceParser.parse`
+    /// and `ThinkingSegmenter.pieces`, one line at a time.
+    private struct LineState {
+        var proseOnly = false
+        var segments: [ThinkingSegment] = []
+        var opening: ThinkingFenceParser.Fence?
+        /// The open block's language, as segments keep it; nil for prose.
+        var language: String?
+        var blockCount = 0
+        var blockPieces = 0
+        var piece = ""
+        var pieceBytes = 0
+
+        /// Parses one line; false once the blocks reach `ThinkingFenceParser.maximumBlocks`.
+        mutating func feed(_ line: Substring, newline: Bool) -> Bool {
+            let text = String(line)
+            let ending = newline ? "\n" : ""
+            if proseOnly {
+                add(text + ending)
+                return true
+            }
+            if let active = opening {
+                if let candidate = ThinkingFenceParser.fence(in: text), candidate.marker == active.marker,
+                    candidate.count >= active.count, candidate.quoteDepth == active.quoteDepth,
+                    candidate.info.isEmpty
+                {
+                    endBlock()
+                    opening = nil
+                    language = nil
+                } else {
+                    add(ThinkingFenceParser.codeLine(text, fence: active) + ending)
+                }
+            } else if let candidate = ThinkingFenceParser.fence(in: text) {
+                endBlock()
+                opening = candidate
+                language = ThinkingSegmenter.language(candidate.info)
+            } else {
+                add(text + ending)
+            }
+            return blockCount < ThinkingFenceParser.maximumBlocks
+        }
+
+        /// Ends the open block, when it has text, as the parser flushes a non-empty buffer.
+        mutating func endBlock() {
+            guard blockPieces > 0 || !piece.isEmpty else { return }
+            flushPiece()
+            blockCount += 1
+            blockPieces = 0
+        }
+
+        private mutating func add(_ full: String) {
+            let limit = max(4, ThinkingSegmenter.targetBytes)
+            let bytes = full.utf8.count
+            if bytes > limit {
+                flushPiece()
+                for part in (try? TranscriptTextParts.split(full, maximumBytes: limit)) ?? [full] { emit(part) }
+            } else {
+                if pieceBytes + bytes > limit { flushPiece() }
+                piece += full
+                pieceBytes += bytes
+            }
+        }
+
+        private mutating func flushPiece() {
+            guard !piece.isEmpty else { return }
+            emit(piece)
+            piece = ""
+            pieceBytes = 0
+        }
+
+        private mutating func emit(_ text: String) {
+            segments.append(
+                ThinkingSegment(
+                    index: segments.count, text: text, language: language, continuesPrevious: blockPieces > 0,
+                    bytes: text.utf8.count))
+            blockPieces += 1
+        }
+    }
+}
+
+/// Parses and segments reasoning off the main actor. Streaming reasoning keeps its segmentation per
+/// message, extended while its revision only appends; at most `maximumStreams` are kept, each about
+/// the size of its reasoning.
 actor ThinkingPreparation {
     static let shared = ThinkingPreparation()
+    static let maximumStreams = 4
+
+    private struct Stream {
+        var revision: TextRevision
+        var segmentation: ThinkingSegmentation
+        var access: UInt64
+    }
+
+    private var streams: [UUID: Stream] = [:]
+    private var access: UInt64 = 0
 
     func segments(_ source: String) throws -> [ThinkingSegment] {
         try Task.checkCancellation()
         return ThinkingSegmenter.segments(ThinkingFenceParser.parse(source))
     }
 
-    /// Reasoning without its boundary blank lines, as bounded segments.
-    func prepare(_ source: String, revision: TextRevision) throws -> PreparedThinking {
+    /// `source` without its boundary blank lines, as bounded segments.
+    func prepare(id: UUID, source: String, revision: TextRevision) throws -> PreparedThinking {
         try Task.checkCancellation()
-        let blocks = ThinkingFenceParser.parse(TranscriptText.removingBoundaryBlankLines(source))
-        try Task.checkCancellation()
-        let segments = ThinkingSegmenter.segments(blocks)
-        return PreparedThinking(revision: revision, segments: segments, bytes: segments.reduce(0) { $0 + $1.bytes })
+        access &+= 1
+        // Taken out of the dictionary, so it is extended in place.
+        let held = streams.removeValue(forKey: id)
+        var segmentation =
+            held.flatMap { revision.extends($0.revision) ? $0.segmentation : nil } ?? ThinkingSegmentation()
+        let segments = segmentation.extend(to: source)
+        streams[id] = Stream(revision: revision, segmentation: segmentation, access: access)
+        while streams.count > Self.maximumStreams,
+            let victim = streams.min(by: { $0.value.access < $1.value.access })?.key
+        {
+            streams[victim] = nil
+        }
+        return PreparedThinking(revision: revision, segments: segments)
+    }
+
+    func removeAll() {
+        streams.removeAll()
     }
 }
 
@@ -259,10 +466,10 @@ final class PreparedThinkingCache {
     @discardableResult
     func store(_ thinking: PreparedThinking, for id: UUID) -> Bool {
         remove(id)
-        guard thinking.bytes <= maximumEntryCost else { return false }
+        guard thinking.cost <= maximumEntryCost else { return false }
         clock &+= 1
         entries[id] = Entry(thinking: thinking, access: clock)
-        totalCost += thinking.bytes
+        totalCost += thinking.cost
         while totalCost > maximumTotalCost || entries.count > maximumEntries,
             let victim = entries.min(by: { $0.value.access < $1.value.access })?.key
         {
@@ -288,7 +495,7 @@ final class PreparedThinkingCache {
 
     private func remove(_ id: UUID) {
         guard let old = entries.removeValue(forKey: id) else { return }
-        totalCost -= old.thinking.bytes
+        totalCost -= old.thinking.cost
     }
 }
 
@@ -389,7 +596,7 @@ struct ExpandedThinkingView: View {
             if next?.revision != request.revision {
                 guard
                     let fresh = try? await ThinkingPreparation.shared.prepare(
-                        request.source, revision: request.revision),
+                        id: message.id, source: request.source, revision: request.revision),
                     !Task.isCancelled
                 else { return }
                 next = fresh

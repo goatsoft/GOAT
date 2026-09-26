@@ -219,10 +219,15 @@ segment rather than per message. Deliver it in three reviewable steps:
      navigation owner pages it under a key derived from the message ID, so reasoning and answer are
      held, counted and cleared independently and the reader's measured anchor can be a reasoning
      segment. Preparation happens off the main actor, sampled every 120 ms while the reply streams
-     and keyed by the reasoning's text revision; each sample re-parses the reasoning, linear in its
-     length, rather than extending a held segmentation as answers do. `PreparedThinkingCache` keeps
-     prepared reasoning by revision under its own byte budget (one entry through the rich limit, 8 MiB
-     in all), and the message window charges expanded reasoning at most one reply window. The bounded
+     and keyed by the reasoning's text revision. Like answers, streaming reasoning extends a held
+     segmentation (`ThinkingSegmentation`) while its revision only appends: lines before the last
+     non-blank line are parsed once, and a refresh parses only newly completed lines, the last line
+     and the open piece, so work grows linearly with the reasoning (about 1.03 bytes scanned per
+     byte at 1 KiB appends); an edit or trim starts again. The result equals preparing the whole text.
+     At most four streams are held. Segments keep a fence's language as its first word, at most 32
+     characters, and `PreparedThinkingCache` charges each segment's text, language and storage under
+     its own budget (one entry through the rich limit, 8 MiB in all). The message window charges
+     expanded reasoning at most one reply window. The bounded
      excerpt shown while reasoning streams is unchanged. Reasoning above 2 MiB keeps bounded text
      parts; the disclosure's copy action copies all of it.
 

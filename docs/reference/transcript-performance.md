@@ -59,8 +59,10 @@ repeated reference definitions.
 Reasoning shown in full is windowed the same way through 2 MiB: its fence-aware
 blocks are split at line boundaries into segments of at most 6 KiB, and a window
 of at most 32 segments and 16 KiB is laid out, paged under its own key. It is
-prepared off the main actor from a 120 ms sample of its text revision; each
-sample re-parses the reasoning, so the work per sample is linear in its length.
+prepared off the main actor from a 120 ms sample of its text revision. While the
+revision only appends, the held segmentation parses just the newly completed
+lines, the last line and the open piece, so total work grows linearly with the
+reasoning (`streamingPreparationWorkGrowsLinearly` checks this through 2 MiB).
 
 A response or expanded reasoning above 2 MiB is presented as
 selectable plain-text parts, prepared off the main actor. Earlier text and Later
