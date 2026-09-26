@@ -806,14 +806,24 @@ extension AppTests.Bleet {
             scroll.reflectScrolledClipView(scroll.contentView)
             host.layoutSubtreeIfNeeded()
             let before = try snapshot(host)
-            for _ in 0..<100 where viewport.segmentWindow(for: reply.id) == nil || viewport.request != nil {
+            let commands = viewport.scrollCommands
+            // Paging is done when the owner holds an earlier window, the reply has prepared and laid it
+            // out, and the owner's restore of the kept segment has ended. Moving up alone already makes
+            // the owner hold the shown window, so holding a window is not enough.
+            func pagedAndPlaced() -> Bool {
+                guard let held = viewport.segmentWindow(for: reply.id), held.lowerBound < shown.lowerBound else {
+                    return false
+                }
+                return prepared()?.window == held && viewport.request == nil
+            }
+            for _ in 0..<150 where !pagedAndPlaced() {
                 try await Task.sleep(for: .milliseconds(20))
                 host.layoutSubtreeIfNeeded()
             }
             try await settle(viewport, host: host)
-            let paged = try #require(
-                viewport.segmentWindow(for: reply.id),
-                "The earlier segments loaded; \(viewport.diagnostics.suffix(16))")
+            try #require(
+                pagedAndPlaced(), "The earlier segments loaded and were placed; \(viewport.diagnostics.suffix(16))")
+            let paged = try #require(viewport.segmentWindow(for: reply.id))
             #expect(paged.lowerBound < shown.lowerBound && paged.contains(shown.lowerBound))
             #expect(viewport.abandonedRequests == 0, "\(viewport.diagnostics.suffix(16))")
             let after = try snapshot(host)
@@ -829,9 +839,18 @@ extension AppTests.Bleet {
                     changed += 1
                 }
             }
+            let commandsWhilePaging = viewport.scrollCommands - commands
             #expect(
                 changed == 0,
-                "The reader's view moved while paging the reply: \(changed) pixels; \(viewport.diagnostics.suffix(16))")
+                "The reader's view moved while paging the reply: \(changed) pixels, \(commandsWhilePaging) commands; \(viewport.diagnostics.suffix(16))"
+            )
+            if changed > 0 {
+                for (name, image) in [("before", before), ("after", after)] {
+                    if let png = image.representation(using: .png, properties: [:]) {
+                        Attachment.record(png, named: "paging-reply-\(name).png")
+                    }
+                }
+            }
 
             // Reading down pages later until the reply's end is shown again.
             for _ in 0..<40 where viewport.holdsEarlierSegments(of: reply.id) {
