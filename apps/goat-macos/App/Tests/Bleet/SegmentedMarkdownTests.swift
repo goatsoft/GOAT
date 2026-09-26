@@ -382,7 +382,9 @@ extension AppTests.Bleet {
             #expect(await cache.snapshot().parseCount == 5)
             #expect(windowed.retainedBytes == windowed.segments[100..<105].reduce(0) { $0 + $1.text.utf8.count })
             #expect(windowed.renderedBytes > windowed.retainedBytes * 30)
-            #expect(windowed.cost == windowed.retainedBytes + source.utf8.count)
+            // Unparsed segments keep their bodies, which the cost charges with the source and parses.
+            #expect(windowed.bodyBytes == windowed.segments.reduce(0) { $0 + $1.bodyBytes })
+            #expect(windowed.cost == source.utf8.count + windowed.bodyBytes + windowed.retainedBytes)
 
             // Moving within the margin parses only the new segments and keeps nearby ones.
             let moved = try #require(await cache.prepare(id: id, source: source, isComplete: true, window: 102..<108))
@@ -395,6 +397,41 @@ extension AppTests.Bleet {
             // Asking for every segment parses the rest.
             let whole = try #require(await cache.prepare(id: id, source: source, isComplete: true))
             #expect(whole.segments.allSatisfy(\.isParsed) && whole.retainedBytes == whole.renderedBytes)
+        }
+
+        /// Repeated definitions are shared, not copied into every segment, and the cost charges what is
+        /// retained: the source, every body (parsed or not), the shared suffix and the parses. Budgets
+        /// admit and evict by that cost (review of #77: 200 reference paragraphs with a 3,000-byte
+        /// definition render over 600 KB, but retain about the source twice).
+        @Test func repeatedDefinitionsAreSharedAndMostlyUnparsedSegmentsAreCharged() async throws {
+            let definition = "[ref]: https://example.com/" + String(repeating: "p", count: 3_000) + "\n"
+            let source =
+                (0..<200).map { "Paragraph \($0) cites [the reference][ref]." }.joined(separator: "\n\n")
+                + "\n\n" + definition
+            let cache = MarkdownSegmentCache(targetBytes: 1, maximumBytes: 1_024)
+            let windowed = try #require(
+                await cache.prepare(id: UUID(), source: source, isComplete: true, window: 50..<55))
+            #expect(windowed.renderedBytes > 600_000, "Every bracketed segment renders the definitions")
+            #expect(windowed.definitionBytes <= MarkdownSegmenter.definitionLimit)
+            #expect(windowed.definitionBytes >= definition.utf8.count - 1)
+            #expect(windowed.bodyBytes < source.utf8.count + 1_024)
+            let expected = source.utf8.count + windowed.bodyBytes + windowed.definitionBytes + windowed.retainedBytes
+            #expect(windowed.cost == expected)
+            #expect(windowed.cost * 10 < windowed.renderedBytes, "\(windowed.cost) for \(windowed.renderedBytes)")
+            #expect(windowed.retainedBytes < 5 * 4_096, "Only the window's parses are charged for content")
+
+            // A budget one byte below the document's cost declines it; at the cost it is retained.
+            let tight = MarkdownSegmentCache(maximumEntryCost: windowed.cost - 1, targetBytes: 1, maximumBytes: 1_024)
+            _ = await tight.prepare(id: UUID(), source: source, isComplete: true, window: 50..<55)
+            #expect(await tight.snapshot().entryCount == 0)
+            let exact = MarkdownSegmentCache(
+                maximumCost: windowed.cost + 1, maximumEntryCost: windowed.cost, targetBytes: 1, maximumBytes: 1_024)
+            _ = await exact.prepare(id: UUID(), source: source, isComplete: true, window: 50..<55)
+            #expect(await exact.snapshot().entryCount == 1)
+            // A second reply of the same cost evicts the first: the total never exceeds the budget.
+            _ = await exact.prepare(id: UUID(), source: source, isComplete: true, window: 50..<55)
+            let snapshot = await exact.snapshot()
+            #expect(snapshot.entryCount == 1 && snapshot.cost <= windowed.cost + 1)
         }
 
         /// While a long reply streams with a window on its tail, retained parses stay bounded however

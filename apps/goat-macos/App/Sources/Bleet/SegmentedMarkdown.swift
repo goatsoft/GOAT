@@ -8,10 +8,11 @@ import SwiftUI
 /// One prepared segment of a reply (#60 A1, ADR-0091).
 struct PreparedMarkdownSegment: Sendable {
     let index: Int
-    /// The Markdown rendered: the segment body followed by the reference definitions it was prepared
-    /// with. A segment that cannot use definitions keeps its preparation when they grow, so this can
-    /// carry an earlier suffix than the segmentation's.
-    let text: String
+    /// The segment's Markdown body, sharing storage with the segmentation's.
+    let body: String
+    /// The reference definitions the segment was prepared with, shared by every segment prepared
+    /// against the same suffix rather than copied into each. A segment that cannot use definitions
+    /// keeps its preparation when they grow, so this can be an earlier suffix than the segmentation's.
     let definitionSuffix: String
     let kind: MarkdownSegment.Kind
     let continuesPrevious: Bool
@@ -32,15 +33,22 @@ struct PreparedMarkdownSegment: Sendable {
     /// Whether reference definitions can change how the segment renders. A reference always has a
     /// closing bracket, so a parsed segment without one renders the same with any definitions.
     let usesDefinitions: Bool
-    /// UTF-8 bytes of the body at the start of `text`.
+    /// UTF-8 bytes of `body`.
     let bodyBytes: Int
 
     var isParsed: Bool { preparation != nil }
 
+    /// The Markdown rendered: the body followed by the definitions. Built only when needed (a parse,
+    /// a verbatim piece's text), never retained, so definitions are not copied into every segment.
+    var text: String { definitionSuffix.isEmpty ? body : body + definitionSuffix }
+
+    /// UTF-8 bytes of `text`, without building it.
+    var textBytes: Int { bodyBytes + definitionSuffix.utf8.count }
+
     /// This segment without its parse, as kept outside the requested window.
     func unparsed() -> PreparedMarkdownSegment {
         PreparedMarkdownSegment(
-            index: index, text: text, definitionSuffix: definitionSuffix, kind: kind,
+            index: index, body: body, definitionSuffix: definitionSuffix, kind: kind,
             continuesPrevious: continuesPrevious, isSettled: isSettled, preparation: nil, preparationID: 0,
             leadingMargin: nil, trailingMargin: nil, lastLeafIsParagraph: false, endsInParagraph: nil,
             usesDefinitions: usesDefinitions, bodyBytes: bodyBytes)
@@ -48,7 +56,7 @@ struct PreparedMarkdownSegment: Sendable {
 
     func updating(isSettled: Bool, continuesPrevious: Bool, endsInParagraph: Bool?) -> PreparedMarkdownSegment {
         PreparedMarkdownSegment(
-            index: index, text: text, definitionSuffix: definitionSuffix, kind: kind,
+            index: index, body: body, definitionSuffix: definitionSuffix, kind: kind,
             continuesPrevious: continuesPrevious, isSettled: isSettled, preparation: preparation,
             preparationID: preparationID, leadingMargin: leadingMargin, trailingMargin: trailingMargin,
             lastLeafIsParagraph: lastLeafIsParagraph, endsInParagraph: endsInParagraph,
@@ -113,9 +121,15 @@ struct PreparedMarkdownDocument: Sendable {
     /// UTF-8 bytes the segments render: bodies with any rebuilt syntax, whole artifacts and the
     /// definition suffix of every segment that carries it. The window budget charges this.
     let renderedBytes: Int
-    /// The rendered bytes of the segments currently parsed. Equal to `renderedBytes` unless the
-    /// document was prepared for a window.
+    /// The rendered bytes of the segments currently parsed, the proxy for their parsed content. Equal
+    /// to `renderedBytes` unless the document was prepared for a window.
     let retainedBytes: Int
+    /// UTF-8 bytes of every segment's body, parsed or not.
+    let bodyBytes: Int
+    /// UTF-8 bytes of the definition suffixes the segments share: the settled and the provisional
+    /// suffix, each within `MarkdownSegmenter.definitionLimit`. Segments that cannot use definitions
+    /// hold none, so no older suffix is retained.
+    var definitionBytes = 0
     /// The segments the view lays out; nil when it lays out every segment.
     var window: Range<Int>? = nil
 
@@ -125,11 +139,12 @@ struct PreparedMarkdownDocument: Sendable {
     /// The rendered bytes of the segments the view lays out. The transcript window charges this.
     var shownBytes: Int {
         guard let window else { return renderedBytes }
-        return window.reduce(0) { $0 + segments[$1].text.utf8.count }
+        return window.reduce(0) { $0 + segments[$1].textBytes }
     }
 
-    /// What caches charge for a document: the parsed segments' bytes plus the retained source.
-    var cost: Int { retainedBytes + source.utf8.count }
+    /// What caches charge for a document: the source, every segment's body, the shared definitions
+    /// and the parsed segments' content.
+    var cost: Int { source.utf8.count + bodyBytes + definitionBytes + retainedBytes }
 
     func matches(_ revision: TextRevision, isComplete: Bool) -> Bool {
         self.revision == revision && self.isComplete == isComplete
@@ -171,8 +186,9 @@ enum SegmentWindow: Hashable, Sendable {
 /// definitions change, only settled segments with a closing bracket are prepared again. Parsing
 /// happens here, never while SwiftUI evaluates a transcript row.
 ///
-/// Entries are retained under a deterministic budget: rendered bytes plus source bytes, plus the
-/// source bytes again for the segment bodies a streaming reply's scanner holds. A reply whose cost
+/// Entries are retained under a deterministic budget (`PreparedMarkdownDocument.cost`): the source,
+/// every segment's body, the shared definition suffixes and the parsed segments, plus the source bytes
+/// again for the segment bodies a streaming reply's scanner holds. A reply whose cost
 /// exceeds `maximumEntryCost` is prepared and returned but not retained, and keeps no scanner state.
 /// Least recently used entries are evicted with their scanner state. Memory pressure clears it
 /// through `RenderingCaches`.
@@ -226,6 +242,7 @@ actor MarkdownSegmentCache {
         var prepared = PreparedSegmentList()
         var renderedBytes = 0
         var retainedBytes = 0
+        var bodyBytes = 0
         /// The window of the last refresh; nil when every segment is parsed.
         var window: Range<Int>?
         /// Segments below this index were settled, and prepared against `settledSuffix`, at the last
@@ -233,6 +250,14 @@ actor MarkdownSegmentCache {
         var preparedSettledCount = 0
         var settledSuffix = ""
         var tailIndex: Int?
+
+        /// The shared suffixes the prepared segments hold: the settled one, and the provisional one
+        /// when it differs. Suffixes equal in value come from the same segmentation string.
+        var definitionBytes: Int {
+            let provisional = tailIndex.map { prepared[$0].definitionSuffix } ?? ""
+            let settled = settledSuffix.utf8.count
+            return provisional == settledSuffix ? settled : settled + provisional.utf8.count
+        }
     }
 
     let maximumEntries: Int
@@ -250,12 +275,12 @@ actor MarkdownSegmentCache {
     private var preparationCount: UInt64 = 0
     private var work = Work()
 
-    /// Defaults retain a streaming reply through `ReplyWindow.richLimit` (its source, its scanner's
-    /// copy and its window's parses) and at most 16 MiB in all.
+    /// Defaults retain a streaming reply through `ReplyWindow.richLimit` (its source, its segment
+    /// bodies, its scanner's copy, shared definitions and its window's parses) and at most 16 MiB in all.
     init(
         maximumEntries: Int = 32,
         maximumCost: Int = 16 * 1_024 * 1_024,
-        maximumEntryCost: Int = 2 * ReplyWindow.richLimit + 512 * 1_024,
+        maximumEntryCost: Int = 3 * ReplyWindow.richLimit + 512 * 1_024,
         targetBytes: Int = MarkdownSegmenter.targetBytes,
         maximumBytes: Int = MarkdownSegmenter.maximumBytes
     ) {
@@ -299,7 +324,7 @@ actor MarkdownSegmentCache {
             revision.map({ previous.document.revision == $0 }) ?? (previous.document.source == source)
         {
             let segments = previous.document.segments
-            let window = request.resolve(count: segments.count, cost: { segments[$0].text.utf8.count })
+            let window = request.resolve(count: segments.count, cost: { segments[$0].textBytes })
             guard previous.window != window else {
                 insert(previous.document, cost: previous.cost, for: id, window: window)
                 return previous.document
@@ -312,7 +337,8 @@ actor MarkdownSegmentCache {
             applyWindow(&windowed, retainedBytes: &retained, window: window, previous: previous.window, tail: tail)
             let document = PreparedMarkdownDocument(
                 source: old.source, revision: old.revision, isComplete: old.isComplete, segments: windowed,
-                renderedBytes: old.renderedBytes, retainedBytes: retained, window: window)
+                renderedBytes: old.renderedBytes, retainedBytes: retained, bodyBytes: old.bodyBytes,
+                definitionBytes: old.definitionBytes, window: window)
             if var stream = streams.removeValue(forKey: id) {
                 stream.prepared = windowed
                 stream.retainedBytes = retained
@@ -338,6 +364,7 @@ actor MarkdownSegmentCache {
                 stream.prepared = previous.document.segments
                 stream.renderedBytes = previous.document.renderedBytes
                 stream.retainedBytes = previous.document.retainedBytes
+                stream.bodyBytes = previous.document.bodyBytes
                 stream.window = previous.window
             }
         }
@@ -355,7 +382,11 @@ actor MarkdownSegmentCache {
         started = clock.now
         // Read in place: a copy of the segmentation would make its next extension copy its storage.
         let window = request.resolve(
-            count: stream.segmentation.count, cost: { stream.segmentation[$0].text.utf8.count })
+            count: stream.segmentation.count,
+            cost: {
+                let segment = stream.segmentation[$0]
+                return segment.body.utf8.count + segment.definitionSuffix.utf8.count
+            })
         assemble(&stream, isComplete: isComplete, window: window)
         applyWindow(
             &stream.prepared, retainedBytes: &stream.retainedBytes, window: window, previous: stream.window,
@@ -365,7 +396,8 @@ actor MarkdownSegmentCache {
 
         let document = PreparedMarkdownDocument(
             source: source, revision: revision, isComplete: isComplete, segments: stream.prepared,
-            renderedBytes: stream.renderedBytes, retainedBytes: stream.retainedBytes, window: window)
+            renderedBytes: stream.renderedBytes, retainedBytes: stream.retainedBytes, bodyBytes: stream.bodyBytes,
+            definitionBytes: stream.definitionBytes, window: window)
         // A streaming reply's scanner also holds its segment bodies, about the source again.
         let streamCost = isComplete ? 0 : source.utf8.count
         if !isComplete { streams[id] = stream }
@@ -438,8 +470,9 @@ actor MarkdownSegmentCache {
         }
         if stream.prepared.count > count {
             for index in count..<stream.prepared.count {
-                stream.renderedBytes -= stream.prepared[index].text.utf8.count
-                if stream.prepared[index].isParsed { stream.retainedBytes -= stream.prepared[index].text.utf8.count }
+                stream.renderedBytes -= stream.prepared[index].textBytes
+                stream.bodyBytes -= stream.prepared[index].bodyBytes
+                if stream.prepared[index].isParsed { stream.retainedBytes -= stream.prepared[index].textBytes }
             }
             stream.prepared.removeSuffix(from: count)
         }
@@ -465,7 +498,7 @@ actor MarkdownSegmentCache {
             let parsed = fresh.updating(
                 isSettled: old.isSettled, continuesPrevious: old.continuesPrevious,
                 endsInParagraph: index == tail ? fresh.lastLeafIsParagraph : nil)
-            retainedBytes += parsed.text.utf8.count
+            retainedBytes += parsed.textBytes
             segments.set(parsed, at: index)
         }
         guard let window else { return }
@@ -475,7 +508,7 @@ actor MarkdownSegmentCache {
         }
         let keep = kept(window)
         for index in previous.map(kept) ?? all where !keep.contains(index) && segments[index].isParsed {
-            retainedBytes -= segments[index].text.utf8.count
+            retainedBytes -= segments[index].textBytes
             segments.set(segments[index].unparsed(), at: index)
         }
     }
@@ -483,11 +516,13 @@ actor MarkdownSegmentCache {
     private func replace(_ stream: inout Stream, at index: Int, with segment: PreparedMarkdownSegment) {
         if index < stream.prepared.count {
             let old = stream.prepared[index]
-            stream.renderedBytes -= old.text.utf8.count
-            if old.isParsed { stream.retainedBytes -= old.text.utf8.count }
+            stream.renderedBytes -= old.textBytes
+            stream.bodyBytes -= old.bodyBytes
+            if old.isParsed { stream.retainedBytes -= old.textBytes }
         }
-        stream.renderedBytes += segment.text.utf8.count
-        if segment.isParsed { stream.retainedBytes += segment.text.utf8.count }
+        stream.renderedBytes += segment.textBytes
+        stream.bodyBytes += segment.bodyBytes
+        if segment.isParsed { stream.retainedBytes += segment.textBytes }
         stream.prepared.set(segment, at: index)
     }
 
@@ -496,19 +531,19 @@ actor MarkdownSegmentCache {
     private func renders(_ old: PreparedMarkdownSegment, _ segment: MarkdownSegment) -> Bool {
         guard old.kind == segment.kind, old.bodyBytes == segment.body.utf8.count else { return false }
         work.comparedBytes += old.bodyBytes
-        guard old.text.utf8.prefix(old.bodyBytes).elementsEqual(segment.body.utf8) else { return false }
+        guard old.body.utf8.elementsEqual(segment.body.utf8) else { return false }
         return !old.usesDefinitions || old.definitionSuffix == segment.definitionSuffix
     }
 
     /// `segment` with its text but no parse, for a segment outside the requested window.
+    /// A segment that cannot use definitions renders the same without them, so it keeps none.
     private func unparsed(_ segment: MarkdownSegment) -> PreparedMarkdownSegment {
-        PreparedMarkdownSegment(
-            index: segment.index, text: segment.text, definitionSuffix: segment.definitionSuffix, kind: segment.kind,
-            continuesPrevious: segment.continuesPrevious, isSettled: segment.isSettled, preparation: nil,
-            preparationID: 0, leadingMargin: nil, trailingMargin: nil, lastLeafIsParagraph: false,
-            endsInParagraph: nil,
-            usesDefinitions: segment.kind != .verbatimPiece && segment.body.utf8.contains(UInt8(ascii: "]")),
-            bodyBytes: segment.body.utf8.count)
+        let usesDefinitions = segment.kind != .verbatimPiece && segment.body.utf8.contains(UInt8(ascii: "]"))
+        return PreparedMarkdownSegment(
+            index: segment.index, body: segment.body, definitionSuffix: usesDefinitions ? segment.definitionSuffix : "",
+            kind: segment.kind, continuesPrevious: segment.continuesPrevious, isSettled: segment.isSettled,
+            preparation: nil, preparationID: 0, leadingMargin: nil, trailingMargin: nil, lastLeafIsParagraph: false,
+            endsInParagraph: nil, usesDefinitions: usesDefinitions, bodyBytes: segment.body.utf8.count)
     }
 
     private func parse(_ segment: MarkdownSegment) -> PreparedMarkdownSegment {
@@ -541,7 +576,7 @@ actor MarkdownSegmentCache {
             parsedBytes += text.utf8.count
         }
         return PreparedMarkdownSegment(
-            index: segment.index, text: text, definitionSuffix: segment.definitionSuffix, kind: segment.kind,
+            index: segment.index, body: segment.body, definitionSuffix: segment.definitionSuffix, kind: segment.kind,
             continuesPrevious: segment.continuesPrevious, isSettled: segment.isSettled, preparation: preparation,
             preparationID: preparationCount, leadingMargin: structure.leadingMargin,
             trailingMargin: structure.trailingMargin, lastLeafIsParagraph: structure.lastLeafIsParagraph,
@@ -641,11 +676,11 @@ final class PreparedMarkdownDocumentCache {
     private var totalCost = 0
     private var clock: UInt64 = 0
 
-    /// Defaults retain a windowed reply through `ReplyWindow.richLimit` (its source and its window's
-    /// parses) and at most 16 MiB in all.
+    /// Defaults retain a windowed reply through `ReplyWindow.richLimit` (its source, its segment bodies,
+    /// shared definitions and its window's parses) and at most 16 MiB in all.
     init(
         maximumEntries: Int = 64, maximumTotalCost: Int = 16 * 1_024 * 1_024,
-        maximumEntryCost: Int = ReplyWindow.richLimit + 512 * 1_024
+        maximumEntryCost: Int = 2 * ReplyWindow.richLimit + 512 * 1_024
     ) {
         self.maximumEntries = max(1, maximumEntries)
         self.maximumTotalCost = max(1, maximumTotalCost)
@@ -903,7 +938,7 @@ struct SegmentedMarkdownView: View {
         }
     }
 
-    private func cost(_ index: Int) -> Int { document.segments[index].text.utf8.count }
+    private func cost(_ index: Int) -> Int { document.segments[index].textBytes }
 
     nonisolated private static func contentFrame(_ proxy: GeometryProxy) -> CGRect {
         proxy.frame(in: .named(transcriptContentSpace))

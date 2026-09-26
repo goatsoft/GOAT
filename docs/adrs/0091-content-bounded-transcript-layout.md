@@ -164,9 +164,10 @@ segment rather than per message. Deliver it in three reviewable steps:
      loader, as the message window does. `MarkdownSegmentCache.prepare(window:)` resolves the request
      (all, latest, or a held range) against the reply's segments after segmentation, parses only the
      window, and releases parses more than two segments outside it, so retained parses are bounded by
-     the window, not the reply. Prepared-cache retention is bounded separately: an entry may hold a
-     streaming reply at the rich limit (its source, its scanner's copy and its window's parses) and
-     each cache at most 16 MiB. The message window charges a prepared reply the bytes of its shown
+     the window, not the reply. Prepared-cache retention is bounded separately and charges what is
+     retained: the source, every segment body (parsed or not), the shared definition suffixes (segments
+     keep one shared string rather than a copy each) and the parsed segments. An entry may hold a
+     streaming reply at the rich limit, with its scanner's copy, and each cache at most 16 MiB. The message window charges a prepared reply the bytes of its shown
      segments.
    - **Navigation.** `TranscriptViewport` owns each paged reply window. Loaders at a window's edges
      page it when they come into view, like the message loaders; the kept segment (the old window's
