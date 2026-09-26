@@ -1,56 +1,103 @@
 import AppKit
+import Caprine
+import OKLabColorPicker
 import Pens
 import SwiftUI
 
-/// A compact OKLCH colour picker: a live swatch + quick palette, then Lightness / Chroma /
-/// Hue sliders. Perceptually uniform, themed, no dependency (conversion lives in GoatCore).
-struct OKLCHPicker: View {
-    @Binding var color: OKLCH
-    var tint: Color
+/// Adapt the shared picker at the UI boundary; the Pen's persisted OKLCH representation stays stable.
+enum ColorPickerValues {
+    static func picker(_ color: OKLCH) -> OKLabColorValue {
+        OKLabColorValue(lightness: color.l, chroma: color.c, hueDegrees: color.h)
+    }
+
+    static func pen(_ color: OKLabColorValue) -> OKLCH {
+        OKLCH(l: color.lightness, c: color.chroma, h: color.hueDegrees)
+    }
+
+    /// Theme slots store opaque #RRGGBB, including when the picker accepts an RGBA hex value.
+    static func themeHex(_ color: OKLabColorValue) -> String {
+        var opaque = color
+        opaque.alpha = 1
+        return opaque.hexString
+    }
+}
+
+/// Shared picker with writable mode state (the upstream convenience button uses a constant mode).
+struct ThemeColorPicker: View {
+    @Binding var hex: String
+    let title: String
+    @State private var showingPicker = false
+    @State private var mode = OKLabPickerMode.polarOKLCH
+
+    private var value: Binding<OKLabColorValue> {
+        Binding(
+            get: { OKLabColorValue.from(hex: hex) ?? OKLabColorValue(lightness: 0, a: 0, b: 0) },
+            set: { hex = ColorPickerValues.themeHex($0) })
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color(color))
-                    .frame(width: 40, height: 28)
-                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(0.2)))
-                    .shadow(color: Color(color).opacity(0.5), radius: 5)
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 7) {
-                        ForEach(Array(OKLCH.palette.enumerated()), id: \.offset) { _, swatch in
-                            Circle()
-                                .fill(Color(swatch))
-                                .frame(width: 18, height: 18)
-                                .overlay(
-                                    Circle().strokeBorder(
-                                        .white.opacity(isSelected(swatch) ? 0.9 : 0.15),
-                                        lineWidth: isSelected(swatch) ? 2 : 1)
-                                )
-                                .onTapGesture { color = swatch }
-                        }
-                    }
-                    .padding(.vertical, 1)
-                }
+        Button {
+            showingPicker.toggle()
+        } label: {
+            HStack(spacing: Caprine.Activity.spacing) {
+                RoundedRectangle(cornerRadius: Caprine.Activity.radius)
+                    .fill(Color(hexString: hex))
+                    .frame(width: InterfaceMetrics.controlHitArea, height: InterfaceMetrics.controlHitArea)
+                Text(title)
+                Spacer()
+                Text(hex).monospaced().foregroundStyle(.secondary)
             }
-            slider("Lightness", value: $color.l, range: 0.35...0.92)
-            slider("Chroma", value: $color.c, range: 0...0.30)
-            slider("Hue", value: $color.h, range: 0...360)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityValue(hex)
+        .popover(isPresented: $showingPicker) {
+            SharedColorSelection(color: value, mode: $mode, title: title)
+                .padding(Caprine.Activity.spacing)
+                .frame(width: Caprine.ColorEditing.pickerWidth)
         }
     }
+}
 
-    private func isSelected(_ s: OKLCH) -> Bool {
-        abs(s.h - color.h) < 1 && abs(s.l - color.l) < 0.01 && abs(s.c - color.c) < 0.01
+/// Pen colours keep their persisted values; the shared package supplies swatches and precise controls.
+struct PenColorPicker: View {
+    @Binding var color: OKLCH
+    @State private var mode = OKLabPickerMode.perceptualSwatches
+
+    var body: some View {
+        SharedColorSelection(
+            color: Binding(get: { ColorPickerValues.picker(color) }, set: { color = ColorPickerValues.pen($0) }),
+            mode: $mode, title: "Pen colour")
     }
+}
 
-    private func slider(_ label: String, value: Binding<Double>, range: ClosedRange<Double>) -> some View {
-        HStack(spacing: 8) {
-            Text(label)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .frame(width: 62, alignment: .leading)
-            Slider(value: value, in: range)
-                .tint(tint)
+/// The package accepts a mode binding; the host supplies the mode selector.
+private struct SharedColorSelection: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Binding var color: OKLabColorValue
+    @Binding var mode: OKLabPickerMode
+    let title: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Caprine.Activity.spacing) {
+            Picker("Colour controls", selection: $mode) {
+                Text("Swatches").tag(OKLabPickerMode.perceptualSwatches)
+                Text("Colour wheel").tag(OKLabPickerMode.polarOKLCH)
+                Text("Sliders").tag(OKLabPickerMode.cartesianOKLab)
+                Text("Harmonies").tag(OKLabPickerMode.colorHarmonies)
+            }
+            .pickerStyle(.menu)
+            OKLabColorPicker(
+                color: $color, mode: $mode,
+                configuration: OKLabPickerConfiguration(title: title, showColorMetrics: false))
+        }
+        .transaction { transaction in
+            if reduceMotion || !model.animationsEnabled {
+                transaction.animation = nil
+                transaction.disablesAnimations = true
+            }
         }
     }
 }

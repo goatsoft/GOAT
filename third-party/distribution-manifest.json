@@ -38,6 +38,15 @@
       }
     },
     {
+      "identity": "oklabcolorpicker",
+      "kind": "remoteSourceControl",
+      "location": "https://github.com/goatsoft/OKLabColorPicker",
+      "state": {
+        "revision": "aaaad3d7de01cce2f52d21d93e716f84f1a1b211",
+        "version": "0.1.1"
+      }
+    },
+    {
       "identity": "swift-atomics",
       "kind": "remoteSourceControl",
       "location": "https://github.com/apple/swift-atomics.git",
@@ -1907,7 +1916,7 @@
     },
     {
       "path": "apps/goat-macos/GOAT.xcodeproj/project.pbxproj",
-      "sha256": "4f3898b5b0fd634ef4768a47ec3048f22bad4f7faa3b1c631409103ab3b70148"
+      "sha256": "9cd45778d0990c9ee88e49f4aa3d1075182c6327055fdbee295c4f2e774df214"
     },
     {
       "path": "scripts/distribution-notices.py",
@@ -1949,7 +1958,7 @@
   "outputs": [
     {
       "path": "apps/goat-macos/App/Resources/Licenses/THIRD-PARTY-NOTICES.txt",
-      "sha256": "94cdac7454189b520c8cd5ca286cee8aee07ae9df21b079868e8aa6059317b7e"
+      "sha256": "e76eb0ae0b298ab3fcbffbcbb261c7be2f7a65b472fbf671ecbbb5331fcb96e5"
     },
     {
       "path": "apps/goat-macos/App/Resources/Licenses/LICENSE.txt",

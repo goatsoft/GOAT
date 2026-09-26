@@ -16,24 +16,28 @@ extension AppModel {
     }
 
     /// Save a user theme (optionally with a preview image) and select it.
-    func saveTheme(_ spec: ThemeSpec, previewData: Data? = nil) async {
+    @discardableResult
+    func saveTheme(_ spec: ThemeSpec, previewData: Data? = nil) async -> Bool {
         await saveThemeOnWorker(spec, previewData: previewData)
     }
 
-    private func saveThemeOnWorker(_ spec: ThemeSpec, previewData: Data?) async {
+    @discardableResult
+    private func saveThemeOnWorker(_ spec: ThemeSpec, previewData: Data?) async -> Bool {
         let revision = nextThemeStoreRevision()
         do {
             guard
                 let result = try await fileWorker.saveTheme(
                     spec, previewData: previewData, revision: revision)
-            else { return }
-            guard themeStoreRevision == revision, !Task.isCancelled else { return }
-            guard let saved = result.saved else { return }
+            else { return false }
+            guard themeStoreRevision == revision, !Task.isCancelled else { return false }
+            guard let saved = result.saved else { return false }
             userThemes = result.themes
             themeID = saved.id
+            return true
         } catch {
             dbWarning = "Theme was not saved: \(error.localizedDescription)"
             if themeStoreRevision == revision { await reloadThemes() }
+            return false
         }
     }
 

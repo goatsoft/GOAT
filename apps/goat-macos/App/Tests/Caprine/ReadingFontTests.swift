@@ -1,4 +1,6 @@
 import AppKit
+import OKLabColorPicker
+import Pens
 import Testing
 
 @testable import GOAT
@@ -79,6 +81,29 @@ extension AppTests.Caprine {
                     == "font:Menlo-Regular")
             let unavailable = ReadingFonts.requestedID(selection: "theme", themeFont: "GOAT-Missing-Font", role: .code)
             #expect(ReadingFonts.nsFont(unavailable, size: 17, role: .code).isFixedPitch)
+        }
+    }
+}
+
+extension AppTests.Caprine {
+    @Suite struct ColorPickerValueTests {
+        @Test func penColoursRoundTripWithoutSRGBClipping() {
+            let source = OKLCH(l: 0.68, c: 0.30, h: 250)
+            let restored = ColorPickerValues.pen(ColorPickerValues.picker(source))
+            #expect(abs(restored.l - source.l) < 0.000001)
+            #expect(abs(restored.c - source.c) < 0.000001)
+            #expect(abs(restored.h - source.h) < 0.000001)
+        }
+
+        @Test(arguments: ["#000000", "#FFFFFF", "#3AA0FF", "#7542CB"])
+        func themeColoursKeepTheirStoredRGB(hex: String) throws {
+            let value = try #require(OKLabColorValue.from(hex: hex))
+            #expect(ColorPickerValues.themeHex(value) == hex)
+        }
+
+        @Test func themeSlotsStayOpaqueEvenWhenHexIncludesAlpha() throws {
+            let value = try #require(OKLabColorValue.from(hex: "#3AA0FF80"))
+            #expect(ColorPickerValues.themeHex(value) == "#3AA0FF")
         }
     }
 }

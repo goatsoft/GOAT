@@ -37,6 +37,15 @@
       }
     },
     {
+      "identity": "oklabcolorpicker",
+      "kind": "remoteSourceControl",
+      "location": "https://github.com/goatsoft/OKLabColorPicker",
+      "state": {
+        "revision": "aaaad3d7de01cce2f52d21d93e716f84f1a1b211",
+        "version": "0.1.1"
+      }
+    },
+    {
       "identity": "swift-atomics",
       "kind": "remoteSourceControl",
       "location": "https://github.com/apple/swift-atomics.git",

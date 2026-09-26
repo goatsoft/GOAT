@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		EABE25C511B14761B229FF01 /* OKLabColorPicker in Frameworks */ = {isa = PBXBuildFile; productRef = EABE25C511B14761B229FF03 /* OKLabColorPicker */; };
 		00D05EB310864CC79FB0B18B /* EngineRecoveryController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95AE81071E463320EAA77CBE /* EngineRecoveryController.swift */; };
 		019D3569FFC4BD5A25F0AF8E /* ResponseDetailsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E2BA5E1763E4AFE11427CDF /* ResponseDetailsView.swift */; };
 		038245916A8530E93C6B420C /* AppModel+Pens.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62A4D904562FF87B0C028785 /* AppModel+Pens.swift */; };
@@ -486,6 +487,7 @@
 				263F463A9030B9D10630A706 /* Tools in Frameworks */,
 				9AF9A7793FCC941B9CE9B4F4 /* MarkdownUI in Frameworks */,
 				37FB8FC1BE37D6CD48C458CD /* HighlightKit in Frameworks */,
+				EABE25C511B14761B229FF01 /* OKLabColorPicker in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1037,6 +1039,7 @@
 				6DDD19C0C715976773D69DD4 /* Tools */,
 				626F31F1214FAA5C71F8E9A8 /* MarkdownUI */,
 				CB57A21F037A14E96BCA7F4B /* HighlightKit */,
+				EABE25C511B14761B229FF03 /* OKLabColorPicker */,
 			);
 			productName = GOAT;
 			productReference = CEE5B7BDBDC665EE431D5AD3 /* GOAT.app */;
@@ -1069,6 +1072,7 @@
 			mainGroup = F95972CAB8422D4991F31C57;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				EABE25C511B14761B229FF02 /* XCRemoteSwiftPackageReference "OKLabColorPicker" */,
 				801BF9E9D400E47259B4D079 /* XCRemoteSwiftPackageReference "HighlightKit" */,
 				CB866D29EE67008C4F183861 /* XCRemoteSwiftPackageReference "swift-markdown-ui" */,
 				3290AB21C3DC62D58BD67E1F /* XCLocalSwiftPackageReference "Modules" */,
@@ -1587,6 +1591,11 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+        EABE25C511B14761B229FF02 /* XCRemoteSwiftPackageReference "OKLabColorPicker" */ = {
+            isa = XCRemoteSwiftPackageReference;
+            repositoryURL = "https://github.com/goatsoft/OKLabColorPicker";
+            requirement = { kind = exactVersion; version = 0.1.1; };
+        };
 		801BF9E9D400E47259B4D079 /* XCRemoteSwiftPackageReference "HighlightKit" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/goatsoft/HighlightKit";
@@ -1606,6 +1615,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+        EABE25C511B14761B229FF03 /* OKLabColorPicker */ = {
+            isa = XCSwiftPackageProductDependency;
+            package = EABE25C511B14761B229FF02 /* XCRemoteSwiftPackageReference "OKLabColorPicker" */;
+            productName = OKLabColorPicker;
+        };
 		0C2E19BA77DA82B622ADCCB8 /* JUDAS */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = JUDAS;
