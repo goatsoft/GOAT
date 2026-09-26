@@ -88,6 +88,7 @@ enum TranscriptWindow {
         guard bytes <= TranscriptTextParts.maximumBytes, message.role == .assistant else {
             return min(TranscriptTextParts.maximumBytes, bytes)
         }
-        return PreparedMarkdownDocumentCache.shared.renderedBytes(for: message.id, source: message.text) ?? bytes
+        let cache = PreparedMarkdownDocumentCache.shared
+        return cache.renderedBytes(for: message.id, revision: message.textRevision) ?? bytes
     }
 }

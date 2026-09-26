@@ -215,36 +215,44 @@ struct PreparedMarkdownView<Rendered: View>: View {
 }
 
 /// Unified, stable Markdown view for both streaming and complete states without view-identity swapping.
-/// The reply renders as segments (#60 A1 step 2, ADR-0091): settled segments are prepared once and
-/// keep their views while only the streaming tail is re-prepared. Text above 8 KiB keeps the
-/// plain-text parts fallback until segment-level windowing (step 3) bounds what one reply lays out.
+/// The reply renders as segments (#60 A1, ADR-0091): settled segments are prepared once and keep
+/// their views while only the streaming tail is re-prepared. The message's text revision identifies
+/// each sample, so refreshes never compare the reply's text. Text above 8 KiB keeps the plain-text
+/// parts fallback until segment-level windowing (step 3) bounds what one reply lays out.
 struct StreamingMarkdownView: View {
     @Bindable var message: ChatMessage
     @Environment(AppModel.self) private var model
     @State private var snapshot: Snapshot
     @State private var document: PreparedMarkdownDocument?
 
-    /// The text and completion sampled together, so completion always prepares the final text.
+    /// The text and completion sampled together, so completion always prepares the final text. The
+    /// revision identifies the text, so equality never reads it.
     private struct Snapshot: Equatable {
-        let source: String
+        let revision: TextRevision
         let isComplete: Bool
+        let source: String
+
+        static func == (lhs: Snapshot, rhs: Snapshot) -> Bool {
+            lhs.revision == rhs.revision && lhs.isComplete == rhs.isComplete
+        }
     }
 
     init(message: ChatMessage) {
         self.message = message
-        _snapshot = State(initialValue: Snapshot(source: message.text, isComplete: message.complete))
+        _snapshot = State(
+            initialValue: Snapshot(revision: message.textRevision, isComplete: message.complete, source: message.text))
         // Seed only from an already-prepared document. SwiftUI evaluates this initializer on every
         // parent update, so it must stay a lookup. A streaming reply may show its last prepared
         // document until the current text is ready, as the view itself does between refreshes.
         let cache = PreparedMarkdownDocumentCache.shared
         _document = State(
-            initialValue: cache.document(for: message.id, source: message.text)
+            initialValue: cache.document(for: message.id, revision: message.textRevision)
                 ?? (message.complete ? nil : cache.latest(for: message.id)))
     }
 
     var body: some View {
         Group {
-            if snapshot.source.utf8.count > TranscriptTextParts.maximumBytes {
+            if snapshot.revision.utf8Count > TranscriptTextParts.maximumBytes {
                 TranscriptTextPartsView(
                     source: snapshot.source, fontSize: model.chatFontSize, cacheKey: "\(message.id.uuidString):text",
                     onPrepared: { message.markRenderChanged() })
@@ -262,11 +270,12 @@ struct StreamingMarkdownView: View {
         .alignmentGuide(.trailing) { dimensions in dimensions.width }
         .task(id: snapshot) {
             let request = snapshot
-            guard request.source.utf8.count <= TranscriptTextParts.maximumBytes else { return }
-            if let document, document.source == request.source, document.isComplete == request.isComplete { return }
+            guard request.revision.utf8Count <= TranscriptTextParts.maximumBytes else { return }
+            if let document, document.matches(request.revision, isComplete: request.isComplete) { return }
             guard
                 let prepared = await MarkdownSegmentCache.shared.prepare(
-                    id: message.id, source: request.source, isComplete: request.isComplete),
+                    id: message.id, source: request.source, revision: request.revision,
+                    isComplete: request.isComplete),
                 !Task.isCancelled
             else { return }
             document = prepared
@@ -285,7 +294,8 @@ struct StreamingMarkdownView: View {
     }
 
     private func sample() {
-        let next = Snapshot(source: message.text, isComplete: message.complete)
-        if snapshot != next { snapshot = next }
+        let revision = message.textRevision
+        guard revision != snapshot.revision || message.complete != snapshot.isComplete else { return }
+        snapshot = Snapshot(revision: revision, isComplete: message.complete, source: message.text)
     }
 }
