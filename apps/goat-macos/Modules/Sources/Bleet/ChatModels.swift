@@ -18,6 +18,11 @@ public struct TextRevision: Hashable, Sendable {
     public let epoch: UInt64
     public let utf8Count: Int
 
+    public init(epoch: UInt64, utf8Count: Int) {
+        self.epoch = epoch
+        self.utf8Count = utf8Count
+    }
+
     /// Whether this revision is `older` with text appended (or unchanged).
     public func extends(_ older: TextRevision) -> Bool {
         epoch == older.epoch && utf8Count >= older.utf8Count
