@@ -496,7 +496,8 @@ private struct MarkdownSegmentView: View, Equatable {
                         CodeBlockScope(
                             messageID: $0, segment: codeSegment, content: content,
                             preparationID: segment.preparationID, isFencePiece: segment.kind == .fencedCodePiece)
-                    })
+                    }
+                )
                 // Text layouts arrive in view order, so when the segment ends in a paragraph the last
                 // one is that paragraph's, wherever its text also appears earlier.
                 .overlayPreferenceValue(Text.LayoutKey.self) { layouts in
