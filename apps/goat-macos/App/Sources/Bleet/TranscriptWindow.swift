@@ -75,8 +75,19 @@ enum TranscriptWindow {
         // Do not scan tool payloads or all reasoning merely to decide which rows to admit.
         // Answer and reasoning each render at most one parts page. Reasoning is charged at its expanded
         // size (not the character-based preview) because the reader can show all of it in place.
-        min(TranscriptTextParts.maximumBytes, message.text.utf8.count)
+        answerCost(message)
             + min(TranscriptTextParts.maximumBytes, message.thinking.utf8.count)
             + min(capacity, message.toolEvents.count) * 256
+    }
+
+    /// A segmented reply is charged the bytes its segments render (rebuilt syntax, artifacts and each
+    /// segment's definition suffix) once prepared, and its source bytes until then. Above the parts
+    /// threshold it renders one parts page.
+    @MainActor private static func answerCost(_ message: ChatMessage) -> Int {
+        let bytes = message.text.utf8.count
+        guard bytes <= TranscriptTextParts.maximumBytes, message.role == .assistant else {
+            return min(TranscriptTextParts.maximumBytes, bytes)
+        }
+        return PreparedMarkdownDocumentCache.shared.renderedBytes(for: message.id, source: message.text) ?? bytes
     }
 }

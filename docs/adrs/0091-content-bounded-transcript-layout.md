@@ -125,6 +125,23 @@ segment rather than per message. Deliver it in three reviewable steps:
      rendered, including whole artifacts and the definition suffix, which sit outside the body bound.
    - Pieces of oversized blocks are not full Markdown semantic preservation (see step 1), so A1 stays
      open until this step's acceptance passes.
+   - **As implemented.** `MarkdownSegmentCache` (an actor) holds each streaming reply's
+     segmentation in place, starts a new one when the source no longer extends the previous one (an
+     edit, or the trim at completion), and reuses a settled segment while the definition suffix is
+     unchanged. Other segments are reused only when their text is unchanged. Its entries and the
+     main-actor `PreparedMarkdownDocumentCache` (first-frame reuse) are charged rendered bytes plus
+     source bytes. The window charges a prepared reply its rendered bytes. Segments stack with the gap
+     MarkdownUI's block sequence would leave between the same blocks (the larger adjacent margin, or
+     the default padding when neither block sets one). Pieces marked `continuesPrevious` have no gap.
+     Only a reply's first segment can be an HTML or SVG artifact. The caret draws through a
+     `TextRenderer` on the paragraph that ends the tail segment, so it never changes layout. The 8 KiB
+     parts fallback still applies to the whole reply, so a reply renders at most two segments until
+     step 3.
+   - **Measured (Release, engine-free).** For a streamed reply with 1 KiB refreshes, parsed bytes per
+     reply byte stay at about 4.0 at 32, 64 and 128 KiB. Parsing the whole reply at every refresh
+     grows quadratically: at 128 KiB it would parse 8.45 MB instead of 0.54 MB. App tests also cover
+     segmented and whole-reply heights across block boundaries, completion without reflow, and the
+     caret on the final line only.
 3. **Segment-level windowing**, built on the single transcript navigation owner from
    [#54](https://github.com/goatsoft/GOAT/issues/54) section 2. The window admits segments rather
    than whole messages, so a long reply renders rich and pages within itself, with one scroll

@@ -112,6 +112,8 @@
 		7C255A3E3062248A00F85B42 /* ToolDiffView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C255A3D3062248A00F85B42 /* ToolDiffView.swift */; };
 		7C255A40306224A800F85B42 /* ToolDiffTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C255A3F306224A800F85B42 /* ToolDiffTests.swift */; };
 		7C61349818623A757F70ABB2 /* HindsightGraph.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66DF2B9001A47C5002249BBD /* HindsightGraph.swift */; };
+		7CA4ABFD30676E2E0045FFC7 /* SegmentedMarkdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CA4ABFC30676E2E0045FFC7 /* SegmentedMarkdown.swift */; };
+		7CA4ABFF30676EBE0045FFC7 /* SegmentedMarkdownTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CA4ABFE30676EBE0045FFC7 /* SegmentedMarkdownTests.swift */; };
 		7CAEB9589EC3F1F2FA4EDDE1 /* ThinkingFenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0789042D8250AC1AE65DF506 /* ThinkingFenceTests.swift */; };
 		7CD68D223064A7A300C5CC13 /* SubagentTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CD68D213064A7A300C5CC13 /* SubagentTypes.swift */; };
 		7CD68D243064A80A00C5CC13 /* SubagentCapabilityFence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CD68D233064A80A00C5CC13 /* SubagentCapabilityFence.swift */; };
@@ -347,6 +349,8 @@
 		7B0D7F1E6815419124FB4875 /* ImageProcessingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageProcessingTests.swift; sourceTree = "<group>"; };
 		7C255A3D3062248A00F85B42 /* ToolDiffView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolDiffView.swift; sourceTree = "<group>"; };
 		7C255A3F306224A800F85B42 /* ToolDiffTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolDiffTests.swift; sourceTree = "<group>"; };
+		7CA4ABFC30676E2E0045FFC7 /* SegmentedMarkdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SegmentedMarkdown.swift; sourceTree = "<group>"; };
+		7CA4ABFE30676EBE0045FFC7 /* SegmentedMarkdownTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SegmentedMarkdownTests.swift; sourceTree = "<group>"; };
 		7CD68D213064A7A300C5CC13 /* SubagentTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubagentTypes.swift; sourceTree = "<group>"; };
 		7CD68D233064A80A00C5CC13 /* SubagentCapabilityFence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubagentCapabilityFence.swift; sourceTree = "<group>"; };
 		7CD68D253064A81F00C5CC13 /* SubagentWorker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubagentWorker.swift; sourceTree = "<group>"; };
@@ -746,6 +750,7 @@
 				242527B6F7D13A955455D15A /* TranscriptTextPartsTests.swift */,
 				B79C62D5F2A34267AAE455E9 /* TranscriptWindowTests.swift */,
 				7C255A3F306224A800F85B42 /* ToolDiffTests.swift */,
+				7CA4ABFE30676EBE0045FFC7 /* SegmentedMarkdownTests.swift */,
 			);
 			path = Bleet;
 			sourceTree = "<group>";
@@ -863,6 +868,7 @@
 				DEA9F0F6F670712EF924B7A5 /* TranscriptActivity.swift */,
 				6902E94E883F0D66B2AB89D2 /* TranscriptTextParts.swift */,
 				DD1C9E4DD4A0229DDB40F398 /* TranscriptWindow.swift */,
+				7CA4ABFC30676E2E0045FFC7 /* SegmentedMarkdown.swift */,
 			);
 			path = Bleet;
 			sourceTree = "<group>";
@@ -1142,6 +1148,7 @@
 				CC5BC45CE5083165946BAA4C /* PaddockShellCacheTests.swift in Sources */,
 				2A1AEF146CCDFB72E1E77870 /* GraphCameraTests.swift in Sources */,
 				DA99D94958F731DA02411DE4 /* AppTests.swift in Sources */,
+				7CA4ABFF30676EBE0045FFC7 /* SegmentedMarkdownTests.swift in Sources */,
 				0C5E3DC7DABAD8EBDB89E47D /* DataManagementPlanTests.swift in Sources */,
 				9245330480B14DFCAE737F08 /* EngineRecoveryTests.swift in Sources */,
 				57FE69D6BC6D13360E79386A /* EngineSetupTests.swift in Sources */,
@@ -1296,6 +1303,7 @@
 				69F5B8E20D64B3782343BA1D /* PreparedWebArtifactView.swift in Sources */,
 				ED88B504FF9A2911FC68C4EA /* PresentationPreferences.swift in Sources */,
 				7CD68D223064A7A300C5CC13 /* SubagentTypes.swift in Sources */,
+				7CA4ABFD30676E2E0045FFC7 /* SegmentedMarkdown.swift in Sources */,
 				C2327BCA25F8B424B0C00212 /* PresentationStyle.swift in Sources */,
 				A97DBBDAA0175E469FF86946 /* ReadingFonts.swift in Sources */,
 				6303CA20EDBA3728983632EA /* RenderingCaches.swift in Sources */,
@@ -1429,12 +1437,12 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = ProfessionalAppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				COMBINE_HIDPI_IMAGES = YES;
+				GOAT_APP_BUNDLE_IDENTIFIER = dev.leet.goat;
 				INFOPLIST_FILE = "$(DERIVED_FILE_DIR)/GOAT-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				GOAT_APP_BUNDLE_IDENTIFIER = dev.leet.goat;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(GOAT_APP_BUNDLE_IDENTIFIER)";
 				PRODUCT_NAME = GOAT;
 				SDKROOT = macosx;
@@ -1527,12 +1535,12 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = ProfessionalAppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				COMBINE_HIDPI_IMAGES = YES;
+				GOAT_APP_BUNDLE_IDENTIFIER = dev.leet.goat;
 				INFOPLIST_FILE = "$(DERIVED_FILE_DIR)/GOAT-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				GOAT_APP_BUNDLE_IDENTIFIER = dev.leet.goat;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(GOAT_APP_BUNDLE_IDENTIFIER)";
 				PRODUCT_NAME = GOAT;
 				SDKROOT = macosx;

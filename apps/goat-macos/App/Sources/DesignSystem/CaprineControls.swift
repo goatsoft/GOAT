@@ -126,16 +126,46 @@ struct ThinkingBubble: View {
 
 /// Draw the streaming marker at the final line, including a trailing blank line. Keeping it
 /// in the text layout avoids a separate HStack column and leaves copied text unchanged.
+/// Drawing never changes layout, so removing the marker at completion cannot reflow the reply.
 struct StreamingTextRenderer: TextRenderer {
     let tint: Color
+    var opacity = 0.85
     var displayPadding: EdgeInsets { EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 6) }
+
+    var animatableData: Double {
+        get { opacity }
+        set { opacity = newValue }
+    }
 
     func draw(layout: Text.Layout, in context: inout GraphicsContext) {
         for line in layout { context.draw(line) }
         guard let last = layout.last else { return }
         let bounds = last.typographicBounds.rect
-        let caret = CGRect(x: bounds.maxX + 3, y: bounds.minY, width: 2.5, height: bounds.height)
-        context.fill(Path(roundedRect: caret, cornerRadius: 1.25), with: .color(tint.opacity(0.85)))
+        let caret = CGRect(x: bounds.maxX + 3, y: bounds.minY, width: 2, height: bounds.height)
+        context.fill(Path(roundedRect: caret, cornerRadius: 1), with: .color(tint.opacity(opacity)))
+    }
+}
+
+/// DESIGN.md streaming caret (#60 B1): a 2 pt accent bar with a soft 1.2 s pulse, held steady when
+/// animations are off, Reduce Motion is on or the window is inactive.
+struct StreamingCaret: ViewModifier {
+    @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var dimmed = false
+
+    private var pulses: Bool { model.animationsEnabled && !reduceMotion && scenePhase == .active }
+
+    func body(content: Content) -> some View {
+        content
+            .textRenderer(StreamingTextRenderer(tint: model.theme.tokens.accent, opacity: dimmed ? 0.3 : 0.85))
+            .onChange(of: pulses, initial: true) { _, pulses in
+                if pulses {
+                    withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) { dimmed = true }
+                } else {
+                    withAnimation(nil) { dimmed = false }
+                }
+            }
     }
 }
 
