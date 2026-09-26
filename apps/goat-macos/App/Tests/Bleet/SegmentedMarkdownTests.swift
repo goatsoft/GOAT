@@ -431,6 +431,47 @@ extension AppTests.Bleet {
             }
         }
 
+        /// #60 A1 step 3: under the default bounds a reply streams to the rich limit showing its latest
+        /// segments. The cache keeps its scanner at every refresh (no rescans), the view lays out at most
+        /// the reply budget, and parses are retained for the window only, not the reply.
+        @Test @MainActor func aReplyStreamsToTheRichLimitUnderTheDefaultBounds() async throws {
+            let cache = MarkdownSegmentCache()
+            let message = ChatMessage(role: .assistant)
+            var maximumShown = 0
+            var maximumRetained = 0
+            var last: PreparedMarkdownDocument?
+            for chunk in chunks(of: PreparationShape.mixed.reply(bytes: ReplyWindow.richLimit - 8_192), bytes: 32_768) {
+                message.appendStream(text: chunk, thinking: "")
+                let document = try #require(
+                    await cache.prepare(
+                        id: message.id, source: message.text, revision: message.textRevision, isComplete: false,
+                        window: .latest))
+                maximumShown = max(maximumShown, document.shownBytes)
+                maximumRetained = max(maximumRetained, document.retainedBytes)
+                #expect(await cache.snapshot().streamCount == 1, "Refresh at \(message.textRevision.utf8Count) bytes")
+                last = document
+            }
+            let streamed = try #require(last)
+            #expect(message.textRevision.utf8Count <= ReplyWindow.richLimit)
+            #expect(streamed.window?.upperBound == streamed.segments.count, "Following shows the latest segments")
+            let segmentBound = MarkdownSegmenter.maximumBytes + MarkdownSegmenter.definitionLimit
+            #expect(maximumShown <= max(ReplyWindow.budget, 2 * segmentBound), "\(maximumShown)")
+            let margins = 2 * MarkdownSegmentCache.retentionMargin * segmentBound
+            #expect(maximumRetained <= maximumShown + margins, "\(maximumRetained)")
+            #expect(streamed.retainedBytes * 10 < streamed.renderedBytes)
+
+            message.complete = true
+            let complete = try #require(
+                await cache.prepare(
+                    id: message.id, source: message.text, revision: message.textRevision, isComplete: true,
+                    window: .latest))
+            #expect(complete.window?.upperBound == complete.segments.count)
+            #expect(await cache.snapshot().entryCount == 1, "The completed reply stays retained")
+            let front = PreparedMarkdownDocumentCache()
+            #expect(front.store(complete, for: message.id), "The front cache retains a windowed reply at the limit")
+            #expect(front.shownBytes(for: message.id, revision: message.textRevision) == complete.shownBytes)
+        }
+
         /// Documents handed to views keep their segments while the cache prepares later refreshes.
         @Test func preparedSegmentListsShareUnchangedChunks() async throws {
             let cache = MarkdownSegmentCache(targetBytes: 1, maximumBytes: 1_024)

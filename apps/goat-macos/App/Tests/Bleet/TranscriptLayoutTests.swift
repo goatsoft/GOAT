@@ -295,8 +295,8 @@ extension AppTests.Bleet {
         }
 
         /// Issue #60 C0: a reply whose answer and reasoning both pass 8 KiB completes while streaming.
-        /// Both parts views must show their latest text, and the transcript must stay scrollable to
-        /// its bottom without reselecting the chat.
+        /// The answer's latest segments and the reasoning's latest part must show, and the transcript
+        /// must stay scrollable to its bottom without reselecting the chat.
         @Test @MainActor func oversizedAnswerAndReasoningCompleteIntoAReachableBottom() async throws {
             let session = ChatSession(effort: .trot, modelID: nil)
             session.messagesLoaded = true
@@ -338,10 +338,16 @@ extension AppTests.Bleet {
             assistant.complete = true
             session.isStreaming = false
 
-            // Each parts view publishes exactly what it prepared for display under its owner key.
+            // The answer renders its latest segments as rich Markdown (#60 A1 step 3); the reasoning's
+            // parts view publishes exactly what it prepared under its owner key.
             let reasoning = TranscriptText.removingBoundaryBlankLines(assistant.thinking)
             func shownAnswer() -> String? {
-                TranscriptPartsCache.shared.parts(for: "\(assistant.id.uuidString):text", source: assistant.text)?.last
+                let cache = PreparedMarkdownDocumentCache.shared
+                guard let document = cache.document(for: assistant.id, revision: assistant.textRevision),
+                    document.isComplete, let last = document.shownSegments.last,
+                    last == document.segments.count - 1, document.segments[last].isParsed
+                else { return nil }
+                return document.segments[last].text
             }
             func shownReasoning() -> String? {
                 TranscriptPartsCache.shared.parts(for: "\(assistant.id.uuidString):thinking", source: reasoning)?.last
@@ -362,7 +368,7 @@ extension AppTests.Bleet {
             }
             #expect(
                 settled,
-                "Latest parts render and the bottom is reachable; answer \(shownAnswer()?.suffix(12) ?? "none"), reasoning \(shownReasoning()?.suffix(12) ?? "none")"
+                "Latest text renders and the bottom is reachable; answer \(shownAnswer()?.suffix(12) ?? "none"), reasoning \(shownReasoning()?.suffix(12) ?? "none")"
             )
         }
 
@@ -569,6 +575,37 @@ extension AppTests.Bleet {
             #expect(viewport.anchor == kept)
         }
 
+        /// #60 A1 step 3: a long reply's segment window belongs to the navigation owner. Paging it makes
+        /// the reader the owner and restores a segment anchor; only a window short of the reply's end
+        /// keeps the transcript's bottom from being its end, and following clears every held window.
+        @Test @MainActor func segmentPagingIsAnOwnerTransition() throws {
+            let reply = UUID()
+            let viewport = TranscriptViewport()
+            #expect(viewport.segmentWindow(for: reply) == nil)
+            let kept = Anchor(messageID: reply, offset: 14, segment: 40)
+            viewport.pageSegments(of: reply, to: 30..<41, reachesEnd: false, currentRange: 0..<3, keeping: kept)
+            #expect(viewport.readerOwnsViewport && viewport.heldRange == 0..<3)
+            #expect(viewport.segmentWindow(for: reply) == 30..<41 && viewport.holdsEarlierSegments(of: reply))
+            #expect(viewport.anchor == kept && viewport.request?.target == .anchor(kept))
+            viewport.readerMoved(currentRange: 0..<3)
+            #expect(viewport.request == nil, "Reader input cancels the segment restore like any other")
+
+            viewport.pageSegments(
+                of: reply, to: 40..<52, reachesEnd: true, currentRange: 0..<3,
+                keeping: Anchor(messageID: reply, offset: 0, segment: 40))
+            #expect(viewport.segmentWindow(for: reply) == 40..<52 && !viewport.holdsEarlierSegments(of: reply))
+            #expect(viewport.readerOwnsViewport)
+            viewport.readerSettled(atTrueBottom: true, anchor: nil)
+            #expect(viewport.autoFollow && viewport.segmentWindows.isEmpty, "Following shows latest segments again")
+
+            for index in 0...TranscriptViewport.maximumSegmentWindows {
+                viewport.pageSegments(of: UUID(), to: 0..<1, reachesEnd: false, currentRange: 0..<3, keeping: kept)
+                #expect(viewport.segmentWindows.count <= TranscriptViewport.maximumSegmentWindows, "\(index)")
+            }
+            viewport.jumpToLatest()
+            #expect(viewport.segmentWindows.isEmpty && viewport.autoFollow)
+        }
+
         /// Paging earlier keeps the reader's view in place: the message at the top of the old window
         /// stays at the same position on screen (within 1 pt), so every pixel below it is unchanged.
         @Test @MainActor func pagingEarlierKeepsTheReadersViewInPlace() async throws {
@@ -622,6 +659,92 @@ extension AppTests.Bleet {
             #expect(
                 changed == 0,
                 "The reader's view moved while paging earlier: \(changed) pixels; \(viewport.diagnostics.suffix(16))")
+        }
+
+        /// #60 A1 step 3: a long reply renders rich as a bounded window of its latest segments, never as
+        /// text parts. Paging earlier inside it keeps the reader's segment where it was on screen (every
+        /// pixel below it unchanged), and paging later reaches the reply's end again.
+        @Test @MainActor func pagingInsideALongReplyKeepsTheReadersViewInPlace() async throws {
+            let session = ChatSession(effort: .trot, modelID: nil)
+            session.messagesLoaded = true
+            let reply = ChatMessage(role: .assistant)
+            reply.text = (0..<900).map { "Paragraph \($0) of a long reply, with words enough to wrap once or twice." }
+                .joined(separator: "\n\n")
+            reply.complete = true
+            session.messages = [reply]
+            let viewport = TranscriptViewport()
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 700, height: 450), styleMask: [.titled],
+                backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            let host = NSHostingView(
+                rootView: ChatTranscriptView(session: session, viewport: viewport)
+                    .environment(AppModel.shared).environment(\.colorScheme, .light)
+                    .frame(width: 700, height: 450))
+            host.appearance = NSAppearance(named: .aqua)
+            window.contentView = host
+            window.orderFront(nil)
+            defer {
+                window.contentView = nil
+                window.close()
+            }
+            func prepared() -> PreparedMarkdownDocument? {
+                PreparedMarkdownDocumentCache.shared.document(for: reply.id, revision: reply.textRevision)
+            }
+            for _ in 0..<150 where prepared()?.window == nil {
+                try await Task.sleep(for: .milliseconds(20))
+                host.layoutSubtreeIfNeeded()
+            }
+            try await settle(viewport, host: host)
+            let document = try #require(prepared())
+            let shown = try #require(document.window, "A long reply lays out a window of its segments")
+            #expect(shown.upperBound == document.segments.count && shown.lowerBound > 0)
+            #expect(document.shownBytes <= ReplyWindow.budget)
+            #expect(TranscriptPartsCache.shared.parts(for: "\(reply.id.uuidString):text", source: reply.text) == nil)
+            let scroll = try #require(findTranscriptScroll(host))
+
+            // Reveal the reply's earlier loader. Paging starts from its visibility callback.
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: 0))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            host.layoutSubtreeIfNeeded()
+            let before = try snapshot(host)
+            for _ in 0..<100 where viewport.segmentWindow(for: reply.id) == nil || viewport.request != nil {
+                try await Task.sleep(for: .milliseconds(20))
+                host.layoutSubtreeIfNeeded()
+            }
+            try await settle(viewport, host: host)
+            let paged = try #require(
+                viewport.segmentWindow(for: reply.id),
+                "The earlier segments loaded; \(viewport.diagnostics.suffix(16))")
+            #expect(paged.lowerBound < shown.lowerBound && paged.contains(shown.lowerBound))
+            #expect(viewport.abandonedRequests == 0, "\(viewport.diagnostics.suffix(16))")
+            let after = try snapshot(host)
+
+            // Below the loader and message header, and above the jump button, the view is identical.
+            let scale = CGFloat(before.pixelsHigh) / before.size.height
+            let top = Int(150 * scale)
+            let bottom = before.pixelsHigh - Int(70 * scale)
+            var changed = 0
+            for y in stride(from: top, to: bottom, by: 2) {
+                for x in stride(from: 0, to: min(before.pixelsWide, after.pixelsWide), by: 2)
+                where before.colorAt(x: x, y: y) != after.colorAt(x: x, y: y) {
+                    changed += 1
+                }
+            }
+            #expect(
+                changed == 0,
+                "The reader's view moved while paging the reply: \(changed) pixels; \(viewport.diagnostics.suffix(16))")
+
+            // Reading down pages later until the reply's end is shown again.
+            for _ in 0..<40 where viewport.holdsEarlierSegments(of: reply.id) {
+                let content = try #require(scroll.documentView)
+                let end = content.bounds.height - scroll.contentView.bounds.height
+                scroll.contentView.scroll(to: NSPoint(x: 0, y: end))
+                scroll.reflectScrolledClipView(scroll.contentView)
+                try await settle(viewport, host: host)
+            }
+            #expect(!viewport.holdsEarlierSegments(of: reply.id), "\(viewport.diagnostics.suffix(16))")
+            #expect(viewport.abandonedRequests == 0, "\(viewport.diagnostics.suffix(16))")
         }
 
         /// A reader who takes the viewport cancels a pending programmatic scroll before it runs.

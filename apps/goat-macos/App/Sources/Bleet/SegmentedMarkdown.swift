@@ -1,4 +1,5 @@
 import Bleet
+import Caprine
 import Foundation
 import Hoofprint
 import MarkdownUI
@@ -115,12 +116,47 @@ struct PreparedMarkdownDocument: Sendable {
     /// The rendered bytes of the segments currently parsed. Equal to `renderedBytes` unless the
     /// document was prepared for a window.
     let retainedBytes: Int
+    /// The segments the view lays out; nil when it lays out every segment.
+    var window: Range<Int>? = nil
+
+    /// The indices of the segments the view lays out.
+    var shownSegments: Range<Int> { window ?? 0..<segments.count }
+
+    /// The rendered bytes of the segments the view lays out. The transcript window charges this.
+    var shownBytes: Int {
+        guard let window else { return renderedBytes }
+        return window.reduce(0) { $0 + segments[$1].text.utf8.count }
+    }
 
     /// What caches charge for a document: the parsed segments' bytes plus the retained source.
     var cost: Int { retainedBytes + source.utf8.count }
 
     func matches(_ revision: TextRevision, isComplete: Bool) -> Bool {
         self.revision == revision && self.isComplete == isComplete
+    }
+}
+
+/// Which segments of a reply to parse and lay out.
+enum SegmentWindow: Hashable, Sendable {
+    /// Every segment.
+    case all
+    /// The latest segments within `ReplyWindow.budget`: every segment of a reply that fits.
+    case latest
+    /// The given segments, clamped to the reply; the latest segments when none remain.
+    case segments(Range<Int>)
+
+    /// The window of a reply with `count` segments, or nil for every segment.
+    func resolve(count: Int, cost: (Int) -> Int) -> Range<Int>? {
+        switch self {
+        case .all:
+            return nil
+        case .latest:
+            let latest = ReplyWindow.latest(count: count, cost: cost)
+            return latest == 0..<count ? nil : latest
+        case .segments(let window):
+            let clamped = window.clamped(to: 0..<count)
+            return clamped.isEmpty ? SegmentWindow.latest.resolve(count: count, cost: cost) : clamped
+        }
     }
 }
 
@@ -214,10 +250,12 @@ actor MarkdownSegmentCache {
     private var preparationCount: UInt64 = 0
     private var work = Work()
 
+    /// Defaults retain a streaming reply through `ReplyWindow.richLimit` (its source, its scanner's
+    /// copy and its window's parses) and at most 16 MiB in all.
     init(
         maximumEntries: Int = 32,
-        maximumCost: Int = 8 * 1_024 * 1_024,
-        maximumEntryCost: Int = 2 * 1_024 * 1_024,
+        maximumCost: Int = 16 * 1_024 * 1_024,
+        maximumEntryCost: Int = 2 * ReplyWindow.richLimit + 512 * 1_024,
         targetBytes: Int = MarkdownSegmenter.targetBytes,
         maximumBytes: Int = MarkdownSegmenter.maximumBytes
     ) {
@@ -242,7 +280,17 @@ actor MarkdownSegmentCache {
     /// outside it are released, so retained parsed content is bounded by the window rather than the
     /// reply. Without one, every segment is parsed.
     func prepare(
-        id: UUID, source: String, revision: TextRevision? = nil, isComplete: Bool, window: Range<Int>? = nil
+        id: UUID, source: String, revision: TextRevision? = nil, isComplete: Bool, window: Range<Int>?
+    ) -> PreparedMarkdownDocument? {
+        prepare(
+            id: id, source: source, revision: revision, isComplete: isComplete,
+            window: window.map(SegmentWindow.segments) ?? .all)
+    }
+
+    /// The prepared segments of `source` for a window `request`, resolved against the reply's
+    /// segments once they are known, so a view can ask for the latest segments before it has any.
+    func prepare(
+        id: UUID, source: String, revision: TextRevision? = nil, isComplete: Bool, window request: SegmentWindow = .all
     ) -> PreparedMarkdownDocument? {
         guard !Task.isCancelled else { return nil }
         access &+= 1
@@ -250,21 +298,23 @@ actor MarkdownSegmentCache {
         if let previous, previous.document.isComplete == isComplete,
             revision.map({ previous.document.revision == $0 }) ?? (previous.document.source == source)
         {
+            let segments = previous.document.segments
+            let window = request.resolve(count: segments.count, cost: { segments[$0].text.utf8.count })
             guard previous.window != window else {
                 insert(previous.document, cost: previous.cost, for: id, window: window)
                 return previous.document
             }
             // The same text for another window: parse and release segments, never rescan.
             let old = previous.document
-            var segments = old.segments
+            var windowed = old.segments
             var retained = old.retainedBytes
-            let tail = isComplete || segments.isEmpty ? nil : segments.count - 1
-            applyWindow(&segments, retainedBytes: &retained, window: window, previous: previous.window, tail: tail)
+            let tail = isComplete || windowed.isEmpty ? nil : windowed.count - 1
+            applyWindow(&windowed, retainedBytes: &retained, window: window, previous: previous.window, tail: tail)
             let document = PreparedMarkdownDocument(
-                source: old.source, revision: old.revision, isComplete: old.isComplete, segments: segments,
-                renderedBytes: old.renderedBytes, retainedBytes: retained)
+                source: old.source, revision: old.revision, isComplete: old.isComplete, segments: windowed,
+                renderedBytes: old.renderedBytes, retainedBytes: retained, window: window)
             if var stream = streams.removeValue(forKey: id) {
-                stream.prepared = segments
+                stream.prepared = windowed
                 stream.retainedBytes = retained
                 stream.window = window
                 streams[id] = stream
@@ -303,6 +353,9 @@ actor MarkdownSegmentCache {
         work.segmentationTime += clock.now - started
 
         started = clock.now
+        // Read in place: a copy of the segmentation would make its next extension copy its storage.
+        let window = request.resolve(
+            count: stream.segmentation.count, cost: { stream.segmentation[$0].text.utf8.count })
         assemble(&stream, isComplete: isComplete, window: window)
         applyWindow(
             &stream.prepared, retainedBytes: &stream.retainedBytes, window: window, previous: stream.window,
@@ -312,7 +365,7 @@ actor MarkdownSegmentCache {
 
         let document = PreparedMarkdownDocument(
             source: source, revision: revision, isComplete: isComplete, segments: stream.prepared,
-            renderedBytes: stream.renderedBytes, retainedBytes: stream.retainedBytes)
+            renderedBytes: stream.renderedBytes, retainedBytes: stream.retainedBytes, window: window)
         // A streaming reply's scanner also holds its segment bodies, about the source again.
         let streamCost = isComplete ? 0 : source.utf8.count
         if !isComplete { streams[id] = stream }
@@ -576,6 +629,8 @@ final class PreparedMarkdownDocumentCache {
 
     private struct Entry {
         let document: PreparedMarkdownDocument
+        /// Summed once: the transcript window reads it for every admitted row on every update.
+        let shownBytes: Int
         var access: UInt64
     }
 
@@ -586,7 +641,12 @@ final class PreparedMarkdownDocumentCache {
     private var totalCost = 0
     private var clock: UInt64 = 0
 
-    init(maximumEntries: Int = 64, maximumTotalCost: Int = 8 * 1_024 * 1_024, maximumEntryCost: Int = 1_024 * 1_024) {
+    /// Defaults retain a windowed reply through `ReplyWindow.richLimit` (its source and its window's
+    /// parses) and at most 16 MiB in all.
+    init(
+        maximumEntries: Int = 64, maximumTotalCost: Int = 16 * 1_024 * 1_024,
+        maximumEntryCost: Int = ReplyWindow.richLimit + 512 * 1_024
+    ) {
         self.maximumEntries = max(1, maximumEntries)
         self.maximumTotalCost = max(1, maximumTotalCost)
         self.maximumEntryCost = max(1, min(maximumEntryCost, maximumTotalCost))
@@ -608,13 +668,19 @@ final class PreparedMarkdownDocumentCache {
         return document.renderedBytes
     }
 
+    /// The rendered bytes of the segments shown for exactly `revision`, without changing recency.
+    func shownBytes(for id: UUID, revision: TextRevision) -> Int? {
+        guard let entry = entries[id], entry.document.revision == revision else { return nil }
+        return entry.shownBytes
+    }
+
     /// Returns whether the document was retained. A declined store also drops the older entry.
     @discardableResult
     func store(_ document: PreparedMarkdownDocument, for id: UUID) -> Bool {
         remove(id)
         guard document.cost <= maximumEntryCost else { return false }
         clock &+= 1
-        entries[id] = Entry(document: document, access: clock)
+        entries[id] = Entry(document: document, shownBytes: document.shownBytes, access: clock)
         totalCost += document.cost
         while totalCost > maximumTotalCost || entries.count > maximumEntries,
             let victim = entries.min(by: { $0.value.access < $1.value.access })?.key
@@ -795,24 +861,75 @@ struct SegmentedMarkdownView: View {
     let document: PreparedMarkdownDocument
     let fontSize: CGFloat
     let isStreaming: Bool
+    var messageID: UUID?
+    /// Pages a windowed reply: the new window, the segment to keep in place, and whether the window
+    /// reaches the reply's end.
+    var page: (_ window: Range<Int>, _ kept: Int, _ reachesEnd: Bool) -> Void = { _, _, _ in }
+    @Environment(\.transcriptSegments) private var navigation
 
     var body: some View {
+        let shown = document.shownSegments
+        let isWindowed = document.window != nil
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(document.segments, id: \.index) { segment in
+            if isWindowed, shown.lowerBound > 0 {
+                SegmentLoader(label: "Earlier text") {
+                    let earlier = ReplyWindow.earlier(shown, count: document.segments.count, cost: cost)
+                    page(earlier, shown.lowerBound, false)
+                }
+            }
+            ForEach(shown, id: \.self) { index in
+                let segment = document.segments[index]
                 MarkdownSegmentView(
                     segment: segment, fontSize: fontSize, isStreaming: isStreaming,
                     isTail: isStreaming && segment.index == document.segments.count - 1
                 )
                 .equatable()
-                .padding(.top, gap(before: segment))
+                .padding(.top, index == shown.lowerBound ? 0 : gap(before: segment))
+                .onGeometryChange(for: CGRect?.self, of: { isWindowed ? $0.frame(in: .scrollView) : nil }) { frame in
+                    if let messageID, isWindowed { navigation.recordFrame(messageID, index, frame) }
+                }
+                .onDisappear {
+                    if let messageID, isWindowed { navigation.recordFrame(messageID, index, nil) }
+                }
+            }
+            if isWindowed, shown.upperBound < document.segments.count {
+                SegmentLoader(label: "Later text") {
+                    let later = ReplyWindow.later(shown, count: document.segments.count, cost: cost)
+                    page(later, shown.upperBound - 1, later.upperBound == document.segments.count)
+                }
             }
         }
     }
+
+    private func cost(_ index: Int) -> Int { document.segments[index].text.utf8.count }
 
     private func gap(before segment: PreparedMarkdownSegment) -> CGFloat? {
         guard segment.index > 0, segment.index <= document.segments.count else { return 0 }
         return MarkdownSegmentSpacing.gap(
             after: document.segments[segment.index - 1], before: segment, fontSize: fontSize)
+    }
+}
+
+/// Pages a windowed reply as it comes into view, like the transcript's message loaders. It never
+/// scrolls: the navigation owner keeps the reader's segment in place.
+private struct SegmentLoader: View {
+    let label: String
+    let action: () -> Void
+
+    var body: some View {
+        HStack {
+            GoatLoadingIndicator().controlSize(.mini)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, Caprine.Activity.spacing)
+        .onScrollVisibilityChange(threshold: 0.01) { visible in
+            if visible { action() }
+        }
+        .accessibilityElement()
+        .accessibilityLabel(label)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { action() }
     }
 }
 

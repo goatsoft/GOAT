@@ -44,20 +44,24 @@ cost per window. At least one message is always admitted. Earlier/Later paging
 keeps every message reachable; a reader-owned window holds its range during
 incoming output. Latest or a new user turn restores following.
 
-An individual response or expanded reasoning above 8 KiB is presented as
+Responses through 2 MiB render as rich Markdown segments split at valid block
+boundaries ([ADR-0091](../adrs/0091-content-bounded-transcript-layout.md)).
+While a response streams, settled segments are parsed once and only the tail is
+parsed again, so parse work grows linearly with the response. The
+`MarkdownSegmentParse` signpost marks each segment parse. A long response lays
+out a window of at most 32 segments and 16 KiB of rendered bytes: its latest
+segments while following, or those the reader pages to. Loaders at the window's
+edges page it as they come into view, keeping the reader's segment in place. Only
+the window's segments (and two on each side) keep their parses. The message
+window charges a prepared response the bytes of its shown segments, including
+repeated reference definitions.
+
+A response above 2 MiB, and expanded reasoning above 8 KiB, is presented as
 selectable plain-text parts, prepared off the main actor. Earlier text and Later
 text navigate those parts; Latest text follows the newest part. Choosing an
 older part holds that choice as output arrives. Copy retains the full original
 source, including Markdown fences and whitespace. These are presentation bounds;
-persistence and model context retain the complete content. Rich Markdown and
-embedded code-block actions remain available for smaller responses.
-
-Smaller responses render as segments split at valid Markdown block boundaries
-([ADR-0091](../adrs/0091-content-bounded-transcript-layout.md)). While a
-response streams, settled segments are parsed once and only the tail is parsed
-again, so parse work grows linearly with the response. The `MarkdownSegmentParse`
-signpost marks each segment parse. The window charges a prepared response the
-bytes its segments render, including repeated reference definitions.
+persistence and model context retain the complete content.
 
 
 ## Recorded maintenance evidence

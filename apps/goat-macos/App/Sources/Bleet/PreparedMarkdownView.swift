@@ -217,13 +217,22 @@ struct PreparedMarkdownView<Rendered: View>: View {
 /// Unified, stable Markdown view for both streaming and complete states without view-identity swapping.
 /// The reply renders as segments (#60 A1, ADR-0091): settled segments are prepared once and keep
 /// their views while only the streaming tail is re-prepared. The message's text revision identifies
-/// each sample, so refreshes never compare the reply's text. Text above 8 KiB keeps the plain-text
-/// parts fallback until segment-level windowing (step 3) bounds what one reply lays out.
+/// each sample, so refreshes never compare the reply's text.
+///
+/// A long reply lays out a window of its segments (`ReplyWindow`): its latest segments, or those the
+/// reader paged to through the transcript's navigation owner. Loaders at the window's edges page it as
+/// they come into view, keeping the reader's segment in place. Replies above `ReplyWindow.richLimit`
+/// keep bounded selectable text parts.
 struct StreamingMarkdownView: View {
     @Bindable var message: ChatMessage
     @Environment(AppModel.self) private var model
+    @Environment(\.transcriptSegments) private var navigation
     @State private var snapshot: Snapshot
     @State private var document: PreparedMarkdownDocument?
+    /// The window request `document` was prepared for.
+    @State private var preparedWindow: SegmentWindow?
+    /// A reader's window when no navigation owner hosts this view.
+    @State private var localWindow: Range<Int>?
 
     /// The text and completion sampled together, so completion always prepares the final text. The
     /// revision identifies the text, so equality never reads it.
@@ -235,6 +244,11 @@ struct StreamingMarkdownView: View {
         static func == (lhs: Snapshot, rhs: Snapshot) -> Bool {
             lhs.revision == rhs.revision && lhs.isComplete == rhs.isComplete
         }
+    }
+
+    private struct Preparation: Equatable {
+        let snapshot: Snapshot
+        let window: SegmentWindow
     }
 
     init(message: ChatMessage) {
@@ -250,14 +264,27 @@ struct StreamingMarkdownView: View {
                 ?? (message.complete ? nil : cache.latest(for: message.id)))
     }
 
+    /// The segments to show: the window the reader paged this reply to, else its latest segments.
+    /// While the reader owns the viewport, a reply showing its latest segments keeps the ones shown,
+    /// as the owner keeps the message window: output below them waits behind the later loader.
+    private var requestedWindow: SegmentWindow {
+        guard let viewport = navigation.viewport else { return localWindow.map(SegmentWindow.segments) ?? .latest }
+        if let held = viewport.segmentWindow(for: message.id) { return .segments(held) }
+        if viewport.readerOwnsViewport, let shown = document?.window { return .segments(shown) }
+        return .latest
+    }
+
     var body: some View {
+        let window = requestedWindow
         Group {
-            if snapshot.revision.utf8Count > TranscriptTextParts.maximumBytes {
+            if snapshot.revision.utf8Count > ReplyWindow.richLimit {
                 TranscriptTextPartsView(
                     source: snapshot.source, fontSize: model.chatFontSize, cacheKey: "\(message.id.uuidString):text",
                     onPrepared: { message.markRenderChanged() })
             } else if let document {
-                SegmentedMarkdownView(document: document, fontSize: model.chatFontSize, isStreaming: !message.complete)
+                SegmentedMarkdownView(
+                    document: document, fontSize: model.chatFontSize, isStreaming: !message.complete,
+                    messageID: message.id, page: { page(to: $0, keeping: $1, reachesEnd: $2) })
             } else {
                 // Never flash raw Markdown while a saved reply is being prepared off the main actor.
                 Label("Formatting response…", systemImage: "text.badge.checkmark")
@@ -268,17 +295,22 @@ struct StreamingMarkdownView: View {
         // Align the document boundary without searching nested lists and code scrollers.
         .alignmentGuide(.leading) { _ in 0 }
         .alignmentGuide(.trailing) { dimensions in dimensions.width }
-        .task(id: snapshot) {
+        .task(id: Preparation(snapshot: snapshot, window: window)) {
             let request = snapshot
-            guard request.revision.utf8Count <= TranscriptTextParts.maximumBytes else { return }
-            if let document, document.matches(request.revision, isComplete: request.isComplete) { return }
+            guard request.revision.utf8Count <= ReplyWindow.richLimit else { return }
+            if let document, document.matches(request.revision, isComplete: request.isComplete),
+                preparedWindow == window
+            {
+                return
+            }
             guard
                 let prepared = await MarkdownSegmentCache.shared.prepare(
                     id: message.id, source: request.source, revision: request.revision,
-                    isComplete: request.isComplete),
+                    isComplete: request.isComplete, window: window),
                 !Task.isCancelled
             else { return }
             document = prepared
+            preparedWindow = window
             PreparedMarkdownDocumentCache.shared.store(prepared, for: message.id)
             message.markRenderChanged()
         }
@@ -291,6 +323,15 @@ struct StreamingMarkdownView: View {
             sample()
         }
         .onChange(of: message.complete) { sample() }
+    }
+
+    /// Pages the shown window to `target`, keeping segment `kept` where the reader sees it.
+    private func page(to target: Range<Int>, keeping kept: Int, reachesEnd: Bool) {
+        if navigation.viewport != nil {
+            navigation.page(message.id, target, kept, reachesEnd)
+        } else {
+            localWindow = reachesEnd ? nil : target
+        }
     }
 
     private func sample() {

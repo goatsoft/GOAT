@@ -19,10 +19,32 @@ extension EnvironmentValues {
     }
 }
 
+/// Segment paging and frame reports from long replies to the transcript's navigation owner. Equal
+/// for the same owner, so a transcript update does not invalidate every reply: the actions read the
+/// transcript's state when they run.
+struct TranscriptSegmentNavigation: Equatable, Sendable {
+    var viewport: TranscriptViewport?
+    /// Shows `window` of a reply's segments, keeping segment `kept` where the reader sees it.
+    /// `reachesEnd` says the window reaches the reply's end.
+    var page: @MainActor @Sendable (_ messageID: UUID, _ window: Range<Int>, _ kept: Int, _ reachesEnd: Bool) -> Void =
+        { _, _, _, _ in }
+    /// A shown segment's frame in viewport coordinates, or nil when it is no longer laid out.
+    var recordFrame: @MainActor @Sendable (_ messageID: UUID, _ segment: Int, _ frame: CGRect?) -> Void = {
+        _, _, _ in
+    }
+
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.viewport === rhs.viewport }
+}
+
+extension EnvironmentValues {
+    @Entry var transcriptSegments = TranscriptSegmentNavigation()
+}
+
 private enum TranscriptPagingPhase: Equatable, Sendable {
     case idle
     case pagingEarlier
     case pagingLater
+    case pagingSegments
 }
 
 /// The transcript's single navigation owner (#54 section 2, #60 A1).
@@ -34,10 +56,13 @@ private enum TranscriptPagingPhase: Equatable, Sendable {
 /// Raw scroll measurements stay in the view's non-observable reader state.
 @MainActor @Observable final class TranscriptViewport {
     /// A reading position: a message, and how far the viewport's top edge is below the message's top
-    /// edge. A negative offset leaves space above the message.
+    /// edge. A negative offset leaves space above the message. In a long reply shown as a window of
+    /// segments the offset is measured from a segment's top edge instead, so it survives the window
+    /// moving above it.
     struct Anchor: Equatable, Sendable {
         var messageID: UUID
         var offset: CGFloat
+        var segment: Int? = nil
     }
 
     enum Target: Equatable, Sendable {
@@ -60,6 +85,15 @@ private enum TranscriptPagingPhase: Equatable, Sendable {
     var isScrolledToBottom: Bool
     private(set) var anchor: Anchor?
     private(set) var request: Request?
+    /// A long reply's window the reader paged to, and whether it reached the reply's end then.
+    struct SegmentHold: Equatable, Sendable {
+        var window: Range<Int>
+        var reachedEnd: Bool
+    }
+
+    /// Segment windows the reader paged long replies to, by message. Following clears them.
+    private(set) var segmentWindows: [UUID: SegmentHold] = [:]
+    static let maximumSegmentWindows = 16
     private var generation: UInt64 = 0
     /// Scroll commands issued and requests abandoned after the bounded attempts, for instrumentation.
     @ObservationIgnored private(set) var scrollCommands = 0
@@ -86,6 +120,29 @@ private enum TranscriptPagingPhase: Equatable, Sendable {
         return TranscriptWindow.range(count: count, end: nil, cost: cost)
     }
 
+    /// The window the reader paged a long reply to, if any. Without one a reply shows its latest
+    /// segments, or keeps those shown while the reader owns the viewport.
+    func segmentWindow(for messageID: UUID) -> Range<Int>? { segmentWindows[messageID]?.window }
+
+    /// Whether the reader paged `messageID` to earlier segments, so the transcript's bottom is not
+    /// the reply's end.
+    func holdsEarlierSegments(of messageID: UUID) -> Bool {
+        segmentWindows[messageID].map { !$0.reachedEnd } ?? false
+    }
+
+    /// The reader paged a long reply to `window`, which `reachesEnd` of the reply or not. The reader
+    /// owns the viewport and keeps `anchor`, a segment inside both windows.
+    func pageSegments(
+        of messageID: UUID, to window: Range<Int>, reachesEnd: Bool, currentRange: Range<Int>, keeping anchor: Anchor
+    ) {
+        readerMoved(currentRange: currentRange)
+        if segmentWindows[messageID] == nil, segmentWindows.count >= Self.maximumSegmentWindows {
+            segmentWindows.removeAll()
+        }
+        segmentWindows[messageID] = SegmentHold(window: window, reachedEnd: reachesEnd)
+        restore(anchor)
+    }
+
     /// A reader gesture, keyboard or scroller movement, or an inspection took the viewport. The
     /// reader's input always wins, so any pending scroll is cancelled.
     func readerMoved(currentRange: Range<Int>, anchor: Anchor? = nil) {
@@ -106,6 +163,7 @@ private enum TranscriptPagingPhase: Equatable, Sendable {
             heldRange = nil
             autoFollow = true
             self.anchor = nil
+            segmentWindows.removeAll()
         } else if let anchor {
             self.anchor = anchor
         }
@@ -117,6 +175,7 @@ private enum TranscriptPagingPhase: Equatable, Sendable {
         autoFollow = true
         isScrolledToBottom = true
         anchor = nil
+        segmentWindows.removeAll()
         issue(.bottom)
     }
 
@@ -388,6 +447,15 @@ struct ChatTranscriptView: View {
                     viewport.readerMoved(currentRange: messageRange, anchor: reader.measuredAnchor())
                 }
             )
+            .environment(
+                \.transcriptSegments,
+                TranscriptSegmentNavigation(
+                    viewport: viewport,
+                    page: { id, window, kept, reachesEnd in
+                        pageSegments(of: id, to: window, keeping: kept, reachesEnd: reachesEnd)
+                    },
+                    recordFrame: { id, segment, frame in recordFrame(frame, of: id, segment: segment) })
+            )
             .scrollPosition($position)
             .defaultScrollAnchor(.bottom, for: .initialOffset)
             .defaultScrollAnchor(.bottom, for: .alignment)
@@ -408,8 +476,12 @@ struct ChatTranscriptView: View {
                     let readerFinishedScrolling = reader.isScrolling
                     reader.isScrolling = false
                     guard readerFinishedScrolling else { return }
+                    // A last reply held on earlier segments is not the conversation's end.
+                    let holdsLastReply =
+                        session.messages.last.map { viewport.holdsEarlierSegments(of: $0.id) } ?? false
                     viewport.readerSettled(
-                        atTrueBottom: messageRange.upperBound == session.messages.count && reader.isAtBottom,
+                        atTrueBottom: messageRange.upperBound == session.messages.count && reader.isAtBottom
+                            && !holdsLastReply,
                         anchor: reader.measuredAnchor())
                 }
             }
@@ -509,6 +581,16 @@ struct ChatTranscriptView: View {
         viewport.restore(TranscriptViewport.Anchor(messageID: id, offset: id == kept ? keptOffset ?? 0 : 0))
     }
 
+    /// Moves a long reply's segment window, keeping segment `kept` where the reader sees it.
+    private func pageSegments(of id: UUID, to window: Range<Int>, keeping kept: Int, reachesEnd: Bool) {
+        guard pagingPhase == .idle else { return }
+        let offset = reader.offset(of: id, segment: kept) ?? 0
+        pagingPhase = .pagingSegments
+        viewport.pageSegments(
+            of: id, to: window, reachesEnd: reachesEnd, currentRange: messageRange,
+            keeping: TranscriptViewport.Anchor(messageID: id, offset: offset, segment: kept))
+    }
+
     /// The nearest message at or after `index` in the window (else before it) that renders a row.
     /// Tool results and empty assistant messages have no row to anchor to.
     private func renderedMessageID(near index: Int) -> UUID? {
@@ -526,6 +608,14 @@ struct ChatTranscriptView: View {
     private func recordFrame(_ frame: CGRect, of id: UUID) {
         reader.rowFrames[id] = frame
         if case .anchor(let anchor) = viewport.request?.target, anchor.messageID == id {
+            executePendingRequest()
+        }
+    }
+
+    private func recordFrame(_ frame: CGRect?, of id: UUID, segment: Int) {
+        reader.segmentFrames[id, default: [:]][segment] = frame
+        if reader.segmentFrames[id]?.isEmpty == true { reader.segmentFrames[id] = nil }
+        if frame != nil, case .anchor(let anchor) = viewport.request?.target, anchor.messageID == id {
             executePendingRequest()
         }
     }
@@ -607,7 +697,7 @@ struct ChatTranscriptView: View {
                 target = metrics.offset + metrics.bottomGap
             case .anchor(let anchor):
                 // Not laid out yet: the row's geometry report runs this again, within the same bound.
-                guard let frame = reader.rowFrames[anchor.messageID] else {
+                guard let frame = reader.frame(of: anchor) else {
                     reader.attempts += 1
                     return
                 }
@@ -660,6 +750,8 @@ struct TranscriptScrollMetrics: Equatable {
     var metrics = TranscriptScrollMetrics()
     /// Row frames in viewport coordinates, keyed by message identity.
     var rowFrames: [UUID: CGRect] = [:]
+    /// Frames of the shown segments of windowed long replies, by message and segment index.
+    var segmentFrames: [UUID: [Int: CGRect]] = [:]
     var executorTask: Task<Void, Never>?
     /// The executor's own command moved the viewport; the next offset change is not the reader's.
     var executorScrolled = false
@@ -671,10 +763,27 @@ struct TranscriptScrollMetrics: Equatable {
         rowFrames[id].map { -$0.minY }
     }
 
+    /// The distance from a shown segment's top edge to the viewport's top edge, when laid out.
+    func offset(of id: UUID, segment: Int) -> CGFloat? {
+        segmentFrames[id]?[segment].map { -$0.minY }
+    }
+
+    /// The frame an anchor is measured from: its segment's when it names one, else its row's.
+    func frame(of anchor: TranscriptViewport.Anchor) -> CGRect? {
+        guard let segment = anchor.segment else { return rowFrames[anchor.messageID] }
+        return segmentFrames[anchor.messageID]?[segment]
+    }
+
     /// The reader's position: the topmost row still visible, and how far into it the viewport starts.
+    /// In a windowed long reply, the topmost segment still visible.
     func measuredAnchor() -> TranscriptViewport.Anchor? {
-        rowFrames.filter { $0.value.maxY > 0 }.min { $0.value.minY < $1.value.minY }
-            .map { TranscriptViewport.Anchor(messageID: $0.key, offset: -$0.value.minY) }
+        guard
+            let row = rowFrames.filter({ $0.value.maxY > 0 }).min(by: { $0.value.minY < $1.value.minY })
+        else { return nil }
+        if let segment = segmentFrames[row.key]?.filter({ $0.value.maxY > 0 }).min(by: { $0.key < $1.key }) {
+            return TranscriptViewport.Anchor(messageID: row.key, offset: -segment.value.minY, segment: segment.key)
+        }
+        return TranscriptViewport.Anchor(messageID: row.key, offset: -row.value.minY)
     }
 
     /// Whether the viewport already shows `target`: the anchor's top within 1 pt of its offset, or
@@ -684,7 +793,7 @@ struct TranscriptScrollMetrics: Equatable {
         case .bottom:
             return metrics.distanceFromBottom <= 1
         case .anchor(let anchor):
-            guard let frame = rowFrames[anchor.messageID] else { return false }
+            guard let frame = frame(of: anchor) else { return false }
             let error = frame.minY + anchor.offset
             if abs(error) <= 1 { return true }
             // The target lies past an end of the scrollable range: the nearest end is fulfilment.

@@ -156,6 +156,29 @@ segment rather than per message. Deliver it in three reviewable steps:
    [#54](https://github.com/goatsoft/GOAT/issues/54) section 2. The window admits segments rather
    than whole messages, so a long reply renders rich and pages within itself, with one scroll
    executor, stable segment identities and preserved reader anchors.
+   - **As implemented.** Replies through 2 MiB (`ReplyWindow.richLimit`) render as segments; the
+     8 KiB whole-reply fallback is removed for answers. A reply lays out a window of its segments:
+     at most 32 segments and 16 KiB of rendered bytes (the message window's budget), or two segments
+     when paging across one that alone fills it. Following shows the latest segments; while the
+     reader owns the viewport a reply keeps the segments shown, and output below them waits behind a
+     loader, as the message window does. `MarkdownSegmentCache.prepare(window:)` resolves the request
+     (all, latest, or a held range) against the reply's segments after segmentation, parses only the
+     window, and releases parses more than two segments outside it, so retained parses are bounded by
+     the window, not the reply. Prepared-cache retention is bounded separately: an entry may hold a
+     streaming reply at the rich limit (its source, its scanner's copy and its window's parses) and
+     each cache at most 16 MiB. The message window charges a prepared reply the bytes of its shown
+     segments.
+   - **Navigation.** `TranscriptViewport` owns each paged reply window. Loaders at a window's edges
+     page it when they come into view, like the message loaders; the kept segment (the old window's
+     first segment paging earlier, its last paging later) is in both windows, and the owner restores
+     an anchor measured from that segment's top edge, fulfilled by the single executor within 1 pt.
+     The reader's measured anchor in a windowed reply is its topmost visible segment. Following, and
+     a gesture settling at the true bottom, clear every held window; a last reply held on earlier
+     segments is not the true bottom.
+   - **Above the limit.** Longer replies keep bounded selectable text parts with full-source copy.
+     Until the parts are prepared the reply shows its last 8 KiB of text instead of a placeholder;
+     the final part can be shorter, so the text can reflow once when the parts arrive. Expanded
+     reasoning keeps its 8 KiB parts fallback until it is windowed the same way.
 
 **Acceptance per step.** Tests for boundary crossings while streaming, oversized fences, tables and
 paragraphs, completion without reflow, paging reachability, anchor preservation, and parse work
