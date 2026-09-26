@@ -369,6 +369,68 @@ extension AppTests.Bleet {
             #expect(await cache.snapshot().work.definitionVisits >= 3)
         }
 
+        /// #60 A1 step 3: a window parses only its segments; the others keep their text unparsed, and
+        /// parses outside the window's margin are released, so retention follows the window.
+        @Test func aWindowParsesOnlyItsSegmentsAndReleasesTheRest() async throws {
+            let cache = MarkdownSegmentCache(targetBytes: 1, maximumBytes: 1_024)
+            let id = UUID()
+            let source = (0..<200).map { "Paragraph \($0) of a long reply." }.joined(separator: "\n\n")
+            let windowed = try #require(
+                await cache.prepare(id: id, source: source, isComplete: true, window: 100..<105))
+            #expect(windowed.segments.count == 200)
+            #expect(windowed.segments.filter(\.isParsed).map(\.index) == Array(100..<105))
+            #expect(await cache.snapshot().parseCount == 5)
+            #expect(windowed.retainedBytes == windowed.segments[100..<105].reduce(0) { $0 + $1.text.utf8.count })
+            #expect(windowed.renderedBytes > windowed.retainedBytes * 30)
+            #expect(windowed.cost == windowed.retainedBytes + source.utf8.count)
+
+            // Moving within the margin parses only the new segments and keeps nearby ones.
+            let moved = try #require(await cache.prepare(id: id, source: source, isComplete: true, window: 102..<108))
+            #expect(await cache.snapshot().parseCount == 8)
+            #expect(moved.segments.filter(\.isParsed).map(\.index) == Array(100..<108))
+            // A distant window releases the old parses; a document already handed out keeps its own.
+            let far = try #require(await cache.prepare(id: id, source: source, isComplete: true, window: 10..<12))
+            #expect(far.segments.filter(\.isParsed).map(\.index) == [10, 11])
+            #expect(moved.segments[103].isParsed)
+            // Asking for every segment parses the rest.
+            let whole = try #require(await cache.prepare(id: id, source: source, isComplete: true))
+            #expect(whole.segments.allSatisfy(\.isParsed) && whole.retainedBytes == whole.renderedBytes)
+        }
+
+        /// While a long reply streams with a window on its tail, retained parses stay bounded however
+        /// long the reply grows, and late definitions re-parse only segments in the window.
+        @Test(arguments: [PreparationShape.mixed, .lateDefinitions])
+        @MainActor func aStreamingTailWindowBoundsRetainedParses(shape: PreparationShape) async throws {
+            func run(windowed: Bool) async throws -> (maximumRetained: Int, maximumParses: Int) {
+                let cache = MarkdownSegmentCache(maximumCost: 64 * 1_024 * 1_024, maximumEntryCost: 64 * 1_024 * 1_024)
+                let message = ChatMessage(role: .assistant)
+                var window = 0..<4
+                var maximumRetained = 0
+                var maximumParses = 0
+                for chunk in chunks(of: shape.reply(bytes: 256 * 1_024), bytes: 4_096) {
+                    message.appendStream(text: chunk, thinking: "")
+                    let before = await cache.snapshot().parseCount
+                    let document = try #require(
+                        await cache.prepare(
+                            id: message.id, source: message.text, revision: message.textRevision, isComplete: false,
+                            window: windowed ? window : nil))
+                    maximumParses = max(maximumParses, await cache.snapshot().parseCount - before)
+                    maximumRetained = max(maximumRetained, document.retainedBytes)
+                    // Following keeps the last segments in the window, as the view does.
+                    window = max(0, document.segments.count - 3)..<document.segments.count + 1
+                }
+                return (maximumRetained, maximumParses)
+            }
+            let windowed = try await run(windowed: true)
+            let whole = try await run(windowed: false)
+            #expect(windowed.maximumRetained <= 6 * MarkdownSegmenter.maximumBytes, "\(windowed)")
+            #expect(whole.maximumRetained > 3 * windowed.maximumRetained, "\(whole) vs \(windowed)")
+            #expect(windowed.maximumParses <= 6, "One refresh parses at most the window: \(windowed)")
+            if shape == .lateDefinitions {
+                #expect(whole.maximumParses > 20, "Without a window, definitions re-parse the reply: \(whole)")
+            }
+        }
+
         /// Documents handed to views keep their segments while the cache prepares later refreshes.
         @Test func preparedSegmentListsShareUnchangedChunks() async throws {
             let cache = MarkdownSegmentCache(targetBytes: 1, maximumBytes: 1_024)
