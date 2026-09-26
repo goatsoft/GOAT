@@ -68,9 +68,9 @@ extension AppTests.Bleet {
                 contentRect: NSRect(x: 80, y: 80, width: 760, height: 520), styleMask: [.titled, .resizable],
                 backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
-            let viewport = TranscriptViewport()
+            let navigation = TranscriptViewport()
             let host = NSHostingView(
-                rootView: ChatTranscriptView(session: session, viewport: viewport).environment(model)
+                rootView: ChatTranscriptView(session: session, viewport: navigation).environment(model)
                     .environment(\.colorScheme, .light)
                     .background(
                         Color.white
@@ -113,9 +113,9 @@ extension AppTests.Bleet {
                     }
                     let document = String(describing: scroll.documentView?.frame)
                     let clip = "clip \(scroll.contentView.bounds), document \(document)"
-                    let owner = "held \(String(describing: viewport.heldRange)), following \(viewport.autoFollow)"
-                    let recent = Array(viewport.diagnostics.suffix(10))
-                    let trace = "request \(String(describing: viewport.request)), \(recent)"
+                    let owner = "held \(String(describing: navigation.heldRange)), following \(navigation.autoFollow)"
+                    let recent = Array(navigation.diagnostics.suffix(10))
+                    let trace = "request \(String(describing: navigation.request)), \(recent)"
                     let state = "\(clip), \(owner), \(trace)"
                     let context = "width \(width), font \(font), wheel \(delta); ink=\(ink)"
                     #expect(ink > 100, "Viewport must contain visible text after \(context); \(state)")
