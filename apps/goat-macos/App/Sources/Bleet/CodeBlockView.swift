@@ -11,14 +11,23 @@ import SwiftUI
 struct FenceInfo: Equatable, Sendable {
     let language: String?
     let filename: String?
+    /// The fence's occurrence in its segment, from the tag `CodeBlockTags` adds while preparing.
+    let occurrence: Int?
 
-    init(language: String?, filename: String?) {
+    init(language: String?, filename: String?, occurrence: Int? = nil) {
         self.language = language
         self.filename = filename
+        self.occurrence = occurrence
     }
 
     init(_ info: String?) {
-        let words = Self.words(info ?? "")
+        var words = Self.words(info ?? "")
+        var occurrence: Int?
+        if let tag = words.lastIndex(where: { $0.hasPrefix(CodeBlockTags.key) }) {
+            occurrence = Int(words[tag].dropFirst(CodeBlockTags.key.count))
+            words.remove(at: tag)
+        }
+        self.occurrence = occurrence
         var language = words.first.map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "{}.")) }
         var filename: String?
         if let word = language, let colon = word.firstIndex(of: ":"), colon != word.startIndex {
@@ -61,6 +70,60 @@ struct FenceInfo: Equatable, Sendable {
     }
 }
 
+/// Tags each fence opener in a segment with its occurrence (` goat-block=N`), so identical code blocks
+/// keep distinct identities: MarkdownUI gives a code block only its info string and literal. Openers
+/// precede their content, so a streaming block keeps its occurrence as it grows. `FenceInfo` strips the
+/// tag. The tracker is conservative (quotes and indentation, no HTML blocks); a tagged parse whose code
+/// literals contain the tag is discarded for the untagged one.
+enum CodeBlockTags {
+    static let key = "goat-block="
+
+    /// `source` with every fence opener tagged, or nil when it has no fences or may hold an HTML block.
+    static func tagged(_ source: String) -> String? {
+        guard source.contains("```") || source.contains("~~~") else { return nil }
+        var result = ""
+        result.reserveCapacity(source.utf8.count + 64)
+        var open: (marker: Character, count: Int)?
+        var occurrence = 0
+        var first = true
+        for line in source.split(separator: "\n", omittingEmptySubsequences: false) {
+            if !first { result.append("\n") }
+            first = false
+            var rest = line.drop(while: { $0 == " " || $0 == "\t" })
+            if open == nil, rest.first == "<" { return nil }
+            while rest.first == ">" {
+                rest = rest.dropFirst().drop(while: { $0 == " " || $0 == "\t" })
+            }
+            guard let marker = rest.first, marker == "`" || marker == "~" else {
+                result.append(contentsOf: line)
+                continue
+            }
+            let count = rest.prefix(while: { $0 == marker }).count
+            let info = rest.dropFirst(count)
+            if let fence = open {
+                if marker == fence.marker, count >= fence.count, info.allSatisfy(\.isWhitespace) { open = nil }
+                result.append(contentsOf: line)
+            } else if count >= 3, marker == "~" || !info.contains("`") {
+                open = (marker, count)
+                let body = line.hasSuffix("\r") ? line.dropLast() : line
+                result.append(contentsOf: body)
+                result.append(" \(key)\(occurrence)")
+                if line.hasSuffix("\r") { result.append("\r") }
+                occurrence += 1
+            } else {
+                result.append(contentsOf: line)
+            }
+        }
+        return result
+    }
+
+    /// Whether a parse of tagged source carried a tag into a code literal (a line mistaken for an
+    /// opener), so the untagged parse must be used.
+    static func leaked(html: String) -> Bool {
+        CodeBlockPositions.codeBlocks(html: html).contains { $0.contains(key) }
+    }
+}
+
 /// Where a code block is rendered: a segment of a reply. The reader's choices for a block are kept
 /// by `CodeBlockIdentity`, which stays the same while the block streams and differs between blocks
 /// (#60 A6). Blocks rendered without a scope (user messages, previews) keep their choices only while
@@ -82,10 +145,13 @@ struct CodeBlockScope: Equatable, Sendable {
     }
 }
 
-/// A code block's message, segment and position among the segment's code blocks. The blocks before
-/// a streaming block are settled, so its position does not change as it grows. Identical blocks in
-/// one segment share a position, and so a choice.
+/// A code block's message, segment and position: its fence's occurrence in the segment, or, for a block
+/// without an occurrence tag (indented code, or a segment left untagged), `literalBase` plus its
+/// position among the segment's code literals. The blocks before a streaming block are settled, so its
+/// position does not change as it grows.
 struct CodeBlockIdentity: Hashable, Sendable {
+    static let literalBase = 1 << 20
+
     let messageID: UUID
     let segment: Int
     let position: Int
@@ -115,9 +181,12 @@ extension EnvironmentValues {
         self.limit = max(1, limit)
     }
 
-    func identity(of code: String, in scope: CodeBlockScope) -> CodeBlockIdentity? {
+    func identity(of code: String, occurrence: Int?, in scope: CodeBlockScope) -> CodeBlockIdentity? {
         if scope.isFencePiece {
             return CodeBlockIdentity(messageID: scope.messageID, segment: scope.segment, position: 0)
+        }
+        if let occurrence {
+            return CodeBlockIdentity(messageID: scope.messageID, segment: scope.segment, position: occurrence)
         }
         let key = Key(messageID: scope.messageID, segment: scope.segment, preparationID: scope.preparationID)
         let list: [String]
@@ -136,7 +205,8 @@ extension EnvironmentValues {
             let position = list.firstIndex(of: code)
                 ?? list.firstIndex(where: { trimmed($0) == trimmed(code) })
         else { return nil }
-        return CodeBlockIdentity(messageID: scope.messageID, segment: scope.segment, position: position)
+        return CodeBlockIdentity(
+            messageID: scope.messageID, segment: scope.segment, position: CodeBlockIdentity.literalBase + position)
     }
 
     /// The literal of every `<pre><code>` element, in order. cmark escapes `&`, `<`, `>` and `"`.
@@ -206,7 +276,7 @@ struct CodeBlockView: View {
     private var kind: PaddockArtifact.Kind { PaddockArtifact.kind(forFenceLanguage: info.language) }
     @Environment(\.codeBlockScope) private var scope
     private var identity: CodeBlockIdentity? {
-        scope.flatMap { CodeBlockPositions.shared.identity(of: code, in: $0) }
+        scope.flatMap { CodeBlockPositions.shared.identity(of: code, occurrence: info.occurrence, in: $0) }
     }
     private var state: CodeBlockStateStore.State {
         blockState ?? identity.map(CodeBlockStateStore.shared.state(for:)) ?? CodeBlockStateStore.State()

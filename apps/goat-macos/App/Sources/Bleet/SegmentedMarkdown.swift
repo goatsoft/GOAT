@@ -177,8 +177,7 @@ actor MarkdownSegmentCache {
             preparation = .parsed(
                 RenderSignposts.measure("MarkdownSegmentParse") {
                     PreparedMarkdownContent(
-                        value: MarkdownContent(
-                            GOATMarkdownSyntax.normalized(text, detectsArtifacts: segment.index == 0)))
+                        value: Self.content(GOATMarkdownSyntax.normalized(text, detectsArtifacts: segment.index == 0)))
                 })
             parseCount += 1
             parsedBytes += text.utf8.count
@@ -190,6 +189,14 @@ actor MarkdownSegmentCache {
             leadingMargin: MarkdownSegmentSpacing.leadingMargin(of: segment.body, kind: segment.kind),
             trailingMargin: MarkdownSegmentSpacing.trailingMargin(of: segment.body, kind: segment.kind),
             endsInParagraph: nil)
+    }
+
+    /// Parses `markdown` with each fence tagged by its occurrence (`CodeBlockTags`), unless the tags
+    /// would reach a code literal.
+    static func content(_ markdown: String) -> MarkdownContent {
+        guard let tagged = CodeBlockTags.tagged(markdown) else { return MarkdownContent(markdown) }
+        let content = MarkdownContent(tagged)
+        return CodeBlockTags.leaked(html: content.renderHTML()) ? MarkdownContent(markdown) : content
     }
 
     private func takeEntry(_ id: UUID) -> Entry? {
