@@ -146,9 +146,41 @@ struct StreamingTextRenderer: TextRenderer {
     }
 }
 
-/// DESIGN.md streaming caret (#60 B1): a 2 pt accent bar with a soft 1.2 s pulse, held steady when
-/// animations are off, Reduce Motion is on or the window is inactive.
+/// DESIGN.md streaming caret (#60 B1) on a text view's final line.
 struct StreamingCaret: ViewModifier {
+    func body(content: Content) -> some View {
+        StreamingCaretPulse { tint, opacity in
+            content.textRenderer(StreamingTextRenderer(tint: tint, opacity: opacity))
+        }
+    }
+}
+
+/// The streaming caret at the end of a text layout's final line, drawn over the text in the layout's
+/// coordinate space. It never changes layout, so removing it at completion cannot reflow the reply.
+struct StreamingCaretMark: View {
+    let text: Text.LayoutKey.AnchoredLayout
+
+    var body: some View {
+        GeometryReader { proxy in
+            if let line = text.layout.last {
+                let origin = proxy[text.origin]
+                let bounds = line.typographicBounds.rect
+                StreamingCaretPulse { tint, opacity in
+                    RoundedRectangle(cornerRadius: 1).fill(tint.opacity(opacity))
+                }
+                .frame(width: 2, height: bounds.height)
+                .offset(x: origin.x + bounds.maxX + 3, y: origin.y + bounds.minY)
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+/// DESIGN.md caret pulse: a 2 pt accent bar with a soft 1.2 s pulse, held steady when animations are
+/// off, Reduce Motion is on or the window is inactive.
+private struct StreamingCaretPulse<Content: View>: View {
+    @ViewBuilder let content: (_ tint: Color, _ opacity: Double) -> Content
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
@@ -156,9 +188,8 @@ struct StreamingCaret: ViewModifier {
 
     private var pulses: Bool { model.animationsEnabled && !reduceMotion && scenePhase == .active }
 
-    func body(content: Content) -> some View {
-        content
-            .textRenderer(StreamingTextRenderer(tint: model.theme.tokens.accent, opacity: dimmed ? 0.3 : 0.85))
+    var body: some View {
+        content(model.theme.tokens.accent, dimmed ? 0.3 : 0.85)
             .onChange(of: pulses, initial: true) { _, pulses in
                 if pulses {
                     withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) { dimmed = true }

@@ -162,6 +162,25 @@ extension AppTests.Bleet {
             #expect(await cache.snapshot().parseCount == parsed)
         }
 
+        /// #60 B1: the caret follows the tail's structure. Only a streaming tail whose last leaf block is
+        /// a paragraph carries it, whatever text earlier blocks share with that ending.
+        @Test(arguments: [
+            ("Done.", true), ("Done.\n\nDone.", true), ("done.\n\nAll done.", true),
+            ("Intro.\n\n- one\n- two", true), ("- loose\n\n  continued", true), ("> quoted\n> ending", true),
+            ("1. outer\n   - inner ending", true), ("- [ ] task ending", true),
+            ("Done.\n\n\(fence)\nDone.\n\(fence)", false), ("Done.\n\n# Done.", false),
+            ("Done.\n\n| Done. |\n| --- |\n| Done. |", false), ("Done.\n\n---", false),
+            ("Done.\n\n![Done.](x.png)", false), ("Done.\n\n<div>Done.</div>", false),
+            ("- Done.\n\n  \(fence)\n  Done.\n  \(fence)", false), ("> Done.\n>\n> ## Done.", false),
+        ])
+        func caretFollowsTheTailsLastLeafBlock(source: String, endsInParagraph: Bool) async throws {
+            let cache = MarkdownSegmentCache()
+            let streaming = try #require(await cache.prepare(id: UUID(), source: source, isComplete: false))
+            #expect(streaming.segments.map(\.endsInParagraph) == [endsInParagraph])
+            let complete = try #require(await cache.prepare(id: UUID(), source: source, isComplete: true))
+            #expect(complete.segments.map(\.endsInParagraph) == [nil])
+        }
+
         @Test func cacheChargesRenderedBytesAndEvictsWithinBounds() async throws {
             let cache = MarkdownSegmentCache(maximumEntries: 2, maximumCost: 600, maximumEntryCost: 400, targetBytes: 1)
             let reference = "Use [a][x].\n\nThen [a][x] again.\n\n[x]: https://example.com/x\n"
@@ -330,10 +349,12 @@ extension AppTests.Bleet {
             #expect(PreparedMarkdownDocumentCache.shared.document(for: message.id, source: reply)?.isComplete == true)
         }
 
-        /// #60 B1: the caret marks only the end of the reply, in its final line.
+        /// #60 B1: the caret marks only the end of the reply, in its final line, including when earlier
+        /// paragraphs end with the same text.
         @Test(arguments: [
             "First paragraph of the answer.\n\n- a list item\n\nThe final streamed line",
             "First paragraph of the answer.\n\nA second paragraph.\n\n- a list item\n- the final streamed item",
+            "Done.\n\nDone.\n\nDone.", "done.\n\nAll done.", "- Done.\n\n> Done.\n\nDone.",
         ])
         @MainActor func streamingCaretMarksOnlyTheFinalLine(source: String) async throws {
             // One tail segment holding three paragraphs: only the last one carries the caret.
@@ -360,6 +381,33 @@ extension AppTests.Bleet {
             #expect(
                 CGFloat(rows.upperBound) > CGFloat(streaming.pixelsHigh) - 40 * scale,
                 "The caret sits on the final line: rows \(rows)")
+        }
+
+        /// #60 B1: a tail ending in code, a heading or a table shows no caret, even on an earlier
+        /// paragraph whose text matches the ending.
+        @Test(arguments: [
+            "Done.\n\n\(fence)\nDone.\n\(fence)", "Done.\n\n# Done.", "Done.\n\n| Done. |\n| --- |\n| Done. |",
+        ])
+        @MainActor func streamingCaretSkipsTailsThatDoNotEndInProse(source: String) async throws {
+            let document = try #require(
+                await MarkdownSegmentCache().prepare(id: UUID(), source: source, isComplete: false))
+            #expect(document.segments.count == 1)
+            let streaming = try await caretPixels(document, streaming: true)
+            let complete = try await caretPixels(document, streaming: false)
+            #expect(streaming.pixelsHigh == complete.pixelsHigh)
+            // Rows of the leading paragraph: its own rendering, less the bottom padding.
+            let prose = try #require(
+                await MarkdownSegmentCache().prepare(id: UUID(), source: "Done.", isComplete: true))
+            let proseImage = try await caretPixels(prose, streaming: false)
+            let scale = CGFloat(proseImage.pixelsHigh) / proseImage.size.height
+            let proseRows = proseImage.pixelsHigh - Int(10 * scale)
+            for y in 0..<proseRows {
+                for x in 0..<min(streaming.pixelsWide, complete.pixelsWide)
+                where streaming.colorAt(x: x, y: y) != complete.colorAt(x: x, y: y) {
+                    Issue.record("The leading paragraph changed at \(x), \(y)")
+                    return
+                }
+            }
         }
     }
 }

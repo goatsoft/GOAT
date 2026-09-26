@@ -20,16 +20,16 @@ struct PreparedMarkdownSegment: Sendable {
     /// MarkdownUI margins of the first and last block, in base font sizes (see `MarkdownSegmentSpacing`).
     let leadingMargin: Double?
     let trailingMargin: Double?
-    /// The last line of the rendered plain text while this segment is the streaming tail. The paragraph
-    /// that ends with it carries the caret (#60 B1).
-    let caretLine: String?
+    /// While this segment is the streaming tail, whether its last leaf block is a paragraph, which then
+    /// carries the caret (#60 B1); nil for any other segment.
+    let endsInParagraph: Bool?
 
-    func updating(isSettled: Bool, continuesPrevious: Bool, caretLine: String?) -> PreparedMarkdownSegment {
+    func updating(isSettled: Bool, continuesPrevious: Bool, endsInParagraph: Bool?) -> PreparedMarkdownSegment {
         PreparedMarkdownSegment(
             index: index, text: text, definitionSuffix: definitionSuffix, kind: kind,
             continuesPrevious: continuesPrevious, isSettled: isSettled, preparation: preparation,
             preparationID: preparationID, leadingMargin: leadingMargin, trailingMargin: trailingMargin,
-            caretLine: caretLine)
+            endsInParagraph: endsInParagraph)
     }
 }
 
@@ -143,7 +143,7 @@ actor MarkdownSegmentCache {
             segments.append(
                 prepared.updating(
                     isSettled: segment.isSettled, continuesPrevious: segment.continuesPrevious,
-                    caretLine: isTail ? (prepared.caretLine ?? Self.caretLine(of: prepared)) : nil))
+                    endsInParagraph: isTail ? (prepared.endsInParagraph ?? Self.endsInParagraph(prepared)) : nil))
             renderedBytes += prepared.text.utf8.count
         }
 
@@ -189,7 +189,7 @@ actor MarkdownSegmentCache {
             preparationID: preparationCount,
             leadingMargin: MarkdownSegmentSpacing.leadingMargin(of: segment.body, kind: segment.kind),
             trailingMargin: MarkdownSegmentSpacing.trailingMargin(of: segment.body, kind: segment.kind),
-            caretLine: nil)
+            endsInParagraph: nil)
     }
 
     private func takeEntry(_ id: UUID) -> Entry? {
@@ -225,22 +225,32 @@ actor MarkdownSegmentCache {
         return contiguous ?? text.utf8.prefix(count).elementsEqual(prefix.utf8)
     }
 
-    private static func caretLine(of segment: PreparedMarkdownSegment) -> String? {
-        guard case .parsed(let content) = segment.preparation else { return nil }
-        return lastLine(of: content.value.renderPlainText())
+    /// Whether the last leaf block of a parsed segment is a paragraph, read from its structure rather
+    /// than its text: cmark closes that paragraph last, inside any lists and quotes that hold it. A
+    /// tight list item's paragraph closes without `</p>`. Code, headings, tables, thematic breaks,
+    /// HTML blocks and image-only endings are not prose and carry no caret.
+    static func endsInParagraph(_ segment: PreparedMarkdownSegment) -> Bool {
+        guard case .parsed(let content) = segment.preparation else { return false }
+        return endsInParagraph(html: content.value.renderHTML())
     }
 
-    /// The last non-blank line of `text` without its surrounding whitespace.
-    static func lastLine(of text: String) -> String? {
-        var end = text.endIndex
+    static func endsInParagraph(html: String) -> Bool {
+        var html = Substring(html)
+        var closesItem = false
         while true {
-            let newline = text[..<end].lastIndex(where: \.isNewline)
-            let start = newline.map { text.index(after: $0) } ?? text.startIndex
-            let line = text[start..<end].trimmingCharacters(in: .whitespaces)
-            if !line.isEmpty { return line }
-            guard let newline else { return nil }
-            end = newline
+            html = html.dropLast(html.reversed().prefix(while: \.isWhitespace).count)
+            guard let closer = ["</li>", "</ul>", "</ol>", "</blockquote>"].first(where: { html.hasSuffix($0) })
+            else { break }
+            // Only the innermost closer tells whether an item ended in its own inline content.
+            closesItem = closer == "</li>"
+            html = html.dropLast(closer.count)
         }
+        // An image or thematic break ends the segment without text.
+        if html.hasSuffix("/>") || html.hasSuffix("/></p>") { return false }
+        if html.hasSuffix("</p>") { return true }
+        guard closesItem, !html.hasSuffix("<li>") else { return false }
+        let blockClosers = ["</pre>", "</table>", "</h1>", "</h2>", "</h3>", "</h4>", "</h5>", "</h6>"]
+        return !blockClosers.contains(where: html.hasSuffix)
     }
 }
 
@@ -450,22 +460,25 @@ private struct MarkdownSegmentView: View, Equatable {
     @Environment(AppModel.self) private var model
 
     nonisolated static func == (lhs: MarkdownSegmentView, rhs: MarkdownSegmentView) -> Bool {
-        lhs.segment.preparationID == rhs.segment.preparationID && lhs.segment.caretLine == rhs.segment.caretLine
-            && lhs.fontSize == rhs.fontSize && lhs.isStreaming == rhs.isStreaming && lhs.isTail == rhs.isTail
+        lhs.segment.preparationID == rhs.segment.preparationID
+            && lhs.segment.endsInParagraph == rhs.segment.endsInParagraph && lhs.fontSize == rhs.fontSize
+            && lhs.isStreaming == rhs.isStreaming && lhs.isTail == rhs.isTail
     }
 
     var body: some View {
         switch segment.preparation {
         case .parsed(let content):
-            let caretLine = isTail ? segment.caretLine : nil
+            let showsCaret = isTail && segment.endsInParagraph == true
             Markdown(content.value)
                 .markdownImageProvider(BlockedMarkdownImageProvider())
                 .markdownInlineImageProvider(BlockedMarkdownInlineImageProvider())
                 .goatMarkdownStyle(fontSize: fontSize, isStreaming: isStreaming)
-                .markdownBlockStyle(\.paragraph) { configuration in
-                    MarkdownSegmentParagraph(configuration: configuration, caretLine: caretLine)
-                }
                 .textSelection(.enabled)
+                // Text layouts arrive in view order, so when the segment ends in a paragraph the last
+                // one is that paragraph's, wherever its text also appears earlier.
+                .overlayPreferenceValue(Text.LayoutKey.self) { layouts in
+                    if showsCaret, let last = layouts.last { StreamingCaretMark(text: last) }
+                }
         case .plainText:
             let text = Text(verbatim: segment.text)
                 .font(Font(ReadingFonts.nsFont(model.effectiveCodeFontID, size: model.codeFontSize, role: .code)))
@@ -473,26 +486,5 @@ private struct MarkdownSegmentView: View, Equatable {
                 .textSelection(.enabled)
             if isTail { text.modifier(StreamingCaret()) } else { text }
         }
-    }
-}
-
-/// MarkdownUI's basic paragraph. While a reply streams, the paragraph that ends the reply's tail
-/// segment also draws the caret; drawing never changes the paragraph's layout.
-private struct MarkdownSegmentParagraph: View {
-    let configuration: BlockConfiguration
-    let caretLine: String?
-
-    var body: some View {
-        let paragraph = configuration.label
-            .fixedSize(horizontal: false, vertical: true)
-            .relativeLineSpacing(.em(0.15))
-            .markdownMargin(top: .zero, bottom: .em(1))
-        if endsReply { paragraph.modifier(StreamingCaret()) } else { paragraph }
-    }
-
-    private var endsReply: Bool {
-        guard let caretLine, let line = MarkdownSegmentCache.lastLine(of: configuration.content.renderPlainText())
-        else { return false }
-        return caretLine.hasSuffix(line)
     }
 }
