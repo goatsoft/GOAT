@@ -11,6 +11,9 @@ struct PresentationStyle: ViewModifier {
                 ThemedFieldSelection(tint: model.theme.tokens.tint, ink: model.theme.tokens.ink)
                     .frame(width: 0, height: 0)
             )
+            // System resolves to Light or Midnight by the appearance this view sees, so an OS switch
+            // re-highlights; its own colours are placeholders.
+            .environment(\.syntaxPalette, SyntaxPalette(theme: model.theme.resolved(dark: colorScheme == .dark)))
             .tint(model.theme.tokens.tint)
             .accentColor(model.theme.tokens.tint)
             .preferredColorScheme(model.preferredColorScheme)

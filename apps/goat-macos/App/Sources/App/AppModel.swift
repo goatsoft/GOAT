@@ -377,6 +377,10 @@ final class AppModel {
     var showToolDiffs: Bool {
         didSet { UserDefaults.standard.set(showToolDiffs, forKey: "appearance.toolDiffs") }
     }
+    /// When on, a completed reply's reasoning folds to one "Thought for" line (#60 B4, ADR-0074).
+    var foldsCompletedReasoning: Bool {
+        didSet { UserDefaults.standard.set(foldsCompletedReasoning, forKey: "appearance.reasoningFolds") }
+    }
     /// When on, Paddock previews are restricted to local content (ADR-0015).
     var previewsOffGrid: Bool {
         didSet { UserDefaults.standard.set(previewsOffGrid, forKey: "paddock.offGrid") }
@@ -398,6 +402,7 @@ final class AppModel {
         animationsEnabled = true
         codeWordWrap = false
         showToolDiffs = true
+        foldsCompletedReasoning = true
         automaticChatTitles = true
         autoCompactEnabled = true
         compactAtPercent = 80
@@ -463,6 +468,7 @@ final class AppModel {
         animationsEnabled = d.object(forKey: "appearance.animations") as? Bool ?? true
         showToolDiffs = d.object(forKey: "appearance.toolDiffs") as? Bool ?? true
         codeWordWrap = d.object(forKey: "appearance.codeWordWrap") as? Bool ?? false
+        foldsCompletedReasoning = d.object(forKey: "appearance.reasoningFolds") as? Bool ?? true
         previewsOffGrid = d.object(forKey: "paddock.offGrid") as? Bool ?? false
         settingsAlwaysOnTop = d.object(forKey: "settings.alwaysOnTop") as? Bool ?? true
         herdRootPath = d.string(forKey: "herd.defaultRoot") ?? HerdWorkspace.suggestedRoot.path

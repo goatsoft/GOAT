@@ -98,3 +98,23 @@ no telemetry) and must be licensed under the MIT license. An alternative highlig
   polyglot syntax highlighting for dozens of development languages.
 - **Embedded WebKit / Monaco Editor for Diffs**: Heavyweight process model, slow initialization,
   and incompatible with GOAT native SwiftUI rendering and keyboard navigation standards.
+
+## Amendment: Theme-derived syntax palette (2026-09-26)
+
+Tracked by [#60](https://github.com/goatsoft/GOAT/issues/60) (A5). Section 1 mapped only the light
+and dark schemes to syntax tokens, so every theme shared Xcode's colours.
+
+- `SyntaxPalette` derives the token colours from the active `ThemeSpec`: keywords from the accent,
+  strings from the second accent, numbers and literals from the glow, comments from the muted ink,
+  types and titles from the tint, and plain text from the ink. Diff additions and deletions use the
+  semantic success and danger tokens.
+- Each colour moves toward the theme's ink until it reaches 4.5:1 contrast on the theme's
+  background (DESIGN.md §10), measured with OKLabColorPicker's shared WCAG utilities (ADR-0098).
+  A colour that already does is used unchanged. This guarantees AA only when the ink itself reaches
+  4.5:1; with a lower-contrast custom ink, a colour that never reaches it ends at the ink.
+- The window root provides the palette as an environment value from the active theme, so System
+  follows its light or dark theme. Views outside a themed window keep the Xcode palette.
+- The palette's colours are part of every highlight cache key (the shared highlight cache, prepared
+  code text, reasoning code and Vue code), so a theme change never serves another theme's colours.
+  During a live change the previous colours stay on screen until the new highlight is ready; after
+  eviction the source shows until it is prepared again.

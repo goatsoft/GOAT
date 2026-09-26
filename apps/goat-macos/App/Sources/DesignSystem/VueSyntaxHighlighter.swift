@@ -74,9 +74,9 @@ actor VueSyntaxHighlighter {
         }
     }
 
-    func render(_ source: String, dark: Bool) async throws -> AttributedString {
+    func render(_ source: String, dark: Bool, palette: SyntaxPalette? = nil) async throws -> AttributedString {
         guard source.utf8.count <= Self.maximumBytes else { return AttributedString(source) }
-        let theme: HighlightTheme = dark ? .xcodeDark : .xcodeLight
+        let theme = await CodeSyntaxHighlighter.shared.theme(palette: palette, dark: dark)
         var output = AttributedString()
         for section in Self.sections(in: source) {
             try Task.checkCancellation()
@@ -115,21 +115,25 @@ actor VueSyntaxHighlighter {
 struct VueCodeText: View {
     let code: String
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.syntaxPalette) private var palette
     @State private var rendered: AttributedString?
     @State private var renderedKey: Key?
 
     private struct Key: Equatable {
         let code: String
         let dark: Bool
+        let palette: SyntaxPalette?
     }
 
     private var currentText: AttributedString {
-        let key = Key(code: code, dark: colorScheme == .dark)
+        let key = Key(code: code, dark: colorScheme == .dark, palette: palette)
         if renderedKey == key, let rendered {
             return rendered
         }
+        // A theme change keeps the previous colours until the new ones are ready.
+        if let rendered, renderedKey?.code == code { return rendered }
         if let rendered, let prevKey = renderedKey,
-            prevKey.dark == (colorScheme == .dark),
+            prevKey.dark == key.dark, prevKey.palette == key.palette,
             code.hasPrefix(prevKey.code)
         {
             var combined = rendered
@@ -141,13 +145,14 @@ struct VueCodeText: View {
     }
 
     var body: some View {
-        let key = Key(code: code, dark: colorScheme == .dark)
+        let key = Key(code: code, dark: colorScheme == .dark, palette: palette)
         Text(currentText)
             .task(id: key) {
                 // Coalesce streaming updates while retaining any previously highlighted prefix.
                 do {
                     try await Task.sleep(for: .milliseconds(120))
-                    let result = try await VueSyntaxHighlighter.shared.render(code, dark: key.dark)
+                    let result = try await VueSyntaxHighlighter.shared.render(
+                        code, dark: key.dark, palette: key.palette)
                     try Task.checkCancellation()
                     rendered = result
                     renderedKey = key
