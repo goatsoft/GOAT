@@ -561,7 +561,8 @@ extension AppTests.Bleet {
 
             let html = source + "<div>\nraw\n</div>\n"
             let untagged = identities(html)
-            #expect(untagged.compactMap { $0?.position } == [0, 1] && untagged.allSatisfy { $0?.isOccurrence == false })
+            #expect(untagged.compactMap { $0?.position } == [0, 1])
+            #expect(untagged.allSatisfy { $0?.isOccurrence == false })
             #expect(untagged[0] != untagged[1] && untagged[1] != tagged[1])
             #expect(identities(html) == untagged, "Remounting resolves the same way")
         }
