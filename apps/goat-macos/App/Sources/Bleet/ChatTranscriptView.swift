@@ -585,22 +585,28 @@ struct ChatTranscriptView: View {
                 pagingPhase = .idle
                 return
             }
-            var transaction = Transaction()
-            transaction.disablesAnimations = true
+            let metrics = reader.metrics
+            var target: CGFloat
             switch request.target {
             case .bottom:
                 RenderSignposts.event("TranscriptFollow")
                 followThrottle.recordFire(at: ProcessInfo.processInfo.systemUptime)
-                withTransaction(transaction) { position.scrollTo(edge: .bottom) }
+                target = metrics.offset + metrics.bottomGap
             case .anchor(let anchor):
                 // Not laid out yet: the row's geometry report runs this again, within the same bound.
                 guard let frame = reader.rowFrames[anchor.messageID] else {
                     reader.attempts += 1
                     return
                 }
-                let target = reader.metrics.offset + frame.minY + anchor.offset
-                withTransaction(transaction) { position.scrollTo(y: target) }
+                target = metrics.offset + frame.minY + anchor.offset
             }
+            target = min(max(target, metrics.offset - metrics.topGap), metrics.offset + metrics.bottomGap)
+            // SwiftUI ignores a position equal to the one it holds, which it still holds after
+            // scrolling that was not a gesture. A hair's difference makes it scroll again.
+            if position.point?.y == target { target += 0.001 }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { position.scrollTo(y: target) }
             reader.attempts += 1
             reader.executorScrolled = true
             viewport.recordScrollCommand()
@@ -608,11 +614,13 @@ struct ChatTranscriptView: View {
     }
 }
 
-/// The scroll geometry the navigation owner needs, compared on every scroll frame.
+/// The scroll geometry the navigation owner needs, compared on every scroll frame. Distances to the
+/// ends come from the visible rectangle, so they hold whatever insets the window applies.
 struct TranscriptScrollMetrics: Equatable {
     var offset: CGFloat = 0
-    var minimumOffset: CGFloat = 0
-    var maximumOffset: CGFloat = 0
+    /// How far the viewport can still move up, and down.
+    var topGap: CGFloat = 0
+    var bottomGap: CGFloat = 0
     var contentHeight: CGFloat = 0
     var width: CGFloat = 0
 
@@ -620,14 +628,13 @@ struct TranscriptScrollMetrics: Equatable {
 
     init(_ geometry: ScrollGeometry) {
         offset = geometry.contentOffset.y
-        minimumOffset = -geometry.contentInsets.top
-        maximumOffset = max(
-            minimumOffset, geometry.contentSize.height - geometry.containerSize.height + geometry.contentInsets.bottom)
+        topGap = max(0, geometry.contentOffset.y + geometry.contentInsets.top)
+        bottomGap = max(0, geometry.contentSize.height - geometry.visibleRect.maxY)
         contentHeight = geometry.contentSize.height
         width = geometry.containerSize.width
     }
 
-    var distanceFromBottom: CGFloat { maximumOffset - offset }
+    var distanceFromBottom: CGFloat { bottomGap }
 }
 
 /// Raw scroll measurements and executor bookkeeping. Deliberately not observable view state.
@@ -665,8 +672,7 @@ struct TranscriptScrollMetrics: Equatable {
             let error = frame.minY + anchor.offset
             if abs(error) <= 1 { return true }
             // The target lies past an end of the scrollable range: the nearest end is fulfilment.
-            return (error > 0 && metrics.offset >= metrics.maximumOffset - 1)
-                || (error < 0 && metrics.offset <= metrics.minimumOffset + 1)
+            return (error > 0 && metrics.bottomGap <= 1) || (error < 0 && metrics.topGap <= 1)
         }
     }
 }
