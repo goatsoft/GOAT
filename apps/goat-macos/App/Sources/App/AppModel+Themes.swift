@@ -1,6 +1,12 @@
 import Caprine
 import Foundation
 
+enum ThemeSaveResult: Equatable {
+    case saved
+    case superseded
+    case failed(String)
+}
+
 extension AppModel {
     // MARK: Theme CRUD (user themes are folders; ThemeStore, ADR-0022)
 
@@ -16,24 +22,31 @@ extension AppModel {
     }
 
     /// Save a user theme (optionally with a preview image) and select it.
-    func saveTheme(_ spec: ThemeSpec, previewData: Data? = nil) async {
+    @discardableResult
+    func saveTheme(_ spec: ThemeSpec, previewData: Data? = nil) async -> ThemeSaveResult {
         await saveThemeOnWorker(spec, previewData: previewData)
     }
 
-    private func saveThemeOnWorker(_ spec: ThemeSpec, previewData: Data?) async {
+    @discardableResult
+    private func saveThemeOnWorker(_ spec: ThemeSpec, previewData: Data?) async -> ThemeSaveResult {
         let revision = nextThemeStoreRevision()
         do {
             guard
                 let result = try await fileWorker.saveTheme(
                     spec, previewData: previewData, revision: revision)
-            else { return }
-            guard themeStoreRevision == revision, !Task.isCancelled else { return }
-            guard let saved = result.saved else { return }
+            else { return .superseded }
+            guard themeStoreRevision == revision, !Task.isCancelled else { return .superseded }
+            guard let saved = result.saved else { return .superseded }
             userThemes = result.themes
             themeID = saved.id
+            return .saved
         } catch {
+            guard themeStoreRevision == revision, !Task.isCancelled, !(error is CancellationError) else {
+                return .superseded
+            }
             dbWarning = "Theme was not saved: \(error.localizedDescription)"
             if themeStoreRevision == revision { await reloadThemes() }
+            return .failed(error.localizedDescription)
         }
     }
 
