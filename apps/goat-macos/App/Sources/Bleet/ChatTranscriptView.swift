@@ -554,7 +554,7 @@ struct ChatTranscriptView: View {
             if metrics.contentHeight != previous.contentHeight || metrics.width != previous.width {
                 // Content grew or reflowed: follow it, or put the reader's anchor back.
                 viewport.contentChanged()
-            } else if metrics.offset != previous.offset, !reader.executorReached(metrics.offset) {
+            } else if metrics.offset != previous.offset, !reader.executorMoving {
                 // The keyboard, a scroller or another direct move changed the offset without a gesture
                 // phase and without a content change; it cancels any pending scroll.
                 viewport.note("reader offset \(Int(previous.offset))->\(Int(metrics.offset))")
@@ -565,7 +565,7 @@ struct ChatTranscriptView: View {
                     viewport.readerMoved(currentRange: messageRange, anchor: reader.measuredAnchor())
                 }
             }
-            if metrics.offset != previous.offset { reader.executorTarget = nil }
+            if metrics.offset != previous.offset { reader.executorMoving = false }
         }
         // Following shows the latest output even while a growth step is still being chased.
         let showsLatest = viewport.autoFollow || atBottom
@@ -642,7 +642,9 @@ struct ChatTranscriptView: View {
             transaction.disablesAnimations = true
             withTransaction(transaction) { position.scrollTo(y: target) }
             reader.attempts += 1
-            reader.executorTarget = target
+            // Only a command that moves the viewport marks the next offset change as its own; one that
+            // lands where the viewport already is produces no change and must not claim the reader's.
+            reader.executorMoving = abs(target - metrics.offset) > 1
             viewport.recordScrollCommand()
         }
     }
@@ -683,15 +685,11 @@ private let transcriptContentSpace = "transcript-content"
     /// Row frames in content coordinates, keyed by message identity.
     var rowFrames: [UUID: CGRect] = [:]
     var executorTask: Task<Void, Never>?
-    /// The offset the executor's last command scrolled to. An offset change is the executor's only when
-    /// it lands there; any other direct move is the reader's, even when a command produced no change.
-    var executorTarget: CGFloat?
+    /// The executor's last command moves the viewport; the next offset change is its own, wherever
+    /// clamping lands it. Any other offset change without a gesture is the reader's.
+    var executorMoving = false
     var attemptGeneration: UInt64 = 0
     var attempts = 0
-
-    func executorReached(_ offset: CGFloat) -> Bool {
-        executorTarget.map { abs(offset - $0) <= 1 } ?? false
-    }
 
     /// The distance from `id`'s top edge to the viewport's top edge, when laid out.
     func offset(of id: UUID) -> CGFloat? {
