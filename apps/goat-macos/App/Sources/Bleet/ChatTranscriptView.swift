@@ -279,7 +279,13 @@ struct ChatTranscriptView: View {
                         .padding(.vertical, 8)
                         .id("earlier-messages-loader")
                         .onScrollVisibilityChange(threshold: 0.01) { visible in
-                            if visible { loadEarlierMessages() }
+                            // Never inside the layout pass that revealed the loader: the scroll that
+                            // revealed it is attributed first.
+                            guard visible else { return }
+                            Task { @MainActor in
+                                await Task.yield()
+                                loadEarlierMessages()
+                            }
                         }
                     }
                     let rows = TranscriptActivity.rows(session.messages[messageRange])
@@ -333,7 +339,13 @@ struct ChatTranscriptView: View {
                         .padding(.vertical, 8)
                         .id("later-messages-loader")
                         .onScrollVisibilityChange(threshold: 0.01) { visible in
-                            if visible { loadLaterMessages() }
+                            // Never inside the layout pass that revealed the loader: the scroll that
+                            // revealed it is attributed first.
+                            guard visible else { return }
+                            Task { @MainActor in
+                                await Task.yield()
+                                loadLaterMessages()
+                            }
                         }
                     }
                     if session.isStreaming && messageRange.upperBound == session.messages.count {
