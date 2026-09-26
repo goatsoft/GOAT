@@ -558,6 +558,9 @@ struct ChatTranscriptView: View {
                 // The keyboard, a scroller or another direct move changed the offset without a gesture
                 // phase and without a content change; it cancels any pending scroll.
                 viewport.note("reader offset \(Int(previous.offset))->\(Int(metrics.offset))")
+                // The binding still holds the executor's last target, which SwiftUI would re-apply on
+                // the next update and scroll the reader back. A direct move leaves it with no target.
+                if position.point != nil || position.edge != nil { position = ScrollPosition(idType: UUID.self) }
                 if viewport.readerOwnsViewport || !atBottom {
                     viewport.readerMoved(currentRange: messageRange, anchor: reader.measuredAnchor())
                 }
