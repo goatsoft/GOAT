@@ -55,9 +55,24 @@ embedded code-block actions remain available for smaller responses.
 Smaller responses render as segments split at valid Markdown block boundaries
 ([ADR-0091](../adrs/0091-content-bounded-transcript-layout.md)). While a
 response streams, settled segments are parsed once and only the tail is parsed
-again, so parse work grows linearly with the response. The `MarkdownSegmentParse`
-signpost marks each segment parse. The window charges a prepared response the
-bytes its segments render, including repeated reference definitions.
+again. The message's text revision tells the preparation cache when text was
+only appended, so a refresh never compares the response's prefix, and it
+visits only newly settled segments and the provisional tail. The
+`MarkdownSegmentParse` signpost marks each segment parse. The window charges a
+prepared response the bytes its segments render, including repeated reference
+definitions.
+
+`SegmentPreparationWorkloadTests` (in the default app test plan) streams five
+reply shapes from 32 KiB to 2 MiB at a fixed 4 KiB per refresh through the
+preparation layer and prints one `SEGMENT_PREPARATION` record per shape and
+size: parse count and bytes, scanned, copied and compared bytes, segments
+visited (total and the most in one refresh), HTML bytes, segmentation, parse
+and assembly time, refresh time percentiles, main-actor hand-off time, retained
+cost and the cost of a completion trim. It asserts that work per reply byte
+stays flat as the reply grows 64 times and that a refresh visits a bounded
+number of segments. Times are observations, not thresholds. It measures the
+preparation layer only; the live view keeps the 8 KiB fallback until
+segment-level windowing lands.
 
 
 ## Recorded maintenance evidence
