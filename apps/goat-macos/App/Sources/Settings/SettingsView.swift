@@ -570,6 +570,14 @@ struct AppearanceSettings: View {
                 }
             }
 
+            Toggle(isOn: $model.foldsCompletedReasoning) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Fold reasoning after replies")
+                    Text("Collapse a finished reply's reasoning to one line. Reopening it is remembered.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+
             if model.presentation.isUnlocked {
                 Section("GOAT 1337") {
                     Toggle(
