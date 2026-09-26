@@ -140,12 +140,15 @@ struct ThinkingContentView: View {
                                     ReadingFonts.nsFont(
                                         model.effectiveCodeFontID, size: model.codeFontSize, role: .code)))
                     } else {
+                        // Reasoning prose is secondary to the answer: muted and italic (DESIGN.md §3, §5).
                         Text(block.text)
                             .font(
                                 Font(
                                     ReadingFonts.nsFont(
                                         model.effectiveChatFontID, size: model.chatFontSize - 1, role: .chat))
                             )
+                            .italic()
+                            .foregroundStyle(model.theme.tokens.muted)
                             .lineSpacing(4)
                     }
                 }
