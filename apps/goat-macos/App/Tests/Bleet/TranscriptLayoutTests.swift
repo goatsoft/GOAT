@@ -130,7 +130,9 @@ extension AppTests.Bleet {
                 try await Task.sleep(for: .milliseconds(20))
             }
             try #require(!viewport.isScrolledToBottom, "Scroll-to-bottom button must be visible")
-            #expect(document.bounds.maxY - document.visibleRect.maxY > 500, "Should be scrolled away from bottom")
+            #expect(
+                document.bounds.maxY - document.visibleRect.maxY > 500,
+                "Should be scrolled away from bottom; \(viewport.diagnostics.suffix(16))")
             let clickPoint = NSPoint(x: host.bounds.midX, y: host.isFlipped ? (host.bounds.height - 28) : 28)
             click(at: clickPoint, in: host, window: window)
 
