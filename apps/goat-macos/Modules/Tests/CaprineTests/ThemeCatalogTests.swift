@@ -35,3 +35,11 @@ import Testing
     #expect(all.last?.id == "sunset")  // a genuinely new theme appends after built-ins
     #expect(all.count == ThemeCatalog.builtins.count + 1)
 }
+
+@Test func systemResolvesToLightOrMidnightAndOtherThemesToThemselves() throws {
+    let system = try #require(ThemeCatalog.builtins.first { $0.appearance == .system })
+    #expect(system.resolved(dark: false) == ThemeCatalog.light)
+    #expect(system.resolved(dark: true) == ThemeCatalog.midnight)
+    #expect(ThemeCatalog.light.resolved(dark: true) == ThemeCatalog.light)
+    #expect(ThemeCatalog.midnight.resolved(dark: false) == ThemeCatalog.midnight)
+}

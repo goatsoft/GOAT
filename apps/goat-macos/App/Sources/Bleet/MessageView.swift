@@ -187,6 +187,8 @@ struct MessageView: View {
             VStack(alignment: .leading, spacing: Caprine.Activity.spacing) {
                 if TranscriptText.hasContent(message.thinking) {
                     ThinkingDisclosure(message: message)
+                        // The answer starts clearly below the reasoning (#60 B4).
+                        .padding(.bottom, TranscriptText.hasContent(message.text) ? Caprine.Activity.reasoningGap : 0)
                 }
                 if TranscriptText.hasContent(message.text) {
                     StreamingMarkdownView(message: message)
@@ -926,34 +928,92 @@ private struct SubagentInvestigationDetails: View {
 extension EnvironmentValues {
     /// Opens full reasoning instead of the recent excerpt when a disclosure first appears.
     @Entry var reasoningStartsExpanded = false
+    /// The transcript's navigation owner, so a row can tell whether the reader owns the viewport
+    /// without observing it.
+    @Entry var transcriptViewport: TranscriptViewport?
 }
 
-/// Reasoning stays visible when calls arrive. User choices survive stream updates.
+/// The reader's reasoning choices per message for this session, so a row that SwiftUI recreates
+/// (paging, chat switches, window changes) keeps them (#60 B4). Bounded; the oldest are dropped.
+@MainActor final class ReasoningDisclosureStore {
+    static let shared = ReasoningDisclosureStore()
+
+    struct Choice: Equatable {
+        var isOpen: Bool
+        var showsAll: Bool
+    }
+
+    let limit: Int
+    private var choices: [UUID: Choice] = [:]
+    private var order: [UUID] = []
+
+    init(limit: Int = 512) {
+        self.limit = max(1, limit)
+    }
+
+    func choice(for id: UUID) -> Choice? { choices[id] }
+
+    func set(_ choice: Choice, for id: UUID) {
+        if choices.updateValue(choice, forKey: id) == nil { order.append(id) }
+        while order.count > limit { choices[order.removeFirst()] = nil }
+    }
+}
+
+/// Reasoning stays visible while it streams, visually secondary to the answer (#60 B4, ADR-0074).
+/// When the reply completes it folds to one "Thought for" line, unless the reader chose otherwise
+/// for this message or turned folding off. Folding is a deliberate change, so it happens only while
+/// the transcript follows the latest output: a reader who owns the viewport keeps the reasoning
+/// open and nothing they are reading moves. User choices survive stream updates and remounts.
 struct ThinkingDisclosure: View {
     @Environment(\.transcriptInspection) private var inspection
     @Environment(\.reasoningStartsExpanded) private var startsExpanded
+    @Environment(\.transcriptViewport) private var viewport
     let message: ChatMessage
-    @State private var visible = true
-    @State private var showAll = false
+    @State private var choice: ReasoningDisclosureStore.Choice?
     @Environment(AppModel.self) private var model
+
+    init(message: ChatMessage) {
+        self.message = message
+        _choice = State(initialValue: ReasoningDisclosureStore.shared.choice(for: message.id))
+    }
+
+    /// Open while streaming; after completion, folded unless chosen otherwise or folding is off.
+    var isOpen: Bool {
+        choice?.isOpen ?? (!message.complete || !model.foldsCompletedReasoning)
+    }
+
+    private var showsAll: Bool { choice?.showsAll ?? startsExpanded }
+
+    private func choose(_ next: ReasoningDisclosureStore.Choice) {
+        choice = next
+        ReasoningDisclosureStore.shared.set(next, for: message.id)
+    }
+
+    /// "Thought for 12s" once complete ("Thought" when the duration is unknown, as after a reload).
+    private var title: String {
+        guard message.complete else { return "Reasoning" }
+        guard let seconds = message.thinkingSeconds else { return "Thought" }
+        return "Thought for \(AssistantStatusRow<EmptyView>.elapsedLabel(TimeInterval(seconds)))"
+    }
 
     var body: some View {
         let preview = ReasoningPreview(message.thinking)
+        let isOpen = self.isOpen
         VStack(alignment: .leading, spacing: Caprine.Activity.spacing) {
             HStack {
                 Button {
                     inspection.perform()
-                    visible.toggle()
+                    choose(ReasoningDisclosureStore.Choice(isOpen: !isOpen, showsAll: showsAll))
                 } label: {
                     HStack(spacing: Caprine.Activity.spacing) {
-                        Image(systemName: visible ? "chevron.down" : "chevron.right")
-                        Text("Reasoning")
+                        Image(systemName: isOpen ? "chevron.down" : "chevron.right")
+                        Text(title)
                     }
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityValue(visible ? "Expanded" : "Collapsed")
-                if let seconds = message.thinkingSeconds {
+                .accessibilityValue(isOpen ? "Expanded" : "Collapsed")
+                if !message.complete, let seconds = message.thinkingSeconds {
                     Text(AssistantStatusRow<EmptyView>.elapsedLabel(TimeInterval(seconds)))
                         .monospacedDigit()
                 }
@@ -962,10 +1022,10 @@ struct ThinkingDisclosure: View {
             }
             .font(Caprine.Activity.font)
             .foregroundStyle(model.theme.tokens.muted)
-            if visible {
+            if isOpen {
                 ThinkingContentView(
                     source: TranscriptText.removingBoundaryBlankLines(
-                        showAll ? message.thinking : preview.text),
+                        showsAll ? message.thinking : preview.text),
                     cacheKey: "\(message.id.uuidString):thinking",
                     onPrepared: { message.markRenderChanged() }
                 )
@@ -975,9 +1035,9 @@ struct ThinkingDisclosure: View {
                         .frame(width: Caprine.Activity.ruleWidth)
                 }
                 if preview.hasEarlierText {
-                    Button(showAll ? "Show recent reasoning" : "Show all reasoning") {
+                    Button(showsAll ? "Show recent reasoning" : "Show all reasoning") {
                         inspection.perform()
-                        showAll.toggle()
+                        choose(ReasoningDisclosureStore.Choice(isOpen: true, showsAll: !showsAll))
                     }
                     .buttonStyle(.plain)
                     .font(Caprine.Activity.font)
@@ -985,7 +1045,13 @@ struct ThinkingDisclosure: View {
                 }
             }
         }
-        .onAppear { if startsExpanded { showAll = true } }
+        .onChange(of: message.complete) { _, complete in
+            // A reader who owns the viewport keeps the reasoning open, so completion moves nothing
+            // they are reading. Folding happens on the next appearance instead.
+            guard complete, choice == nil, model.foldsCompletedReasoning, viewport?.readerOwnsViewport == true
+            else { return }
+            choice = ReasoningDisclosureStore.Choice(isOpen: true, showsAll: showsAll)
+        }
     }
 }
 
