@@ -85,6 +85,11 @@ extension AppTests.Bleet {
             unicode.thinking = String(repeating: "\u{E9}", count: 1_400)
             #expect(TranscriptWindow.displayCost(unicode) == 2_800)
 
+            // Longer expanded reasoning lays out one reply window at most (#60 A1).
+            let long = ChatMessage(role: .assistant)
+            long.thinking = String(repeating: "d", count: 40 * 1_024)
+            #expect(TranscriptWindow.displayCost(long) == ReplyWindow.budget)
+
             // An 8 KiB answer with expanded 8 KiB reasoning fills the budget; a 6 KiB row cannot join it.
             let light = ChatMessage(role: .assistant)
             light.text = String(repeating: "c", count: 6 * 1_024)

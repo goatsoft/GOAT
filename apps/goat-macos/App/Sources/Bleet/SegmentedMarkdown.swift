@@ -980,7 +980,7 @@ struct SegmentedMarkdownView: View {
 /// Pages a windowed reply as it comes into view, like the transcript's message loaders. It never
 /// scrolls: the navigation owner keeps the reader's segment in place. It acts on the next turn of
 /// the main actor, after the scroll that revealed it has been attributed to the reader.
-private struct SegmentLoader: View {
+struct SegmentLoader: View {
     let label: String
     let action: () -> Void
 

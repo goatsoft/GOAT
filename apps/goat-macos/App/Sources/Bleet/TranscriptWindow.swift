@@ -79,10 +79,10 @@ enum TranscriptWindow {
 
     @MainActor static func displayCost(_ message: ChatMessage) -> Int {
         // Do not scan tool payloads or all reasoning merely to decide which rows to admit.
-        // Reasoning renders at most one parts page, and is charged at its expanded size (not the
+        // Expanded reasoning lays out at most one reply window, and is charged at that size (not the
         // character-based preview) because the reader can show all of it in place.
         answerCost(message)
-            + min(TranscriptTextParts.maximumBytes, message.thinking.utf8.count)
+            + min(ReplyWindow.budget, message.thinkingRevision.utf8Count)
             + min(capacity, message.toolEvents.count) * 256
     }
 

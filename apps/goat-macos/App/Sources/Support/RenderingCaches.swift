@@ -27,6 +27,7 @@ enum RenderingCaches {
             HighlightCache.shared.removeAll()
             TranscriptPartsCache.shared.removeAll()
             PreparedMarkdownDocumentCache.shared.removeAll()
+            PreparedThinkingCache.shared.removeAll()
             JSONValueCache.shared.removeAll()
         }
     }

@@ -1025,12 +1025,16 @@ struct ThinkingDisclosure: View {
             .font(Caprine.Activity.font)
             .foregroundStyle(model.theme.tokens.muted)
             if isOpen {
-                ThinkingContentView(
-                    source: TranscriptText.removingBoundaryBlankLines(
-                        showsAll ? message.thinking : preview.text),
-                    cacheKey: "\(message.id.uuidString):thinking",
-                    onPrepared: { message.markRenderChanged() }
-                )
+                Group {
+                    if showsAll {
+                        // All of it, rich and windowed through the navigation owner (#60 A1).
+                        ExpandedThinkingView(message: message, onPrepared: { message.markRenderChanged() })
+                    } else {
+                        ThinkingContentView(
+                            source: TranscriptText.removingBoundaryBlankLines(preview.text),
+                            onPrepared: { message.markRenderChanged() })
+                    }
+                }
                 .padding(.leading, Caprine.Activity.inset)
                 .overlay(alignment: .leading) {
                     Rectangle().fill(model.theme.tokens.muted.opacity(Caprine.Activity.branchOpacity))
