@@ -420,7 +420,7 @@ extension AppTests.Bleet {
             #expect(elsewhere != one, "Another reply's equal block has its own identity")
             // Without an occurrence tag, the literal's position still tells the two apart.
             let untagged = try #require(CodeBlockPositions.shared.identity(of: second, occurrence: nil, in: scope))
-            #expect(untagged.position == 1, "A unique literal's position is its occurrence")
+            #expect(untagged.position == 1 && !untagged.isOccurrence, "An untagged literal has its own namespace")
 
             let store = CodeBlockStateStore()
             store.set(.init(wordWrap: true), for: one)
@@ -526,9 +526,44 @@ extension AppTests.Bleet {
             #expect(CodeBlockTags.tagged(html) == nil)
             let untagged = identities(html, messageID: messageID)
             #expect(untagged[0] == nil && untagged[1] == nil, "Identical untagged literals share no identity")
-            #expect(untagged[2] == tagged[2], "A unique block keeps its identity")
+            #expect(untagged[2]?.position == 2 && untagged[2]?.isOccurrence == false)
+            #expect(untagged[2] != tagged[2], "Losing tags resets a fence's choices; it never maps onto another")
             // Remounting resolves the same way.
             #expect(identities(html, messageID: messageID) == untagged)
+        }
+
+        /// Review of #75: indented and fenced blocks count differently (literals count every code block,
+        /// occurrences only fences), so their identities live in separate namespaces and never collide,
+        /// tagged or not, after appending an HTML block, and after remounting.
+        @Test @MainActor func indentedAndFencedBlocksNeverShareAnIdentity() throws {
+            let fence = "```"
+            let source = "    let indented = 1\n\n\(fence)swift\nlet fenced = 2\n\(fence)\n\n"
+            let positions = CodeBlockPositions()
+            let messageID = UUID()
+            func identities(_ source: String) -> [CodeBlockIdentity?] {
+                let content = MarkdownSegmentCache.content(source)
+                let scope = CodeBlockScope(
+                    messageID: messageID, segment: 0, content: PreparedMarkdownContent(value: content),
+                    preparationID: UInt64(source.utf8.count), isFencePiece: false)
+                let occurrence = CodeBlockTags.tagged(source).flatMap { text in
+                    text.split(separator: "\n").first { $0.hasPrefix(fence) && $0.count > 3 }
+                        .flatMap { FenceInfo(String($0.dropFirst(3))).occurrence }
+                }
+                return [
+                    positions.identity(of: "let indented = 1\n", occurrence: nil, in: scope),
+                    positions.identity(of: "let fenced = 2\n", occurrence: occurrence, in: scope),
+                ]
+            }
+            let tagged = identities(source)
+            #expect(tagged[0]?.position == 0 && tagged[0]?.isOccurrence == false)
+            #expect(tagged[1]?.position == 0 && tagged[1]?.isOccurrence == true)
+            #expect(tagged[0] != nil && tagged[0] != tagged[1], "Same number, different namespace")
+
+            let html = source + "<div>\nraw\n</div>\n"
+            let untagged = identities(html)
+            #expect(untagged.compactMap { $0?.position } == [0, 1] && untagged.allSatisfy { $0?.isOccurrence == false })
+            #expect(untagged[0] != untagged[1] && untagged[1] != tagged[1])
+            #expect(identities(html) == untagged, "Remounting resolves the same way")
         }
 
         /// Every piece of an oversized fence keeps its choices by the fence's first piece.

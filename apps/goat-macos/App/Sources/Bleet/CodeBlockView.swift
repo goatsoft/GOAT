@@ -159,16 +159,19 @@ struct CodeBlockScope: Equatable, Sendable {
     }
 }
 
-/// A code block's message, segment and position: its fence's occurrence in the segment, or, for a block
-/// without an occurrence tag (indented code, or a segment that may hold an HTML block), its position
-/// among the segment's code literals when that literal occurs once. The two agree when a segment has
-/// no indented code, so a streaming segment that stops being tagged keeps its unique blocks' choices.
-/// An untagged literal that occurs more than once has no identity: its choices stay with its view. The
-/// blocks before a streaming block are settled, so its position does not change as it grows.
+/// A code block's message, segment and position, in one of two namespaces that never compare equal:
+/// its fence's occurrence in the segment (`isOccurrence`), or, for a block without an occurrence tag
+/// (indented code, or a segment that may hold an HTML block), its index among all of the segment's code
+/// literals when that literal occurs once. An untagged literal that occurs more than once has no
+/// identity: its choices stay with its view. The blocks before a streaming block are settled, so its
+/// position does not change as it grows. Transition policy: when a streaming segment gains an HTML block
+/// and stops being tagged, its fences move to the literal namespace and their choices reset; they never
+/// map onto another block's.
 struct CodeBlockIdentity: Hashable, Sendable {
     let messageID: UUID
     let segment: Int
     let position: Int
+    var isOccurrence = true
 }
 
 extension EnvironmentValues {
@@ -219,7 +222,8 @@ extension EnvironmentValues {
         if matches.isEmpty { matches = list.indices.filter { trimmed(list[$0]) == trimmed(code) } }
         // Without an occurrence, identical literals cannot be told apart: none gets a shared identity.
         guard matches.count == 1, let position = matches.first else { return nil }
-        return CodeBlockIdentity(messageID: scope.messageID, segment: scope.segment, position: position)
+        return CodeBlockIdentity(
+            messageID: scope.messageID, segment: scope.segment, position: position, isOccurrence: false)
     }
 
     /// The literal of every `<pre><code>` element, in order. cmark escapes `&`, `<`, `>` and `"`.
