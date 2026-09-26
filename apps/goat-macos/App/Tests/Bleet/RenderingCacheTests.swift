@@ -420,7 +420,7 @@ extension AppTests.Bleet {
             #expect(elsewhere != one, "Another reply's equal block has its own identity")
             // Without an occurrence tag, the literal's position still tells the two apart.
             let untagged = try #require(CodeBlockPositions.shared.identity(of: second, occurrence: nil, in: scope))
-            #expect(untagged.position == CodeBlockIdentity.literalBase + 1)
+            #expect(untagged.position == 1, "A unique literal's position is its occurrence")
 
             let store = CodeBlockStateStore()
             store.set(.init(wordWrap: true), for: one)
@@ -476,9 +476,59 @@ extension AppTests.Bleet {
             #expect(!MarkdownSegmentCache.content(indented).renderHTML().contains(CodeBlockTags.key))
             #expect(CodeBlockTags.tagged("<div>\n\(fence)swift\nx\n\(fence)\n</div>\n") == nil)
             #expect(CodeBlockTags.tagged("No fences here.") == nil)
+            for line in ["<div>", "</section>", "<!-- note -->", "<?xml", "<br/>", "<p class=\"x\">", "<table"] {
+                #expect(CodeBlockTags.startsHTMLBlock(line[...]), "\(line)")
+            }
+            for line in ["<https://example.com>", "<mailto:goat@example.com>", "<3 goats", "< div>", "a <div>"] {
+                #expect(!CodeBlockTags.startsHTMLBlock(line[...]), "\(line)")
+            }
             let long = "\(fence)\(fence)swift\n\(fence)swift inner\n\(fence)\(fence)\n"
             let tagged = try #require(CodeBlockTags.tagged(long))
             #expect(tagged.components(separatedBy: CodeBlockTags.key).count == 2, "Only the outer fence opens")
+        }
+
+        /// Review of #75: duplicates stay distinct beside an autolink, which is not an HTML block. Where a
+        /// segment may hold an HTML block and is left untagged, duplicate literals get no shared identity
+        /// (their choices stay with their views), and a unique block keeps its identity when a streaming
+        /// segment stops being tagged, including after remounting.
+        @Test @MainActor func duplicatesBesideAutolinksAndHTMLBlocksNeverShareAnIdentity() throws {
+            let fence = "```"
+            let duplicate = "\(fence)swift\nlet a = 1\n\(fence)\n\n"
+            let unique = "\(fence)swift\nlet c = 3\n\(fence)\n\n"
+            let positions = CodeBlockPositions()
+            func identities(_ source: String, messageID: UUID) -> [CodeBlockIdentity?] {
+                let content = MarkdownSegmentCache.content(source)
+                let scope = CodeBlockScope(
+                    messageID: messageID, segment: 0, content: PreparedMarkdownContent(value: content),
+                    preparationID: UInt64(source.utf8.count), isFencePiece: false)
+                // The occurrences MarkdownUI hands each block: tags in the parsed source, if it was tagged.
+                let parsed = CodeBlockTags.tagged(source).flatMap {
+                    CodeBlockTags.leaked(html: MarkdownContent($0).renderHTML()) ? nil : $0
+                }
+                let occurrences: [Int?] =
+                    parsed.map { text in
+                        text.split(separator: "\n").filter { $0.hasPrefix(fence) && $0.count > 3 }
+                            .map { FenceInfo(String($0.dropFirst(3))).occurrence }
+                    } ?? [nil, nil, nil]
+                return zip(["let a = 1\n", "let a = 1\n", "let c = 3\n"], occurrences).map {
+                    positions.identity(of: $0, occurrence: $1, in: scope)
+                }
+            }
+            let messageID = UUID()
+
+            let autolink = duplicate + duplicate + unique + "<https://example.com>\n"
+            #expect(CodeBlockTags.tagged(autolink) != nil, "An autolink is not an HTML block")
+            let tagged = identities(autolink, messageID: messageID)
+            #expect(tagged.map { $0?.position } == [0, 1, 2])
+
+            // Streaming appends an HTML block: the segment is left untagged.
+            let html = autolink + "\n<div>\nraw\n</div>\n"
+            #expect(CodeBlockTags.tagged(html) == nil)
+            let untagged = identities(html, messageID: messageID)
+            #expect(untagged[0] == nil && untagged[1] == nil, "Identical untagged literals share no identity")
+            #expect(untagged[2] == tagged[2], "A unique block keeps its identity")
+            // Remounting resolves the same way.
+            #expect(identities(html, messageID: messageID) == untagged)
         }
 
         /// Every piece of an oversized fence keeps its choices by the fence's first piece.

@@ -90,7 +90,7 @@ enum CodeBlockTags {
             if !first { result.append("\n") }
             first = false
             var rest = line.drop(while: { $0 == " " || $0 == "\t" })
-            if open == nil, rest.first == "<" { return nil }
+            if open == nil, startsHTMLBlock(rest) { return nil }
             while rest.first == ">" {
                 rest = rest.dropFirst().drop(while: { $0 == " " || $0 == "\t" })
             }
@@ -115,6 +115,20 @@ enum CodeBlockTags {
             }
         }
         return result
+    }
+
+    /// Whether a line (after indentation) may start a CommonMark HTML block: a comment, processing
+    /// instruction, declaration or CDATA, or an opening or closing tag name followed by whitespace, `>`,
+    /// `/` or the line's end. An autolink (`<https://…>`) does not: its scheme is followed by `:`.
+    static func startsHTMLBlock(_ line: Substring) -> Bool {
+        guard line.first == "<" else { return false }
+        var rest = line.dropFirst()
+        if let first = rest.first, first == "!" || first == "?" { return true }
+        if rest.first == "/" { rest = rest.dropFirst() }
+        let name = rest.prefix(while: { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") })
+        guard let initial = name.first, initial.isLetter else { return false }
+        guard let next = rest.dropFirst(name.count).first else { return true }
+        return next.isWhitespace || next == ">" || next == "/"
     }
 
     /// Whether a parse of tagged source carried a tag into a code literal (a line mistaken for an
@@ -146,12 +160,12 @@ struct CodeBlockScope: Equatable, Sendable {
 }
 
 /// A code block's message, segment and position: its fence's occurrence in the segment, or, for a block
-/// without an occurrence tag (indented code, or a segment left untagged), `literalBase` plus its
-/// position among the segment's code literals. The blocks before a streaming block are settled, so its
-/// position does not change as it grows.
+/// without an occurrence tag (indented code, or a segment that may hold an HTML block), its position
+/// among the segment's code literals when that literal occurs once. The two agree when a segment has
+/// no indented code, so a streaming segment that stops being tagged keeps its unique blocks' choices.
+/// An untagged literal that occurs more than once has no identity: its choices stay with its view. The
+/// blocks before a streaming block are settled, so its position does not change as it grows.
 struct CodeBlockIdentity: Hashable, Sendable {
-    static let literalBase = 1 << 20
-
     let messageID: UUID
     let segment: Int
     let position: Int
@@ -201,12 +215,11 @@ extension EnvironmentValues {
         func trimmed(_ text: String) -> Substring {
             text.dropLast(text.reversed().prefix(while: { $0 == "\n" }).count)
         }
-        guard
-            let position = list.firstIndex(of: code)
-                ?? list.firstIndex(where: { trimmed($0) == trimmed(code) })
-        else { return nil }
-        return CodeBlockIdentity(
-            messageID: scope.messageID, segment: scope.segment, position: CodeBlockIdentity.literalBase + position)
+        var matches = list.indices.filter { list[$0] == code }
+        if matches.isEmpty { matches = list.indices.filter { trimmed(list[$0]) == trimmed(code) } }
+        // Without an occurrence, identical literals cannot be told apart: none gets a shared identity.
+        guard matches.count == 1, let position = matches.first else { return nil }
+        return CodeBlockIdentity(messageID: scope.messageID, segment: scope.segment, position: position)
     }
 
     /// The literal of every `<pre><code>` element, in order. cmark escapes `&`, `<`, `>` and `"`.
