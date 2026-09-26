@@ -11,6 +11,7 @@ struct PresentationStyle: ViewModifier {
                 ThemedFieldSelection(tint: model.theme.tokens.tint, ink: model.theme.tokens.ink)
                     .frame(width: 0, height: 0)
             )
+            .environment(\.syntaxPalette, SyntaxPalette(theme: model.theme))
             .tint(model.theme.tokens.tint)
             .accentColor(model.theme.tokens.tint)
             .preferredColorScheme(model.preferredColorScheme)

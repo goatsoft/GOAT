@@ -1,4 +1,5 @@
 import AppKit
+import Caprine
 import HighlightKit
 import SwiftUI
 import Testing
@@ -212,6 +213,116 @@ extension AppTests.Caprine {
                 return view.subviews.lazy.compactMap(findScrollView).first
             }
             #expect(findScrollView(host) == nil)
+        }
+
+        // MARK: Theme palettes (#60 A5)
+
+        private static func theme(_ id: String) throws -> ThemeSpec {
+            try #require(ThemeCatalog.builtins.first { $0.id == id })
+        }
+
+        private static func foreground(of word: String, in text: AttributedString) throws -> UInt32? {
+            let range = try #require(text.range(of: word))
+            guard let color = text[range].runs.first?.appKit.foregroundColor?.usingColorSpace(.sRGB) else { return nil }
+            func channel(_ value: CGFloat) -> UInt32 { UInt32((value * 255).rounded()) }
+            return channel(color.redComponent) << 16 | channel(color.greenComponent) << 8 | channel(color.blueComponent)
+        }
+
+        /// Every built-in theme derives AA-readable syntax colours from its own tokens.
+        @Test(arguments: ThemeCatalog.builtins.map(\.id))
+        func syntaxPaletteDerivesReadableColoursFromTheTheme(id: String) throws {
+            let theme = try Self.theme(id)
+            let palette = SyntaxPalette(theme: theme)
+            let background = try #require(SyntaxPalette.rgb(theme.bg))
+            for colour in [palette.keyword, palette.string, palette.number, palette.comment, palette.type] {
+                #expect(
+                    SyntaxPalette.contrast(colour, background) >= SyntaxPalette.minimumContrast,
+                    "\(id): \(String(colour, radix: 16)) on \(theme.bg)")
+            }
+            // A token already readable on the background is used as the theme defines it.
+            let accent = try #require(SyntaxPalette.rgb(theme.accent))
+            if SyntaxPalette.contrast(accent, background) >= SyntaxPalette.minimumContrast {
+                #expect(palette.keyword == accent)
+            }
+        }
+
+        /// Themes highlight the same code in their own colours.
+        @Test func themesHighlightCodeInTheirOwnColours() async throws {
+            let light = SyntaxPalette(theme: try Self.theme("light"))
+            let pasture = SyntaxPalette(theme: try Self.theme("pasture"))
+            #expect(light != pasture && light.key != pasture.key)
+            let code = "let value = \"text\" // note"
+            let renderer = CodeSyntaxHighlighter.shared
+            let lightText = try await renderer.render(code, language: "swift", dark: false, palette: light)
+            let pastureText = try await renderer.render(code, language: "swift", dark: false, palette: pasture)
+            #expect(try Self.foreground(of: "let", in: lightText) == light.keyword)
+            #expect(try Self.foreground(of: "let", in: pastureText) == pasture.keyword)
+            #expect(try Self.foreground(of: "// note", in: pastureText) == pasture.comment)
+            #expect(String(pastureText.characters) == code, "Highlighting never changes the code")
+        }
+
+        /// The cache keys on the palette; a theme change keeps the previous colours on the first frame
+        /// until the new ones are ready, and an evicted entry falls back to source.
+        @Test @MainActor func highlightCacheSeparatesPalettesAndReusesTheFirstFrame() throws {
+            let light = SyntaxPalette(theme: try Self.theme("light"))
+            let pasture = SyntaxPalette(theme: try Self.theme("pasture"))
+            let code = "let palette = \"\(UUID().uuidString)\""
+            let lightText = AttributedString("light rendering")
+            HighlightCache.shared.set(
+                code: code, language: "swift", dark: false, palette: light, text: lightText, lineCount: 1)
+            let resident = HighlightCache.shared.peek(code: code, language: "swift", dark: false, palette: light)
+            #expect(resident?.text == lightText)
+            #expect(HighlightCache.shared.peek(code: code, language: "swift", dark: false, palette: pasture) == nil)
+            #expect(HighlightCache.shared.peek(code: code, language: "swift", dark: false) == nil)
+
+            // First frame under the cached palette.
+            #expect(
+                PreparedCodeText.displayText(
+                    code: code, language: "swift", dark: false, palette: light, isStreaming: false, rendered: nil,
+                    renderedKey: nil) == lightText)
+            // A live theme change shows the previous colours, not plain source, until re-highlighted.
+            let previous = PreparedCodeText.CacheKey(code: code, language: "swift", dark: false, palette: light)
+            #expect(
+                PreparedCodeText.displayText(
+                    code: code, language: "swift", dark: false, palette: pasture, isStreaming: false,
+                    rendered: lightText, renderedKey: previous) == lightText)
+            // Evicted: nothing resident, so the consumer shows source and prepares again.
+            HighlightCache.shared.removeAll()
+            #expect(
+                String(
+                    PreparedCodeText.displayText(
+                        code: code, language: "swift", dark: false, palette: pasture, isStreaming: false,
+                        rendered: nil, renderedKey: nil
+                    ).characters) == code)
+        }
+
+        /// A mounted code view re-highlights when the theme changes and caches under the new palette.
+        @Test @MainActor func liveThemeChangesRehighlightMountedCode() async throws {
+            let light = SyntaxPalette(theme: try Self.theme("light"))
+            let pasture = SyntaxPalette(theme: try Self.theme("pasture"))
+            let code = "let live = \"\(UUID().uuidString)\""
+            let host = NSHostingView(
+                rootView: AnyView(PreparedCodeText(code: code, language: "swift").environment(\.syntaxPalette, light)))
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 400, height: 100), styleMask: [.titled], backing: .buffered,
+                defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            defer {
+                window.contentView = nil
+                window.close()
+            }
+            for palette in [light, pasture] {
+                host.rootView = AnyView(
+                    PreparedCodeText(code: code, language: "swift").environment(\.syntaxPalette, palette))
+                var cached: HighlightCache.Entry?
+                for _ in 0..<50 where cached == nil {
+                    try await Task.sleep(for: .milliseconds(20))
+                    cached = HighlightCache.shared.peek(code: code, language: "swift", dark: false, palette: palette)
+                }
+                let entry = try #require(cached, "Prepared under palette \(palette.key)")
+                #expect(try Self.foreground(of: "let", in: entry.text) == palette.keyword)
+            }
         }
     }
 }
