@@ -293,6 +293,7 @@ struct ChatTranscriptView: View {
                         .transition(.opacity.combined(with: .scale(scale: 0.85)))
                     }
                 }
+                .environment(\.transcriptViewport, viewport)
                 .environment(
                     \.transcriptInspection,
                     TranscriptInspectionAction {
