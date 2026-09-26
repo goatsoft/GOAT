@@ -614,22 +614,29 @@ extension AppTests.Bleet {
                     messageID: messageID,
                     segment: SegmentedMarkdownView.codeSegment(of: segment.index, in: document.segments),
                     content: content, preparationID: segment.preparationID, isFencePiece: false)
-                return CodeBlockPositions.shared.identity(of: code, occurrence: 0, in: scope)
+                // Several blocks can share a segment: the block's fence occurrence counts the fences before it.
+                let before = segment.text.components(separatedBy: code)[0]
+                let occurrence = before.components(separatedBy: "\(fence)swift").count - 2
+                return CodeBlockPositions.shared.identity(of: code, occurrence: occurrence, in: scope)
             }
 
-            let first = try await prepare(0..<12)
-            let count = first.segments.count
-            #expect(count > 30, "The reply is windowed across many segments")
-            let block = 3
+            // Windows chosen from the reply's actual segments: one holding the block, an overlapping one
+            // that also holds it, a distant one that does not, and back.
+            let probe = try await prepare(0..<1)
+            let count = probe.segments.count
+            let block = 20
+            let home = try #require(probe.segments.first { $0.text.contains("let block\(block) = \(block)\n") }).index
+            try #require(
+                home >= 3 && home + 4 < count - 4, "The block sits inside a windowed reply: \(home) of \(count)")
+            let first = try await prepare((home - 3)..<(home + 1))
             let original = try #require(try identity(of: block, in: first))
             CodeBlockStateStore.shared.set(.init(wordWrap: true, isExpanded: true), for: original)
 
-            // An overlapping window, a distant one, and back: the block's identity and choice never move.
-            let overlapping = try await prepare(4..<20)
+            let overlapping = try await prepare(home..<(home + 4))
             #expect(try identity(of: block, in: overlapping) == original)
-            let distant = try await prepare(max(0, count - 8)..<count)
+            let distant = try await prepare((count - 4)..<count)
             #expect(try identity(of: block, in: distant) == nil, "Outside the window the block has no view")
-            let back = try await prepare(0..<12)
+            let back = try await prepare((home - 3)..<(home + 1))
             let remounted = try #require(try identity(of: block, in: back))
             #expect(remounted == original)
             #expect(CodeBlockStateStore.shared.state(for: remounted).isExpanded)
