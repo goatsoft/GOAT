@@ -149,10 +149,10 @@ extension AppTests.Bleet {
                 try await Task.sleep(for: .milliseconds(20))
             }
 
+            let trace = viewport.diagnostics.suffix(16)
             #expect(
                 reachedBottom,
-                "A single click on the scroll-to-bottom button must bring the viewport to the end of the transcript; "
-                    + "\(viewport.diagnostics.suffix(16))")
+                "A single click on the scroll-to-bottom button must bring the viewport to the end; \(trace)")
         }
 
         @Test @MainActor func repeatedPagingBoundsMessageCountAndBudgetWhilePreservingReaderPosition() async throws {
