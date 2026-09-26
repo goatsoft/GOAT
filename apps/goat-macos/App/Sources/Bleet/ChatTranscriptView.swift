@@ -487,8 +487,11 @@ struct ChatTranscriptView: View {
     }
 
     /// Pages earlier while keeping the message at the top of the window where the reader sees it.
+    /// Only a reader pages earlier: while the transcript follows, the earlier loader can be seen for a
+    /// moment during layout (a reply still preparing is short), and paging then would leave the latest
+    /// output.
     private func loadEarlierMessages() {
-        guard pagingPhase == .idle, messageRange.lowerBound > 0 else { return }
+        guard pagingPhase == .idle, messageRange.lowerBound > 0, viewport.readerOwnsViewport else { return }
         let kept = session.messages[messageRange.lowerBound].id
         let keptOffset = reader.offset(of: kept)
         guard let result = viewport.pageEarlier(count: session.messages.count, cost: displayCost) else { return }
