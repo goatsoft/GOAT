@@ -151,7 +151,8 @@ extension AppTests.Bleet {
 
             #expect(
                 reachedBottom,
-                "A single click on the scroll-to-bottom button must bring the viewport to the end of the transcript")
+                "A single click on the scroll-to-bottom button must bring the viewport to the end of the transcript; "
+                    + "\(viewport.diagnostics.suffix(16))")
         }
 
         @Test @MainActor func repeatedPagingBoundsMessageCountAndBudgetWhilePreservingReaderPosition() async throws {
@@ -603,7 +604,7 @@ extension AppTests.Bleet {
                 host.layoutSubtreeIfNeeded()
             }
             try await settle(viewport, host: host)
-            #expect(viewport.heldRange != windowBefore, "The earlier page loaded")
+            #expect(viewport.heldRange != windowBefore, "The earlier page loaded; \(viewport.diagnostics.suffix(16))")
             #expect(viewport.abandonedRequests == 0)
             let after = try snapshot(host)
 
@@ -618,7 +619,9 @@ extension AppTests.Bleet {
                     changed += 1
                 }
             }
-            #expect(changed == 0, "The reader's view moved while paging earlier: \(changed) pixels changed")
+            #expect(
+                changed == 0,
+                "The reader's view moved while paging earlier: \(changed) pixels; \(viewport.diagnostics.suffix(16))")
         }
 
         /// A reader who takes the viewport cancels a pending programmatic scroll before it runs.

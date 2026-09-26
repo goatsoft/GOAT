@@ -64,6 +64,13 @@ private enum TranscriptPagingPhase: Equatable, Sendable {
     /// Scroll commands issued and requests abandoned after the bounded attempts, for instrumentation.
     @ObservationIgnored private(set) var scrollCommands = 0
     @ObservationIgnored private(set) var abandonedRequests = 0
+    /// The executor's recent steps, for test failure messages and debugging. Bounded.
+    @ObservationIgnored private(set) var diagnostics: [String] = []
+
+    func note(_ event: String) {
+        diagnostics.append(event)
+        if diagnostics.count > 40 { diagnostics.removeFirst(diagnostics.count - 40) }
+    }
 
     init(initiallyFollowing: Bool = true, initialHeldRange: Range<Int>? = nil, initialAnchor: Anchor? = nil) {
         autoFollow = initiallyFollowing
@@ -532,11 +539,11 @@ struct ChatTranscriptView: View {
             if metrics.contentHeight != previous.contentHeight || metrics.width != previous.width {
                 // Content grew or reflowed: follow it, or put the reader's anchor back.
                 viewport.contentChanged()
-            } else if metrics.offset != previous.offset, viewport.request == nil, !reader.executorScrolled {
-                // The keyboard or a scroller moved the viewport without a gesture phase.
-                if viewport.readerOwnsViewport {
-                    viewport.readerSettled(atTrueBottom: false, anchor: reader.measuredAnchor())
-                } else if !atBottom {
+            } else if metrics.offset != previous.offset, !reader.executorScrolled {
+                // The keyboard, a scroller or another direct move changed the offset without a gesture
+                // phase and without a content change; it cancels any pending scroll.
+                viewport.note("reader offset \(Int(previous.offset))->\(Int(metrics.offset))")
+                if viewport.readerOwnsViewport || !atBottom {
                     viewport.readerMoved(currentRange: messageRange, anchor: reader.measuredAnchor())
                 }
             }
@@ -573,13 +580,19 @@ struct ChatTranscriptView: View {
                 await Task.yield()
             }
             reader.executorTask = nil
+            // A request issued while this attempt waited runs next; it must not wait for geometry.
+            defer {
+                if !Task.isCancelled, let pending = viewport.request, pending != request { executePendingRequest() }
+            }
             guard !Task.isCancelled, viewport.request == request, !reader.isScrolling else { return }
             if reader.shows(request.target) {
+                viewport.note("fulfilled \(request.generation) at \(Int(reader.metrics.offset))")
                 viewport.fulfilled(request)
                 if pagingPhase != .idle { pagingPhase = .idle }
                 return
             }
             guard reader.attempts < Self.maximumScrollAttempts else {
+                viewport.note("abandoned \(request.generation)")
                 RenderSignposts.event("TranscriptScrollAbandoned")
                 viewport.abandon(request)
                 pagingPhase = .idle
@@ -604,6 +617,9 @@ struct ChatTranscriptView: View {
             // SwiftUI ignores a position equal to the one it holds, which it still holds after
             // scrolling that was not a gesture. A hair's difference makes it scroll again.
             if position.point?.y == target { target += 0.001 }
+            viewport.note(
+                "scroll \(request.generation) \(request.target == .bottom ? "bottom" : "anchor") "
+                    + "\(Int(metrics.offset))->\(Int(target)) gap \(Int(metrics.topGap))/\(Int(metrics.bottomGap))")
             var transaction = Transaction()
             transaction.disablesAnimations = true
             withTransaction(transaction) { position.scrollTo(y: target) }
