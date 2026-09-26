@@ -112,10 +112,11 @@ extension AppTests.Bleet {
                         }
                     }
                     let document = String(describing: scroll.documentView?.frame)
-                    let state =
-                        "clip \(scroll.contentView.bounds), document \(document), "
-                        + "held \(String(describing: viewport.heldRange)), following \(viewport.autoFollow), "
-                        + "request \(String(describing: viewport.request)), \(viewport.diagnostics.suffix(10))"
+                    let clip = "clip \(scroll.contentView.bounds), document \(document)"
+                    let owner = "held \(String(describing: viewport.heldRange)), following \(viewport.autoFollow)"
+                    let recent = Array(viewport.diagnostics.suffix(10))
+                    let trace = "request \(String(describing: viewport.request)), \(recent)"
+                    let state = "\(clip), \(owner), \(trace)"
                     let context = "width \(width), font \(font), wheel \(delta); ink=\(ink)"
                     #expect(ink > 100, "Viewport must contain visible text after \(context); \(state)")
 
