@@ -82,14 +82,37 @@ segment rather than per message. Deliver it in three reviewable steps:
 
 1. **Segmentation** (`MarkdownSegmenter` in Bleet, pure). Segments break only at valid top-level
    block boundaries: a column-0 line after a blank line, a column-0 fence opener, or the line after a
-   fence closes, never inside fenced code, multi-line HTML or display math. Whole blocks pack to about
-   6 KiB, and a segment never exceeds 16 KiB. Oversized blocks are split explicitly: fenced code
-   repeats its opener in every piece, tables repeat their header and delimiter rows, and other blocks
-   split at column-0 lines, then lines, whitespace or scalar boundaries, never inside a nested
-   container while another cut exists. HTML and SVG artifact documents stay whole. Reference
-   definitions are appended to every segment. A segment's index is its identity. Only segments that
-   end before the final, possibly partial line are settled; the rest are provisional, and consumers
-   compare segment text before reusing prepared content because a later definition can change it.
+   container closes, never inside fenced code, multi-line HTML or display math. A column-0 item of
+   the same list continues it, so loose lists stay whole. Whole blocks pack to about 6 KiB.
+   - **Bounds.** A segment's Markdown body never exceeds 16 KiB. Two things sit outside that bound
+     and are stated separately: an HTML or SVG artifact document stays one whole segment, and the
+     reply's reference definitions (at most 4 KiB, none once they exceed it) are appended to the
+     text of every non-verbatim segment. Syntax a piece repeats is capped at a quarter of the
+     maximum. A line longer than the maximum carries no block syntax (it cannot open or close a
+     container or head a table), a deliberate departure from CommonMark that bounds both repeated
+     syntax and scanner lookahead.
+   - **Oversized blocks.** Fenced code is rebuilt in every piece with a fence that fits the syntax
+     budget (the full opener, its language only, or a bare fence) and closed except for an
+     unterminated final piece. Tables repeat their header and delimiter rows. Other blocks split at
+     column-0 lines, then lines, whitespace or scalar boundaries, never inside a nested container. A
+     nested container larger than a piece is split on its own: a fence in a list item or behind
+     indentation is rebuilt as top-level code (its list nesting is not kept), and quoted fences,
+     HTML and display math become verbatim pieces. Anything whose syntax cannot be rebuilt within
+     the budget becomes verbatim pieces, which render as plain monospaced text. Known limits of
+     pieces: a split paragraph or list item ends early, inline markup across a cut is not kept, and
+     a one-item piece of a loose list renders tight. Consumers join pieces marked
+     `continuesPrevious` without a block gap.
+   - **Validation.** App tests render segments with MarkdownUI: whole-block segments produce exactly
+     the whole reply's HTML (loose and tight lists, quotes, alerts, HTML comments, math, reference
+     links), and fence, table and paragraph pieces keep every code line, row and word.
+   - **Streaming.** A segment's index is its identity. The scanner is append-oriented: a line is
+     committed once its role is decided (when it ends or exceeds the maximum, or for a possible
+     table header, when its delimiter row is decided), committed segments are never revisited, and
+     each extension reads only the new bytes plus a tail bounded by the segment maximum. Callers
+     must only append; only the undecided tail is compared. Segments ending before the undecided
+     tail are settled; the rest are provisional, and consumers compare segment text before reusing
+     prepared content because a later definition can change it. Scanned and copied bytes are
+     instrumented, and tests hold them linear in the reply for six reply shapes.
 2. **Stable-prefix rendering** inside the existing message window. Settled segments are prepared
    once; only provisional segments are re-prepared as the reply streams. Rendered segments and
    prepared-content cache bytes are bounded independently of total reply length. The streaming caret

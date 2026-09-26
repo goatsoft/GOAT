@@ -37,7 +37,7 @@ Public seams: `ChatSession`, `ChatMessage`, `LiveGenerationMetrics`, `MarkdownSe
 
 No transport or tool execution; streamed display state is coalesced by Shepherd.
 
-Validation: BleetTests covers message revisions, live metrics and Markdown segmentation (valid boundaries, oversized fences, tables and paragraphs, growth stability); the Bleet test plan covers composer, transcript and status presentation. Run `make test MODULE=Bleet`.
+Validation: BleetTests covers message revisions, live metrics and Markdown segmentation (valid boundaries, bounded bodies, oversized and nested fences, tables and paragraphs, growth stability, linear scanner work); the Bleet test plan covers composer, transcript and status presentation. Run `make test MODULE=Bleet`.
 
 ## Caprine
 
