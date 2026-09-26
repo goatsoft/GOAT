@@ -215,44 +215,77 @@ struct PreparedMarkdownView<Rendered: View>: View {
 }
 
 /// Unified, stable Markdown view for both streaming and complete states without view-identity swapping.
+/// The reply renders as segments (#60 A1 step 2, ADR-0091): settled segments are prepared once and
+/// keep their views while only the streaming tail is re-prepared. Text above 8 KiB keeps the
+/// plain-text parts fallback until segment-level windowing (step 3) bounds what one reply lays out.
 struct StreamingMarkdownView: View {
     @Bindable var message: ChatMessage
     @Environment(AppModel.self) private var model
-    @State private var snapshot: String
+    @State private var snapshot: Snapshot
+    @State private var document: PreparedMarkdownDocument?
+
+    /// The text and completion sampled together, so completion always prepares the final text.
+    private struct Snapshot: Equatable {
+        let source: String
+        let isComplete: Bool
+    }
 
     init(message: ChatMessage) {
         self.message = message
-        _snapshot = State(initialValue: message.text)
+        _snapshot = State(initialValue: Snapshot(source: message.text, isComplete: message.complete))
+        // Seed only from an already-prepared document. SwiftUI evaluates this initializer on every
+        // parent update, so it must stay a lookup. A streaming reply may show its last prepared
+        // document until the current text is ready, as the view itself does between refreshes.
+        let cache = PreparedMarkdownDocumentCache.shared
+        _document = State(
+            initialValue: cache.document(for: message.id, source: message.text)
+                ?? (message.complete ? nil : cache.latest(for: message.id)))
     }
 
     var body: some View {
-        PreparedMarkdownView(
-            id: message.id, source: snapshot, fallbackFontSize: model.chatFontSize,
-            onPrepared: { message.markRenderChanged() },
-            retainsPreviousContent: true
-        ) { content in
-            Markdown(content)
-                .markdownImageProvider(BlockedMarkdownImageProvider())
-                .markdownInlineImageProvider(BlockedMarkdownInlineImageProvider())
-                .goatMarkdownStyle(fontSize: model.chatFontSize, isStreaming: !message.complete)
-                .textSelection(.enabled)
+        Group {
+            if snapshot.source.utf8.count > TranscriptTextParts.maximumBytes {
+                TranscriptTextPartsView(
+                    source: snapshot.source, fontSize: model.chatFontSize, cacheKey: "\(message.id.uuidString):text",
+                    onPrepared: { message.markRenderChanged() })
+            } else if let document {
+                SegmentedMarkdownView(document: document, fontSize: model.chatFontSize, isStreaming: !message.complete)
+            } else {
+                // Never flash raw Markdown while a saved reply is being prepared off the main actor.
+                Label("Formatting response…", systemImage: "text.badge.checkmark")
+                    .font(Font(ReadingFonts.nsFont(model.effectiveChatFontID, size: model.chatFontSize, role: .chat)))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        // Align the document boundary without searching nested lists and code scrollers.
+        .alignmentGuide(.leading) { _ in 0 }
+        .alignmentGuide(.trailing) { dimensions in dimensions.width }
+        .task(id: snapshot) {
+            let request = snapshot
+            guard request.source.utf8.count <= TranscriptTextParts.maximumBytes else { return }
+            if let document, document.source == request.source, document.isComplete == request.isComplete { return }
+            guard
+                let prepared = await MarkdownSegmentCache.shared.prepare(
+                    id: message.id, source: request.source, isComplete: request.isComplete),
+                !Task.isCancelled
+            else { return }
+            document = prepared
+            PreparedMarkdownDocumentCache.shared.store(prepared, for: message.id)
+            message.markRenderChanged()
         }
         .task(id: message.id) {
             while !message.complete {
-                if snapshot != message.text {
-                    snapshot = message.text
-                }
+                sample()
                 try? await Task.sleep(for: .milliseconds(120))
                 guard !Task.isCancelled else { return }
             }
-            if snapshot != message.text {
-                snapshot = message.text
-            }
+            sample()
         }
-        .onChange(of: message.complete) { _, complete in
-            if complete && snapshot != message.text {
-                snapshot = message.text
-            }
-        }
+        .onChange(of: message.complete) { sample() }
+    }
+
+    private func sample() {
+        let next = Snapshot(source: message.text, isComplete: message.complete)
+        if snapshot != next { snapshot = next }
     }
 }

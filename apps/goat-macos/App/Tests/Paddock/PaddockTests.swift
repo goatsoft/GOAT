@@ -420,7 +420,7 @@ final class ChatArtifactSyntaxTests: XCTestCase {
                     ? "<html><body><h1 id='stream-goat'>"
                     : "<svg xmlns='http://www.w3.org/2000/svg'><text id='stream-goat'>"
                 let closing = language == "html" ? "</h1></body></html>" : "</text></svg>"
-                let parseCount = await MarkdownRenderCache.shared.snapshot().parseCount
+                let parseCount = await MarkdownSegmentCache.shared.snapshot().parseCount
                 for chunk in [prefix + opening + "Goat", " trails", closing + (fenced ? "\n```" : "")] {
                     message.appendStream(text: chunk, thinking: "")
                     for _ in 0..<40 {
@@ -432,7 +432,7 @@ final class ChatArtifactSyntaxTests: XCTestCase {
                         try await Task.sleep(for: .milliseconds(10))
                     }
                 }
-                let prepared = await MarkdownRenderCache.shared.snapshot().parseCount
+                let prepared = await MarkdownSegmentCache.shared.snapshot().parseCount
                 XCTAssertGreaterThanOrEqual(prepared - parseCount, 3, "Exercise successive rendered snapshots")
 
                 message.complete = true

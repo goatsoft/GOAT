@@ -6,11 +6,15 @@ import SwiftUI
 enum GOATMarkdownSyntax {
     /// MarkdownUI already supports GFM. GitHub Alerts are a GitHub presentation extension, so
     /// retain their meaning in portable Markdown and give the resulting quote a first-class look.
-    static func normalized(_ source: String) -> String {
-        let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
+    /// Only a whole document (or a reply's first segment) can be an artifact: a later segment that
+    /// starts with `<svg` is an HTML block of the reply, as it is when the reply renders whole.
+    static func normalized(_ source: String, detectsArtifacts: Bool = true) -> String {
+        let trimmed = detectsArtifacts ? source.trimmingCharacters(in: .whitespacesAndNewlines) : ""
         let lower = trimmed.lowercased()
         let language: String?
-        if lower.hasPrefix("<!doctype html") || lower.hasPrefix("<html") {
+        if !detectsArtifacts {
+            language = nil
+        } else if lower.hasPrefix("<!doctype html") || lower.hasPrefix("<html") {
             language = "html"
         } else if lower.hasPrefix("<svg") {
             language = "svg"

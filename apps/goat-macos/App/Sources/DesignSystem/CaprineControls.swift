@@ -126,16 +126,77 @@ struct ThinkingBubble: View {
 
 /// Draw the streaming marker at the final line, including a trailing blank line. Keeping it
 /// in the text layout avoids a separate HStack column and leaves copied text unchanged.
+/// Drawing never changes layout, so removing the marker at completion cannot reflow the reply.
 struct StreamingTextRenderer: TextRenderer {
     let tint: Color
+    var opacity = 0.85
     var displayPadding: EdgeInsets { EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 6) }
+
+    var animatableData: Double {
+        get { opacity }
+        set { opacity = newValue }
+    }
 
     func draw(layout: Text.Layout, in context: inout GraphicsContext) {
         for line in layout { context.draw(line) }
         guard let last = layout.last else { return }
         let bounds = last.typographicBounds.rect
-        let caret = CGRect(x: bounds.maxX + 3, y: bounds.minY, width: 2.5, height: bounds.height)
-        context.fill(Path(roundedRect: caret, cornerRadius: 1.25), with: .color(tint.opacity(0.85)))
+        let caret = CGRect(x: bounds.maxX + 3, y: bounds.minY, width: 2, height: bounds.height)
+        context.fill(Path(roundedRect: caret, cornerRadius: 1), with: .color(tint.opacity(opacity)))
+    }
+}
+
+/// DESIGN.md streaming caret (#60 B1) on a text view's final line.
+struct StreamingCaret: ViewModifier {
+    func body(content: Content) -> some View {
+        StreamingCaretPulse { tint, opacity in
+            content.textRenderer(StreamingTextRenderer(tint: tint, opacity: opacity))
+        }
+    }
+}
+
+/// The streaming caret at the end of a text layout's final line, drawn over the text in the layout's
+/// coordinate space. It never changes layout, so removing it at completion cannot reflow the reply.
+struct StreamingCaretMark: View {
+    let text: Text.LayoutKey.AnchoredLayout
+
+    var body: some View {
+        GeometryReader { proxy in
+            if let line = text.layout.last {
+                let origin = proxy[text.origin]
+                let bounds = line.typographicBounds.rect
+                StreamingCaretPulse { tint, opacity in
+                    RoundedRectangle(cornerRadius: 1).fill(tint.opacity(opacity))
+                }
+                .frame(width: 2, height: bounds.height)
+                .offset(x: origin.x + bounds.maxX + 3, y: origin.y + bounds.minY)
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+/// DESIGN.md caret pulse: a 2 pt accent bar with a soft 1.2 s pulse, held steady when animations are
+/// off, Reduce Motion is on or the window is inactive.
+private struct StreamingCaretPulse<Content: View>: View {
+    @ViewBuilder let content: (_ tint: Color, _ opacity: Double) -> Content
+    @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var dimmed = false
+
+    private var pulses: Bool { model.animationsEnabled && !reduceMotion && scenePhase == .active }
+
+    var body: some View {
+        content(model.theme.tokens.accent, dimmed ? 0.3 : 0.85)
+            .onChange(of: pulses, initial: true) { _, pulses in
+                if pulses {
+                    withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) { dimmed = true }
+                } else {
+                    withAnimation(nil) { dimmed = false }
+                }
+            }
     }
 }
 

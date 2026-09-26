@@ -52,6 +52,13 @@ source, including Markdown fences and whitespace. These are presentation bounds;
 persistence and model context retain the complete content. Rich Markdown and
 embedded code-block actions remain available for smaller responses.
 
+Smaller responses render as segments split at valid Markdown block boundaries
+([ADR-0091](../adrs/0091-content-bounded-transcript-layout.md)). While a
+response streams, settled segments are parsed once and only the tail is parsed
+again, so parse work grows linearly with the response. The `MarkdownSegmentParse`
+signpost marks each segment parse. The window charges a prepared response the
+bytes its segments render, including repeated reference definitions.
+
 
 ## Recorded maintenance evidence
 
