@@ -21,13 +21,14 @@ enum ThinkingFenceParser {
     }
 
     static let maximumBytes = ReplyWindow.richLimit
-    /// Past this many blocks the source stays prose: segments bound its layout either way (#60 A1).
+    /// Past this many blocks the rest of the source is prose, so pathological fences stay bounded.
     static let maximumBlocks = 4_096
 
     static func parse(_ source: String) -> [Block] {
         guard source.utf8.count <= maximumBytes else { return [Block(text: source, language: nil)] }
         var blocks: [Block] = []
         var opening: Fence?
+        var proseOnly = false
         var buffer = ""
         func flush(language: String?) {
             if !buffer.isEmpty { blocks.append(Block(text: buffer, language: language)) }
@@ -37,7 +38,9 @@ enum ThinkingFenceParser {
         for (index, rawLine) in lines.enumerated() {
             let line = String(rawLine)
             let newline = index < lines.count - 1 ? "\n" : ""
-            if let active = opening {
+            if proseOnly {
+                buffer += line + newline
+            } else if let active = opening {
                 if let candidate = fence(in: line), candidate.marker == active.marker,
                     candidate.count >= active.count, candidate.quoteDepth == active.quoteDepth,
                     candidate.info.isEmpty
@@ -53,7 +56,10 @@ enum ThinkingFenceParser {
             } else {
                 buffer += line + newline
             }
-            guard blocks.count < maximumBlocks else { return [Block(text: source, language: nil)] }
+            if !proseOnly, blocks.count >= maximumBlocks {
+                proseOnly = true
+                opening = nil
+            }
         }
         // An unfinished fence is code too: don't flash raw delimiters while tokens arrive.
         flush(language: opening?.info)
@@ -133,11 +139,22 @@ struct ThinkingSegment: Equatable, Sendable {
 enum ThinkingSegmenter {
     static let targetBytes = MarkdownSegmenter.targetBytes
     static let maximumLanguageCharacters = 32
+    static let maximumLanguageScalars = 128
 
     /// A fence's language as segments keep it: the info string's first word, bounded. The highlighter
     /// reads nothing else, so an unbounded info string is never retained.
     static func language(_ info: String?) -> String? {
-        info.map { String($0.prefix(maximumLanguageCharacters).prefix(while: { !$0.isWhitespace })) }
+        info.map { language(scalars: $0.unicodeScalars) }
+    }
+
+    /// The language of an info string given as scalars, which may still end in whitespace: its first
+    /// word within its first `maximumLanguageScalars` scalars and `maximumLanguageCharacters` characters.
+    static func language<Scalars: Sequence<Unicode.Scalar>>(scalars: Scalars) -> String {
+        var head = String.UnicodeScalarView()
+        head.append(
+            contentsOf: scalars.lazy.drop(while: { CharacterSet.whitespacesAndNewlines.contains($0) })
+                .prefix(maximumLanguageScalars))
+        return String(String(head).prefix(maximumLanguageCharacters).prefix(while: { !$0.isWhitespace }))
     }
 
     static func segments(_ blocks: [ThinkingFenceParser.Block], targetBytes: Int = targetBytes) -> [ThinkingSegment] {
@@ -187,7 +204,7 @@ enum ThinkingSegmenter {
 struct PreparedThinking: Sendable {
     /// The reasoning revision prepared. Views and caches match it instead of comparing text.
     let revision: TextRevision
-    let segments: [ThinkingSegment]
+    let segments: ChunkedList<ThinkingSegment>
     /// UTF-8 bytes of every segment's text.
     let bytes: Int
     /// What caches charge: every segment's `cost`.
@@ -195,11 +212,18 @@ struct PreparedThinking: Sendable {
     /// The segments laid out; nil when every segment is.
     var window: Range<Int>? = nil
 
-    init(revision: TextRevision, segments: [ThinkingSegment]) {
+    init(revision: TextRevision, segments: ChunkedList<ThinkingSegment>, bytes: Int, cost: Int) {
         self.revision = revision
         self.segments = segments
-        bytes = segments.reduce(0) { $0 + $1.bytes }
-        cost = segments.reduce(0) { $0 + $1.cost }
+        self.bytes = bytes
+        self.cost = cost
+    }
+
+    init(revision: TextRevision, segments: some Sequence<ThinkingSegment>) {
+        let list = ChunkedList(segments)
+        self.init(
+            revision: revision, segments: list, bytes: list.reduce(0) { $0 + $1.bytes },
+            cost: list.reduce(0) { $0 + $1.cost })
     }
 
     var shownSegments: Range<Int> { window ?? 0..<segments.count }
@@ -213,91 +237,141 @@ struct PreparedThinking: Sendable {
 /// Parses and segments reasoning as it streams (#60 A1). The result equals
 /// `ThinkingSegmenter.segments(ThinkingFenceParser.parse(TranscriptText.removingBoundaryBlankLines(source)))`.
 ///
-/// Lines before the last non-blank line are final: each is parsed once and its completed segments are
-/// kept. A refresh parses the lines completed since the last one, then the last line and the open
-/// piece on a copy, so its work is bounded by the appended bytes, the last line and one piece, not
-/// by the reasoning. Extend it only with text that extends the text it last saw (an append
-/// revision); an edit or trim starts a new one.
+/// Each refresh lexes only the characters appended since the last one, one at a time, plus the
+/// source's last character, which can still combine with text appended later and so is lexed on a
+/// copy. Fence syntax is recognised as the characters arrive, and a line's text is split into parts
+/// as it grows, so a long unfinished line is never lexed again: its parts are kept once the line is
+/// certainly text. The last non-blank line stays open, because trailing blank lines are trimmed with
+/// the line break before them. A refresh copies at most one open piece and one chunk of segments.
+/// Extend it only with text that extends the text it last saw (an append revision); an edit or trim
+/// starts a new one.
 struct ThinkingSegmentation {
-    /// UTF-8 bytes parsed since this segmentation was created: completed lines once each, and every
-    /// refresh's last line.
-    private(set) var scannedBytes = 0
-    private var state = LineState()
-    /// UTF-8 offset of the first non-blank line, once there is one.
-    private var start: Int?
-    /// UTF-8 offset up to which lines are parsed into `state`: the start of the last non-blank line.
-    private var committed = 0
+    /// Work since this segmentation was created: deterministic counters for tests.
+    struct Work: Equatable, Sendable {
+        /// UTF-8 bytes lexed, counting each refresh's held-back last character again, and a line's
+        /// leading blanks and the blank lines kept inside the reasoning twice.
+        var lexedBytes = 0
+        /// Segments built, and bytes copied into segment text, final or provisional.
+        var builtSegments = 0
+        var builtBytes = 0
+    }
 
-    mutating func extend(to source: String) -> [ThinkingSegment] {
+    /// The segments of the text so far, their text's UTF-8 bytes and what caches charge for them.
+    typealias Output = (segments: ChunkedList<ThinkingSegment>, bytes: Int, cost: Int)
+
+    private(set) var work = Work()
+    /// Everything before `line`, and the parts of `line` already final.
+    private var state = LineState()
+    /// The last non-blank line so far; nil before the first.
+    private var line: PendingLine?
+    /// UTF-8 offset lexed up to: a character boundary before the last character seen.
+    private var lexed = 0
+    /// Where the line being lexed starts while it is blank so far and not `line`.
+    private var blankStart: Int? = 0
+    /// Blank lines after `line`, without their line breaks: trimmed unless a non-blank line follows.
+    private var blankLines: [Range<Int>] = []
+
+    /// The segments of `source`, which extends the text last seen.
+    mutating func extend(to source: String) -> Output {
         let utf8 = source.utf8
-        var lower = utf8.index(utf8.startIndex, offsetBy: min(committed, utf8.count))
-        if start == nil {
-            // Leading blank lines are trimmed. An unterminated blank line can still gain text.
-            while let lineEnd = source[lower...].firstIndex(of: "\n"),
-                source[lower..<lineEnd].allSatisfy(\.isWhitespace)
-            {
-                lower = source.index(after: lineEnd)
-            }
-            committed = utf8.distance(from: utf8.startIndex, to: lower)
-            guard !source[lower...].allSatisfy(\.isWhitespace) else { return [] }
-            start = committed
-        }
-        // Trailing blank lines are trimmed with the line break before them. The line at `lower` was
-        // the last non-blank line, and appending keeps it non-blank.
-        var end = source.endIndex
-        while lower < end {
-            let newline = source[lower..<end].lastIndex(of: "\n")
-            let lineStart = newline.map { source.index(after: $0) } ?? lower
-            guard source[lineStart..<end].allSatisfy(\.isWhitespace) else { break }
-            end = newline ?? lower
-        }
-        guard lower < end else {
-            // Not an extension of the text last seen: start again.
+        guard lexed <= utf8.count else {
             self = ThinkingSegmentation()
             return extend(to: source)
         }
-        let lastLine = source[lower..<end].lastIndex(of: "\n").map { source.index(after: $0) } ?? lower
-        let first = utf8.index(utf8.startIndex, offsetBy: start ?? 0)
-        // Lines before the last are final.
-        while lower < lastLine, let lineEnd = source[lower..<lastLine].firstIndex(of: "\n") {
-            let line = source[lower..<lineEnd]
-            scannedBytes += line.utf8.count + 1
-            if !state.feed(line, newline: true) {
-                // Past the block cap everything is prose, as `ThinkingFenceParser.parse` falls back.
-                state = LineState(proseOnly: true)
-                refeed(source, from: first, to: source.index(after: lineEnd))
+        var index = utf8.index(utf8.startIndex, offsetBy: lexed)
+        var offset = lexed
+        while index < source.endIndex {
+            let next = source.index(after: index)
+            guard next < source.endIndex else { break }
+            consume(source[index], at: offset, in: source)
+            offset += utf8.distance(from: index, to: next)
+            index = next
+        }
+        lexed = offset
+        // The last character can still combine with text appended later.
+        var open = self
+        if index < source.endIndex { open.consume(source[index], at: offset, in: source) }
+        let result = open.finish(source)
+        work = open.work
+        return result
+    }
+
+    private mutating func consume(_ character: Character, at offset: Int, in source: String) {
+        let size = character.utf8.count
+        work.lexedBytes += size
+        if let start = blankStart {
+            if character == "\n" {
+                // Blank lines before the first non-blank line are trimmed; later ones wait.
+                if line != nil { blankLines.append(start..<offset) }
+                blankStart = offset + size
+            } else if !character.isWhitespace {
+                begin(at: start, before: offset, in: source)
+                withLine { $0.consume(character, at: offset, into: &$1, work: &$2) }
             }
-            lower = source.index(after: lineEnd)
-        }
-        committed = utf8.distance(from: utf8.startIndex, to: lastLine)
-        // The last line can still change, so it is parsed on a copy.
-        let line = source[lastLine..<end]
-        scannedBytes += line.utf8.count
-        var tail = state
-        guard tail.feed(line, newline: false) else {
-            let text = String(source[first..<end])
-            scannedBytes += text.utf8.count
-            return ThinkingSegmenter.segments([ThinkingFenceParser.Block(text: text, language: nil)])
-        }
-        tail.endBlock()
-        return tail.segments
-    }
-
-    private mutating func refeed(_ source: String, from lower: String.Index, to upper: String.Index) {
-        var cursor = lower
-        while cursor < upper, let lineEnd = source[cursor..<upper].firstIndex(of: "\n") {
-            let line = source[cursor..<lineEnd]
-            scannedBytes += line.utf8.count + 1
-            _ = state.feed(line, newline: true)
-            cursor = source.index(after: lineEnd)
+        } else if character == "\n" {
+            // `line` stays open while only blank lines follow it.
+            line?.end = offset
+            blankStart = offset + size
+        } else {
+            withLine { $0.consume(character, at: offset, into: &$1, work: &$2) }
         }
     }
 
-    /// The parser's and segmenter's state after whole lines: the steps of `ThinkingFenceParser.parse`
-    /// and `ThinkingSegmenter.pieces`, one line at a time.
+    /// Mutates `line` in place, with the state and work its commits change.
+    private mutating func withLine(_ body: (inout PendingLine, inout LineState, inout Work) -> Void) {
+        guard var current = line else { return }
+        line = nil
+        body(&current, &state, &work)
+        line = current
+    }
+
+    /// A non-blank character at `offset` makes the line from `start` the last non-blank line, so the
+    /// previous one and the blank lines after it are final.
+    private mutating func begin(at start: Int, before offset: Int, in source: String) {
+        let utf8 = source.utf8
+        if var previous = line {
+            line = nil
+            previous.finish(into: &state, newline: true, source: source, work: &work)
+            for blank in blankLines {
+                let lower = utf8.index(utf8.startIndex, offsetBy: blank.lowerBound)
+                let upper = utf8.index(utf8.startIndex, offsetBy: blank.upperBound)
+                work.lexedBytes += blank.count
+                state.feed(String(source[lower..<upper]), newline: true, work: &work)
+            }
+        }
+        blankLines.removeAll()
+        blankStart = nil
+        line = PendingLine(start: start, state: state)
+        // The line's leading blanks were lexed as a blank line so far; the line lexes them again.
+        var index = utf8.index(utf8.startIndex, offsetBy: start)
+        let upper = utf8.index(utf8.startIndex, offsetBy: offset)
+        var position = start
+        while index < upper {
+            let next = source.index(after: index)
+            let character = source[index]
+            work.lexedBytes += character.utf8.count
+            withLine { $0.consume(character, at: position, into: &$1, work: &$2) }
+            position += utf8.distance(from: index, to: next)
+            index = next
+        }
+    }
+
+    /// The segments with the last non-blank line ended, without its line break.
+    private mutating func finish(_ source: String) -> Output {
+        if var current = line {
+            line = nil
+            current.finish(into: &state, newline: false, source: source, work: &work)
+            state.endBlock(work: &work)
+        }
+        return (state.segments, state.bytes, state.cost)
+    }
+
+    /// The steps of `ThinkingFenceParser.parse` and `ThinkingSegmenter.pieces` after whole lines.
     private struct LineState {
         var proseOnly = false
-        var segments: [ThinkingSegment] = []
+        var segments = ChunkedList<ThinkingSegment>()
+        var bytes = 0
+        var cost = 0
         var opening: ThinkingFenceParser.Fence?
         /// The open block's language, as segments keep it; nil for prose.
         var language: String?
@@ -306,69 +380,409 @@ struct ThinkingSegmentation {
         var piece = ""
         var pieceBytes = 0
 
-        /// Parses one line; false once the blocks reach `ThinkingFenceParser.maximumBlocks`.
-        mutating func feed(_ line: Substring, newline: Bool) -> Bool {
-            let text = String(line)
+        /// Parses one whole line, as `ThinkingFenceParser.parse` does.
+        mutating func feed(_ line: String, newline: Bool, work: inout Work) {
             let ending = newline ? "\n" : ""
             if proseOnly {
-                add(text + ending)
-                return true
-            }
-            if let active = opening {
-                if let candidate = ThinkingFenceParser.fence(in: text), candidate.marker == active.marker,
+                add(line + ending, work: &work)
+            } else if let active = opening {
+                if let candidate = ThinkingFenceParser.fence(in: line), candidate.marker == active.marker,
                     candidate.count >= active.count, candidate.quoteDepth == active.quoteDepth,
                     candidate.info.isEmpty
                 {
-                    endBlock()
+                    endBlock(work: &work)
                     opening = nil
                     language = nil
                 } else {
-                    add(ThinkingFenceParser.codeLine(text, fence: active) + ending)
+                    add(ThinkingFenceParser.codeLine(line, fence: active) + ending, work: &work)
                 }
-            } else if let candidate = ThinkingFenceParser.fence(in: text) {
-                endBlock()
+            } else if let candidate = ThinkingFenceParser.fence(in: line) {
+                endBlock(work: &work)
                 opening = candidate
                 language = ThinkingSegmenter.language(candidate.info)
             } else {
-                add(text + ending)
+                add(line + ending, work: &work)
             }
-            return blockCount < ThinkingFenceParser.maximumBlocks
+            if newline { capIfNeeded() }
+        }
+
+        /// Past `ThinkingFenceParser.maximumBlocks`, the lines after this one are prose.
+        mutating func capIfNeeded() {
+            guard !proseOnly, blockCount >= ThinkingFenceParser.maximumBlocks else { return }
+            proseOnly = true
+            opening = nil
+            language = nil
         }
 
         /// Ends the open block, when it has text, as the parser flushes a non-empty buffer.
-        mutating func endBlock() {
+        mutating func endBlock(work: inout Work) {
             guard blockPieces > 0 || !piece.isEmpty else { return }
-            flushPiece()
+            flushPiece(work: &work)
             blockCount += 1
             blockPieces = 0
         }
 
-        private mutating func add(_ full: String) {
-            let limit = max(4, ThinkingSegmenter.targetBytes)
-            let bytes = full.utf8.count
-            if bytes > limit {
-                flushPiece()
-                for part in (try? TranscriptTextParts.split(full, maximumBytes: limit)) ?? [full] { emit(part) }
-            } else {
-                if pieceBytes + bytes > limit { flushPiece() }
-                piece += full
-                pieceBytes += bytes
+        /// Adds a line's text to the open block, as `ThinkingSegmenter.pieces` does.
+        mutating func add(_ full: String, work: inout Work) {
+            let limit = ThinkingSegmentation.limit
+            guard full.utf8.count > limit else { return pack(full, work: &work) }
+            flushPiece(work: &work)
+            work.builtBytes += full.utf8.count
+            for part in (try? TranscriptTextParts.split(full, maximumBytes: limit)) ?? [full] {
+                emit(part, work: &work)
             }
         }
 
-        private mutating func flushPiece() {
+        /// Adds text of at most `limit` bytes to the open piece, closing the piece first when it would
+        /// grow past the limit.
+        mutating func pack(_ full: String, work: inout Work) {
+            let size = full.utf8.count
+            if pieceBytes + size > ThinkingSegmentation.limit { flushPiece(work: &work) }
+            piece += full
+            pieceBytes += size
+            work.builtBytes += size
+        }
+
+        mutating func flushPiece(work: inout Work) {
             guard !piece.isEmpty else { return }
-            emit(piece)
+            emit(piece, work: &work)
             piece = ""
             pieceBytes = 0
         }
 
-        private mutating func emit(_ text: String) {
-            segments.append(
-                ThinkingSegment(
-                    index: segments.count, text: text, language: language, continuesPrevious: blockPieces > 0,
-                    bytes: text.utf8.count))
+        mutating func emit(_ text: String, work: inout Work) {
+            let segment = ThinkingSegment(
+                index: segments.count, text: text, language: language, continuesPrevious: blockPieces > 0,
+                bytes: text.utf8.count)
+            segments.append(segment)
+            bytes += segment.bytes
+            cost += segment.cost
             blockPieces += 1
+            work.builtSegments += 1
+        }
+    }
+
+    static var limit: Int { max(4, ThinkingSegmenter.targetBytes) }
+
+    /// `TranscriptTextParts.split`, a character at a time: parts of at most `limit` UTF-8 bytes.
+    private struct Splitter {
+        /// Closed parts not yet moved into the state, and the number closed in all.
+        var closed: [String] = []
+        var closedCount = 0
+        var part = ""
+        var partBytes = 0
+
+        /// Whether the text is longer than `limit`, so it is split rather than packed.
+        var isSplit: Bool { closedCount > 0 }
+
+        mutating func append(_ character: Character, work: inout Work) {
+            for scalar in character.unicodeScalars {
+                let size = UTF8.width(scalar)
+                if partBytes + size > ThinkingSegmentation.limit {
+                    closed.append(part)
+                    closedCount += 1
+                    part = ""
+                    partBytes = 0
+                }
+                part.unicodeScalars.append(scalar)
+                partBytes += size
+            }
+            work.builtBytes += character.utf8.count
+        }
+
+        /// Moves the closed parts into `state`, closing its open piece first, as a split line does.
+        mutating func commit(into state: inout LineState, flushed: inout Bool, work: inout Work) {
+            guard !closed.isEmpty else { return }
+            if !flushed {
+                state.flushPiece(work: &work)
+                flushed = true
+            }
+            for part in closed { state.emit(part, work: &work) }
+            closed.removeAll()
+        }
+
+        /// Adds the whole text to `state`, as `LineState.add` does.
+        mutating func finish(into state: inout LineState, flushed: inout Bool, work: inout Work) {
+            guard isSplit else { return state.pack(part, work: &work) }
+            commit(into: &state, flushed: &flushed, work: &work)
+            if !part.isEmpty { state.emit(part, work: &work) }
+        }
+    }
+
+    /// `ThinkingFenceParser.fence(in:)`, a character at a time.
+    private struct FenceLexer {
+        enum Phase: Equatable {
+            case indent(Int)
+            case quotes(afterQuote: Bool)
+            case quoteIndent(Int)
+            case run
+            case info
+            case rejected
+        }
+
+        var phase = Phase.indent(0)
+        var depth = 0
+        var indent = 0
+        var marker: Character = "`"
+        var count = 0
+        /// A backtick in a backtick fence's info, which makes the line not a fence.
+        var backtick = false
+        /// UTF-8 offset of the info's first scalar that trimming keeps; nil while the info is blank.
+        var infoStart: Int?
+
+        /// Whether the line so far is a fence.
+        var isFence: Bool {
+            switch phase {
+            case .run: return count >= 3
+            case .info: return !backtick
+            default: return false
+            }
+        }
+
+        /// Whether the line can no longer become a fence.
+        var neverOpens: Bool { phase == .rejected || (phase == .info && backtick) }
+
+        /// Whether the line can no longer close `opening`.
+        func neverCloses(_ opening: ThinkingFenceParser.Fence) -> Bool {
+            switch phase {
+            case .rejected:
+                return true
+            case .info:
+                return backtick || infoStart != nil || marker != opening.marker || depth != opening.quoteDepth
+                    || count < opening.count
+            case .run:
+                return marker != opening.marker || depth != opening.quoteDepth
+            case .quoteIndent:
+                return depth != opening.quoteDepth
+            default:
+                return false
+            }
+        }
+
+        /// Whether the line so far closes `opening`.
+        func closes(_ opening: ThinkingFenceParser.Fence) -> Bool {
+            isFence && marker == opening.marker && count >= opening.count && depth == opening.quoteDepth
+                && infoStart == nil
+        }
+
+        mutating func consume(_ character: Character, at offset: Int) {
+            switch phase {
+            case .indent(let spaces):
+                if character == " ", spaces < 3 {
+                    phase = .indent(spaces + 1)
+                } else {
+                    indent = spaces
+                    if character == ">" {
+                        depth = 1
+                        phase = .quotes(afterQuote: true)
+                    } else {
+                        startRun(character)
+                    }
+                }
+            case .quotes(let afterQuote):
+                if character == ">" {
+                    depth += 1
+                    phase = .quotes(afterQuote: true)
+                } else if afterQuote, character == " " {
+                    phase = .quotes(afterQuote: false)
+                } else {
+                    phase = .quoteIndent(0)
+                    consume(character, at: offset)
+                }
+            case .quoteIndent(let spaces):
+                if character == " ", spaces < 3 {
+                    phase = .quoteIndent(spaces + 1)
+                } else {
+                    indent = spaces
+                    startRun(character)
+                }
+            case .run:
+                if character == marker {
+                    count += 1
+                } else if count >= 3 {
+                    phase = .info
+                    consumeInfo(character, at: offset)
+                } else {
+                    phase = .rejected
+                }
+            case .info:
+                consumeInfo(character, at: offset)
+            case .rejected:
+                break
+            }
+        }
+
+        private mutating func startRun(_ character: Character) {
+            guard character == "`" || character == "~" else {
+                phase = .rejected
+                return
+            }
+            marker = character
+            count = 1
+            phase = .run
+        }
+
+        private mutating func consumeInfo(_ character: Character, at offset: Int) {
+            if marker == "`", character == "`" { backtick = true }
+            guard infoStart == nil else { return }
+            var position = offset
+            for scalar in character.unicodeScalars {
+                guard CharacterSet.whitespacesAndNewlines.contains(scalar) else {
+                    infoStart = position
+                    return
+                }
+                position += UTF8.width(scalar)
+            }
+        }
+    }
+
+    /// `ThinkingFenceParser.codeLine`'s quote and indent prefix, a character at a time.
+    private enum Strip: Equatable {
+        case leading(Int)
+        /// Quotes consumed so far, fewer than the fence's depth.
+        case quote(Int)
+        /// After a quote, which may be followed by one space.
+        case space(Int)
+        case indent(Int)
+        /// The code has started.
+        case content
+        /// A quote is missing, so the line is code as it is.
+        case whole
+
+        /// Whether the code is the text after the prefix, rather than the whole line, if the line
+        /// ended now.
+        func usesCode(depth: Int) -> Bool {
+            switch self {
+            case .indent, .content: return true
+            case .space(let quotes): return quotes == depth
+            case .leading, .quote, .whole: return false
+            }
+        }
+
+        /// Consumes a character; true when it is code.
+        mutating func consume(_ character: Character, depth: Int, indent: Int) -> Bool {
+            switch self {
+            case .leading(let spaces):
+                if character == " ", spaces < 3 {
+                    self = .leading(spaces + 1)
+                    return false
+                }
+                self = .quote(0)
+                return consume(character, depth: depth, indent: indent)
+            case .quote(let quotes):
+                guard character == ">" else {
+                    self = .whole
+                    return false
+                }
+                self = .space(quotes + 1)
+                return false
+            case .space(let quotes):
+                if character == " " {
+                    self = quotes == depth ? .indent(0) : .quote(quotes)
+                    return false
+                }
+                self = quotes == depth ? .indent(0) : .quote(quotes)
+                return consume(character, depth: depth, indent: indent)
+            case .indent(let spaces):
+                if character == " ", spaces < indent {
+                    self = .indent(spaces + 1)
+                    return false
+                }
+                self = .content
+                return true
+            case .content:
+                return true
+            case .whole:
+                return false
+            }
+        }
+    }
+
+    /// The last non-blank line, lexed as it arrives.
+    private struct PendingLine {
+        let start: Int
+        let proseOnly: Bool
+        /// The fence the line is in, if any.
+        let opening: ThinkingFenceParser.Fence?
+        /// Where the line ends, once its line break has arrived.
+        var end: Int?
+        var fence = FenceLexer()
+        var strip: Strip
+        /// The whole line, and, in a fence, its code after the quote and indent prefix.
+        var whole = Splitter()
+        var code = Splitter()
+        /// Whether the open piece was closed for this line's parts.
+        var flushed = false
+
+        init(start: Int, state: LineState) {
+            self.start = start
+            proseOnly = state.proseOnly
+            opening = state.proseOnly ? nil : state.opening
+            strip = (opening?.quoteDepth ?? 0) > 0 ? .leading(0) : .indent(0)
+        }
+
+        mutating func consume(_ character: Character, at offset: Int, into state: inout LineState, work: inout Work) {
+            if !proseOnly { fence.consume(character, at: offset) }
+            if let opening {
+                // The whole line is code only if a quote is missing.
+                if strip != .content { whole.append(character, work: &work) }
+                if strip.consume(character, depth: opening.quoteDepth, indent: opening.indent) {
+                    code.append(character, work: &work)
+                }
+            } else {
+                whole.append(character, work: &work)
+            }
+            // A line that is certainly text keeps its closed parts.
+            if let isCode = certainText {
+                if isCode {
+                    code.commit(into: &state, flushed: &flushed, work: &work)
+                } else {
+                    whole.commit(into: &state, flushed: &flushed, work: &work)
+                }
+            }
+        }
+
+        /// Whether the line is certainly text, and whether its text is `code` rather than `whole`;
+        /// nil while it can still be fence syntax.
+        private var certainText: Bool? {
+            if proseOnly { return false }
+            guard let opening else { return fence.neverOpens ? false : nil }
+            guard fence.neverCloses(opening) else { return nil }
+            switch strip {
+            case .content: return true
+            case .whole: return false
+            default: return nil
+            }
+        }
+
+        /// Adds the line to `state` as the parser would, with or without its line break.
+        mutating func finish(into state: inout LineState, newline: Bool, source: String, work: inout Work) {
+            if !proseOnly, let opening, fence.closes(opening) {
+                state.endBlock(work: &work)
+                state.opening = nil
+                state.language = nil
+            } else if !proseOnly, opening == nil, fence.isFence {
+                state.endBlock(work: &work)
+                state.opening = ThinkingFenceParser.Fence(
+                    marker: fence.marker, count: fence.count, quoteDepth: fence.depth, indent: fence.indent, info: "")
+                state.language = language(in: source)
+            } else if let opening, strip.usesCode(depth: opening.quoteDepth) {
+                if newline { code.append("\n", work: &work) }
+                code.finish(into: &state, flushed: &flushed, work: &work)
+            } else {
+                if newline { whole.append("\n", work: &work) }
+                whole.finish(into: &state, flushed: &flushed, work: &work)
+            }
+            if newline { state.capIfNeeded() }
+        }
+
+        /// The opening fence's language, read from at most a bounded run of its info.
+        private func language(in source: String) -> String {
+            guard let infoStart = fence.infoStart else { return "" }
+            let utf8 = source.utf8
+            let lower = utf8.index(utf8.startIndex, offsetBy: infoStart)
+            let upper = utf8.index(utf8.startIndex, offsetBy: end ?? utf8.count)
+            return ThinkingSegmenter.language(scalars: source.unicodeScalars[lower..<upper])
         }
     }
 }
@@ -402,14 +816,14 @@ actor ThinkingPreparation {
         let held = streams.removeValue(forKey: id)
         var segmentation =
             held.flatMap { revision.extends($0.revision) ? $0.segmentation : nil } ?? ThinkingSegmentation()
-        let segments = segmentation.extend(to: source)
+        let output = segmentation.extend(to: source)
         streams[id] = Stream(revision: revision, segmentation: segmentation, access: access)
         while streams.count > Self.maximumStreams,
             let victim = streams.min(by: { $0.value.access < $1.value.access })?.key
         {
             streams[victim] = nil
         }
-        return PreparedThinking(revision: revision, segments: segments)
+        return PreparedThinking(revision: revision, segments: output.segments, bytes: output.bytes, cost: output.cost)
     }
 
     func removeAll() {
@@ -503,14 +917,14 @@ final class PreparedThinkingCache {
 struct ThinkingContentView: View {
     let source: String
     var onPrepared: () -> Void = {}
-    @State private var segments: [ThinkingSegment] = []
+    @State private var segments = ChunkedList<ThinkingSegment>()
 
     var body: some View {
         ThinkingSegmentsView(segments: segments)
             .task(id: source) {
                 guard let prepared = try? await ThinkingPreparation.shared.segments(source), !Task.isCancelled
                 else { return }
-                segments = prepared
+                segments = ChunkedList(prepared)
                 onPrepared()
             }
     }
@@ -577,7 +991,8 @@ struct ExpandedThinkingView: View {
 
     var body: some View {
         let window = requestedWindow
-        Group {
+        // A stack, unlike an empty group, appears before anything is prepared, so its tasks run.
+        VStack(alignment: .leading, spacing: 0) {
             if snapshot.revision.utf8Count > ReplyWindow.richLimit {
                 TranscriptTextPartsView(
                     source: TranscriptText.removingBoundaryBlankLines(snapshot.source),
@@ -647,7 +1062,7 @@ struct ExpandedThinkingView: View {
 /// Reasoning segments as muted prose and plain code, with loaders at a window's edges that page it
 /// like a long answer's (#60 A1). Pieces of one block join without a gap.
 struct ThinkingSegmentsView: View {
-    let segments: [ThinkingSegment]
+    let segments: ChunkedList<ThinkingSegment>
     /// The segments laid out; nil lays out every segment.
     var window: Range<Int>? = nil
     /// The key the navigation owner pages these segments under, when it hosts them.

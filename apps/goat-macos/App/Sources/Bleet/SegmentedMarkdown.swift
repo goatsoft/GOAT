@@ -64,42 +64,46 @@ struct PreparedMarkdownSegment: Sendable {
     }
 }
 
-/// Prepared segments stored in fixed-size chunks (#60 A1). A document handed to a view shares every
-/// chunk with the cache, so preparing the next refresh copies only the chunk index and the chunks it
-/// changes, never the whole reply's segments.
-struct PreparedSegmentList: RandomAccessCollection, Sendable {
-    static let chunkSize = 64
-    private var chunks: [[PreparedMarkdownSegment]] = []
+/// Elements stored in fixed-size chunks (#60 A1). A list handed to a view shares every chunk with
+/// its source, so the next refresh copies only the chunk index and the chunks it changes, never every
+/// element.
+struct ChunkedList<Element: Sendable>: RandomAccessCollection, Sendable {
+    static var chunkSize: Int { 64 }
+    private var chunks: [[Element]] = []
     private(set) var endIndex = 0
     var startIndex: Int { 0 }
 
     init() {}
 
-    init(_ segments: some Sequence<PreparedMarkdownSegment>) {
-        for segment in segments { set(segment, at: endIndex) }
+    init(_ elements: some Sequence<Element>) {
+        for element in elements { set(element, at: endIndex) }
     }
 
-    subscript(position: Int) -> PreparedMarkdownSegment {
+    subscript(position: Int) -> Element {
         chunks[position / Self.chunkSize][position % Self.chunkSize]
     }
 
-    /// Replaces the segment at `position`, or appends when `position` is `endIndex`.
-    mutating func set(_ segment: PreparedMarkdownSegment, at position: Int) {
+    /// Replaces the element at `position`, or appends when `position` is `endIndex`.
+    mutating func set(_ element: Element, at position: Int) {
         precondition(position >= 0 && position <= endIndex)
         if position < endIndex {
-            chunks[position / Self.chunkSize][position % Self.chunkSize] = segment
+            chunks[position / Self.chunkSize][position % Self.chunkSize] = element
             return
         }
         if position % Self.chunkSize == 0 {
-            var chunk: [PreparedMarkdownSegment] = []
+            var chunk: [Element] = []
             chunk.reserveCapacity(Self.chunkSize)
             chunks.append(chunk)
         }
-        chunks[chunks.count - 1].append(segment)
+        chunks[chunks.count - 1].append(element)
         endIndex += 1
     }
 
-    /// Removes the segments from `position` on.
+    mutating func append(_ element: Element) {
+        set(element, at: endIndex)
+    }
+
+    /// Removes the elements from `position` on.
     mutating func removeSuffix(from position: Int) {
         guard position < endIndex else { return }
         let keptChunks = (position + Self.chunkSize - 1) / Self.chunkSize
@@ -109,6 +113,9 @@ struct PreparedSegmentList: RandomAccessCollection, Sendable {
         endIndex = position
     }
 }
+
+/// Prepared segments in chunks, so a document handed to a view shares every chunk with the cache.
+typealias PreparedSegmentList = ChunkedList<PreparedMarkdownSegment>
 
 /// A reply's prepared segments for one source.
 struct PreparedMarkdownDocument: Sendable {

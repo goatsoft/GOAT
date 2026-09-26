@@ -220,14 +220,18 @@ segment rather than per message. Deliver it in three reviewable steps:
      held, counted and cleared independently and the reader's measured anchor can be a reasoning
      segment. Preparation happens off the main actor, sampled every 120 ms while the reply streams
      and keyed by the reasoning's text revision. Like answers, streaming reasoning extends a held
-     segmentation (`ThinkingSegmentation`) while its revision only appends: lines before the last
-     non-blank line are parsed once, and a refresh parses only newly completed lines, the last line
-     and the open piece, so work grows linearly with the reasoning (about 1.03 bytes scanned per
-     byte at 1 KiB appends); an edit or trim starts again. The result equals preparing the whole text.
-     At most four streams are held. Segments keep a fence's language as its first word, at most 32
-     characters, and `PreparedThinkingCache` charges each segment's text, language and storage under
-     its own budget (one entry through the rich limit, 8 MiB in all). The message window charges
-     expanded reasoning at most one reply window. The bounded
+     segmentation (`ThinkingSegmentation`) while its revision only appends. It lexes each appended
+     character once (the source's last character is lexed on a copy, since it can still combine):
+     fence syntax is recognised as characters arrive, and a line's text is split into parts as it
+     grows, so a long unfinished line (unbroken prose, one long code line, long fence info) is never
+     lexed again. Only the last non-blank line stays open, because trailing blank lines are trimmed.
+     Segments are kept in fixed-size chunks, so a refresh copies at most one open piece and one chunk.
+     The result equals preparing the whole text; an edit or trim starts again. At most four streams
+     are held. Past 4,096 blocks the rest of the reasoning is one prose block, which bounds
+     pathological fences without re-reading earlier text. Segments keep a fence's language as its
+     first word, at most 32 characters, and `PreparedThinkingCache` charges each segment's text,
+     language and storage under its own budget (one entry through the rich limit, 8 MiB in all). The
+     message window charges expanded reasoning at most one reply window. The bounded
      excerpt shown while reasoning streams is unchanged. Reasoning above 2 MiB keeps bounded text
      parts; the disclosure's copy action copies all of it.
 

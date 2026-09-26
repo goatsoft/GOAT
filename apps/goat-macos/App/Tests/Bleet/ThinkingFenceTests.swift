@@ -48,9 +48,12 @@ extension AppTests.Bleet {
         @Test func thinkingBoundsPathologicalMarkdownAndPreservesOversizedSource() {
             let huge = String(repeating: "x", count: ThinkingFenceParser.maximumBytes + 1)
             #expect(ThinkingFenceParser.parse(huge) == [.init(text: huge, language: nil)])
+            // Past the block cap, the rest of the source is one prose block.
             let many = String(
                 repeating: "```ts\nconst a = 1\n```\ntext\n", count: ThinkingFenceParser.maximumBlocks / 2 + 1)
-            #expect(ThinkingFenceParser.parse(many) == [.init(text: many, language: nil)])
+            let capped = ThinkingFenceParser.parse(many)
+            #expect(capped.count == ThinkingFenceParser.maximumBlocks + 1)
+            #expect(capped.last == .init(text: "const a = 1\n```\ntext\n", language: nil))
             // Hundreds of blocks stay code and prose: segments, not a block cap, bound their layout.
             let hundreds = String(repeating: "```ts\nconst a = 1\n```\ntext\n", count: 300)
             #expect(ThinkingFenceParser.parse(hundreds).count == 600)
@@ -120,58 +123,74 @@ extension AppTests.Bleet {
 
         /// #60 A1: streaming reasoning extends one segmentation. At every refresh it equals preparing
         /// the whole text again: boundary blank lines, unfinished, quoted and indented fences, long
-        /// info strings, oversized lines and lines split across appends.
-        @Test(arguments: [13, 97, 3_001])
+        /// fence info, oversized and unbroken lines, and lines split across appends.
+        @Test(arguments: [89, 997, 3_001])
         func incrementalSegmentationEqualsFullPreparation(step: Int) {
             let code = (0..<400).map { "let value\($0) = \($0) * 2\n" }.joined()
             let prose = (0..<120).map { "Paragraph \($0) weighs one more consideration, \u{E9}t\u{E9}.\n" }.joined()
+            let long = String(repeating: "x", count: ThinkingSegmenter.targetBytes * 2)
             let source =
                 "\n  \n" + prose + "\n\n```swift title=Answer.swift\n" + code + "```\n"
-                + "> ```tsx\n> const card = <div />;\n> ```\n" + "   ~~~json\n   {\"ok\": true}\n   ~~~\n"
-                + String(repeating: "x", count: ThinkingSegmenter.targetBytes * 2) + "\nThen\n\n"
-                + "````text\n```\nliteral\n```\n````\n" + prose + "```ts\nconst partial =" + "\n\n  \n"
+                + "> ```tsx\n> const card = <div />;\n>const b\n> " + long + "\n> ```\n"
+                + "   ~~~json\n   {\"ok\": true}\n    x\n   ~~~\n" + long + "\nThen\n\n"
+                + "````text\n```\nliteral\n```\n````\n" + "```" + String(repeating: "info ", count: 2_000) + "\n"
+                + long + "\n```\n" + String(repeating: ">", count: 7_000) + "\n"
+                + String(repeating: "`", count: 7_000) + " x\n" + prose + "```ts\nconst partial =" + "\n\n  \n"
             var segmentation = ThinkingSegmentation()
             var text = ""
             for piece in appends(source, step: step) {
                 text += piece
-                let segments = segmentation.extend(to: text)
+                let segments = Array(segmentation.extend(to: text).segments)
                 let expected = reference(text)
                 #expect(segments == expected, "After \(text.utf8.count) bytes")
                 if segments != expected { return }
             }
         }
 
-        /// Past `ThinkingFenceParser.maximumBlocks` the whole reasoning is prose, incrementally too.
-        @Test func incrementalSegmentationFallsBackPastTheBlockCap() {
+        /// Past `ThinkingFenceParser.maximumBlocks` the rest of the reasoning is prose, incrementally too.
+        @Test func incrementalSegmentationMatchesPastTheBlockCap() {
             let source = String(
                 repeating: "```ts\nconst a = 1\n```\ntext\n", count: ThinkingFenceParser.maximumBlocks / 2 + 1)
             var segmentation = ThinkingSegmentation()
             var text = ""
             for piece in appends(source, step: 4_096) {
                 text += piece
-                #expect(segmentation.extend(to: text) == reference(text), "After \(text.utf8.count) bytes")
+                #expect(Array(segmentation.extend(to: text).segments) == reference(text), "After \(text.utf8.count)")
             }
-            #expect(segmentation.extend(to: text).allSatisfy { $0.language == nil })
+            #expect(segmentation.extend(to: text).segments.last?.language == nil)
         }
 
-        /// #60 A1, A3: preparing streaming reasoning parses each appended byte about once, so the work
-        /// grows linearly with the reasoning through the rich limit, not with the square of its length.
-        @Test func streamingPreparationWorkGrowsLinearly() {
+        /// #60 A1, A3: streaming reasoning is lexed about once per byte, and its segments are built about
+        /// once plus one open piece per refresh, so preparation work grows linearly with the reasoning
+        /// through the rich limit, for completed lines and for one long unfinished line alike.
+        @Test(arguments: ["paragraphs", "unbroken prose", "code line", "fence info", "quoted code"])
+        func streamingPreparationWorkGrowsLinearly(shape: String) {
             let paragraphs = (0..<60_000).map { "Reasoning paragraph \($0) weighs one more consideration.\n" }
-            let full = paragraphs.joined()
+            let full: String
+            switch shape {
+            case "paragraphs": full = paragraphs.joined()
+            case "unbroken prose": full = String(repeating: "word ", count: 500_000)
+            case "code line": full = "```swift\n" + String(repeating: "let x = 1; ", count: 250_000)
+            case "fence info": full = "```" + String(repeating: "info ", count: 500_000)
+            default: full = "> ```ts\n> " + String(repeating: "q", count: 2_500_000)
+            }
             for (kib, step) in [(32, 1_024), (64, 1_024), (128, 1_024), (2_048, 16_384)] {
                 let source = String(full.utf8.prefix(kib * 1_024))!
                 var segmentation = ThinkingSegmentation()
                 var text = ""
-                var segments: [ThinkingSegment] = []
+                var segments = ChunkedList<ThinkingSegment>()
+                var refreshes = 0
                 for piece in appends(source, step: step) {
                     text += piece
-                    segments = segmentation.extend(to: text)
+                    segments = segmentation.extend(to: text).segments
+                    refreshes += 1
                 }
-                #expect(segments == reference(source), "\(kib) KiB")
-                #expect(
-                    segmentation.scannedBytes <= source.utf8.count * 11 / 10,
-                    "\(kib) KiB scanned \(segmentation.scannedBytes) bytes for \(source.utf8.count)")
+                #expect(Array(segments) == reference(source), "\(shape), \(kib) KiB")
+                let bytes = source.utf8.count
+                let work = segmentation.work
+                #expect(work.lexedBytes <= bytes + refreshes * 4, "\(shape), \(kib) KiB: \(work)")
+                #expect(work.builtBytes <= 3 * bytes, "\(shape), \(kib) KiB: \(work)")
+                #expect(work.builtSegments <= segments.count + 2 * refreshes, "\(shape), \(kib) KiB: \(work)")
             }
         }
 
@@ -184,7 +203,7 @@ extension AppTests.Bleet {
             #expect(segments.count == 1)
             #expect(segments.first?.language?.count == ThinkingSegmenter.maximumLanguageCharacters)
             var segmentation = ThinkingSegmentation()
-            #expect(segmentation.extend(to: source) == segments)
+            #expect(Array(segmentation.extend(to: source).segments) == segments)
             #expect(ThinkingSegmenter.language("swift title=Answer.swift") == "swift")
             #expect(ThinkingSegmenter.language("") == "" && ThinkingSegmenter.language(nil) == nil)
 
