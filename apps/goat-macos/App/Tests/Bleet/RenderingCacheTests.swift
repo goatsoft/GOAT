@@ -303,15 +303,18 @@ extension AppTests.Bleet {
     }
 }
 
+/// Fence info strings with the language and filename they name (#60 A6).
+private let fenceInfoCases: [(String?, String?, String?)] = [
+    ("swift", "swift", nil), ("{.swift}", "swift", nil), ("ts:src/app.ts", "ts", "src/app.ts"),
+    ("swift title=\"Foo Bar.swift\"", "swift", "Foo Bar.swift"), ("python filename=app.py", "python", "app.py"),
+    ("python app.py", "python", "app.py"), ("swift linenos", "swift", nil),
+    ("rust title='src/main.rs' highlight=3", "rust", "src/main.rs"), ("", nil, nil), (nil, nil, nil),
+]
+
 extension AppTests.Bleet {
     /// #60 A6: persistent code block chrome, info strings, collapse and remembered choices.
     @Suite(.serialized) struct CodeBlockChromeTests {
-        @Test(arguments: [
-            ("swift", "swift", nil), ("{.swift}", "swift", nil), ("ts:src/app.ts", "ts", "src/app.ts"),
-            ("swift title=\"Foo Bar.swift\"", "swift", "Foo Bar.swift"), ("python filename=app.py", "python", "app.py"),
-            ("python app.py", "python", "app.py"), ("swift linenos", "swift", nil),
-            ("rust title='src/main.rs' highlight=3", "rust", "src/main.rs"), ("", nil, nil), (nil, nil, nil),
-        ] as [(String?, String?, String?)])
+        @Test(arguments: fenceInfoCases)
         func fenceInfoStringsGiveALanguageAndAFilename(info: String?, language: String?, filename: String?) {
             let parsed = FenceInfo(info)
             #expect(parsed == FenceInfo(language: language, filename: filename), "\(info ?? "nil")")
