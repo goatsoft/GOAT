@@ -64,67 +64,69 @@ struct MessageView: View {
 
     // MARK: User
 
+    /// At most three quarters of the column, right-aligned (#60 D3, DESIGN.md §4).
     private var userBubble: some View {
-        HStack {
-            Spacer(minLength: 60)
-            VStack(alignment: .trailing, spacing: 6) {
-                if !message.attachmentPaths.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 6) {
-                            ForEach(message.attachmentPaths, id: \.self) { path in
-                                StoredAttachmentThumbnail(path: path)
-                            }
+        FractionalWidthLayout(fraction: Caprine.Reading.userBubbleFraction) { userBubbleContent }
+    }
+
+    private var userBubbleContent: some View {
+        VStack(alignment: .trailing, spacing: 6) {
+            if !message.attachmentPaths.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(message.attachmentPaths, id: \.self) { path in
+                            StoredAttachmentThumbnail(path: path)
                         }
                     }
-                    .frame(maxWidth: 420, alignment: .trailing)
                 }
-                PreparedMarkdownView(
-                    id: message.id,
-                    source: message.text,
-                    fallbackFontSize: model.chatFontSize
-                ) { content in
-                    Markdown(content)
-                        .markdownImageProvider(BlockedMarkdownImageProvider())
-                        .markdownInlineImageProvider(BlockedMarkdownInlineImageProvider())
-                        .goatMarkdownStyle(fontSize: model.chatFontSize)
-                        .markdownBlockStyle(\.codeBlock) { configuration in
-                            CodeBlockView(configuration: configuration)
-                        }
-                        .textSelection(.enabled)
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(model.theme.tokens.bubbleGradient, in: RoundedRectangle(cornerRadius: 14))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14)
-                        .strokeBorder(model.theme.tokens.accent.opacity(0.18))
-                )
-                if let error = message.error {
-                    Label(error, systemImage: "exclamationmark.circle")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-                if let notice = message.contextNotice {
-                    Label(notice, systemImage: "text.badge.minus")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.trailing)
-                }
-                HStack(spacing: 8) {
-                    CopyButton(text: message.text)
-                        .labelStyle(.iconOnly)
-                        .font(.caption2)
-                    TimelineView(.periodic(from: .now, by: 30)) { context in
-                        Text(Self.relativeTime(message.createdAt, now: context.date))
-                    }
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .help(message.createdAt.formatted(date: .abbreviated, time: .standard))
-                }
-                .padding(.trailing, 2)
-                .opacity(hovering ? 1 : 0)
-                .allowsHitTesting(hovering)
+                .frame(maxWidth: 420, alignment: .trailing)
             }
+            PreparedMarkdownView(
+                id: message.id,
+                source: message.text,
+                fallbackFontSize: model.chatFontSize
+            ) { content in
+                Markdown(content)
+                    .markdownImageProvider(BlockedMarkdownImageProvider())
+                    .markdownInlineImageProvider(BlockedMarkdownInlineImageProvider())
+                    .goatMarkdownStyle(fontSize: model.chatFontSize)
+                    .markdownBlockStyle(\.codeBlock) { configuration in
+                        CodeBlockView(configuration: configuration)
+                    }
+                    .textSelection(.enabled)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(model.theme.tokens.bubbleGradient, in: RoundedRectangle(cornerRadius: 14))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14)
+                    .strokeBorder(model.theme.tokens.accent.opacity(0.18))
+            )
+            if let error = message.error {
+                Label(error, systemImage: "exclamationmark.circle")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+            if let notice = message.contextNotice {
+                Label(notice, systemImage: "text.badge.minus")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.trailing)
+            }
+            HStack(spacing: 8) {
+                CopyButton(text: message.text)
+                    .labelStyle(.iconOnly)
+                    .font(.caption2)
+                TimelineView(.periodic(from: .now, by: 30)) { context in
+                    Text(Self.relativeTime(message.createdAt, now: context.date))
+                }
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .help(message.createdAt.formatted(date: .abbreviated, time: .standard))
+            }
+            .padding(.trailing, 2)
+            .opacity(hovering ? 1 : 0)
+            .allowsHitTesting(hovering)
         }
     }
 

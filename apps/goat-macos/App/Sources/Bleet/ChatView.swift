@@ -487,37 +487,45 @@ struct Composer: View {
     @State private var composerEditorHeight: CGFloat = 30
 
     var body: some View {
-        VStack(spacing: 6) {
-            inputCard
-                .overlay(alignment: .top) {
-                    if showsSlashMenu {
-                        ComposerSlashMenu(
-                            commands: filteredCommandItems,
-                            skills: filteredSkillItems,
-                            issueCount: skillCatalog.issues.count,
-                            selectedIndex: Binding(get: { slashSelection }, set: { slashSelection = $0 }),
-                            onSelect: selectSlashItem
-                        )
-                        .frame(maxWidth: .infinity)
-                        .frame(height: slashMenuHeight)
-                        .offset(y: -slashMenuHeight - 8)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                        .zIndex(20)
+        // The composer shares the transcript's reading column (#60 D3).
+        BoundedWidthLayout(
+            maximumWidth: ReadingMeasure.column(
+                fontID: model.effectiveChatFontID, size: model.chatFontSize,
+                presentation: model.presentation.isEnabled)
+        ) {
+            VStack(spacing: 6) {
+                inputCard
+                    .overlay(alignment: .top) {
+                        if showsSlashMenu {
+                            ComposerSlashMenu(
+                                commands: filteredCommandItems,
+                                skills: filteredSkillItems,
+                                issueCount: skillCatalog.issues.count,
+                                selectedIndex: Binding(get: { slashSelection }, set: { slashSelection = $0 }),
+                                onSelect: selectSlashItem
+                            )
+                            .frame(maxWidth: .infinity)
+                            .frame(height: slashMenuHeight)
+                            .offset(y: -slashMenuHeight - 8)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                            .zIndex(20)
+                        }
                     }
+                    .zIndex(showsSlashMenu ? 20 : 0)
+                HStack(spacing: 12) {
+                    if pendingLeadCount > 0 {
+                        Text("Lead queued • applies after the current action")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    ComposerStatus(session: session)
+                        .layoutPriority(1)
+                    Spacer(minLength: 8)
+                    ModelEffortControl(session: session, showMenu: $showModelMenu)
                 }
-                .zIndex(showsSlashMenu ? 20 : 0)
-            HStack(spacing: 12) {
-                if pendingLeadCount > 0 {
-                    Text("Lead queued • applies after the current action")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                ComposerStatus(session: session)
-                    .layoutPriority(1)
-                Spacer(minLength: 8)
-                ModelEffortControl(session: session, showMenu: $showModelMenu)
             }
         }
         .padding(.horizontal, 22)
+        .frame(maxWidth: .infinity)
         .padding(
             .bottom,
             Caprine.ModelMenu.composerBottomInset

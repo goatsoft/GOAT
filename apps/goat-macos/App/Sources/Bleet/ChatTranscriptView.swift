@@ -364,97 +364,100 @@ struct ChatTranscriptView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    if messageRange.lowerBound > 0 {
-                        HStack {
-                            GoatLoadingIndicator().controlSize(.mini)
-                            Spacer()
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 8)
-                        .id("earlier-messages-loader")
-                        .onScrollVisibilityChange(threshold: 0.01) { visible in
-                            // Never inside the layout pass that revealed the loader: the scroll that
-                            // revealed it is attributed first.
-                            guard visible else { return }
-                            Task { @MainActor in
-                                await Task.yield()
-                                loadEarlierMessages()
+                // One centred reading column shared with the composer (#60 D3).
+                BoundedWidthLayout(maximumWidth: readingColumn) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        if messageRange.lowerBound > 0 {
+                            HStack {
+                                GoatLoadingIndicator().controlSize(.mini)
+                                Spacer()
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 8)
+                            .id("earlier-messages-loader")
+                            .onScrollVisibilityChange(threshold: 0.01) { visible in
+                                // Never inside the layout pass that revealed the loader: the scroll that
+                                // revealed it is attributed first.
+                                guard visible else { return }
+                                Task { @MainActor in
+                                    await Task.yield()
+                                    loadEarlierMessages()
+                                }
                             }
                         }
-                    }
-                    let rows = TranscriptActivity.rows(session.messages[messageRange])
-                    let lastMessageID = TranscriptActivity.lastVisibleID(in: session.messages)
-                    let activeAssistant =
-                        session.isStreaming
-                        ? session.messages.last(where: { $0.role == .assistant }) : nil
-                    let activeAssistantID = activeAssistant?.id
-                    let activeToolID: String? = {
-                        guard let activeAssistant else { return nil }
-                        return TranscriptActivity.summary([activeAssistant], activeAssistantID: activeAssistant.id)
-                            .current?.id
-                    }()
-                    ForEach(rows) { row in
-                        // Each message retains its identity and ancestry as tool events arrive.
-                        // Keep projection inside the existing bounded, fully measured window.
-                        VStack(alignment: .leading, spacing: 0) {
-                            if let message = row.messages.first {
-                                MessageView(
-                                    message: message, isLast: message.id == lastMessageID,
-                                    projectID: session.projectID, compactActivity: row.isContinuation,
-                                    joinsPreviousTools: row.joinsPreviousTools,
-                                    joinsNextTools: row.joinsNextTools,
-                                    activeToolID: message.id == activeAssistantID ? activeToolID : nil,
-                                    deleteCompaction: CompactionDeletion.canRestore(
-                                        message, in: session.messages)
-                                        ? { Task { await model.deleteCompaction(message, in: session) } }
-                                        : nil)
+                        let rows = TranscriptActivity.rows(session.messages[messageRange])
+                        let lastMessageID = TranscriptActivity.lastVisibleID(in: session.messages)
+                        let activeAssistant =
+                            session.isStreaming
+                            ? session.messages.last(where: { $0.role == .assistant }) : nil
+                        let activeAssistantID = activeAssistant?.id
+                        let activeToolID: String? = {
+                            guard let activeAssistant else { return nil }
+                            return TranscriptActivity.summary([activeAssistant], activeAssistantID: activeAssistant.id)
+                                .current?.id
+                        }()
+                        ForEach(rows) { row in
+                            // Each message retains its identity and ancestry as tool events arrive.
+                            // Keep projection inside the existing bounded, fully measured window.
+                            VStack(alignment: .leading, spacing: 0) {
+                                if let message = row.messages.first {
+                                    MessageView(
+                                        message: message, isLast: message.id == lastMessageID,
+                                        projectID: session.projectID, compactActivity: row.isContinuation,
+                                        joinsPreviousTools: row.joinsPreviousTools,
+                                        joinsNextTools: row.joinsNextTools,
+                                        activeToolID: message.id == activeAssistantID ? activeToolID : nil,
+                                        deleteCompaction: CompactionDeletion.canRestore(
+                                            message, in: session.messages)
+                                            ? { Task { await model.deleteCompaction(message, in: session) } }
+                                            : nil)
+                                }
+                            }
+                            // Align the row boundary without traversing completed Markdown.
+                            .alignmentGuide(.leading) { _ in 0 }
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(
+                                .top,
+                                row.joinsPreviousTools || row.messages.allSatisfy(TranscriptActivity.isEmpty)
+                                    ? 0 : Caprine.Activity.messageSpacing
+                            )
+                            // Row frames in content coordinates locate anchors; they are raw measurements,
+                            // kept out of observable state.
+                            .onGeometryChange(for: CGRect.self, of: Self.contentFrame) { recordFrame($0, of: row.id) }
+                            .onDisappear { reader.rowFrames[row.id] = nil }
+                            .id(row.id)
+                        }
+                        if messageRange.upperBound < session.messages.count {
+                            HStack {
+                                GoatLoadingIndicator().controlSize(.mini)
+                                Spacer()
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 8)
+                            .id("later-messages-loader")
+                            .onScrollVisibilityChange(threshold: 0.01) { visible in
+                                // Never inside the layout pass that revealed the loader: the scroll that
+                                // revealed it is attributed first.
+                                guard visible else { return }
+                                Task { @MainActor in
+                                    await Task.yield()
+                                    loadLaterMessages()
+                                }
                             }
                         }
-                        // Align the row boundary without traversing completed Markdown.
-                        .alignmentGuide(.leading) { _ in 0 }
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(
-                            .top,
-                            row.joinsPreviousTools || row.messages.allSatisfy(TranscriptActivity.isEmpty)
-                                ? 0 : Caprine.Activity.messageSpacing
-                        )
-                        // Row frames in content coordinates locate anchors; they are raw measurements,
-                        // kept out of observable state.
-                        .onGeometryChange(for: CGRect.self, of: Self.contentFrame) { recordFrame($0, of: row.id) }
-                        .onDisappear { reader.rowFrames[row.id] = nil }
-                        .id(row.id)
-                    }
-                    if messageRange.upperBound < session.messages.count {
-                        HStack {
-                            GoatLoadingIndicator().controlSize(.mini)
-                            Spacer()
+                        if session.isStreaming && messageRange.upperBound == session.messages.count {
+                            AgentProgressView(session: session)
+                                .padding(.top, Caprine.Activity.spacing)
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 8)
-                        .id("later-messages-loader")
-                        .onScrollVisibilityChange(threshold: 0.01) { visible in
-                            // Never inside the layout pass that revealed the loader: the scroll that
-                            // revealed it is attributed first.
-                            guard visible else { return }
-                            Task { @MainActor in
-                                await Task.yield()
-                                loadLaterMessages()
-                            }
-                        }
+                        // Space below the last row, so the latest line never sits on the window edge.
+                        Color.clear
+                            .frame(height: Caprine.Activity.doubleLineHeight + 1)
                     }
-                    if session.isStreaming && messageRange.upperBound == session.messages.count {
-                        AgentProgressView(session: session)
-                            .padding(.top, Caprine.Activity.spacing)
-                    }
-                    // Space below the last row, so the latest line never sits on the window edge.
-                    Color.clear
-                        .frame(height: Caprine.Activity.doubleLineHeight + 1)
+                    .scrollTargetLayout()
                 }
-                .scrollTargetLayout()
                 .padding(.horizontal, 24)
                 .padding(.top, 16)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity)
                 .coordinateSpace(.named(transcriptContentSpace))
                 .background { TranscriptScrollAttachment(executor: reader.executor) }
             }
@@ -582,6 +585,11 @@ struct ChatTranscriptView: View {
     }
 
     private var tokens: Caprine { model.theme.tokens }
+
+    private var readingColumn: CGFloat {
+        ReadingMeasure.column(
+            fontID: model.effectiveChatFontID, size: model.chatFontSize, presentation: model.presentation.isEnabled)
+    }
 
     var visibleMessageRange: Range<Int> { messageRange }
 

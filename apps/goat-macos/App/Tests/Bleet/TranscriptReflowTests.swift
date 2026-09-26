@@ -68,13 +68,19 @@ extension AppTests.Bleet {
                 contentRect: NSRect(x: 80, y: 80, width: 760, height: 520), styleMask: [.titled, .resizable],
                 backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
+            let navigation = TranscriptViewport()
             let host = NSHostingView(
-                rootView: ChatTranscriptView(session: session).environment(model).environment(\.colorScheme, .light)
+                rootView: ChatTranscriptView(session: session, viewport: navigation).environment(model)
+                    .environment(\.colorScheme, .light)
                     .background(
                         Color.white
                     ).foregroundStyle(
                         .black))
             host.appearance = NSAppearance(named: .aqua)
+            // The fixture owns the viewport dimensions. A bare root NSHostingView otherwise
+            // exports content-derived min/ideal/max sizes to the window while Markdown reflows.
+            // In the app the transcript receives its width from the surrounding chat layout.
+            host.sizingOptions = []
             window.contentView = host
             // Exercise a displayed window: native scroll settling and display-cycle layout
             // are suspended differently for a hidden hosting view.
@@ -95,6 +101,12 @@ extension AppTests.Bleet {
                     try await scrollWheel(scroll, delta: delta)
                     try await waitForScrollToSettle(scroll)
                     host.layoutSubtreeIfNeeded()
+                    #expect(
+                        abs(host.bounds.width - width) <= 1,
+                        "The test window must retain its requested width: requested \(width), host \(host.bounds)")
+                    #expect(
+                        abs(scroll.frame.width - host.bounds.width) <= 1,
+                        "The transcript must fill its host: scroll \(scroll.frame), host \(host.bounds)")
                     let viewport = host
                     let bitmap = try #require(viewport.bitmapImageRepForCachingDisplay(in: viewport.bounds))
                     viewport.cacheDisplay(in: viewport.bounds, to: bitmap)
@@ -109,10 +121,16 @@ extension AppTests.Bleet {
                             }
                         }
                     }
-                    #expect(
-                        ink > 100,
-                        "Viewport must contain visible text after width \(width), font \(font), wheel \(delta); ink=\(ink)"
-                    )
+                    let document = String(describing: scroll.documentView?.frame)
+                    let clip = "clip \(scroll.contentView.bounds), document \(document)"
+                    let owner = "held \(String(describing: navigation.heldRange)), following \(navigation.autoFollow)"
+                    let recent = Array(navigation.diagnostics.suffix(10))
+                    let trace = "request \(String(describing: navigation.request)), \(recent)"
+                    let hostGeometry =
+                        "host \(host.frame), window \(window.frame), min \(window.contentMinSize), max \(window.contentMaxSize)"
+                    let state = "\(clip), \(hostGeometry), \(owner), \(trace)"
+                    let context = "width \(width), font \(font), wheel \(delta); ink=\(ink)"
+                    #expect(ink > 100, "Viewport must contain visible text after \(context); \(state)")
 
                 }
             }
@@ -146,6 +164,10 @@ extension AppTests.Bleet {
                 rootView: ChatTranscriptView(
                     session: session, initiallyFollowing: false, initialVisibleMessageID: readerAnchor
                 ).environment(model))
+            // The fixture owns the viewport dimensions. A bare root NSHostingView otherwise
+            // exports content-derived min/ideal/max sizes to the window while Markdown reflows.
+            // In the app the transcript receives its width from the surrounding chat layout.
+            host.sizingOptions = []
             window.contentView = host
             // Exercise a displayed window: native scroll settling and display-cycle layout
             // are suspended differently for a hidden hosting view.

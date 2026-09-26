@@ -1,4 +1,5 @@
 import AppKit
+import Caprine
 import MarkdownUI
 import SwiftUI
 
@@ -83,5 +84,85 @@ enum ReadingFonts {
         case "monospaced": return .system(.monospaced)
         default: return .custom(String(resolved.dropFirst(5)))
         }
+    }
+}
+
+/// The transcript's reading measure (#60 D3, DESIGN.md §4). Prose runs at most 68ch of the selected
+/// chat font, where 1ch is the advance of "0" as in CSS, so it follows the font and its size. The
+/// transcript and composer share one centred column wide enough for code and artifacts
+/// (`Caprine.Code.maxWidth`) beside the assistant's masthead; prose within it keeps the measure.
+@MainActor
+enum ReadingMeasure {
+    private static var cache: [String: CGFloat] = [:]
+
+    static func prose(fontID: String, size: Double) -> CGFloat {
+        let key = "\(fontID):\(size)"
+        if let cached = cache[key] { return cached }
+        let font = ReadingFonts.nsFont(fontID, size: size, role: .chat)
+        let zero = ("0" as NSString).size(withAttributes: [.font: font]).width
+        let measure = (zero * Caprine.Reading.characters).rounded()
+        if cache.count >= 64 { cache.removeAll() }
+        cache[key] = measure
+        return measure
+    }
+
+    /// The transcript column: the masthead gutter plus the wider of the prose measure and code.
+    static func column(fontID: String, size: Double, presentation: Bool) -> CGFloat {
+        let avatar =
+            presentation ? Caprine.Activity.presentationAvatarWidth : Caprine.Activity.standardAvatarWidth
+        return avatar + Caprine.Activity.assistantGutter + max(prose(fontID: fontID, size: size), Caprine.Code.maxWidth)
+    }
+}
+
+/// Caps its content at `maximumWidth`, taking the proposed width up to it (or the maximum when none
+/// is proposed). Unlike a flexible frame it never asks its content for an ideal width, which for text
+/// means laying it out on one line, so its size never depends on the content's width.
+struct BoundedWidthLayout: Layout {
+    var maximumWidth: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let child = subviews.first else { return .zero }
+        let width = min(proposal.width ?? maximumWidth, maximumWidth)
+        let size = child.sizeThatFits(ProposedViewSize(width: width, height: proposal.height))
+        return CGSize(width: width, height: size.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let child = subviews.first else { return }
+        child.place(
+            at: bounds.origin, anchor: .topLeading,
+            proposal: ProposedViewSize(width: min(bounds.width, maximumWidth), height: bounds.height))
+    }
+
+    /// Text baselines and other vertical guides are the content's, as through a frame.
+    func explicitAlignment(
+        of guide: VerticalAlignment, in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews,
+        cache: inout ()
+    ) -> CGFloat? {
+        guard let child = subviews.first else { return nil }
+        let size = ProposedViewSize(width: min(bounds.width, maximumWidth), height: bounds.height)
+        return bounds.minY + child.dimensions(in: size)[guide]
+    }
+}
+
+/// Fills the offered width and places its content at the trailing edge, offering it at most a
+/// fraction of that width (#60 D3: user bubbles).
+struct FractionalWidthLayout: Layout {
+    var fraction: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let child = subviews.first else { return .zero }
+        let width = proposal.width.map { $0 * fraction }
+        let size = child.sizeThatFits(ProposedViewSize(width: width, height: proposal.height))
+        return CGSize(width: proposal.width ?? size.width, height: size.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let child = subviews.first else { return }
+        let width = proposal.width.map { $0 * fraction }
+        let size = child.sizeThatFits(ProposedViewSize(width: width, height: proposal.height))
+        child.place(
+            at: CGPoint(x: bounds.maxX - size.width, y: bounds.minY), anchor: .topLeading,
+            proposal: ProposedViewSize(width: size.width, height: size.height))
     }
 }

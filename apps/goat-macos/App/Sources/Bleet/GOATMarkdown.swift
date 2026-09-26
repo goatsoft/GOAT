@@ -48,6 +48,7 @@ private struct GoatMarkdownStyle: ViewModifier {
     @Environment(AppModel.self) private var model
 
     func body(content: Content) -> some View {
+        let measure = ReadingMeasure.prose(fontID: model.effectiveChatFontID, size: fontSize)
         content.markdownTextStyle(\.text) {
             FontSize(fontSize)
             FontFamily(ReadingFonts.family(model.effectiveChatFontID, role: .chat))
@@ -64,17 +65,29 @@ private struct GoatMarkdownStyle: ViewModifier {
             configuration.label.labelStyle(MarkdownListLabelStyle())
         }
         .markdownTextStyle(\.link) { ForegroundColor(model.theme.tokens.tint) }
+        // MarkdownUI's basic paragraph, capped at the reading measure; code and tables may run wider
+        // (#60 D3, DESIGN.md §4).
+        .markdownBlockStyle(\.paragraph) { configuration in
+            BoundedWidthLayout(maximumWidth: measure) {
+                configuration.label
+                    .fixedSize(horizontal: false, vertical: true)
+                    .relativeLineSpacing(.em(0.15))
+            }
+            .markdownMargin(top: .zero, bottom: .em(1))
+        }
         .markdownBlockStyle(\.blockquote) { configuration in
-            configuration.label
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
-                .background(model.theme.tokens.tint.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
-                .overlay(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(model.theme.tokens.tint)
-                        .frame(width: 3)
-                }
-                .markdownTextStyle { ForegroundColor(.primary) }
+            BoundedWidthLayout(maximumWidth: measure) {
+                configuration.label
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+                    .background(model.theme.tokens.tint.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+                    .overlay(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(model.theme.tokens.tint)
+                            .frame(width: 3)
+                    }
+            }
+            .markdownTextStyle { ForegroundColor(.primary) }
         }
     }
 }
