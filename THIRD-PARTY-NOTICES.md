@@ -12,6 +12,7 @@ The [complete application notices](apps/goat-macos/App/Resources/Licenses/THIRD-
 | MCP Swift SDK and EventSource | MCP transport and events | MIT |
 | MarkdownUI and NetworkImage | Markdown presentation | MIT |
 | HighlightKit | Syntax highlighting | MIT |
+| OKLabColorPicker | Native theme and Pen colour selection | MIT |
 | Swift Atomics, Collections, Log, NIO and System | Runtime support | Apache-2.0 with Swift exceptions where supplied |
 | swift-cmark | Markdown parsing | Its bundled COPYING notices, including BSD and MIT terms |
 | Mermaid and its dependency tree | Offline Paddock diagram rendering | MIT and the respective dependency licences |

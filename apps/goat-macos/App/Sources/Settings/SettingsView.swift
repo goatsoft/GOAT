@@ -404,8 +404,8 @@ struct ThemeSwatch: View {
 
 /// Attached under the theme field: the gradient, then square swatches of every color used.
 /// The theme preview: the hero preview image with the theme's gradient + colour swatches overlaid
-/// as a strip along the bottom. Falls back to a bg→surface wash when there's no image. In Phase 2
-/// the strip's gradient + swatches become the editable controls.
+/// as a strip along the bottom. Falls back to a bg→surface wash when there's no image.
+/// User themes have a separate draft colour editor with explicit save/cancel.
 struct ThemePreviewCard: View {
     let spec: ThemeSpec
     var reloadToken = 0
@@ -491,6 +491,7 @@ struct AppearanceSettings: View {
     @State private var appIcon = AppIconManager.current
     @State private var showImport = false
     @State private var editingTheme: ThemeSpec?
+    @State private var editingThemeColors: ThemeSpec?
     @State private var pendingThemeDelete: ThemeSpec?
     @State private var exportCopied = false
     @State private var previewReloadToken = 0
@@ -616,6 +617,7 @@ struct AppearanceSettings: View {
         .scrollContentBackground(.hidden)
         .onChange(of: model.presentation.isEnabled) { _, _ in appIcon = AppIconManager.current }
         .sheet(isPresented: $showImport) { ImportThemeSheet() }
+        .sheet(item: $editingThemeColors) { ThemeColorsSheet(spec: $0) }
         .sheet(item: $editingTheme) { spec in
             if let folder = ThemeStore.folder(for: spec.id) {
                 JSONEditorSheet(
@@ -658,7 +660,7 @@ struct AppearanceSettings: View {
         availableIcons.contains(appIcon) ? appIcon : .system
     }
 
-    // MARK: Theme management (Phase 1: built-ins locked, user themes via JSON + preview)
+    // MARK: Theme management (built-ins locked, user colours, JSON and preview)
 
     @ViewBuilder private var themeControls: some View {
         let selected = model.theme
@@ -679,6 +681,7 @@ struct AppearanceSettings: View {
             }
         } else {
             HStack(spacing: 10) {
+                Button("Edit Colours…") { editingThemeColors = selected }
                 Button("Edit JSON…") { editingTheme = selected }
                 Button("Set Preview…") { pickPreview(for: selected.id) }
                 Button("Export") { copyExport(selected) }
@@ -818,5 +821,68 @@ private struct ImportThemeSheet: View {
             .padding(20)
             .frame(width: 520)
         }
+    }
+}
+
+/// Draft editing keeps Cancel side-effect free and persists through the existing theme worker.
+private struct ThemeColorsSheet: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    @State private var draft: ThemeSpec
+    @State private var saving = false
+    @State private var saveResult: ThemeSaveResult?
+
+    init(spec: ThemeSpec) { _draft = State(initialValue: spec) }
+
+    var body: some View {
+        GOATDialogShell(closeAction: { dismiss() }, closeDisabled: saving) {
+            VStack(alignment: .leading, spacing: Caprine.Activity.spacing) {
+                Text("\(draft.name) Colours").font(.title3.weight(.semibold))
+                ScrollView {
+                    VStack(spacing: Caprine.Activity.spacing) {
+                        ThemePreviewCard(spec: draft)
+                        ThemeColorPicker(hex: $draft.accent, title: "Accent")
+                        ThemeColorPicker(hex: $draft.accent2, title: "Second accent")
+                        ThemeColorPicker(hex: $draft.glow, title: "Glow")
+                        ThemeColorPicker(hex: $draft.tint, title: "Tint")
+                        ThemeColorPicker(hex: $draft.selection, title: "Selection")
+                        ThemeColorPicker(hex: $draft.bg, title: "Background")
+                        ThemeColorPicker(hex: $draft.surface, title: "Surface")
+                        ThemeColorPicker(hex: $draft.ink, title: "Text")
+                        ThemeColorPicker(hex: $draft.muted, title: "Muted text")
+                    }
+                }
+                .disabled(saving)
+                if case .failed(let reason) = saveResult {
+                    Text("The theme could not be saved. Your edits are still here. \(reason)")
+                        .foregroundStyle(Caprine.Semantic.warning)
+                } else if saveResult == .superseded {
+                    Text(
+                        "This save was interrupted. Your edits are still here; save again to apply them."
+                    )
+                    .foregroundStyle(.secondary)
+                }
+                HStack {
+                    Button("Cancel") { dismiss() }
+                        .keyboardShortcut(.cancelAction)
+                    Spacer()
+                    Button("Save") {
+                        saving = true
+                        saveResult = nil
+                        Task { @MainActor in
+                            defer { saving = false }
+                            let result = await model.saveTheme(draft)
+                            saveResult = result
+                            if result == .saved { dismiss() }
+                        }
+                    }
+                    .keyboardShortcut(.defaultAction)
+                }
+                .disabled(saving)
+            }
+            .padding(Caprine.Activity.messageSpacing)
+            .frame(width: Caprine.ColorEditing.sheetWidth, height: Caprine.ColorEditing.sheetHeight)
+        }
+        .interactiveDismissDisabled(saving)
     }
 }
