@@ -106,4 +106,6 @@ Older records retain the package and type names used when accepted. [ADR-0054](0
 
 | [0095](0095-parallel-verification-and-preview-diagnostics.md) | Parallel verification and preview diagnostics | Accepted, amended |
 
+| [0098](0098-shared-oklab-colour-picker.md) | Shared OKLab colour picker | Proposed · refines 0022 |
+
 New session? Start with **[../../AGENT.md](../../AGENT.md)**, then [the roadmap](../ROADMAP.md).
