@@ -207,6 +207,9 @@ struct ChatTranscriptView: View {
     static let bottomTolerance: CGFloat = 50
     /// Attempts per request while layout settles before it is abandoned (and instrumented).
     static let maximumScrollAttempts = 12
+    /// How long an attempt waits for a target row that has not laid out, so a target that never renders
+    /// is abandoned after `maximumScrollAttempts` of them.
+    static let frameRetryInterval = Duration.milliseconds(50)
 
     init(
         session: ChatSession,
@@ -216,10 +219,10 @@ struct ChatTranscriptView: View {
     ) {
         self.session = session
         let initialHeld: Range<Int>?
+        let start =
+            initiallyFollowing
+            ? nil : initialVisibleMessageID.flatMap { id in session.messages.firstIndex(where: { $0.id == id }) }
         if !initiallyFollowing {
-            let start = initialVisibleMessageID.flatMap { id in
-                session.messages.firstIndex(where: { $0.id == id })
-            }
             initialHeld =
                 start.map { start in
                     TranscriptWindow.range(
@@ -234,7 +237,11 @@ struct ChatTranscriptView: View {
         } else {
             initialHeld = nil
         }
-        let restoredAnchor = initiallyFollowing ? nil : initialVisibleMessageID
+        // Restoration anchors to a row that renders in the held window: a missing or removed message
+        // shows the latest page, and a tool result or empty message gives way to its nearest row.
+        let restoredAnchor = start.flatMap { start in
+            initialHeld.flatMap { Self.renderedMessageID(near: start, in: $0, of: session.messages) }
+        }
         _viewport = State(
             initialValue: viewport
                 ?? TranscriptViewport(
@@ -414,6 +421,8 @@ struct ChatTranscriptView: View {
             .onScrollPhaseChange { _, phase in
                 if phase == .tracking || phase == .interacting || phase == .decelerating {
                     reader.isScrolling = true
+                    // The reader takes over: no offset change from here is an issued command's.
+                    reader.commandGeneration = nil
                     viewport.readerMoved(currentRange: messageRange, anchor: reader.measuredAnchor())
                 } else if phase == .idle {
                     let readerFinishedScrolling = reader.isScrolling
@@ -425,8 +434,14 @@ struct ChatTranscriptView: View {
                 }
             }
             .onChange(of: viewport.request) {
-                // A reader gesture that cancels a paging scroll also ends that page load.
-                if viewport.request == nil, pagingPhase != .idle { pagingPhase = .idle }
+                if viewport.request == nil {
+                    // A cancelled request's command no longer claims an offset change, and a reader
+                    // gesture that cancels a paging scroll also ends that page load.
+                    reader.commandGeneration = nil
+                    if pagingPhase != .idle { pagingPhase = .idle }
+                }
+                // A replaced request does not wait out its predecessor's frame deadline.
+                cancelFrameWait()
                 executePendingRequest()
             }
             // Streaming growth (text, thinking, new messages): following chases it; a reader keeps
@@ -526,15 +541,18 @@ struct ChatTranscriptView: View {
     /// The nearest message at or after `index` in the window (else before it) that renders a row.
     /// Tool results and empty assistant messages have no row to anchor to.
     private func renderedMessageID(near index: Int) -> UUID? {
-        let range = messageRange
+        Self.renderedMessageID(near: index, in: messageRange, of: session.messages)
+    }
+
+    private static func renderedMessageID(near index: Int, in range: Range<Int>, of messages: [ChatMessage]) -> UUID? {
         let rendered = { (index: Int) in
-            session.messages[index].role != .tool && !TranscriptActivity.isEmpty(session.messages[index])
+            messages[index].role != .tool && !TranscriptActivity.isEmpty(messages[index])
         }
         let start = min(max(index, range.lowerBound), range.upperBound)
         let found =
             (start..<range.upperBound).first(where: rendered)
             ?? (range.lowerBound..<start).last(where: rendered)
-        return found.map { session.messages[$0].id }
+        return found.map { messages[$0].id }
     }
 
     nonisolated private static func contentFrame(_ proxy: GeometryProxy) -> CGRect {
@@ -544,6 +562,8 @@ struct ChatTranscriptView: View {
     private func recordFrame(_ frame: CGRect, of id: UUID) {
         reader.rowFrames[id] = frame
         if case .anchor(let anchor) = viewport.request?.target, anchor.messageID == id {
+            // The awaited row arrived: run now rather than at the retry.
+            cancelFrameWait()
             executePendingRequest()
         }
     }
@@ -557,21 +577,20 @@ struct ChatTranscriptView: View {
             if metrics.contentHeight != previous.contentHeight || metrics.width != previous.width {
                 // Content grew or reflowed: follow it, or put the reader's anchor back.
                 viewport.contentChanged()
-            } else if metrics.offset != previous.offset, !reader.executorMoving {
+            } else if metrics.offset != previous.offset, !reader.commandMoves(viewport.request) {
                 // The keyboard, a scroller or another direct move changed the offset without a gesture
                 // phase and without a content change; it cancels any pending scroll.
                 viewport.note("reader offset \(Int(previous.offset))->\(Int(metrics.offset))")
+                reader.commandGeneration = nil
                 // The binding still holds the executor's last target, which SwiftUI re-applies on the next
-                // update, scrolling the reader back. Record where the reader is instead: re-applying that
-                // is a no-op. An empty position would fall back to the default bottom anchor.
-                var transaction = Transaction()
-                transaction.disablesAnimations = true
-                withTransaction(transaction) { position.scrollTo(y: metrics.offset) }
+                // update, scrolling the reader back. The executor records where the reader is instead.
+                reader.positionNeedsSync = true
                 if viewport.readerOwnsViewport || !atBottom {
                     viewport.readerMoved(currentRange: messageRange, anchor: reader.measuredAnchor())
                 }
+                executePendingRequest()
             }
-            if metrics.offset != previous.offset { reader.executorMoving = false }
+            if metrics.offset != previous.offset { reader.commandGeneration = nil }
         }
         // Following shows the latest output even while a growth step is still being chased.
         let showsLatest = viewport.autoFollow || atBottom
@@ -587,9 +606,15 @@ struct ChatTranscriptView: View {
     /// Performs the owner's pending request, the transcript's only scroll path. A request runs on a
     /// later turn of the main actor (never inside a geometry callback), once its target is laid out;
     /// it is fulfilled when the geometry shows it and re-issued as layout settles, at most
-    /// `maximumScrollAttempts` times. Reader input cancels it through the owner.
+    /// `maximumScrollAttempts` times. A target that has no row yet is retried on the same bound, so one
+    /// that never renders is abandoned. Reader input cancels it through the owner. With no request, it
+    /// records a direct reader move in the scroll binding.
     private func executePendingRequest() {
-        guard let request = viewport.request, reader.executorTask == nil, !reader.isScrolling else { return }
+        guard reader.executorTask == nil, !reader.isScrolling else { return }
+        guard let request = viewport.request else {
+            if reader.positionNeedsSync { synchronizePosition() }
+            return
+        }
         if reader.attemptGeneration != request.generation {
             reader.attemptGeneration = request.generation
             reader.attempts = 0
@@ -630,9 +655,18 @@ struct ChatTranscriptView: View {
                 followThrottle.recordFire(at: ProcessInfo.processInfo.systemUptime)
                 target = metrics.offset + metrics.bottomGap
             case .anchor(let anchor):
-                // Not laid out yet: the row's geometry report runs this again, within the same bound.
+                // Not laid out yet: the row's first geometry report runs this again, else a retry does,
+                // within the same bound.
                 guard let frame = reader.rowFrames[anchor.messageID] else {
                     reader.attempts += 1
+                    viewport.note("awaiting row \(request.generation)")
+                    reader.awaitingFrame = true
+                    reader.executorTask = Task { @MainActor in
+                        do { try await Task.sleep(for: Self.frameRetryInterval) } catch { return }
+                        reader.executorTask = nil
+                        reader.awaitingFrame = false
+                        executePendingRequest()
+                    }
                     return
                 }
                 target = frame.minY + anchor.offset
@@ -644,15 +678,42 @@ struct ChatTranscriptView: View {
             viewport.note(
                 "scroll \(request.generation) \(request.target == .bottom ? "bottom" : "anchor") "
                     + "\(Int(metrics.offset))->\(Int(target)) gap \(Int(metrics.topGap))/\(Int(metrics.bottomGap))")
-            var transaction = Transaction()
-            transaction.disablesAnimations = true
-            withTransaction(transaction) { position.scrollTo(y: target) }
+            command(y: target)
             reader.attempts += 1
             // Only a command that moves the viewport marks the next offset change as its own; one that
             // lands where the viewport already is produces no change and must not claim the reader's.
-            reader.executorMoving = abs(target - metrics.offset) > 1
+            reader.commandGeneration = abs(target - metrics.offset) > 1 ? request.generation : nil
             viewport.recordScrollCommand()
         }
+    }
+
+    /// Records a direct reader move in the binding on a later turn, so the executor's last target is
+    /// never re-applied. A pending request's own command replaces it.
+    private func synchronizePosition() {
+        reader.executorTask = Task { @MainActor in
+            await Task.yield()
+            reader.executorTask = nil
+            guard !Task.isCancelled, reader.positionNeedsSync, !reader.isScrolling else { return }
+            guard viewport.request == nil else { return executePendingRequest() }
+            // Re-applying the reader's own offset is a no-op; an empty position would fall back to the
+            // default bottom anchor.
+            command(y: reader.metrics.offset)
+        }
+    }
+
+    /// The only writer of the scroll binding.
+    private func command(y: CGFloat) {
+        reader.positionNeedsSync = false
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { position.scrollTo(y: y) }
+    }
+
+    private func cancelFrameWait() {
+        guard reader.awaitingFrame else { return }
+        reader.executorTask?.cancel()
+        reader.executorTask = nil
+        reader.awaitingFrame = false
     }
 }
 
@@ -691,11 +752,22 @@ private let transcriptContentSpace = "transcript-content"
     /// Row frames in content coordinates, keyed by message identity.
     var rowFrames: [UUID: CGRect] = [:]
     var executorTask: Task<Void, Never>?
-    /// The executor's last command moves the viewport; the next offset change is its own, wherever
-    /// clamping lands it. Any other offset change without a gesture is the reader's.
-    var executorMoving = false
+    /// The request whose last command moves the viewport: the next offset change is that command's,
+    /// wherever clamping lands it, while the request is pending. Reader takeover and cancellation clear
+    /// it; any other offset change without a gesture is the reader's.
+    var commandGeneration: UInt64?
+    /// A direct reader move left the binding at the executor's last target.
+    var positionNeedsSync = false
+    /// The pending attempt waits, with a deadline, for its target row's first layout.
+    var awaitingFrame = false
     var attemptGeneration: UInt64 = 0
     var attempts = 0
+
+    /// Whether an offset change now belongs to the command issued for `request`, not to the reader.
+    func commandMoves(_ request: TranscriptViewport.Request?) -> Bool {
+        guard let commandGeneration, let request else { return false }
+        return commandGeneration <= request.generation
+    }
 
     /// The distance from `id`'s top edge to the viewport's top edge, when laid out.
     func offset(of id: UUID) -> CGFloat? {

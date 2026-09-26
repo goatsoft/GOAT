@@ -486,6 +486,21 @@ extension AppTests.Bleet {
     return bitmap
 }
 
+@MainActor private func hostedWindow(
+    _ session: ChatSession, viewport: TranscriptViewport
+) -> (NSWindow, NSHostingView<some View>) {
+    let window = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 700, height: 450), styleMask: [.titled],
+        backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    let host = NSHostingView(
+        rootView: ChatTranscriptView(session: session, viewport: viewport)
+            .environment(AppModel.shared).frame(width: 700, height: 450))
+    window.contentView = host
+    window.orderFront(nil)
+    return (window, host)
+}
+
 @MainActor private func settle(_ viewport: TranscriptViewport, host: NSView) async throws {
     for _ in 0..<100 {
         host.layoutSubtreeIfNeeded()
@@ -651,6 +666,115 @@ extension AppTests.Bleet {
             try await Task.sleep(for: .milliseconds(300))
             #expect(viewport.request == nil)
             #expect(viewport.scrollCommands == commands, "A cancelled target must never scroll")
+        }
+
+        /// A reader who interrupts an already-issued command owns the next direct move: the cancelled
+        /// command claims no offset change, and the viewport stays where the reader put it.
+        @Test @MainActor func aDirectMoveAfterAnInterruptedCommandIsTheReaders() async throws {
+            let session = distinctSession(count: 60)
+            let viewport = TranscriptViewport()
+            let (window, host) = hostedWindow(session, viewport: viewport)
+            defer {
+                window.contentView = nil
+                window.close()
+            }
+            try await settle(viewport, host: host)
+            let scroll = try #require(findTranscriptScroll(host))
+            let range = viewport.messageRange(count: session.messages.count, cost: { _ in 0 })
+            let commands = viewport.scrollCommands
+            viewport.restore(Anchor(messageID: session.messages[range.lowerBound].id, offset: 0))
+            for _ in 0..<100 where viewport.scrollCommands == commands {
+                try await Task.sleep(for: .milliseconds(5))
+            }
+            try #require(viewport.scrollCommands > commands, "The command was issued")
+            // The reader interrupts it and moves directly before the command's move lands.
+            viewport.readerMoved(currentRange: range)
+            let target = (scroll.documentView?.bounds.height ?? 0) / 2
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: target))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            try await settle(viewport, host: host)
+            try await settle(viewport, host: host)
+            let trace = viewport.diagnostics.suffix(16)
+            #expect(viewport.readerOwnsViewport && viewport.request == nil, "\(trace)")
+            #expect(
+                abs(scroll.contentView.bounds.minY - target) <= 1,
+                "The viewport left the reader's position: \(scroll.contentView.bounds.minY) vs \(target); \(trace)")
+        }
+
+        /// A target without a row (missing, removed or never rendering) is abandoned within the bounded
+        /// attempts instead of waiting for a layout that never comes; one that arrives in time is shown.
+        @Test @MainActor func targetsWithoutARowHaveABoundedLifecycle() async throws {
+            let session = distinctSession(count: 61)
+            let tool = ChatMessage(role: .tool)
+            tool.text = "Tool output"
+            tool.complete = true
+            session.messages.insert(tool, at: 50)
+            let viewport = TranscriptViewport()
+            let (window, host) = hostedWindow(session, viewport: viewport)
+            defer {
+                window.contentView = nil
+                window.close()
+            }
+            try await settle(viewport, host: host)
+
+            func awaitSettled() async throws -> Duration {
+                let start = ContinuousClock.now
+                for _ in 0..<200 where viewport.request != nil {
+                    host.layoutSubtreeIfNeeded()
+                    try await Task.sleep(for: .milliseconds(10))
+                }
+                return ContinuousClock.now - start
+            }
+            let removed = try #require(session.messages.last)
+            for name in ["missing", "non-rendering", "removed"] {
+                let abandoned = viewport.abandonedRequests
+                var id = UUID()
+                if name == "non-rendering" { id = tool.id }
+                if name == "removed" {
+                    id = removed.id
+                    session.messages.removeLast()
+                }
+                // A removed row's frame goes with its layout, before the target is requested.
+                host.layoutSubtreeIfNeeded()
+                try await Task.sleep(for: .milliseconds(20))
+                viewport.restore(Anchor(messageID: id, offset: 0))
+                let elapsed = try await awaitSettled()
+                let trace = viewport.diagnostics.suffix(8)
+                #expect(viewport.request == nil, "A \(name) target must not wait forever; \(trace)")
+                #expect(viewport.abandonedRequests == abandoned + 1, "A \(name) target is abandoned; \(trace)")
+                #expect(elapsed < .seconds(1.5), "A \(name) target took \(elapsed); \(trace)")
+            }
+
+            // A row that lays out before the deadline is shown, not abandoned.
+            let late = ChatMessage(role: .assistant)
+            late.text = "A late reply"
+            late.complete = true
+            let abandoned = viewport.abandonedRequests
+            viewport.restore(Anchor(messageID: late.id, offset: 0))
+            try await Task.sleep(for: .milliseconds(100))
+            session.messages.append(late)
+            _ = try await awaitSettled()
+            let trace = viewport.diagnostics.suffix(8)
+            #expect(viewport.request == nil && viewport.abandonedRequests == abandoned, "\(trace)")
+            #expect(viewport.anchor?.messageID == late.id, "\(trace)")
+        }
+
+        /// Restoration anchors to a row the held window renders: a non-rendering message gives way to
+        /// its nearest row, and a missing one restores no anchor.
+        @Test @MainActor func initialRestorationResolvesToARenderedRow() throws {
+            let session = distinctSession(count: 60)
+            let tool = ChatMessage(role: .tool)
+            tool.complete = true
+            session.messages.insert(tool, at: 20)
+            let resolved = ChatTranscriptView(
+                session: session, initiallyFollowing: false, initialVisibleMessageID: tool.id
+            ).viewport
+            #expect(resolved.anchor?.messageID == session.messages[21].id)
+            #expect(resolved.request?.target == .anchor(Anchor(messageID: session.messages[21].id, offset: 0)))
+            let missing = ChatTranscriptView(
+                session: session, initiallyFollowing: false, initialVisibleMessageID: UUID()
+            ).viewport
+            #expect(missing.anchor == nil && missing.request == nil && missing.readerOwnsViewport)
         }
 
         /// Font and width reflow restore the reader's anchor through the executor: each correction is
