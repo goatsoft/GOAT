@@ -400,7 +400,10 @@ extension AppTests.Bleet {
                 contentRect: NSRect(x: 0, y: 0, width: 700, height: 450),
                 styleMask: [.titled], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
-            let host = NSHostingView(rootView: transcript(session))
+            let viewport = TranscriptViewport()
+            let host = NSHostingView(
+                rootView: ChatTranscriptView(session: session, viewport: viewport).id(session.id)
+                    .environment(AppModel.shared).frame(width: 700, height: 450))
             window.contentView = host
             defer {
                 window.contentView = nil
@@ -421,9 +424,19 @@ extension AppTests.Bleet {
                 }
                 try await Task.sleep(for: .milliseconds(20))
             }
+            let scroll = findTranscriptScroll(host)
+            let geometry = scroll.flatMap { scroll in
+                scroll.documentView.map { ($0.bounds.height, $0.bounds.maxY - $0.visibleRect.maxY) }
+            }
+            let prepared = PreparedMarkdownDocumentCache.shared.document(
+                for: assistant.id, revision: assistant.textRevision)
+            let window = prepared.map { "\($0.window.map { "\($0)" } ?? "all") of \($0.segments.count)" }
+            let detail =
+                "height and distance \(String(describing: geometry)), reply \(window ?? "unprepared"), "
+                + "follows \(viewport.autoFollow); \(viewport.diagnostics.suffix(16))"
             #expect(
                 settled != nil,
-                "An oversized completed reply must render a tall scrollable document and settle at the bottom")
+                "An oversized completed reply must render a tall scrollable document at the bottom; \(detail)")
         }
 
         enum CompletionCase: String, CaseIterable, Sendable {
