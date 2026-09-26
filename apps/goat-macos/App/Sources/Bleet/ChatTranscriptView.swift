@@ -313,11 +313,8 @@ struct ChatTranscriptView: View {
                         )
                         // Row frames in viewport coordinates locate anchors; they are raw measurements,
                         // kept out of observable state.
-                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .scrollView) } action: { frame in
-                            reader.rowFrames[row.id] = frame
-                            if case .anchor(let anchor) = viewport.request?.target, anchor.messageID == row.id {
-                                executePendingRequest()
-                            }
+                        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .scrollView) }) { frame in
+                            recordFrame(frame, of: row.id)
                         }
                         .onDisappear { reader.rowFrames[row.id] = nil }
                         .id(row.id)
@@ -513,9 +510,17 @@ struct ChatTranscriptView: View {
             session.messages[index].role != .tool && !TranscriptActivity.isEmpty(session.messages[index])
         }
         let start = min(max(index, range.lowerBound), range.upperBound)
-        let found = (start..<range.upperBound).first(where: rendered)
+        let found =
+            (start..<range.upperBound).first(where: rendered)
             ?? (range.lowerBound..<start).last(where: rendered)
         return found.map { session.messages[$0].id }
+    }
+
+    private func recordFrame(_ frame: CGRect, of id: UUID) {
+        reader.rowFrames[id] = frame
+        if case .anchor(let anchor) = viewport.request?.target, anchor.messageID == id {
+            executePendingRequest()
+        }
     }
 
     private func handleGeometry(from previous: TranscriptScrollMetrics, to metrics: TranscriptScrollMetrics) {
