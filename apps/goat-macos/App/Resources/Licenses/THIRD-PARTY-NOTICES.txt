@@ -109,8 +109,8 @@ SOFTWARE.
 
 
 ========================================================================
-OKLabColorPicker 0.1.1
-Source: https://github.com/goatsoft/OKLabColorPicker @ aaaad3d7de01cce2f52d21d93e716f84f1a1b211
+OKLabColorPicker 0.1.2
+Source: https://github.com/goatsoft/OKLabColorPicker @ 455c855ec91fd877900606f4971b418ab67a664d
 ========================================================================
 
 LICENSE

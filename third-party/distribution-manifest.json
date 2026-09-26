@@ -42,8 +42,8 @@
       "kind": "remoteSourceControl",
       "location": "https://github.com/goatsoft/OKLabColorPicker",
       "state": {
-        "revision": "aaaad3d7de01cce2f52d21d93e716f84f1a1b211",
-        "version": "0.1.1"
+        "revision": "455c855ec91fd877900606f4971b418ab67a664d",
+        "version": "0.1.2"
       }
     },
     {
@@ -1916,7 +1916,7 @@
     },
     {
       "path": "apps/goat-macos/GOAT.xcodeproj/project.pbxproj",
-      "sha256": "8d771145c2556ae973a2b1cb2c8b586d519ec978fbf981da8ae84c5c20890040"
+      "sha256": "608f0e99ef4ad80971e9997527cc415b4869bc18be2085edd7509e8a0a5b6cfc"
     },
     {
       "path": "scripts/distribution-notices.py",
@@ -1958,7 +1958,7 @@
   "outputs": [
     {
       "path": "apps/goat-macos/App/Resources/Licenses/THIRD-PARTY-NOTICES.txt",
-      "sha256": "e76eb0ae0b298ab3fcbffbcbb261c7be2f7a65b472fbf671ecbbb5331fcb96e5"
+      "sha256": "2a9b6ce254651f2c87e4d8a69ca1f9c226a81f77df04199bdf345a98c9e41b9e"
     },
     {
       "path": "apps/goat-macos/App/Resources/Licenses/LICENSE.txt",
