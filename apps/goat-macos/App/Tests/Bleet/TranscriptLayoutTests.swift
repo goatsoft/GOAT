@@ -151,7 +151,8 @@ extension AppTests.Bleet {
 
             #expect(
                 reachedBottom,
-                "A single click on the scroll-to-bottom button must bring the viewport to the end of the transcript")
+                "A single click on the scroll-to-bottom button must bring the viewport to the end of the transcript; "
+                    + "\(viewport.diagnostics.suffix(16))")
         }
 
         @Test @MainActor func repeatedPagingBoundsMessageCountAndBudgetWhilePreservingReaderPosition() async throws {
@@ -459,6 +460,235 @@ extension AppTests.Bleet {
             host.layoutSubtreeIfNeeded()
             let after = host.fittingSize.height
             #expect(after == before, "Completion must not reflow a \(completion) reply (\(before) -> \(after) pt)")
+        }
+    }
+}
+
+/// A chat whose every line names its message and line, so a shifted view never matches pixels.
+@MainActor private func distinctSession(count: Int) -> ChatSession {
+    let session = ChatSession(effort: .trot, modelID: nil)
+    session.messagesLoaded = true
+    session.messages = (0..<count).map { index in
+        let message = ChatMessage(role: index.isMultiple(of: 2) ? .user : .assistant)
+        message.text =
+            "Message \(index)\n\n" + (0..<6).map { "- Line \($0) of message \(index)." }.joined(separator: "\n")
+        message.complete = true
+        return message
+    }
+    return session
+}
+
+@MainActor private func snapshot(_ view: NSView) throws -> NSBitmapImageRep {
+    let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+    view.cacheDisplay(in: view.bounds, to: bitmap)
+    return bitmap
+}
+
+@MainActor private func settle(_ viewport: TranscriptViewport, host: NSView) async throws {
+    for _ in 0..<100 {
+        host.layoutSubtreeIfNeeded()
+        if viewport.request == nil { break }
+        try await Task.sleep(for: .milliseconds(20))
+    }
+    try await Task.sleep(for: .milliseconds(150))
+    host.layoutSubtreeIfNeeded()
+}
+
+extension AppTests.Bleet {
+    /// #54 section 2: one navigation owner with explicit transitions, at most one pending request
+    /// and one scroll executor.
+    @Suite(.serialized) struct TranscriptNavigationTests {
+        private typealias Anchor = TranscriptViewport.Anchor
+
+        @Test @MainActor func readerInputCancelsPendingScrollsAndOnlyAGestureAtTheBottomFollows() throws {
+            let viewport = TranscriptViewport()
+            viewport.contentChanged()
+            let bottom = try #require(viewport.request)
+            #expect(bottom.target == .bottom)
+            viewport.contentChanged()
+            #expect(viewport.request == bottom, "Equal requests coalesce")
+
+            let anchor = Anchor(messageID: UUID(), offset: 12)
+            viewport.readerMoved(currentRange: 0..<10, anchor: anchor)
+            #expect(viewport.request == nil, "Reader input cancels a pending scroll")
+            #expect(viewport.readerOwnsViewport && viewport.heldRange == 0..<10)
+            viewport.fulfilled(bottom)
+            #expect(viewport.request == nil, "A stale completion changes nothing")
+
+            viewport.contentChanged()
+            #expect(viewport.request?.target == .anchor(anchor), "Content changes restore the reader's anchor")
+            viewport.readerSettled(atTrueBottom: false, anchor: nil)
+            #expect(viewport.readerOwnsViewport)
+            viewport.readerSettled(atTrueBottom: true, anchor: nil)
+            #expect(viewport.autoFollow && viewport.heldRange == nil && viewport.anchor == nil)
+        }
+
+        @Test @MainActor func aReplacedRequestIgnoresItsCompletion() throws {
+            let viewport = TranscriptViewport(
+                initiallyFollowing: false, initialHeldRange: 0..<5,
+                initialAnchor: Anchor(messageID: UUID(), offset: 0))
+            let restoring = try #require(viewport.request)
+            viewport.jumpToLatest()
+            let bottom = try #require(viewport.request)
+            #expect(bottom.generation > restoring.generation)
+            viewport.fulfilled(restoring)
+            #expect(viewport.request == bottom)
+            viewport.fulfilled(bottom)
+            #expect(viewport.request == nil && viewport.autoFollow && viewport.isScrolledToBottom)
+
+            viewport.contentChanged()
+            let again = try #require(viewport.request)
+            viewport.abandon(again)
+            #expect(viewport.request == nil && viewport.abandonedRequests == 1)
+        }
+
+        @Test @MainActor func finalPageKeepsOwnershipAndRemovalKeepsAnAnchor() throws {
+            var ids = (0..<100).map { _ in UUID() }
+            let cost: (Int) -> Int = { _ in 1_000 }
+            let viewport = TranscriptViewport()
+            while viewport.pageEarlier(count: ids.count, cost: cost) != nil {}
+            while viewport.pageLater(count: ids.count, cost: cost) != nil {}
+            #expect(viewport.readerOwnsViewport, "Loading the final page must not enable following")
+
+            viewport.restore(Anchor(messageID: ids[95], offset: 30))
+            // Compaction removes the anchor's message: the reader continues at a surviving message.
+            ids.removeSubrange(90..<97)
+            viewport.messagesRemoved(count: ids.count, anchorIndex: nil, messageID: { ids[$0] }, cost: cost)
+            let range = try #require(viewport.heldRange)
+            #expect(range.upperBound <= ids.count && !range.isEmpty)
+            let anchor = try #require(viewport.anchor)
+            #expect(anchor == Anchor(messageID: ids[range.lowerBound], offset: 0))
+            #expect(viewport.request?.target == .anchor(anchor))
+
+            // A surviving anchor is kept as it was.
+            let kept = Anchor(messageID: ids[range.lowerBound], offset: 7)
+            viewport.restore(kept)
+            ids.removeLast()
+            viewport.messagesRemoved(
+                count: ids.count, anchorIndex: range.lowerBound, messageID: { ids[$0] }, cost: cost)
+            #expect(viewport.anchor == kept)
+        }
+
+        /// Paging earlier keeps the reader's view in place: the message at the top of the old window
+        /// stays at the same position on screen (within 1 pt), so every pixel below it is unchanged.
+        @Test @MainActor func pagingEarlierKeepsTheReadersViewInPlace() async throws {
+            let session = distinctSession(count: 120)
+            let viewport = TranscriptViewport()
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 700, height: 450), styleMask: [.titled],
+                backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            let host = NSHostingView(
+                rootView: ChatTranscriptView(session: session, viewport: viewport)
+                    .environment(AppModel.shared).environment(\.colorScheme, .light)
+                    .frame(width: 700, height: 450))
+            host.appearance = NSAppearance(named: .aqua)
+            window.contentView = host
+            window.orderFront(nil)
+            defer {
+                window.contentView = nil
+                window.close()
+            }
+            try await settle(viewport, host: host)
+            let scroll = try #require(findTranscriptScroll(host))
+
+            // Reveal the earlier loader. Paging starts from its visibility callback, after this frame.
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: 0))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            host.layoutSubtreeIfNeeded()
+            let before = try snapshot(host)
+            let windowBefore = viewport.heldRange
+
+            for _ in 0..<100 where viewport.heldRange == windowBefore || viewport.request != nil {
+                try await Task.sleep(for: .milliseconds(20))
+                host.layoutSubtreeIfNeeded()
+            }
+            try await settle(viewport, host: host)
+            #expect(viewport.heldRange != windowBefore, "The earlier page loaded; \(viewport.diagnostics.suffix(16))")
+            #expect(viewport.abandonedRequests == 0)
+            let after = try snapshot(host)
+
+            // Below the loader and above the jump button, the view must be identical.
+            let scale = CGFloat(before.pixelsHigh) / before.size.height
+            let top = Int(90 * scale)
+            let bottom = before.pixelsHigh - Int(70 * scale)
+            var changed = 0
+            for y in stride(from: top, to: bottom, by: 2) {
+                for x in stride(from: 0, to: min(before.pixelsWide, after.pixelsWide), by: 2)
+                where before.colorAt(x: x, y: y) != after.colorAt(x: x, y: y) {
+                    changed += 1
+                }
+            }
+            #expect(
+                changed == 0,
+                "The reader's view moved while paging earlier: \(changed) pixels; \(viewport.diagnostics.suffix(16))")
+        }
+
+        /// A reader who takes the viewport cancels a pending programmatic scroll before it runs.
+        @Test @MainActor func readerInputCancelsAStaleTargetBeforeItScrolls() async throws {
+            let session = distinctSession(count: 60)
+            let viewport = TranscriptViewport()
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 700, height: 450), styleMask: [.titled],
+                backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            let host = NSHostingView(
+                rootView: ChatTranscriptView(session: session, viewport: viewport)
+                    .environment(AppModel.shared).frame(width: 700, height: 450))
+            window.contentView = host
+            window.orderFront(nil)
+            defer {
+                window.contentView = nil
+                window.close()
+            }
+            try await settle(viewport, host: host)
+            let range = viewport.messageRange(count: session.messages.count, cost: { _ in 0 })
+            let commands = viewport.scrollCommands
+            viewport.restore(Anchor(messageID: session.messages[range.lowerBound].id, offset: 0))
+            viewport.readerMoved(currentRange: range)
+            try await Task.sleep(for: .milliseconds(300))
+            #expect(viewport.request == nil)
+            #expect(viewport.scrollCommands == commands, "A cancelled target must never scroll")
+        }
+
+        /// Font and width reflow restore the reader's anchor through the executor: each correction is
+        /// fulfilled only when the anchor's top is within 1 pt of its offset, and none is abandoned.
+        @Test @MainActor func reflowRestoresTheReadersAnchor() async throws {
+            let model = AppModel.shared
+            let originalFont = model.chatFontSize
+            defer { model.chatFontSize = originalFont }
+            let session = distinctSession(count: 60)
+            let anchorID = session.messages[20].id
+            let viewport = TranscriptViewport(
+                initiallyFollowing: false,
+                initialHeldRange: TranscriptWindow.range(
+                    count: session.messages.count, startingAt: 20,
+                    cost: { TranscriptWindow.displayCost(session.messages[$0]) }),
+                initialAnchor: Anchor(messageID: anchorID, offset: 0))
+            let host = NSHostingView(
+                rootView: ChatTranscriptView(
+                    session: session, initiallyFollowing: false, initialVisibleMessageID: anchorID, viewport: viewport
+                ).environment(model))
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 700, height: 450), styleMask: [.titled, .resizable],
+                backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            window.orderFront(nil)
+            defer {
+                window.contentView = nil
+                window.close()
+            }
+            try await settle(viewport, host: host)
+            #expect(viewport.anchor?.messageID == anchorID && viewport.request == nil)
+            for (width, font) in [(500.0, 24.0), (900, 11), (700, 14)] {
+                model.chatFontSize = font
+                window.setContentSize(NSSize(width: width, height: 450))
+                try await settle(viewport, host: host)
+                #expect(viewport.readerOwnsViewport, "Reflow never hands the viewport to following")
+                #expect(viewport.anchor?.messageID == anchorID, "Width \(width), font \(font)")
+                #expect(viewport.request == nil && viewport.abandonedRequests == 0, "Width \(width), font \(font)")
+            }
         }
     }
 }
