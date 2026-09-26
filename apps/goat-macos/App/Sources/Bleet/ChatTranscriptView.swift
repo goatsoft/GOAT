@@ -464,6 +464,8 @@ struct ChatTranscriptView: View {
             .onDisappear {
                 reader.executorTask?.cancel()
                 reader.executorTask = nil
+                reader.directMoveTask?.cancel()
+                reader.directMoveTask = nil
                 pagingPhase = .idle
             }
         }
@@ -580,16 +582,22 @@ struct ChatTranscriptView: View {
             } else if metrics.offset != previous.offset, !reader.commandMoves(viewport.request) {
                 // The keyboard, a scroller or another direct move changed the offset without a gesture
                 // phase and without a content change; it cancels any pending scroll.
-                viewport.note("reader offset \(Int(previous.offset))->\(Int(metrics.offset))")
-                reader.commandGeneration = nil
-                // The binding still holds the executor's last target, which SwiftUI re-applies on the next
-                // update, scrolling the reader back. Record where the reader is now, before `readerMoved`
-                // triggers that update: re-applying the reader's own offset is a no-op, not a scroll. An
-                // empty position would fall back to the default bottom anchor.
-                command(y: metrics.offset)
-                if viewport.readerOwnsViewport || !atBottom {
-                    viewport.readerMoved(currentRange: messageRange, anchor: reader.measuredAnchor())
+                if let readerOffset = reader.directMoveOffset, let stale = reader.commandedOffset,
+                    abs(metrics.offset - stale) <= 1
+                {
+                    // SwiftUI re-applied the executor's last target before the reader's position was
+                    // recorded: not the reader's move. Recording it puts the reader back. (SwiftUI clears
+                    // the binding's point once applied, yet still holds the target it re-applies.)
+                    viewport.note("re-applied \(Int(stale)), reader at \(Int(readerOffset))")
+                } else {
+                    viewport.note("reader offset \(Int(previous.offset))->\(Int(metrics.offset))")
+                    reader.commandGeneration = nil
+                    reader.directMoveOffset = metrics.offset
+                    if viewport.readerOwnsViewport || !atBottom {
+                        viewport.readerMoved(currentRange: messageRange, anchor: reader.measuredAnchor())
+                    }
                 }
+                recordDirectMove()
             }
             if metrics.offset != previous.offset { reader.commandGeneration = nil }
         }
@@ -683,8 +691,28 @@ struct ChatTranscriptView: View {
         }
     }
 
+    /// Records a direct reader move (keyboard, scroller) in the scroll binding on a later turn, never
+    /// inside the geometry callback that reported it: SwiftUI applies a position written there out of
+    /// order. Until then the binding holds the executor's last target, which SwiftUI may re-apply on
+    /// any update; the offset the reader moved to is kept, so recording it puts the reader back.
+    /// Re-applying the reader's own offset is a no-op; an empty position would fall back to the
+    /// default bottom anchor. A pending request's own command replaces the record.
+    private func recordDirectMove() {
+        guard reader.directMoveTask == nil else { return }
+        reader.directMoveTask = Task { @MainActor in
+            await Task.yield()
+            reader.directMoveTask = nil
+            guard !Task.isCancelled, let offset = reader.directMoveOffset else { return }
+            reader.directMoveOffset = nil
+            // A gesture that began meanwhile positions the viewport itself.
+            guard !reader.isScrolling, viewport.request == nil else { return }
+            command(y: offset)
+        }
+    }
+
     /// The only writer of the scroll binding.
     private func command(y: CGFloat) {
+        reader.commandedOffset = y
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) { position.scrollTo(y: y) }
@@ -733,6 +761,12 @@ private let transcriptContentSpace = "transcript-content"
     /// Row frames in content coordinates, keyed by message identity.
     var rowFrames: [UUID: CGRect] = [:]
     var executorTask: Task<Void, Never>?
+    /// A direct reader move waiting for its later turn to be recorded in the binding, and where the
+    /// reader moved to.
+    var directMoveTask: Task<Void, Never>?
+    var directMoveOffset: CGFloat?
+    /// The offset last written to the scroll binding.
+    var commandedOffset: CGFloat?
     /// The request whose last command moves the viewport: the next offset change is that command's,
     /// wherever clamping lands it, while the request is pending. Reader takeover and cancellation clear
     /// it; any other offset change without a gesture is the reader's.
