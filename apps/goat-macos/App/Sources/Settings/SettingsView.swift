@@ -562,6 +562,14 @@ struct AppearanceSettings: View {
                 }
             }
 
+            Toggle(isOn: $model.codeWordWrap) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Wrap code")
+                    Text("Wrap long lines in code blocks instead of scrolling. Each block can override it.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+
             Toggle(isOn: $model.showToolDiffs) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Tool diffs")

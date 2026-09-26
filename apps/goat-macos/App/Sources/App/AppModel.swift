@@ -368,6 +368,11 @@ final class AppModel {
     var animationsEnabled: Bool {
         didSet { UserDefaults.standard.set(animationsEnabled, forKey: "appearance.animations") }
     }
+    /// The default for code blocks: wrap long lines instead of scrolling (#60 A6). A block's own
+    /// choice overrides it.
+    var codeWordWrap: Bool {
+        didSet { UserDefaults.standard.set(codeWordWrap, forKey: "appearance.codeWordWrap") }
+    }
     /// When on, tool file modifications are presented as unified visual diffs (ADR-0094).
     var showToolDiffs: Bool {
         didSet { UserDefaults.standard.set(showToolDiffs, forKey: "appearance.toolDiffs") }
@@ -391,6 +396,7 @@ final class AppModel {
         codeFontSize = ReadingFontRole.code.normalizedSize(14 * 0.92)
         windowTransparency = CaprineBackground.defaultTransparency
         animationsEnabled = true
+        codeWordWrap = false
         showToolDiffs = true
         automaticChatTitles = true
         autoCompactEnabled = true
@@ -456,6 +462,7 @@ final class AppModel {
         defaultEffort = Effort(rawValue: d.string(forKey: "chat.defaultEffort") ?? "") ?? .trot
         animationsEnabled = d.object(forKey: "appearance.animations") as? Bool ?? true
         showToolDiffs = d.object(forKey: "appearance.toolDiffs") as? Bool ?? true
+        codeWordWrap = d.object(forKey: "appearance.codeWordWrap") as? Bool ?? false
         previewsOffGrid = d.object(forKey: "paddock.offGrid") as? Bool ?? false
         settingsAlwaysOnTop = d.object(forKey: "settings.alwaysOnTop") as? Bool ?? true
         herdRootPath = d.string(forKey: "herd.defaultRoot") ?? HerdWorkspace.suggestedRoot.path

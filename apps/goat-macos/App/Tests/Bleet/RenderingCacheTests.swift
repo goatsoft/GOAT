@@ -2,6 +2,7 @@ import AppKit
 import Caprine
 import CoreGraphics
 import Foundation
+import MarkdownUI
 import Paddock
 import Persistence
 import SwiftUI
@@ -298,6 +299,79 @@ extension AppTests.Bleet {
             #expect(TranscriptPartsCache.shared.parts(for: "clear-\(id)", source: source) == nil)
             #expect(JSONValueCache.shared.peek(source) == nil)
             #expect(await cache.snapshot().entryCount == 0)
+        }
+    }
+}
+
+extension AppTests.Bleet {
+    /// #60 A6: persistent code block chrome, info strings, collapse and remembered choices.
+    @Suite(.serialized) struct CodeBlockChromeTests {
+        @Test(arguments: [
+            ("swift", "swift", nil), ("{.swift}", "swift", nil), ("ts:src/app.ts", "ts", "src/app.ts"),
+            ("swift title=\"Foo Bar.swift\"", "swift", "Foo Bar.swift"), ("python filename=app.py", "python", "app.py"),
+            ("python app.py", "python", "app.py"), ("swift linenos", "swift", nil),
+            ("rust title='src/main.rs' highlight=3", "rust", "src/main.rs"), ("", nil, nil), (nil, nil, nil),
+        ] as [(String?, String?, String?)])
+        func fenceInfoStringsGiveALanguageAndAFilename(info: String?, language: String?, filename: String?) {
+            let parsed = FenceInfo(info)
+            #expect(parsed == FenceInfo(language: language, filename: filename), "\(info ?? "nil")")
+        }
+
+        @Test func collapsedCodeKeepsItsFirstLines() {
+            let code = (1...50).map { "line \($0)" }.joined(separator: "\n") + "\n"
+            let shown = CodeBlockView.prefix(of: code, lines: 40)
+            #expect(shown.split(separator: "\n").count == 40 && shown.hasSuffix("line 40"))
+            #expect(CodeBlockView.prefix(of: "short\n", lines: 40) == "short\n")
+        }
+
+        @MainActor private func height(_ source: String) async throws -> CGFloat {
+            let host = NSHostingView(
+                rootView: Markdown(MarkdownContent(source)).goatMarkdownStyle(fontSize: 14)
+                    .frame(width: 600).environment(AppModel.shared))
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled], backing: .buffered,
+                defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            defer {
+                window.contentView = nil
+                window.close()
+            }
+            try await Task.sleep(for: .milliseconds(400))
+            host.layoutSubtreeIfNeeded()
+            return host.fittingSize.height
+        }
+
+        /// Blocks over the limit show their first lines; expanding is remembered when the block is
+        /// recreated.
+        @Test @MainActor func longBlocksCollapseAndAnExpansionSurvivesRecreation() async throws {
+            let marker = UUID().uuidString
+            let lines = (0..<60).map { "let value\($0) = \"\(marker)\"" }
+            let fence = "```"
+            let source = "\(fence)swift title=Values.swift\n" + lines.joined(separator: "\n") + "\n\(fence)"
+            let short = "\(fence)swift\n" + lines.prefix(40).joined(separator: "\n") + "\n\(fence)"
+            let collapsed = try await height(source)
+            let exactlyAtLimit = try await height(short)
+            // The collapsed block is the 40-line block plus one action row.
+            #expect(collapsed > exactlyAtLimit && collapsed < exactlyAtLimit + 40, "\(collapsed) vs \(exactlyAtLimit)")
+
+            let key = CodeBlockStateStore.key(language: "swift", code: lines.joined(separator: "\n") + "\n")
+            CodeBlockStateStore.shared.set(.init(wordWrap: nil, isExpanded: true), for: key)
+            let expanded = try await height(source)
+            #expect(expanded > collapsed + 200, "The remembered expansion shows every line: \(expanded)")
+        }
+
+        @Test @MainActor func choicesAreBoundedAndDefaultToTheGlobalWrap() {
+            let store = CodeBlockStateStore(limit: 2)
+            #expect(store.state(for: "a") == CodeBlockStateStore.State())
+            #expect(store.state(for: "a").wordWrap == nil, "Without a choice the global preference applies")
+            store.set(.init(wordWrap: true), for: "a")
+            store.set(.init(isExpanded: true), for: "b")
+            store.set(.init(isExpanded: true), for: "c")
+            #expect(store.state(for: "a") == CodeBlockStateStore.State())
+            #expect(store.state(for: "c").isExpanded)
+            let swift = CodeBlockStateStore.key(language: "swift", code: "abc")
+            #expect(swift != CodeBlockStateStore.key(language: "py", code: "abc"))
         }
     }
 }

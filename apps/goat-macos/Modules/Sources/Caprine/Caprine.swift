@@ -16,6 +16,17 @@ public struct Caprine: Sendable {
         public static let shadow = Color.black
     }
 
+    /// Fenced code blocks and inline artifacts in the transcript (#60 A6).
+    public enum Code {
+        /// Code and artifacts may extend past the reading measure, up to this width.
+        public static let maxWidth: CGFloat = 820
+        /// Longer blocks show this many lines until the reader expands them.
+        public static let collapsedLineLimit = 40
+        public static let previewHeight: CGFloat = 340
+        public static let diagramPreviewHeight: CGFloat = 280
+        public static let surfaceOpacity = 0.22
+    }
+
     public enum Activity {
         public static let ruleWidth: CGFloat = 2
         public static let spacing: CGFloat = 8
