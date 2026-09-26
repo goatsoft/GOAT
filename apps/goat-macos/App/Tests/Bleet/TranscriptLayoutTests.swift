@@ -430,9 +430,9 @@ extension AppTests.Bleet {
             }
             let prepared = PreparedMarkdownDocumentCache.shared.document(
                 for: assistant.id, revision: assistant.textRevision)
-            let window = prepared.map { "\($0.window.map { "\($0)" } ?? "all") of \($0.segments.count)" }
+            let shown = prepared.map { "\($0.window.map { "\($0)" } ?? "all") of \($0.segments.count)" }
             let detail =
-                "height and distance \(String(describing: geometry)), reply \(window ?? "unprepared"), "
+                "height and distance \(String(describing: geometry)), reply \(shown ?? "unprepared"), "
                 + "follows \(viewport.autoFollow); \(viewport.diagnostics.suffix(16))"
             #expect(
                 settled != nil,
