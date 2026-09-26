@@ -127,9 +127,12 @@ import XCTest
         let initial = host.fittingSize.height
         XCTAssertGreaterThan(initial, 120, "Reasoning must be visible without expanding a disclosure")
         message.toolEvents = activityMessage().toolEvents
-        message.complete = true
         try await Task.sleep(for: .milliseconds(350))
         XCTAssertGreaterThanOrEqual(host.fittingSize.height, initial, "Tool arrival must not collapse visible prose")
+        // Completion then folds only the reasoning to its "Thought" line (#60 B4); the answer stays.
+        message.complete = true
+        try await Task.sleep(for: .milliseconds(350))
+        XCTAssertGreaterThan(host.fittingSize.height, 80, "The answer and tool rows stay visible after completion")
         window.setContentSize(NSSize(width: 720, height: host.fittingSize.height))
         try await Task.sleep(for: .milliseconds(100))
         try attachSnapshot(host, name: "Visible reasoning with collapsed tool details")
