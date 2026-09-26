@@ -109,5 +109,51 @@ extension AppTests.Bleet {
             // Forward admits 8 and 9 (half the budget); backward admits 7 and 6, then 5 would exceed it.
             #expect(TranscriptWindow.range(count: 10, startingAt: 8, cost: { _ in quarter }) == 6..<10)
         }
+
+        /// #60 A1 step 3: paging a long reply's segments keeps the reader's segment shown, always
+        /// progresses and reaches every segment, and lays out at most the reply budget, or two segments
+        /// when one alone fills it.
+        @Test func replyPagingKeepsTheReadersSegmentAndReachesEverySegment() {
+            let costs = [2_000, 16_384, 3_000, 3_000, 16_384, 16_384, 1_000, 1_000, 6_000, 6_000, 6_000, 500]
+            let cost = { (index: Int) in costs[index] }
+            let count = costs.count
+            func fits(_ window: Range<Int>) -> Bool {
+                window.count <= 2 || window.reduce(0) { $0 + cost($1) } <= ReplyWindow.budget
+            }
+            var window = ReplyWindow.latest(count: count, cost: cost)
+            #expect(window.upperBound == count && fits(window))
+            var seen = Set(window)
+            while window.lowerBound > 0 {
+                let earlier = ReplyWindow.earlier(window, count: count, cost: cost)
+                #expect(earlier.contains(window.lowerBound), "\(window) -> \(earlier)")
+                #expect(earlier.lowerBound < window.lowerBound && fits(earlier))
+                #expect(earlier.count <= ReplyWindow.capacity)
+                seen.formUnion(earlier)
+                window = earlier
+            }
+            #expect(seen == Set(0..<count))
+            while window.upperBound < count {
+                let later = ReplyWindow.later(window, count: count, cost: cost)
+                #expect(later.contains(window.upperBound - 1), "\(window) -> \(later)")
+                #expect(later.upperBound > window.upperBound && fits(later))
+                #expect(later.count <= ReplyWindow.capacity)
+                window = later
+            }
+        }
+
+        @Test func segmentWindowsResolveAgainstTheReply() {
+            let small = { (_: Int) in 1_000 }
+            #expect(
+                SegmentWindow.latest.resolve(count: 10, cost: small) == nil, "A reply that fits shows every segment")
+            #expect(SegmentWindow.all.resolve(count: 100, cost: small) == nil)
+            let large = { (_: Int) in 6_000 }
+            #expect(SegmentWindow.latest.resolve(count: 10, cost: large) == 8..<10)
+            #expect(SegmentWindow.segments(3..<5).resolve(count: 10, cost: large) == 3..<5)
+            #expect(SegmentWindow.segments(8..<12).resolve(count: 10, cost: large) == 8..<10)
+            #expect(
+                SegmentWindow.segments(20..<22).resolve(count: 10, cost: large) == 8..<10,
+                "A window past an edited reply's end shows its latest segments")
+            #expect(SegmentWindow.latest.resolve(count: 0, cost: large) == nil)
+        }
     }
 }

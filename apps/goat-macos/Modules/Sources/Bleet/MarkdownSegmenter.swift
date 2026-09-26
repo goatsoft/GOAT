@@ -117,6 +117,9 @@ public struct MarkdownSegmentation: Sendable {
     public private(set) var source = ""
     public private(set) var isComplete = false
     public private(set) var work = Work()
+    /// How many times `extend` started over because the new source did not extend the current one.
+    /// Consumers holding state derived from settled segments must discard it when this changes.
+    public private(set) var restarts = 0
     let limits: SegmentLimits
 
     private var settled: [StoredSegment] = []
@@ -136,6 +139,14 @@ public struct MarkdownSegmentation: Sendable {
     /// The segments, settled ones first. Accessing one is O(1); `text` concatenates on access.
     public var segments: [MarkdownSegment] { Array(self) }
 
+    /// Segments below this index are settled: their range, kind and body never change again within
+    /// this segmentation. Only their definition suffix can grow.
+    public var settledCount: Int { settled.count }
+
+    /// The reference definitions appended to settled segments that accept them. Within one
+    /// segmentation it only grows by whole definitions, or empties once they exceed the limit.
+    public var settledDefinitionSuffix: String { settledSuffix }
+
     /// Extends the segmentation to `newSource`.
     ///
     /// `newSource` must extend the current source. Only the undecided tail is compared, so a caller
@@ -145,8 +156,10 @@ public struct MarkdownSegmentation: Sendable {
     public mutating func extend(to newSource: String, isComplete complete: Bool) {
         if !canExtend(to: newSource) {
             let spent = work
+            let restarted = restarts + (source.isEmpty ? 0 : 1)
             self = MarkdownSegmentation(limits: limits)
             work = spent
+            restarts = restarted
         }
         source = newSource
         isComplete = complete

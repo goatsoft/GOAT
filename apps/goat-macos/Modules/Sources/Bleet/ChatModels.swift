@@ -9,14 +9,52 @@ public enum ChatMessageKind: String, Sendable, Equatable {
     case compaction
 }
 
+/// One version of a growing text, so incremental consumers never compare the text itself (#60 A1).
+///
+/// Within one `epoch` the text only grows by appends, so `utf8Count` identifies its content. Any
+/// other change (an edit, a trim, a replacement) starts a new epoch. Epochs are unique for the
+/// process, so a message recreated with the same identifier never reuses one.
+public struct TextRevision: Hashable, Sendable {
+    public let epoch: UInt64
+    public let utf8Count: Int
+
+    public init(epoch: UInt64, utf8Count: Int) {
+        self.epoch = epoch
+        self.utf8Count = utf8Count
+    }
+
+    /// Whether this revision is `older` with text appended (or unchanged).
+    public func extends(_ older: TextRevision) -> Bool {
+        epoch == older.epoch && utf8Count >= older.utf8Count
+    }
+}
+
 /// One transcript entry. Mutable while streaming; `complete` seals it.
 @MainActor
 @Observable
 public final class ChatMessage: Identifiable {
     public let id: UUID
     public let role: ChatTurn.Role
-    public var text = ""
-    public var thinking = ""
+    /// Assigning text that extends the current text keeps its revision epoch; anything else starts one.
+    public var text: String {
+        get { storedText }
+        set {
+            textRevision = Self.revision(after: textRevision, old: storedText, new: newValue)
+            storedText = newValue
+        }
+    }
+    public var thinking: String {
+        get { storedThinking }
+        set {
+            thinkingRevision = Self.revision(after: thinkingRevision, old: storedThinking, new: newValue)
+            storedThinking = newValue
+        }
+    }
+    private var storedText = ""
+    private var storedThinking = ""
+    /// Identifies `text` without reading it: streamed appends keep the epoch (#60 A1).
+    public private(set) var textRevision: TextRevision
+    public private(set) var thinkingRevision: TextRevision
     /// O(1) identity for transcript following. Never derive cadence from full String counts.
     public private(set) var renderRevision: UInt64 = 0
     /// Incrementally maintained collapsed preview, avoiding a full thinking split per stream batch.
@@ -67,6 +105,24 @@ public final class ChatMessage: Identifiable {
         self.id = id
         self.role = role
         self.createdAt = createdAt
+        textRevision = TextRevision(epoch: Self.nextEpoch(), utf8Count: 0)
+        thinkingRevision = TextRevision(epoch: Self.nextEpoch(), utf8Count: 0)
+    }
+
+    private static var lastEpoch: UInt64 = 0
+
+    private static func nextEpoch() -> UInt64 {
+        lastEpoch &+= 1
+        return lastEpoch
+    }
+
+    /// Appending keeps the epoch; the prefix check runs only on assignment, never on streamed appends.
+    private static func revision(after current: TextRevision, old: String, new: String) -> TextRevision {
+        let count = new.utf8.count
+        if count >= current.utf8Count, new.utf8.starts(with: old.utf8) {
+            return TextRevision(epoch: current.epoch, utf8Count: count)
+        }
+        return TextRevision(epoch: nextEpoch(), utf8Count: count)
     }
 
     public func appendStream(text textDelta: String, thinking thinkingDelta: String, toolInputBytes: Int = 0) {
@@ -81,18 +137,23 @@ public final class ChatMessage: Identifiable {
         }
         guard !textDelta.isEmpty || !thinkingDelta.isEmpty else { return }
         if !thinkingDelta.isEmpty {
-            thinking.append(contentsOf: thinkingDelta)
+            storedThinking.append(contentsOf: thinkingDelta)
+            thinkingRevision = TextRevision(epoch: thinkingRevision.epoch, utf8Count: storedThinking.utf8.count)
             updateThinkingTail(with: thinkingDelta)
         }
         if !textDelta.isEmpty {
-            text.append(contentsOf: textDelta)
+            storedText.append(contentsOf: textDelta)
+            textRevision = TextRevision(epoch: textRevision.epoch, utf8Count: storedText.utf8.count)
         }
         markRenderChanged()
     }
 
+    /// Replaces both texts with restored content, starting new revision epochs.
     public func restoreContent(text: String, thinking: String) {
-        self.text = text
-        self.thinking = thinking
+        storedText = text
+        storedThinking = thinking
+        textRevision = TextRevision(epoch: Self.nextEpoch(), utf8Count: text.utf8.count)
+        thinkingRevision = TextRevision(epoch: Self.nextEpoch(), utf8Count: thinking.utf8.count)
         thinkingTail = Self.lastNonemptyThinkingLine(in: thinking)
         markRenderChanged()
     }

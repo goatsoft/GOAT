@@ -161,10 +161,13 @@ extension AppTests.Bleet {
             let (window, host) = mounted(
                 TranscriptTextPartsView(source: oversized, fontSize: 13, cacheKey: key)
                     .frame(width: 500).environment(AppModel.shared))
-            let placeholder = host.fittingSize.height
+            // The first frame shows the latest text, never a placeholder. The source splits into whole
+            // 8 KiB parts, so the last part is that same text, and preparation adds the part controls.
+            let latest = host.fittingSize.height
+            #expect(latest > 1_000, "The latest text shows before the parts are prepared (\(latest))")
             try await Task.sleep(for: .milliseconds(600))
             host.layoutSubtreeIfNeeded()
-            #expect(host.fittingSize.height > placeholder * 4, "View-owned parts render without global retention")
+            #expect(host.fittingSize.height > latest, "View-owned parts render without global retention")
             #expect(TranscriptPartsCache.shared.parts(for: key, source: oversized) == nil)
             window.contentView = nil
             window.close()
@@ -193,15 +196,17 @@ extension AppTests.Bleet {
                 TranscriptTextPartsView(source: source, fontSize: 13, cacheKey: key)
                     .frame(width: 500).environment(AppModel.shared)
             }
-            // First mount: nothing is prepared yet, so the first frame is the short placeholder.
+            // First mount: nothing is prepared yet, so the first frame shows the latest text while the
+            // parts are split off the main actor, and the initializer retains nothing.
             let (firstWindow, first) = mounted(parts())
-            let placeholder = first.fittingSize.height
+            #expect(first.fittingSize.height > 1_000, "The latest text shows, never a placeholder")
+            #expect(
+                TranscriptPartsCache.shared.parts(for: key, source: source) == nil,
+                "Preparation must happen off the initializer")
             try await Task.sleep(for: .milliseconds(400))
             first.layoutSubtreeIfNeeded()
             let prepared = first.fittingSize.height
-            #expect(
-                prepared > placeholder * 4,
-                "Preparation must happen off the initializer (\(placeholder) -> \(prepared))")
+            #expect(TranscriptPartsCache.shared.parts(for: key, source: source)?.count == 2)
             firstWindow.contentView = nil
             firstWindow.close()
 
@@ -582,6 +587,68 @@ extension AppTests.Bleet {
             }
             let after = try #require(document.segments.last?.index)
             #expect(SegmentedMarkdownView.codeSegment(of: after, in: document.segments) == after)
+        }
+
+        /// Integration with segment windows (#78): a block's remembered choice survives its reply paging
+        /// to another window and back, and every piece of an oversized fence keeps the first piece's
+        /// identity even when that piece lies outside the window.
+        @Test @MainActor func codeBlockChoicesSurviveSegmentPaging() async throws {
+            let fence = "```"
+            let messageID = UUID()
+            let blocks = (0..<30).map {
+                "Paragraph \($0) introduces a block.\n\n\(fence)swift\nlet block\($0) = \($0)\n\(fence)"
+            }
+            let pieces = (0..<400).map { "let piece\($0) = \($0)" }.joined(separator: "\n")
+            let source = blocks.joined(separator: "\n\n") + "\n\n\(fence)swift\n\(pieces)\n\(fence)\n\nAfter."
+            let cache = MarkdownSegmentCache(targetBytes: 256, maximumBytes: 1_024)
+
+            func prepare(_ window: Range<Int>) async throws -> PreparedMarkdownDocument {
+                try #require(await cache.prepare(id: messageID, source: source, isComplete: true, window: window))
+            }
+            func identity(of block: Int, in document: PreparedMarkdownDocument) throws -> CodeBlockIdentity? {
+                let code = "let block\(block) = \(block)\n"
+                let segment = try #require(document.segments.first { $0.text.contains(code) })
+                guard document.shownSegments.contains(segment.index), case .parsed(let content) = segment.preparation
+                else { return nil }
+                let scope = CodeBlockScope(
+                    messageID: messageID,
+                    segment: SegmentedMarkdownView.codeSegment(of: segment.index, in: document.segments),
+                    content: content, preparationID: segment.preparationID, isFencePiece: false)
+                return CodeBlockPositions.shared.identity(of: code, occurrence: 0, in: scope)
+            }
+
+            let first = try await prepare(0..<12)
+            let count = first.segments.count
+            #expect(count > 30, "The reply is windowed across many segments")
+            let block = 3
+            let original = try #require(try identity(of: block, in: first))
+            CodeBlockStateStore.shared.set(.init(wordWrap: true, isExpanded: true), for: original)
+
+            // An overlapping window, a distant one, and back: the block's identity and choice never move.
+            let overlapping = try await prepare(4..<20)
+            #expect(try identity(of: block, in: overlapping) == original)
+            let distant = try await prepare(max(0, count - 8)..<count)
+            #expect(try identity(of: block, in: distant) == nil, "Outside the window the block has no view")
+            let back = try await prepare(0..<12)
+            let remounted = try #require(try identity(of: block, in: back))
+            #expect(remounted == original)
+            #expect(CodeBlockStateStore.shared.state(for: remounted).isExpanded)
+
+            // Pieces of the oversized fence share its first piece, even when that piece is not shown.
+            let fencePieces = distant.segments.filter { $0.kind == .fencedCodePiece }.map(\.index)
+            let firstPiece = try #require(fencePieces.first)
+            #expect(fencePieces.count > 3)
+            let pieceWindow = try await prepare((firstPiece + 1)..<min(count, firstPiece + 4))
+            #expect(!pieceWindow.shownSegments.contains(firstPiece))
+            for piece in pieceWindow.shownSegments where pieceWindow.segments[piece].kind == .fencedCodePiece {
+                #expect(SegmentedMarkdownView.codeSegment(of: piece, in: pieceWindow.segments) == firstPiece)
+            }
+            // Tags never reach the code a view shows.
+            for index in pieceWindow.shownSegments {
+                if case .parsed(let content) = pieceWindow.segments[index].preparation {
+                    #expect(!content.value.renderHTML().contains("goat-block"))
+                }
+            }
         }
 
         @Test func codeBlockLiteralsAreReadFromTheParse() {

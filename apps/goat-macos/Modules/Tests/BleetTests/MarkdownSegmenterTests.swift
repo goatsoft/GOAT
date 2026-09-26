@@ -430,6 +430,27 @@ private func stream(
         #expect(Double(totals[2]) / Double(totals[1]) < 2.4, "\(shape): \(totals)")
     }
 
+    /// What the preparation cache relies on (#60 A1): the settled count never falls while a reply
+    /// streams, and the settled definition suffix only grows by whole definitions or empties.
+    @Test func settledCountAndDefinitionSuffixOnlyGrow() {
+        var definitions = ""
+        for index in 0..<40 { definitions += "See [ref \(index)].\n\n[ref \(index)]: https://example.com/\(index)\n\n" }
+        let source = mixedReply + definitions + paragraph("after", bytes: 3_000)
+        var settledCount = 0
+        var suffix = ""
+        stream(source, step: 97, target: 256, maximum: 1_024) { partial, length in
+            #expect(partial.settledCount >= settledCount, "at \(length)")
+            #expect(partial.settledCount <= partial.count)
+            let next = partial.settledDefinitionSuffix
+            if !next.isEmpty, !suffix.isEmpty {
+                #expect(next.hasPrefix(String(suffix.dropLast())), "at \(length)")
+            }
+            for segment in partial.prefix(partial.settledCount) { #expect(segment.isSettled) }
+            settledCount = partial.settledCount
+            suffix = next
+        }
+    }
+
     /// What step 2 must re-prepare per append: the unsettled segments stay within a few segment
     /// maxima, however long the reply grows.
     @Test func unsettledBytesStayBoundedWhileStreaming() {

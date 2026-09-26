@@ -132,5 +132,18 @@ extension AppTests.Bleet {
             }
             #expect(recovered.map(String.init) == words)
         }
+
+        /// Above the rich limit a reply shows its latest text while its parts are prepared, never a
+        /// placeholder; the tail is found without walking the rest of the source.
+        @Test func theTailShowsTheLatestScalarsWithinOnePart() {
+            let source = String(repeating: "👩🏽‍💻 café\r\n", count: 3_000) + "END"
+            let tail = TranscriptTextParts.tail(source)
+            #expect(source.unicodeScalars.reversed().starts(with: tail.unicodeScalars.reversed()))
+            #expect(tail.hasSuffix("END"))
+            #expect(tail.utf8.count <= TranscriptTextParts.maximumBytes)
+            #expect(tail.utf8.count > TranscriptTextParts.maximumBytes - 8)
+            #expect(TranscriptTextParts.tail("short") == "short")
+            #expect(TranscriptTextParts.tail("") == "")
+        }
     }
 }

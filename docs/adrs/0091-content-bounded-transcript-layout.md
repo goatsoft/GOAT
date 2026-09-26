@@ -132,7 +132,14 @@ segment rather than per message. Deliver it in three reviewable steps:
      main-actor `PreparedMarkdownDocumentCache` (first-frame reuse) are charged rendered bytes plus
      source bytes. The window charges a prepared reply its rendered bytes. Segments stack with the gap
      MarkdownUI's block sequence would leave between the same blocks (the larger adjacent margin, or
-     the default padding when neither block sets one). Pieces marked `continuesPrevious` have no gap.
+     the default padding when neither block sets one). Margins come from the parsed blocks, not the
+     segment's first and last lines: each parse's HTML is scanned once, and a top-level block takes
+     the largest margin set anywhere inside it, as MarkdownUI reduces its margin preference, so a
+     quote or list holding only code sets none. Hosted tests hold eight multi-block shapes (nested
+     and code-only quotes, lists, headings inside quotes, thematic breaks, tables, HTML blocks)
+     within 1 pt of the whole reply. Pieces marked `continuesPrevious` have no gap, which is a
+     stated degradation: a split paragraph ends its line early and each code piece has its own
+     chrome.
      Only a reply's first segment can be an HTML or SVG artifact. The caret is placed by
      structure, not text: a tail segment carries it only when its last leaf block is a paragraph
      (read from the parsed segment's HTML), and it is drawn over the last of the segment's text
@@ -152,10 +159,59 @@ segment rather than per message. Deliver it in three reviewable steps:
      segment array, so total preparation CPU work is not yet shown to be linear. Before step 3 lifts
      the fallback, profile the complete path and carry explicit source-revision and append
      information instead of rescanning the prefix, so step 1's scanner gains hold end to end.
+   - **Whole-path preparation (as implemented after step 2).** `ChatMessage` carries a `TextRevision`
+     for its text and reasoning: streamed appends keep the revision's epoch, and any other change (an
+     edit, the completion trim, a restore or replacement) starts a new, process-unique epoch. The cache
+     extends the held segmentation when the new revision extends the held one, so a refresh never
+     compares the reply's prefix. A refresh visits only segments settled since the last refresh and the
+     provisional tail; prepared segments live in fixed-size chunks shared with documents already handed
+     to views, so a refresh copies only the chunk index and the chunks it changes. When the reply's
+     reference definitions change, only settled segments containing a closing bracket (the only ones a
+     definition can affect) are parsed again. Views, the front cache and the window charge match
+     documents by revision.
+   - **Measured whole path (Release, engine-free, CI macOS 26 runner).** Five reply shapes (mixed
+     Markdown, long single-line paragraphs, fences including oversized ones, tables including oversized
+     ones, and 16 reference definitions arriving at the end) streamed at a fixed 4 KiB per refresh from
+     32 KiB to 2 MiB. Scanned, copied, compared, parsed and HTML bytes per reply byte stay flat (about
+     9 to 15 in total, per shape, at every size). Per-refresh preparation time does not grow with the
+     reply (median 0.4 to 0.9 ms, 1.7 to 2.1 ms for tables; 95th percentile 0.6 to 1.9 ms, 3.0 to
+     3.4 ms for tables), at most three
+     segments are visited per refresh, and handing a document to the main actor takes under 0.1 ms.
+     Compared bytes are under 0.75 per reply byte (no prefix comparison). Exceptions, stated rather
+     than hidden: the refresh that delivers late reference definitions re-parses every settled segment
+     with a bracket once (106 ms at 2 MiB, off the main actor); a completion trim that changes the
+     text starts a new epoch and costs one pass over the reply (about 15 ms at 2 MiB). A streaming
+     reply retains about three times its source bytes (rendered segments, source and the scanner's
+     bodies). These measure the preparation layer; the live view still uses the 8 KiB fallback, so
+     live rendering at these sizes is measured with step 3.
 3. **Segment-level windowing**, built on the single transcript navigation owner from
    [#54](https://github.com/goatsoft/GOAT/issues/54) section 2. The window admits segments rather
    than whole messages, so a long reply renders rich and pages within itself, with one scroll
    executor, stable segment identities and preserved reader anchors.
+   - **As implemented.** Replies through 2 MiB (`ReplyWindow.richLimit`) render as segments; the
+     8 KiB whole-reply fallback is removed for answers. A reply lays out a window of its segments:
+     at most 32 segments and 16 KiB of rendered bytes (the message window's budget), or two segments
+     when paging across one that alone fills it. Following shows the latest segments; while the
+     reader owns the viewport a reply keeps the segments shown, and output below them waits behind a
+     loader, as the message window does. `MarkdownSegmentCache.prepare(window:)` resolves the request
+     (all, latest, or a held range) against the reply's segments after segmentation, parses only the
+     window, and releases parses more than two segments outside it, so retained parses are bounded by
+     the window, not the reply. Prepared-cache retention is bounded separately and charges what is
+     retained: the source, every segment body (parsed or not), the shared definition suffixes (segments
+     keep one shared string rather than a copy each) and the parsed segments. An entry may hold a
+     streaming reply at the rich limit, with its scanner's copy, and each cache at most 16 MiB. The message window charges a prepared reply the bytes of its shown
+     segments.
+   - **Navigation.** `TranscriptViewport` owns each paged reply window. Loaders at a window's edges
+     page it when they come into view, like the message loaders; the kept segment (the old window's
+     first segment paging earlier, its last paging later) is in both windows, and the owner restores
+     an anchor measured from that segment's top edge, fulfilled by the single executor within 1 pt.
+     The reader's measured anchor in a windowed reply is its topmost visible segment. Following, and
+     a gesture settling at the true bottom, clear every held window; a last reply held on earlier
+     segments is not the true bottom.
+   - **Above the limit.** Longer replies keep bounded selectable text parts with full-source copy.
+     Until the parts are prepared the reply shows its last 8 KiB of text instead of a placeholder;
+     the final part can be shorter, so the text can reflow once when the parts arrive. Expanded
+     reasoning keeps its 8 KiB parts fallback until it is windowed the same way.
 
 **Acceptance per step.** Tests for boundary crossings while streaming, oversized fences, tables and
 paragraphs, completion without reflow, paging reachability, anchor preservation, and parse work
