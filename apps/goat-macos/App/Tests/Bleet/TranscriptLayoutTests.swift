@@ -524,13 +524,16 @@ extension AppTests.Bleet {
     return (window, host)
 }
 
+/// Waits until no scroll request has been pending for 300 ms, within 5 s. Rows whose Markdown finishes
+/// preparing after the first placement change height and correctly issue a restore, so a single
+/// moment without a request is not settled. A request that is never fulfilled still fails the caller.
 @MainActor private func settle(_ viewport: TranscriptViewport, host: NSView) async throws {
-    for _ in 0..<100 {
+    var quiet = 0
+    for _ in 0..<250 where quiet < 15 {
         host.layoutSubtreeIfNeeded()
-        if viewport.request == nil { break }
+        quiet = viewport.request == nil ? quiet + 1 : 0
         try await Task.sleep(for: .milliseconds(20))
     }
-    try await Task.sleep(for: .milliseconds(150))
     host.layoutSubtreeIfNeeded()
 }
 
