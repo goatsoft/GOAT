@@ -362,7 +362,7 @@ extension AppTests.Bleet {
 
             let scope = Self.scope(source)
             let identity = try #require(
-                CodeBlockPositions.shared.identity(of: lines.joined(separator: "\n") + "\n", in: scope))
+                CodeBlockPositions.shared.identity(of: lines.joined(separator: "\n") + "\n", occurrence: 0, in: scope))
             CodeBlockStateStore.shared.set(.init(wordWrap: nil, isExpanded: true), for: identity)
             let expanded = try await height(source, scope: scope)
             #expect(expanded > collapsed + 200, "The remembered expansion shows every line: \(expanded)")
@@ -370,8 +370,9 @@ extension AppTests.Bleet {
 
         private static func scope(_ source: String, messageID: UUID = UUID()) -> CodeBlockScope {
             CodeBlockScope(
-                messageID: messageID, segment: 0, content: PreparedMarkdownContent(value: MarkdownContent(source)),
-                preparationID: 1, isFencePiece: false)
+                messageID: messageID, segment: 0,
+                content: PreparedMarkdownContent(value: MarkdownSegmentCache.content(source)), preparationID: 1,
+                isFencePiece: false)
         }
 
         /// Review of #75: a choice made while a block is shorter than any prefix key survives the block
@@ -391,7 +392,7 @@ extension AppTests.Bleet {
                 let scope = CodeBlockScope(
                     messageID: messageID, segment: segment.index, content: content,
                     preparationID: segment.preparationID, isFencePiece: false)
-                return CodeBlockPositions.shared.identity(of: code, in: scope)
+                return CodeBlockPositions.shared.identity(of: code, occurrence: 0, in: scope)
             }
             let before = try #require(try identity(early, "let a = 1\n"))
             CodeBlockStateStore.shared.set(.init(wordWrap: true, isExpanded: true), for: before)
@@ -411,16 +412,73 @@ extension AppTests.Bleet {
             let second = header + "\nlet second = 2\n"
             let source = "\(fence)swift\n\(first)\(fence)\n\nBetween.\n\n\(fence)swift\n\(second)\(fence)\n"
             let scope = Self.scope(source)
-            let one = try #require(CodeBlockPositions.shared.identity(of: first, in: scope))
-            let two = try #require(CodeBlockPositions.shared.identity(of: second, in: scope))
+            let one = try #require(CodeBlockPositions.shared.identity(of: first, occurrence: 0, in: scope))
+            let two = try #require(CodeBlockPositions.shared.identity(of: second, occurrence: 1, in: scope))
             #expect(one != two && one.position == 0 && two.position == 1)
-            let elsewhere = try #require(CodeBlockPositions.shared.identity(of: first, in: Self.scope(source)))
+            let elsewhere = try #require(
+                CodeBlockPositions.shared.identity(of: first, occurrence: 0, in: Self.scope(source)))
             #expect(elsewhere != one, "Another reply's equal block has its own identity")
+            // Without an occurrence tag, the literal's position still tells the two apart.
+            let untagged = try #require(CodeBlockPositions.shared.identity(of: second, occurrence: nil, in: scope))
+            #expect(untagged.position == CodeBlockIdentity.literalBase + 1)
 
             let store = CodeBlockStateStore()
             store.set(.init(wordWrap: true), for: one)
             #expect(store.state(for: two) == CodeBlockStateStore.State())
             #expect(store.state(for: elsewhere) == CodeBlockStateStore.State())
+        }
+
+        /// Review of #75: identical literals in one segment keep independent choices. Each fence carries its
+        /// occurrence through the info string, and the code itself is unchanged.
+        @Test @MainActor func identicalBlocksKeepIndependentChoices() async throws {
+            let fence = "```"
+            let code = (0..<60).map { "let same\($0) = \($0)" }.joined(separator: "\n") + "\n"
+            let source = "\(fence)swift\n\(code)\(fence)\n\nAgain:\n\n\(fence)swift\n\(code)\(fence)\n"
+            let tagged = try #require(CodeBlockTags.tagged(source))
+            let infos = tagged.split(separator: "\n").filter { $0.hasPrefix(fence) && $0.count > 3 }
+                .map { FenceInfo(String($0.dropFirst(3))) }
+            #expect(infos.map(\.language) == ["swift", "swift"] && infos.map(\.occurrence) == [0, 1])
+            #expect(
+                CodeBlockPositions.codeBlocks(html: MarkdownContent(tagged).renderHTML())
+                    == CodeBlockPositions.codeBlocks(html: MarkdownContent(source).renderHTML()),
+                "Tags never reach the code")
+
+            // Rendered: expanding the second block expands only it.
+            let messageID = UUID()
+            let scope = Self.scope(source, messageID: messageID)
+            let neither = try await height(source, scope: scope)
+            let second = CodeBlockIdentity(messageID: messageID, segment: 0, position: 1)
+            CodeBlockStateStore.shared.set(.init(wordWrap: nil, isExpanded: true), for: second)
+            let one = try await height(source, scope: scope)
+            let first = CodeBlockIdentity(messageID: messageID, segment: 0, position: 0)
+            CodeBlockStateStore.shared.set(.init(wordWrap: nil, isExpanded: true), for: first)
+            let both = try await height(source, scope: scope)
+            #expect(neither + 200 < one && one + 200 < both, "\(neither) < \(one) < \(both)")
+        }
+
+        /// A streaming duplicate keeps its occurrence as it grows past, and away from, the earlier block.
+        @Test func aGrowingDuplicateKeepsItsOccurrence() throws {
+            let fence = "```"
+            let opening = "\(fence)swift\nlet a = 1\n\(fence)\n\nMore:\n\n\(fence)swift\nlet a = 1\n"
+            for source in [opening, opening + "let b = 2\n", opening + "let b = 2\n\(fence)\n\nDone."] {
+                let tagged = try #require(CodeBlockTags.tagged(source))
+                let occurrences = tagged.split(separator: "\n").filter { $0.hasPrefix(fence) && $0.count > 3 }
+                    .map { FenceInfo(String($0.dropFirst(3))).occurrence }
+                #expect(occurrences == [0, 1], "\(source)")
+            }
+        }
+
+        /// Where a fence-like line is not an opener (indented code) or an HTML block may hold one, the tags
+        /// are not used, so no code or text ever shows them.
+        @Test func tagsNeverReachCodeOrHTMLText() throws {
+            let fence = "```"
+            let indented = "Code:\n\n    \(fence)swift\n    let a = 1\n"
+            #expect(!MarkdownSegmentCache.content(indented).renderHTML().contains(CodeBlockTags.key))
+            #expect(CodeBlockTags.tagged("<div>\n\(fence)swift\nx\n\(fence)\n</div>\n") == nil)
+            #expect(CodeBlockTags.tagged("No fences here.") == nil)
+            let long = "\(fence)\(fence)swift\n\(fence)swift inner\n\(fence)\(fence)\n"
+            let tagged = try #require(CodeBlockTags.tagged(long))
+            #expect(tagged.components(separatedBy: CodeBlockTags.key).count == 2, "Only the outer fence opens")
         }
 
         /// Every piece of an oversized fence keeps its choices by the fence's first piece.
