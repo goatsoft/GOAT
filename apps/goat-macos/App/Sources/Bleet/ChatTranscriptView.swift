@@ -559,8 +559,11 @@ struct ChatTranscriptView: View {
     }
 
     /// Pages earlier while keeping the message at the top of the window where the reader sees it.
+    /// Only a reader pages earlier: while the transcript follows, the earlier loader can be seen for a
+    /// moment during layout (a reply still preparing is short), and paging then would leave the latest
+    /// output.
     private func loadEarlierMessages() {
-        guard pagingPhase == .idle, messageRange.lowerBound > 0 else { return }
+        guard pagingPhase == .idle, messageRange.lowerBound > 0, viewport.readerOwnsViewport else { return }
         let kept = session.messages[messageRange.lowerBound].id
         let keptOffset = reader.offset(of: kept)
         guard let result = viewport.pageEarlier(count: session.messages.count, cost: displayCost) else { return }
@@ -649,9 +652,12 @@ struct ChatTranscriptView: View {
                 // The keyboard, a scroller or another direct move changed the offset without a gesture
                 // phase and without a content change; it cancels any pending scroll.
                 viewport.note("reader offset \(Int(previous.offset))->\(Int(metrics.offset))")
-                // The binding still holds the executor's last target, which SwiftUI would re-apply on
-                // the next update and scroll the reader back. A direct move leaves it with no target.
-                if position.point != nil || position.edge != nil { position = ScrollPosition(idType: UUID.self) }
+                // The binding still holds the executor's last target, which SwiftUI re-applies on the next
+                // update, scrolling the reader back. Record where the reader is instead: re-applying that
+                // is a no-op. An empty position would fall back to the default bottom anchor.
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) { position.scrollTo(y: metrics.offset) }
                 if viewport.readerOwnsViewport || !atBottom {
                     viewport.readerMoved(currentRange: messageRange, anchor: reader.measuredAnchor())
                 }
