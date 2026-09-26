@@ -505,6 +505,21 @@ extension AppTests.Bleet {
     return bitmap
 }
 
+@MainActor private func hostedWindow(
+    _ session: ChatSession, viewport: TranscriptViewport
+) -> (NSWindow, NSHostingView<some View>) {
+    let window = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 700, height: 450), styleMask: [.titled],
+        backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    let host = NSHostingView(
+        rootView: ChatTranscriptView(session: session, viewport: viewport)
+            .environment(AppModel.shared).frame(width: 700, height: 450))
+    window.contentView = host
+    window.orderFront(nil)
+    return (window, host)
+}
+
 @MainActor private func settle(_ viewport: TranscriptViewport, host: NSView) async throws {
     for _ in 0..<100 {
         host.layoutSubtreeIfNeeded()
@@ -789,6 +804,115 @@ extension AppTests.Bleet {
             #expect(viewport.scrollCommands == commands, "A cancelled target must never scroll")
         }
 
+        /// A reader who interrupts an already-issued command owns the next direct move: the cancelled
+        /// command claims no offset change, and the viewport stays where the reader put it.
+        @Test @MainActor func aDirectMoveAfterAnInterruptedCommandIsTheReaders() async throws {
+            let session = distinctSession(count: 60)
+            let viewport = TranscriptViewport()
+            let (window, host) = hostedWindow(session, viewport: viewport)
+            defer {
+                window.contentView = nil
+                window.close()
+            }
+            try await settle(viewport, host: host)
+            let scroll = try #require(findTranscriptScroll(host))
+            let range = viewport.messageRange(count: session.messages.count, cost: { _ in 0 })
+            let commands = viewport.scrollCommands
+            viewport.restore(Anchor(messageID: session.messages[range.lowerBound].id, offset: 0))
+            for _ in 0..<100 where viewport.scrollCommands == commands {
+                try await Task.sleep(for: .milliseconds(5))
+            }
+            try #require(viewport.scrollCommands > commands, "The command was issued")
+            // The reader interrupts it and moves directly before the command's move lands.
+            viewport.readerMoved(currentRange: range)
+            let target = (scroll.documentView?.bounds.height ?? 0) / 2
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: target))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            try await settle(viewport, host: host)
+            try await settle(viewport, host: host)
+            let trace = viewport.diagnostics.suffix(16)
+            #expect(viewport.readerOwnsViewport && viewport.request == nil, "\(trace)")
+            #expect(
+                abs(scroll.contentView.bounds.minY - target) <= 1,
+                "The viewport left the reader's position: \(scroll.contentView.bounds.minY) vs \(target); \(trace)")
+        }
+
+        /// A target without a row (missing, removed or never rendering) is abandoned within the bounded
+        /// attempts instead of waiting for a layout that never comes; one that arrives in time is shown.
+        @Test @MainActor func targetsWithoutARowHaveABoundedLifecycle() async throws {
+            let session = distinctSession(count: 61)
+            let tool = ChatMessage(role: .tool)
+            tool.text = "Tool output"
+            tool.complete = true
+            session.messages.insert(tool, at: 50)
+            let viewport = TranscriptViewport()
+            let (window, host) = hostedWindow(session, viewport: viewport)
+            defer {
+                window.contentView = nil
+                window.close()
+            }
+            try await settle(viewport, host: host)
+
+            func awaitSettled() async throws -> Duration {
+                let start = ContinuousClock.now
+                for _ in 0..<200 where viewport.request != nil {
+                    host.layoutSubtreeIfNeeded()
+                    try await Task.sleep(for: .milliseconds(10))
+                }
+                return ContinuousClock.now - start
+            }
+            let removed = try #require(session.messages.last)
+            for name in ["missing", "non-rendering", "removed"] {
+                let abandoned = viewport.abandonedRequests
+                var id = UUID()
+                if name == "non-rendering" { id = tool.id }
+                if name == "removed" {
+                    id = removed.id
+                    session.messages.removeLast()
+                }
+                // A removed row's frame goes with its layout, before the target is requested.
+                host.layoutSubtreeIfNeeded()
+                try await Task.sleep(for: .milliseconds(20))
+                viewport.restore(Anchor(messageID: id, offset: 0))
+                let elapsed = try await awaitSettled()
+                let trace = viewport.diagnostics.suffix(8)
+                #expect(viewport.request == nil, "A \(name) target must not wait forever; \(trace)")
+                #expect(viewport.abandonedRequests == abandoned + 1, "A \(name) target is abandoned; \(trace)")
+                #expect(elapsed < .seconds(1.5), "A \(name) target took \(elapsed); \(trace)")
+            }
+
+            // A row that lays out before the deadline is shown, not abandoned.
+            let late = ChatMessage(role: .assistant)
+            late.text = "A late reply"
+            late.complete = true
+            let abandoned = viewport.abandonedRequests
+            viewport.restore(Anchor(messageID: late.id, offset: 0))
+            try await Task.sleep(for: .milliseconds(100))
+            session.messages.append(late)
+            _ = try await awaitSettled()
+            let trace = viewport.diagnostics.suffix(8)
+            #expect(viewport.request == nil && viewport.abandonedRequests == abandoned, "\(trace)")
+            #expect(viewport.anchor?.messageID == late.id, "\(trace)")
+        }
+
+        /// Restoration anchors to a row the held window renders: a non-rendering message gives way to
+        /// its nearest row, and a missing one restores no anchor.
+        @Test @MainActor func initialRestorationResolvesToARenderedRow() throws {
+            let session = distinctSession(count: 60)
+            let tool = ChatMessage(role: .tool)
+            tool.complete = true
+            session.messages.insert(tool, at: 20)
+            let resolved = ChatTranscriptView(
+                session: session, initiallyFollowing: false, initialVisibleMessageID: tool.id
+            ).viewport
+            #expect(resolved.anchor?.messageID == session.messages[21].id)
+            #expect(resolved.request?.target == .anchor(Anchor(messageID: session.messages[21].id, offset: 0)))
+            let missing = ChatTranscriptView(
+                session: session, initiallyFollowing: false, initialVisibleMessageID: UUID()
+            ).viewport
+            #expect(missing.anchor == nil && missing.request == nil && missing.readerOwnsViewport)
+        }
+
         /// Font and width reflow restore the reader's anchor through the executor: each correction is
         /// fulfilled only when the anchor's top is within 1 pt of its offset, and none is abandoned.
         @Test @MainActor func reflowRestoresTheReadersAnchor() async throws {
@@ -827,6 +951,89 @@ extension AppTests.Bleet {
                 #expect(viewport.anchor?.messageID == anchorID, "Width \(width), font \(font)")
                 #expect(viewport.request == nil && viewport.abandonedRequests == 0, "Width \(width), font \(font)")
             }
+        }
+    }
+}
+
+/// Fixed rows in a SwiftUI scroll view with the transcript's default anchors. Clearing
+/// `initialOffsetAnchored` turns the initial-offset anchor off, as the transcript does after its first
+/// placement.
+@MainActor @Observable private final class ScrollLimitationModel {
+    var rows = 200
+    var initialOffsetAnchored = true
+}
+
+private struct ScrollLimitationProbe: View {
+    let model: ScrollLimitationModel
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 0) {
+                ForEach(0..<model.rows, id: \.self) { index in
+                    Text("Row \(index)").frame(maxWidth: .infinity, minHeight: 40, maxHeight: 40)
+                }
+            }
+        }
+        .defaultScrollAnchor(model.initialOffsetAnchored ? .bottom : nil, for: .initialOffset)
+        .defaultScrollAnchor(.bottom, for: .alignment)
+        .defaultScrollAnchor(.top, for: .sizeChanges)
+    }
+}
+
+extension AppTests.Bleet {
+    /// The SwiftUI limitation behind `TranscriptScrollExecutor` and the transcript's one-time initial
+    /// offset (#54 section 2). When the known issue is no longer recorded, revisit both.
+    @Suite(.serialized) struct ScrollPositionLimitationTests {
+        /// Scrolls fixed rows at the bottom to 5000 without a gesture, as a keyboard, scroller or
+        /// AppKit executor move does, then appends one row. Returns where the viewport ends up.
+        @MainActor private func offsetAfterGrowth(initialOffsetAnchoredThroughout: Bool) async throws -> CGFloat {
+            let model = ScrollLimitationModel()
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 400, height: 400), styleMask: [.titled],
+                backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            let host = NSHostingView(rootView: ScrollLimitationProbe(model: model).frame(width: 400, height: 400))
+            window.contentView = host
+            window.orderFront(nil)
+            defer {
+                window.contentView = nil
+                window.close()
+            }
+            func settle() async throws {
+                for _ in 0..<10 {
+                    host.layoutSubtreeIfNeeded()
+                    try await Task.sleep(for: .milliseconds(20))
+                }
+            }
+            try await settle()
+            let scroll = try #require(findTranscriptScroll(host))
+            try #require(scroll.contentView.bounds.minY > 7_000, "The rows start at the bottom")
+            if !initialOffsetAnchoredThroughout {
+                model.initialOffsetAnchored = false
+                try await settle()
+            }
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: 5_000))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            try await settle()
+            try #require(scroll.contentView.bounds.minY == 5_000)
+            model.rows += 1
+            try await settle()
+            return scroll.contentView.bounds.minY
+        }
+
+        /// SwiftUI re-applies the initial bottom offset on a size change after a move without a
+        /// gesture, taking a reader who moved by keyboard or scroller to the bottom.
+        @Test @MainActor func initialOffsetReappliesAfterAMoveWithoutAGesture() async throws {
+            let offset = try await offsetAfterGrowth(initialOffsetAnchoredThroughout: true)
+            withKnownIssue("SwiftUI re-applies .defaultScrollAnchor(_:for: .initialOffset) after a non-gesture move") {
+                #expect(offset == 5_000, "The viewport moved to \(offset) when one row was appended")
+            }
+        }
+
+        /// Turning the initial offset off after the first placement keeps the viewport where it was
+        /// moved, which is why the transcript does.
+        @Test @MainActor func initialOffsetTurnedOffAfterPlacementKeepsTheViewport() async throws {
+            let offset = try await offsetAfterGrowth(initialOffsetAnchoredThroughout: false)
+            #expect(offset == 5_000, "The viewport moved to \(offset) when one row was appended")
         }
     }
 }

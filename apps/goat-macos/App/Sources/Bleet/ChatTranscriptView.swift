@@ -52,7 +52,7 @@ private enum TranscriptPagingPhase: Equatable, Sendable {
 /// It holds the admitted message window, who owns the viewport, the reader's anchor and at most one
 /// pending scroll request. Reader gestures, paging, restoration, compaction, jumps to the latest
 /// output and content changes arrive as explicit events. `ChatTranscriptView` performs each request
-/// with one mechanism (SwiftUI `ScrollPosition`) and reports when the geometry shows it fulfilled.
+/// with one mechanism (`TranscriptScrollExecutor`) and reports when the geometry shows it fulfilled.
 /// Raw scroll measurements stay in the view's non-observable reader state.
 @MainActor @Observable final class TranscriptViewport {
     /// A reading position: a message, and how far the viewport's top edge is below the message's top
@@ -254,9 +254,11 @@ struct ChatTranscriptView: View {
     @Bindable var session: ChatSession
     @Environment(AppModel.self) private var model
     @State var viewport: TranscriptViewport
-    /// The only scroll mechanism: the executor below is its only writer.
-    @State private var position: ScrollPosition
     @State private var reader = TranscriptReaderState()
+    /// False until the first placement: at the latest output when following, else once the restored
+    /// anchor's request ends. Until then SwiftUI's initial bottom offset applies, and a restoring
+    /// transcript is not shown at a position it is about to leave.
+    @State private var initiallyPlaced = false
     @State private var followThrottle = TranscriptFollowThrottle()
     @State private var pagingPhase: TranscriptPagingPhase = .idle
     @State private var isHoveringScrollButton = false
@@ -266,6 +268,9 @@ struct ChatTranscriptView: View {
     static let bottomTolerance: CGFloat = 50
     /// Attempts per request while layout settles before it is abandoned (and instrumented).
     static let maximumScrollAttempts = 12
+    /// How long an attempt waits for a target row that has not laid out, so a target that never renders
+    /// is abandoned after `maximumScrollAttempts` of them.
+    static let frameRetryInterval = Duration.milliseconds(50)
 
     init(
         session: ChatSession,
@@ -275,10 +280,10 @@ struct ChatTranscriptView: View {
     ) {
         self.session = session
         let initialHeld: Range<Int>?
+        let start =
+            initiallyFollowing
+            ? nil : initialVisibleMessageID.flatMap { id in session.messages.firstIndex(where: { $0.id == id }) }
         if !initiallyFollowing {
-            let start = initialVisibleMessageID.flatMap { id in
-                session.messages.firstIndex(where: { $0.id == id })
-            }
             initialHeld =
                 start.map { start in
                     TranscriptWindow.range(
@@ -293,7 +298,11 @@ struct ChatTranscriptView: View {
         } else {
             initialHeld = nil
         }
-        let restoredAnchor = initiallyFollowing ? nil : initialVisibleMessageID
+        // Restoration anchors to a row that renders in the held window: a missing or removed message
+        // shows the latest page, and a tool result or empty message gives way to its nearest row.
+        let restoredAnchor = start.flatMap { start in
+            initialHeld.flatMap { Self.renderedMessageID(near: start, in: $0, of: session.messages) }
+        }
         _viewport = State(
             initialValue: viewport
                 ?? TranscriptViewport(
@@ -301,8 +310,6 @@ struct ChatTranscriptView: View {
                     initialHeldRange: initialHeld,
                     initialAnchor: restoredAnchor.map { TranscriptViewport.Anchor(messageID: $0, offset: 0) }
                 ))
-        _position = State(
-            initialValue: restoredAnchor.map { ScrollPosition(id: $0, anchor: .top) } ?? ScrollPosition(edge: .bottom))
     }
 
     var body: some View {
@@ -420,7 +427,10 @@ struct ChatTranscriptView: View {
                 .padding(.top, 16)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .coordinateSpace(.named(transcriptContentSpace))
+                .background { TranscriptScrollAttachment(executor: reader.executor) }
             }
+            // A restoring transcript appears at the reader's anchor, not where it starts.
+            .opacity(initiallyPlaced || viewport.autoFollow ? 1 : 0)
             .overlay(alignment: .bottom) {
                 if !viewport.isScrolledToBottom {
                     Button {
@@ -467,8 +477,10 @@ struct ChatTranscriptView: View {
                     },
                     recordFrame: { id, segment, frame in recordFrame(frame, of: id, segment: segment) })
             )
-            .scrollPosition($position)
-            .defaultScrollAnchor(.bottom, for: .initialOffset)
+            // SwiftUI re-applies its initial bottom offset on later size changes until a gesture positions
+            // the view, even after the executor or a direct reader move did; it holds only until the first
+            // placement.
+            .defaultScrollAnchor(initiallyPlaced ? nil : .bottom, for: .initialOffset)
             .defaultScrollAnchor(.bottom, for: .alignment)
             // Keep the reader's content in place as rows grow below it; the owner corrects any
             // remaining anchor movement explicitly.
@@ -481,12 +493,14 @@ struct ChatTranscriptView: View {
             // Reader gestures own the viewport until they end at the true bottom.
             .onScrollPhaseChange { _, phase in
                 if phase == .tracking || phase == .interacting || phase == .decelerating {
+                    if !reader.isScrolling { viewport.note("gesture \(phase)") }
                     reader.isScrolling = true
                     viewport.readerMoved(currentRange: messageRange, anchor: reader.measuredAnchor())
                 } else if phase == .idle {
                     let readerFinishedScrolling = reader.isScrolling
                     reader.isScrolling = false
                     guard readerFinishedScrolling else { return }
+                    viewport.note("gesture settled at \(Int(reader.metrics.offset))")
                     // A last reply held on earlier segments is not the conversation's end.
                     let holdsLastReply =
                         session.messages.last.map { viewport.holdsEarlierSegments(of: $0.id) } ?? false
@@ -497,8 +511,13 @@ struct ChatTranscriptView: View {
                 }
             }
             .onChange(of: viewport.request) {
-                // A reader gesture that cancels a paging scroll also ends that page load.
-                if viewport.request == nil, pagingPhase != .idle { pagingPhase = .idle }
+                if viewport.request == nil {
+                    // A reader gesture that cancels a paging scroll also ends that page load.
+                    if pagingPhase != .idle { pagingPhase = .idle }
+                    placeInitiallyIfReady()
+                }
+                // A replaced request does not wait out its predecessor's frame deadline.
+                cancelFrameWait()
                 executePendingRequest()
             }
             // Streaming growth (text, thinking, new messages): following chases it; a reader keeps
@@ -609,15 +628,18 @@ struct ChatTranscriptView: View {
     /// The nearest message at or after `index` in the window (else before it) that renders a row.
     /// Tool results and empty assistant messages have no row to anchor to.
     private func renderedMessageID(near index: Int) -> UUID? {
-        let range = messageRange
+        Self.renderedMessageID(near: index, in: messageRange, of: session.messages)
+    }
+
+    private static func renderedMessageID(near index: Int, in range: Range<Int>, of messages: [ChatMessage]) -> UUID? {
         let rendered = { (index: Int) in
-            session.messages[index].role != .tool && !TranscriptActivity.isEmpty(session.messages[index])
+            messages[index].role != .tool && !TranscriptActivity.isEmpty(messages[index])
         }
         let start = min(max(index, range.lowerBound), range.upperBound)
         let found =
             (start..<range.upperBound).first(where: rendered)
             ?? (range.lowerBound..<start).last(where: rendered)
-        return found.map { session.messages[$0].id }
+        return found.map { messages[$0].id }
     }
 
     nonisolated private static func contentFrame(_ proxy: GeometryProxy) -> CGRect {
@@ -627,6 +649,8 @@ struct ChatTranscriptView: View {
     private func recordFrame(_ frame: CGRect, of id: UUID) {
         reader.rowFrames[id] = frame
         if case .anchor(let anchor) = viewport.request?.target, anchor.messageID == id {
+            // The awaited row arrived: run now rather than at the retry.
+            cancelFrameWait()
             executePendingRequest()
         }
     }
@@ -635,6 +659,8 @@ struct ChatTranscriptView: View {
         reader.segmentFrames[id, default: [:]][segment] = frame
         if reader.segmentFrames[id]?.isEmpty == true { reader.segmentFrames[id] = nil }
         if frame != nil, case .anchor(let anchor) = viewport.request?.target, anchor.messageID == id {
+            // The awaited segment arrived: run now rather than at the retry.
+            cancelFrameWait()
             executePendingRequest()
         }
     }
@@ -645,24 +671,35 @@ struct ChatTranscriptView: View {
             metrics.distanceFromBottom <= Self.bottomTolerance && messageRange.upperBound == session.messages.count
         reader.isAtBottom = atBottom
         if !reader.isScrolling {
-            if metrics.contentHeight != previous.contentHeight || metrics.width != previous.width {
-                // Content grew or reflowed: follow it, or put the reader's anchor back.
+            if metrics.layout != previous.layout {
+                // Content grew or reflowed, or the viewport resized, moving the offset with it if at all:
+                // follow it, or put the reader's anchor back.
                 viewport.contentChanged()
-            } else if metrics.offset != previous.offset, !reader.executorMoving {
-                // The keyboard, a scroller or another direct move changed the offset without a gesture
-                // phase and without a content change; it cancels any pending scroll.
-                viewport.note("reader offset \(Int(previous.offset))->\(Int(metrics.offset))")
-                // The binding still holds the executor's last target, which SwiftUI re-applies on the next
-                // update, scrolling the reader back. Record where the reader is instead: re-applying that
-                // is a no-op. An empty position would fall back to the default bottom anchor.
-                var transaction = Transaction()
-                transaction.disablesAnimations = true
-                withTransaction(transaction) { position.scrollTo(y: metrics.offset) }
-                if viewport.readerOwnsViewport || !atBottom {
-                    viewport.readerMoved(currentRange: messageRange, anchor: reader.measuredAnchor())
+            } else if metrics.offset != previous.offset {
+                // Who moved the viewport is recorded where the move happens, never inferred from geometry.
+                switch reader.executor.cause(ofOffset: metrics.offset) {
+                case .executor, .layout:
+                    // The executor's own command, checked for fulfilment below, or AppKit keeping the
+                    // bounds valid as the document resized.
+                    break
+                case .other:
+                    // The keyboard, a scroller or another direct move, without a gesture phase; it
+                    // cancels any pending scroll.
+                    viewport.note("reader offset \(Int(previous.offset))->\(Int(metrics.offset))")
+                    if viewport.readerOwnsViewport || !atBottom {
+                        viewport.readerMoved(currentRange: messageRange, anchor: reader.measuredAnchor())
+                    }
+                case nil:
+                    // No recorded move lands here, so it changes no ownership.
+                    viewport.note(
+                        "unattributed offset \(Int(previous.offset))->\(Int(metrics.offset)), last move "
+                            + (reader.executor.lastMove.map { "\($0.cause) at \($0.offset)" } ?? "none"))
                 }
             }
-            if metrics.offset != previous.offset { reader.executorMoving = false }
+        }
+        if !initiallyPlaced, metrics.contentHeight > 0 {
+            // Never invalidate layout from inside its own geometry callback.
+            Task { @MainActor in placeInitiallyIfReady() }
         }
         // Following shows the latest output even while a growth step is still being chased.
         let showsLatest = viewport.autoFollow || atBottom
@@ -678,7 +715,8 @@ struct ChatTranscriptView: View {
     /// Performs the owner's pending request, the transcript's only scroll path. A request runs on a
     /// later turn of the main actor (never inside a geometry callback), once its target is laid out;
     /// it is fulfilled when the geometry shows it and re-issued as layout settles, at most
-    /// `maximumScrollAttempts` times. Reader input cancels it through the owner.
+    /// `maximumScrollAttempts` times. A target that has no row yet is retried on the same bound, so one
+    /// that never renders is abandoned. Reader input cancels it through the owner.
     private func executePendingRequest() {
         guard let request = viewport.request, reader.executorTask == nil, !reader.isScrolling else { return }
         if reader.attemptGeneration != request.generation {
@@ -713,6 +751,8 @@ struct ChatTranscriptView: View {
                 pagingPhase = .idle
                 return
             }
+            // Not attached to its scroll view yet: its layout runs this again, else a retry does.
+            guard reader.executor.isAttached else { return awaitLayout(request, for: "scroll view") }
             let metrics = reader.metrics
             var target: CGFloat
             switch request.target {
@@ -721,29 +761,47 @@ struct ChatTranscriptView: View {
                 followThrottle.recordFire(at: ProcessInfo.processInfo.systemUptime)
                 target = metrics.offset + metrics.bottomGap
             case .anchor(let anchor):
-                // Not laid out yet: the row's geometry report runs this again, within the same bound.
-                guard let frame = reader.frame(of: anchor) else {
-                    reader.attempts += 1
-                    return
-                }
+                // Not laid out yet: the row's or segment's first geometry report runs this again, else a
+                // retry does, within the same bound.
+                guard let frame = reader.frame(of: anchor) else { return awaitLayout(request, for: "row") }
                 target = frame.minY + anchor.offset
             }
             target = min(max(target, metrics.offset - metrics.topGap), metrics.offset + metrics.bottomGap)
-            // SwiftUI ignores a position equal to the one it holds, which it still holds after
-            // scrolling that was not a gesture. A hair's difference makes it scroll again.
-            if position.point?.y == target { target += 0.001 }
             viewport.note(
                 "scroll \(request.generation) \(request.target == .bottom ? "bottom" : "anchor") "
                     + "\(Int(metrics.offset))->\(Int(target)) gap \(Int(metrics.topGap))/\(Int(metrics.bottomGap))")
-            var transaction = Transaction()
-            transaction.disablesAnimations = true
-            withTransaction(transaction) { position.scrollTo(y: target) }
+            reader.executor.scroll(toY: target)
             reader.attempts += 1
-            // Only a command that moves the viewport marks the next offset change as its own; one that
-            // lands where the viewport already is produces no change and must not claim the reader's.
-            reader.executorMoving = abs(target - metrics.offset) > 1
             viewport.recordScrollCommand()
         }
+    }
+
+    /// Ends the initial placement once the transcript has content and no restoration is pending.
+    private func placeInitiallyIfReady() {
+        guard !initiallyPlaced, reader.metrics.contentHeight > 0 else { return }
+        guard viewport.autoFollow || viewport.request == nil else { return }
+        initiallyPlaced = true
+    }
+
+    /// Counts an attempt that found its target not laid out, and retries it after a bounded wait, so a
+    /// target that never lays out is abandoned. The awaited row's first layout runs it at once.
+    private func awaitLayout(_ request: TranscriptViewport.Request, for missing: String) {
+        reader.attempts += 1
+        viewport.note("awaiting \(missing) \(request.generation)")
+        reader.awaitingFrame = true
+        reader.executorTask = Task { @MainActor in
+            do { try await Task.sleep(for: Self.frameRetryInterval) } catch { return }
+            reader.executorTask = nil
+            reader.awaitingFrame = false
+            executePendingRequest()
+        }
+    }
+
+    private func cancelFrameWait() {
+        guard reader.awaitingFrame else { return }
+        reader.executorTask?.cancel()
+        reader.executorTask = nil
+        reader.awaitingFrame = false
     }
 }
 
@@ -756,6 +814,14 @@ struct TranscriptScrollMetrics: Equatable {
     var bottomGap: CGFloat = 0
     var contentHeight: CGFloat = 0
     var width: CGFloat = 0
+    /// Everything but the offset: a change here is layout, not a move.
+    var layout = Layout()
+
+    struct Layout: Equatable {
+        var contentHeight: CGFloat = 0
+        var container = CGSize.zero
+        var insets = EdgeInsets()
+    }
 
     init() {}
 
@@ -765,9 +831,139 @@ struct TranscriptScrollMetrics: Equatable {
         bottomGap = max(0, geometry.contentSize.height - geometry.visibleRect.maxY)
         contentHeight = geometry.contentSize.height
         width = geometry.containerSize.width
+        layout = Layout(
+            contentHeight: geometry.contentSize.height, container: geometry.containerSize,
+            insets: geometry.contentInsets)
     }
 
     var distanceFromBottom: CGFloat { bottomGap }
+}
+
+/// The transcript's only scroll writer (#54 section 2), a narrowly scoped AppKit adapter.
+///
+/// SwiftUI positioning is not used because SwiftUI keeps a programmatic target and re-applies it after
+/// a move without a gesture (keyboard, scroller, direct), which does not clear it:
+/// - A `ScrollPosition` command: with it, the owner recording a reader's direct move led SwiftUI
+///   (`HostingScrollView.updateAnimationTarget`) to scroll the reader back to the command's target;
+///   `aDirectMoveAfterAnInterruptedCommandIsTheReaders` fails with a `ScrollPosition` writer, with or
+///   without the initial offset. Rewriting the binding from the geometry callback to hide it was
+///   applied out of order and oscillated on CI (#71).
+/// - The initial bottom offset, re-applied on any size change; `ScrollPositionLimitationTests`
+///   reproduce it with fixed rows, so the transcript turns it off after its first placement.
+///
+/// Commands move the clip view at once. Every bounds change is recorded where it happens: inside a
+/// command it is the executor's; when it only constrains the previous origin to a resized document it
+/// is AppKit's layout; any other is another's, the reader's unless the scroll geometry snapshot that
+/// reports it shows layout (a content, container or inset change). An offset no recorded move explains
+/// changes no ownership.
+@MainActor final class TranscriptScrollExecutor {
+    enum Cause: Equatable, Sendable {
+        /// Inside one of the executor's commands.
+        case executor
+        /// AppKit keeping the bounds valid as the document resizes.
+        case layout
+        /// Anything else: the reader's, unless the same geometry snapshot shows layout.
+        case other
+    }
+
+    private weak var scrollView: NSScrollView?
+    private var observer: NSObjectProtocol?
+    private var commanding = false
+    private var previousOrigin: NSPoint?
+    /// The last recorded bounds change: where the clip view's top edge moved, and why.
+    private(set) var lastMove: (offset: CGFloat, cause: Cause)?
+
+    var isAttached: Bool { scrollView != nil }
+
+    func attach(_ scrollView: NSScrollView) {
+        guard scrollView !== self.scrollView else { return }
+        detach()
+        self.scrollView = scrollView
+        let clip = scrollView.contentView
+        clip.postsBoundsChangedNotifications = true
+        // Delivered synchronously, inside the call that moved the clip view.
+        observer = NotificationCenter.default.addObserver(
+            forName: NSView.boundsDidChangeNotification, object: clip, queue: nil
+        ) { [weak self] _ in MainActor.assumeIsolated { self?.boundsChanged() } }
+    }
+
+    func detach() {
+        observer.map(NotificationCenter.default.removeObserver)
+        observer = nil
+        scrollView = nil
+        lastMove = nil
+        previousOrigin = nil
+    }
+
+    /// Moves the viewport's top edge to `y` in content coordinates, without animation.
+    func scroll(toY y: CGFloat) {
+        guard let scrollView else { return }
+        let clip = scrollView.contentView
+        commanding = true
+        defer { commanding = false }
+        clip.scroll(to: NSPoint(x: clip.bounds.minX, y: y))
+        scrollView.reflectScrolledClipView(clip)
+    }
+
+    /// Why the viewport's top edge is at `offset`, if a recorded move put it there.
+    func cause(ofOffset offset: CGFloat) -> Cause? {
+        guard let lastMove, abs(lastMove.offset - offset) <= 0.5 else { return nil }
+        return lastMove.cause
+    }
+
+    private func boundsChanged() {
+        guard let clip = scrollView?.contentView else { return }
+        let origin = clip.bounds.origin
+        defer { previousOrigin = origin }
+        let cause: Cause
+        if commanding {
+            cause = .executor
+        } else if let previousOrigin, abs(previousOrigin.y - origin.y) > 0.5,
+            abs(clip.constrainBoundsRect(NSRect(origin: previousOrigin, size: clip.bounds.size)).minY - origin.y) <= 0.5
+        {
+            // The clip view reflecting a document frame change: the previous origin, made valid again.
+            cause = .layout
+        } else {
+            cause = .other
+        }
+        lastMove = (origin.y, cause)
+    }
+}
+
+/// Attaches the executor to the scroll view that encloses the transcript's content.
+private struct TranscriptScrollAttachment: NSViewRepresentable {
+    let executor: TranscriptScrollExecutor
+
+    func makeNSView(context: Context) -> AttachmentView {
+        let view = AttachmentView()
+        view.executor = executor
+        return view
+    }
+
+    func updateNSView(_ view: AttachmentView, context: Context) {
+        view.executor = executor
+        view.attach()
+    }
+
+    static func dismantleNSView(_ view: AttachmentView, coordinator: ()) {
+        view.executor?.detach()
+    }
+
+    final class AttachmentView: NSView {
+        weak var executor: TranscriptScrollExecutor?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            attach()
+        }
+
+        func attach() {
+            guard let scrollView = enclosingScrollView else { return }
+            executor?.attach(scrollView)
+        }
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
 }
 
 /// The scroll content's coordinate space. Frames measured in it change only with layout, never with
@@ -784,10 +980,11 @@ let transcriptContentSpace = "transcript-content"
     /// Frames of the shown segments of windowed long replies in content coordinates, by message and
     /// segment index.
     var segmentFrames: [UUID: [Int: CGRect]] = [:]
+    /// The transcript's only scroll writer.
+    let executor = TranscriptScrollExecutor()
     var executorTask: Task<Void, Never>?
-    /// The executor's last command moves the viewport; the next offset change is its own, wherever
-    /// clamping lands it. Any other offset change without a gesture is the reader's.
-    var executorMoving = false
+    /// The pending attempt waits, with a deadline, for its target row's first layout.
+    var awaitingFrame = false
     var attemptGeneration: UInt64 = 0
     var attempts = 0
 
