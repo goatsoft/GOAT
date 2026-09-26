@@ -300,6 +300,10 @@ extension AppTests.Bleet {
         /// Both parts views must show their latest text, and the transcript must stay scrollable to
         /// its bottom without reselecting the chat.
         @Test @MainActor func oversizedAnswerAndReasoningCompleteIntoAReachableBottom() async throws {
+            // Keep the reasoning open at completion, so its parts view stays covered (#60 B4 folds it).
+            let folds = AppModel.shared.foldsCompletedReasoning
+            AppModel.shared.foldsCompletedReasoning = false
+            defer { AppModel.shared.foldsCompletedReasoning = folds }
             let session = ChatSession(effort: .trot, modelID: nil)
             session.messagesLoaded = true
             let user = ChatMessage(role: .user)
@@ -898,6 +902,96 @@ extension AppTests.Bleet {
         @Test @MainActor func initialOffsetTurnedOffAfterPlacementKeepsTheViewport() async throws {
             let offset = try await offsetAfterGrowth(initialOffsetAnchoredThroughout: false)
             #expect(offset == 5_000, "The viewport moved to \(offset) when one row was appended")
+        }
+    }
+}
+
+extension AppTests.Bleet {
+    /// #60 B4: reasoning is visible while it streams and folds to one line after completion, unless
+    /// the reader chose otherwise, turned folding off, or owns the viewport.
+    @Suite(.serialized) struct ReasoningFoldTests {
+        @MainActor private func reply() -> ChatMessage {
+            let message = ChatMessage(role: .assistant)
+            message.appendStream(
+                text: "The answer paragraph.",
+                thinking: (0..<8).map { "Reasoning line \($0) considers the question." }.joined(separator: "\n"))
+            return message
+        }
+
+        @MainActor private func mounted(_ message: ChatMessage, viewport: TranscriptViewport? = nil) async throws
+            -> (NSWindow, NSHostingView<AnyView>)
+        {
+            let host = NSHostingView(
+                rootView: AnyView(
+                    MessageView(message: message, isLast: true, projectID: nil)
+                        .environment(\.transcriptViewport, viewport)
+                        .frame(width: 600).environment(AppModel.shared)))
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled], backing: .buffered,
+                defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            try await Task.sleep(for: .milliseconds(300))
+            host.layoutSubtreeIfNeeded()
+            return (window, host)
+        }
+
+        @MainActor private func completeAndMeasure(_ message: ChatMessage, _ host: NSView) async throws -> CGFloat {
+            message.complete = true
+            try await Task.sleep(for: .milliseconds(300))
+            host.layoutSubtreeIfNeeded()
+            return host.fittingSize.height
+        }
+
+        @Test @MainActor func completedReasoningFoldsWhileTheTranscriptFollows() async throws {
+            let message = reply()
+            let (window, host) = try await mounted(message, viewport: TranscriptViewport())
+            defer { window.close() }
+            let streaming = host.fittingSize.height
+            let completed = try await completeAndMeasure(message, host)
+            #expect(completed < streaming - 60, "The reasoning folds to one line: \(streaming) -> \(completed) pt")
+            #expect(ReasoningDisclosureStore.shared.choice(for: message.id) == nil, "Folding is not a user choice")
+        }
+
+        @Test @MainActor func aReaderWhoOwnsTheViewportKeepsReasoningOpen() async throws {
+            let message = reply()
+            let (window, host) = try await mounted(message, viewport: TranscriptViewport(initiallyFollowing: false))
+            defer { window.close() }
+            let streaming = host.fittingSize.height
+            let completed = try await completeAndMeasure(message, host)
+            #expect(completed == streaming, "Completion must not move a reader's content: \(streaming) -> \(completed)")
+        }
+
+        @Test @MainActor func turningFoldingOffKeepsReasoningOpen() async throws {
+            let folds = AppModel.shared.foldsCompletedReasoning
+            AppModel.shared.foldsCompletedReasoning = false
+            defer { AppModel.shared.foldsCompletedReasoning = folds }
+            let message = reply()
+            let (window, host) = try await mounted(message, viewport: TranscriptViewport())
+            defer { window.close() }
+            let streaming = host.fittingSize.height
+            #expect(try await completeAndMeasure(message, host) == streaming)
+        }
+
+        @Test @MainActor func aRememberedChoiceSurvivesRemounting() async throws {
+            let message = reply()
+            message.complete = true
+            let (foldedWindow, folded) = try await mounted(message)
+            let foldedHeight = folded.fittingSize.height
+            foldedWindow.close()
+
+            ReasoningDisclosureStore.shared.set(.init(isOpen: true, showsAll: false), for: message.id)
+            let (openWindow, open) = try await mounted(message)
+            defer { openWindow.close() }
+            #expect(open.fittingSize.height > foldedHeight + 60, "The reopened reasoning stays open when remounted")
+        }
+
+        @Test @MainActor func choicesAreBounded() {
+            let store = ReasoningDisclosureStore(limit: 2)
+            let ids = (0..<3).map { _ in UUID() }
+            for id in ids { store.set(.init(isOpen: true, showsAll: false), for: id) }
+            #expect(store.choice(for: ids[0]) == nil)
+            #expect(store.choice(for: ids[2])?.isOpen == true)
         }
     }
 }

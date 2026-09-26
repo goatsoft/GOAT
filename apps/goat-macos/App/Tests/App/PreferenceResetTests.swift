@@ -22,6 +22,7 @@ extension AppTests.App {
             let flags: [(ReferenceWritableKeyPath<AppModel, Bool>, Bool)] = [
                 (\.animationsEnabled, model.animationsEnabled), (\.automaticChatTitles, model.automaticChatTitles),
                 (\.settingsAlwaysOnTop, model.settingsAlwaysOnTop), (\.showToolDiffs, model.showToolDiffs),
+                (\.foldsCompletedReasoning, model.foldsCompletedReasoning),
             ]
             let effort = model.defaultEffort
             let icon = AppIconManager.current
@@ -45,6 +46,7 @@ extension AppTests.App {
             model.automaticChatTitles = false
             model.settingsAlwaysOnTop = false
             model.showToolDiffs = false
+            model.foldsCompletedReasoning = false
             defaults.set("list", forKey: "pens.overview.layout")
             let before = defaults.persistentDomain(forName: domain) ?? [:]
             let selectedChat = model.selectedChatID
@@ -62,6 +64,7 @@ extension AppTests.App {
             #expect(
                 model.animationsEnabled && model.automaticChatTitles && model.settingsAlwaysOnTop && model.showToolDiffs
             )
+            #expect(model.foldsCompletedReasoning)
             #expect(model.defaultEffort == .trot)
             #expect(AppIconManager.current == .system)
             #expect(defaults.string(forKey: "pens.overview.layout") == "grid")
@@ -74,6 +77,7 @@ extension AppTests.App {
             let resetKeys: Set<String> = [
                 "appearance.theme", "appearance.chatFont", "appearance.codeFont", "appearance.fontSize",
                 "appearance.codeFontSize", "appearance.transparency", "appearance.animations", "appearance.toolDiffs",
+                "appearance.reasoningFolds",
                 "chat.automaticTitles", "chat.defaultEffort", "settings.alwaysOnTop", "pens.overview.layout",
                 "chat.autoCompact", "chat.compactAtPercent", "experience.1337.enabled", "appIcon",
             ]

@@ -1,6 +1,6 @@
 # ADR-0074: Visible agent progress and expandable tool details
 
-Status: Accepted · 2026-09-08 · Amended 2026-09-13 · Refines ADR-0058
+Status: Accepted · 2026-09-08 · Amended 2026-09-13 and 2026-09-26 · Refines ADR-0058
 
 The 2026-09-13 amendment replaces this ADR's original whole-message grouping decision. It also supersedes ADR-0089's elapsed-time-based “prefill” label. Storage, prompt construction, permissions and tool execution remain separate from this presentation decision.
 
@@ -45,3 +45,9 @@ Apply the projection within the existing measured 40-message window. Tool-role r
 ## Validation
 
 Regression checks cover stable row IDs and continuation alignment before/after call arrival, visible narration and reasoning, chronological paging, independent action expansion, failure/denial/missing-result states, native action labels, observed stream phases, permission precedence, bounded reasoning excerpts and precise elapsed clocks. Native hosted-view snapshots check the composed layout and that tool arrival does not collapse visible content. Existing transcript font/width reflow and reader-scroll tests remain part of full verification.
+
+## Amendment: Reasoning folds after completion (2026-09-26)
+
+Tracked by [#60](https://github.com/goatsoft/GOAT/issues/60) B4. Reasoning stays visible while it happens, as above. It is visually secondary to the answer (muted, italic prose; code keeps its highlighting), and the answer starts a clear gap below it.
+
+When a reply completes, its reasoning folds to one "Thought for" line with the measured duration ("Thought" when it is unknown, as after a reload). The owner can reopen it; that choice is remembered for the message for the session, across row recreation, and a preference (Appearance, on by default) turns folding off. Folding is a deliberate presentation change, not completion reflow: it happens only while the transcript follows the latest output. A reader who owns the viewport keeps the reasoning open when the reply completes, so nothing they are reading moves; it folds on the message's next appearance. Replies without reasoning keep the zero-height completion change (#60 measurement 2).

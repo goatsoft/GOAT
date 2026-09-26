@@ -28,6 +28,8 @@ public struct Caprine: Sendable {
         public static let compactSpacing: CGFloat = 6
         public static let rowPadding: CGFloat = 4
         public static let messageSpacing: CGFloat = 20
+        /// Extra space between a reply's reasoning and its answer, so the answer reads as its own block.
+        public static let reasoningGap: CGFloat = 12
         public static let treeInset: CGFloat = 16
         public static let branchHeight: CGFloat = 13
         public static let inset: CGFloat = 12

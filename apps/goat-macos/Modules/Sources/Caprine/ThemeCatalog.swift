@@ -87,12 +87,16 @@ public struct ThemeSpec: Codable, Identifiable, Sendable, Equatable {
         }
     }
 
+    /// The theme whose colours apply in the given appearance. System follows the OS by adopting a real
+    /// GOAT theme: Light in light mode, Midnight in dark (ADR-0022), not raw macOS window colors, so the
+    /// app looks like itself either way. Its own colours are placeholders.
+    public func resolved(dark: Bool) -> ThemeSpec {
+        guard appearance == .system else { return self }
+        return dark ? ThemeCatalog.midnight : ThemeCatalog.light
+    }
+
     @MainActor public var tokens: Caprine {
-        // System follows the OS by adopting a real GOAT theme: Light in light mode, Midnight in dark
-        // (ADR-0022), not raw macOS window colors, so the app looks like itself either way.
-        if appearance == .system {
-            return (isDark ? ThemeCatalog.midnight : ThemeCatalog.light).tokens
-        }
+        if appearance == .system { return resolved(dark: isDark).tokens }
         return Caprine(
             bg: Color(hexString: bg), surface: Color(hexString: surface),
             ink: Color(hexString: ink), muted: Color(hexString: muted),
