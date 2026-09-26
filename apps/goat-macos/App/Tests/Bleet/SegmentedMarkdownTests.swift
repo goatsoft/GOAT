@@ -408,7 +408,8 @@ extension AppTests.Bleet {
             let source =
                 (0..<200).map { "Paragraph \($0) cites [the reference][ref]." }.joined(separator: "\n\n")
                 + "\n\n" + definition
-            let cache = MarkdownSegmentCache(targetBytes: 1, maximumBytes: 1_024)
+            // The default segment maximum: a definition line longer than it has no block syntax.
+            let cache = MarkdownSegmentCache(targetBytes: 1)
             let windowed = try #require(
                 await cache.prepare(id: UUID(), source: source, isComplete: true, window: 50..<55))
             #expect(windowed.renderedBytes > 600_000, "Every bracketed segment renders the definitions")
@@ -421,11 +422,11 @@ extension AppTests.Bleet {
             #expect(windowed.retainedBytes < 5 * 4_096, "Only the window's parses are charged for content")
 
             // A budget one byte below the document's cost declines it; at the cost it is retained.
-            let tight = MarkdownSegmentCache(maximumEntryCost: windowed.cost - 1, targetBytes: 1, maximumBytes: 1_024)
+            let tight = MarkdownSegmentCache(maximumEntryCost: windowed.cost - 1, targetBytes: 1)
             _ = await tight.prepare(id: UUID(), source: source, isComplete: true, window: 50..<55)
             #expect(await tight.snapshot().entryCount == 0)
             let exact = MarkdownSegmentCache(
-                maximumCost: windowed.cost + 1, maximumEntryCost: windowed.cost, targetBytes: 1, maximumBytes: 1_024)
+                maximumCost: windowed.cost + 1, maximumEntryCost: windowed.cost, targetBytes: 1)
             _ = await exact.prepare(id: UUID(), source: source, isComplete: true, window: 50..<55)
             #expect(await exact.snapshot().entryCount == 1)
             // A second reply of the same cost evicts the first: the total never exceeds the budget.
