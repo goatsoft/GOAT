@@ -9,7 +9,7 @@ The [architecture guide](ARCHITECTURE.md) explains the relationships. [ADR-0054]
 
 | Module | Owns | Dependencies |
 |---|---|---|
-| [Bleet](#bleet) | Observable session and transcript state with incremental live metrics. | Inference, Persistence |
+| [Bleet](#bleet) | Observable session and transcript state, incremental live metrics and Markdown reply segmentation. | Inference, Persistence |
 | [Caprine](#caprine) | Themes, colour rendering and reusable visual primitives. | Herd, Pens |
 | [GOATed](#goated) | Scoped extension capabilities, registration lifetimes, skills and declarative .goated packages. | Tools |
 | [Herd](#herd) | Local home, credentials, attachment files and user workspace bindings. | None |
@@ -29,15 +29,15 @@ The [architecture guide](ARCHITECTURE.md) explains the relationships. [ADR-0054]
 
 ## Bleet
 
-Observable session and transcript state with incremental live metrics.
+Observable session and transcript state, incremental live metrics and Markdown reply segmentation.
 
 Source: [Modules/Sources/Bleet](../apps/goat-macos/Modules/Sources/Bleet).
 
-Public seams: `ChatSession`, `ChatMessage`, `LiveGenerationMetrics`.
+Public seams: `ChatSession`, `ChatMessage`, `LiveGenerationMetrics`, `MarkdownSegmenter`, `MarkdownSegmentation`, `MarkdownSegment`.
 
 No transport or tool execution; streamed display state is coalesced by Shepherd.
 
-Validation: BleetTests covers message revisions and live metrics; the Bleet test plan covers composer, transcript and status presentation. Run `make test MODULE=Bleet`.
+Validation: BleetTests covers message revisions, live metrics and Markdown segmentation (valid boundaries, bounded bodies, oversized and nested fences, tables and paragraphs, growth stability, linear scanner work); the Bleet test plan covers composer, transcript and status presentation. Run `make test MODULE=Bleet`.
 
 ## Caprine
 

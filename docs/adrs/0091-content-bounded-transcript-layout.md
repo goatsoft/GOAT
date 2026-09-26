@@ -1,6 +1,6 @@
 # ADR-0091: Content-bounded transcript layout
 
-Status: Accepted · 2026-09-20 · Amended 2026-09-22
+Status: Accepted · 2026-09-20 · Amended 2026-09-22 · Segmented rendering amendment proposed 2026-09-26
 
 Refines [ADR-0056](0056-bounded-rendering-and-responsive-io.md) and
 [ADR-0074](0074-grouped-transcript-tool-activity.md). Qualification is tracked in
@@ -68,3 +68,73 @@ Golden Gate qualification must be recorded separately before acceptance.
 ## Amendment: Automatic scroll-observed endless scrolling (2026-09-22)
 
 Manual "Earlier messages", "Later messages", and "Latest" buttons are replaced with native SwiftUI scroll-visibility observations (`.onScrollVisibilityChange`) at the transcript boundaries. Approaching the top boundary automatically engages an inline loading indicator (`GoatLoadingIndicator`) and advances the window backward while preserving the user's visible anchor position. Approaching the bottom boundary automatically loads later messages, smoothly transitioning back to bottom following at the conversation floor. The underlying 40-message / 16 KiB display budget from ADR-0091 remains enforced.
+
+## Amendment (proposed): Segmented rich rendering and segment-level windowing (2026-09-26)
+
+Status: Proposed. Tracked by [#60](https://github.com/goatsoft/GOAT/issues/60) (A1, A3, B1, C1).
+The 8 KiB plain-text parts fallback above stays in force until every step's acceptance tests pass.
+
+**Problem.** Replies over 8 KiB lose rich rendering, and streaming re-parses the whole reply on
+every refresh, so parse work grows quadratically with reply length.
+
+**Decision.** Render a reply as independently prepared Markdown segments, and bound layout per
+segment rather than per message. Deliver it in three reviewable steps:
+
+1. **Segmentation** (`MarkdownSegmenter` in Bleet, pure). Segments break only at valid top-level
+   block boundaries: a column-0 line after a blank line, a column-0 fence opener, or the line after a
+   container closes, never inside fenced code, multi-line HTML or display math. A column-0 item of
+   the same list continues it, so loose lists stay whole. Whole blocks pack to about 6 KiB.
+   - **Bounds.** A segment's Markdown body never exceeds 16 KiB. Two things sit outside that bound
+     and are stated separately: an HTML or SVG artifact document stays one whole segment, and the
+     reply's reference definitions (at most 4 KiB, none once they exceed it) are appended to the
+     text of every non-verbatim segment. Syntax a piece repeats is capped at a quarter of the
+     maximum. A line longer than the maximum carries no block syntax (it cannot open or close a
+     container or head a table), a deliberate departure from CommonMark that bounds both repeated
+     syntax and scanner lookahead.
+   - **Oversized blocks.** Fenced code is rebuilt in every piece with a fence that fits the syntax
+     budget (the full opener, its language only, or a bare fence) and closed except for an
+     unterminated final piece. Tables repeat their header and delimiter rows. Other blocks split at
+     column-0 lines, then lines, whitespace or scalar boundaries, never inside a nested container. A
+     nested container larger than a piece is split on its own: a fence in a list item or behind
+     indentation is rebuilt as top-level code (its list nesting is not kept), and quoted fences,
+     HTML and display math become verbatim pieces. Anything whose syntax cannot be rebuilt within
+     the budget becomes verbatim pieces, which render as plain monospaced text. Known limits of
+     pieces: a split paragraph or list item ends early, inline markup across a cut is not kept, and
+     a one-item piece of a loose list renders tight. Consumers join pieces marked
+     `continuesPrevious` without a block gap.
+   - **Validation.** App tests render segments with MarkdownUI: whole-block segments produce exactly
+     the whole reply's HTML (loose and tight lists, quotes, alerts, HTML comments, math, reference
+     links), and fence, table and paragraph pieces keep every code line, row and word.
+   - **Streaming.** A segment's index is its identity. The scanner is append-oriented: a line is
+     committed once its role is decided (when it ends or exceeds the maximum, or for a possible
+     table header, when its delimiter row is decided), committed segments are never revisited, and
+     each extension reads only the new bytes plus a tail bounded by the segment maximum. Callers
+     must only append; only the undecided tail is compared. Segments ending before the undecided
+     tail are settled; the rest are provisional, and consumers compare segment text before reusing
+     prepared content because a later definition can change it. Scanned and copied bytes are
+     instrumented, and tests hold them linear in the reply for six reply shapes.
+2. **Stable-prefix rendering** inside the existing message window. Settled segments are prepared
+   once; only provisional segments are re-prepared as the reply streams. Rendered segments and
+   prepared-content cache bytes are bounded independently of total reply length. The streaming caret
+   (B1) marks only the tail. Integration contracts from the step 1 review:
+   - Each streaming message holds one uniquely referenced `MarkdownSegmentation` and mutates it with
+     `extend`; an edit or replacement starts a new one. The copying `resegment` API and
+     materialising the whole `segments` array are not the hot path. Release builds do not check
+     that committed text is unchanged.
+   - `verbatimPiece` renders as plain text. Budgets charge the prepared representation actually
+     rendered, including whole artifacts and the definition suffix, which sit outside the body bound.
+   - Pieces of oversized blocks are not full Markdown semantic preservation (see step 1), so A1 stays
+     open until this step's acceptance passes.
+3. **Segment-level windowing**, built on the single transcript navigation owner from
+   [#54](https://github.com/goatsoft/GOAT/issues/54) section 2. The window admits segments rather
+   than whole messages, so a long reply renders rich and pages within itself, with one scroll
+   executor, stable segment identities and preserved reader anchors.
+
+**Acceptance per step.** Tests for boundary crossings while streaming, oversized fences, tables and
+paragraphs, completion without reflow, paging reachability, anchor preservation, and parse work
+that grows linearly with the reply. The fallback is retired only when step 3 passes them.
+
+**Rejected.** Fixed-size byte chunks (they break fences, tables, lists and paragraphs). Assuming a
+parsed prefix is permanently stable (definitions and container openers can change it). A second
+scroll owner inside long messages (it would compete with #54's navigation model).
+
