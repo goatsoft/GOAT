@@ -11,7 +11,9 @@ enum ColorPickerValues {
     }
 
     static func pen(_ color: OKLabColorValue) -> OKLCH {
-        OKLCH(l: color.lightness, c: color.chroma, h: color.hueDegrees)
+        OKLCH(
+            l: min(max(color.lightness, 0.35), 0.92),
+            c: min(max(color.chroma, 0), 0.30), h: color.hueDegrees)
     }
 
     /// Theme slots store opaque #RRGGBB, including when the picker accepts an RGBA hex value.
@@ -22,21 +24,46 @@ enum ColorPickerValues {
     }
 }
 
+/// Keep the precise editing value separate from the theme's 8-bit storage projection. An echo of
+/// our own hex write must not clip an out-of-gamut working value or accumulate rounding drift.
+struct ThemeColorDraft {
+    private(set) var value: OKLabColorValue
+    private var projectedHex: String
+
+    init(hex: String = "#000000") {
+        value = OKLabColorValue.from(hex: hex) ?? OKLabColorValue(lightness: 0, a: 0, b: 0)
+        projectedHex = hex
+    }
+
+    mutating func edit(_ value: OKLabColorValue) -> String {
+        self.value = value
+        projectedHex = ColorPickerValues.themeHex(value)
+        return projectedHex
+    }
+
+    mutating func receive(_ hex: String) {
+        guard hex != projectedHex else { return }
+        self = ThemeColorDraft(hex: hex)
+    }
+}
+
 /// Shared picker with writable mode state (the upstream convenience button uses a constant mode).
 struct ThemeColorPicker: View {
     @Binding var hex: String
     let title: String
     @State private var showingPicker = false
     @State private var mode = OKLabPickerMode.polarOKLCH
+    @State private var draft = ThemeColorDraft()
 
     private var value: Binding<OKLabColorValue> {
         Binding(
-            get: { OKLabColorValue.from(hex: hex) ?? OKLabColorValue(lightness: 0, a: 0, b: 0) },
-            set: { hex = ColorPickerValues.themeHex($0) })
+            get: { draft.value },
+            set: { hex = draft.edit($0) })
     }
 
     var body: some View {
         Button {
+            if !showingPicker { draft = ThemeColorDraft(hex: hex) }
             showingPicker.toggle()
         } label: {
             HStack(spacing: Caprine.Activity.spacing) {
@@ -52,6 +79,7 @@ struct ThemeColorPicker: View {
         .buttonStyle(.plain)
         .accessibilityLabel(title)
         .accessibilityValue(hex)
+        .onChange(of: hex) { _, hex in draft.receive(hex) }
         .popover(isPresented: $showingPicker) {
             SharedColorSelection(color: value, mode: $mode, title: title)
                 .padding(Caprine.Activity.spacing)

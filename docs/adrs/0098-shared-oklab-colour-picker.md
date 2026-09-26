@@ -23,3 +23,9 @@ Existing Pen and theme files need no migration. Colour selection stays native an
 ## Alternatives considered
 
 Keeping the custom Pen sliders duplicates our shared package. Replacing persisted values with package types would introduce unnecessary storage coupling. Adopting package contrast helpers is deferred until their calculation is corrected upstream.
+
+## Review refinements
+
+Theme editing holds an unquantized OKLab working value while the popover is open; only the draft hex projection is clipped to sRGB. New Pen selections retain the previous L 0.35–0.92 / C 0–0.30 bounds. These bounds constrain extremes, not guarantee WCAG contrast. Existing stored Pens and their default palette are preserved; package swatches are additional choices and need not contain the initial colour. Saves distinguish successful, superseded/cancelled and failed results.
+
+Contrast feedback is deferred until the shared package's luminance helper is corrected and a tested version adopted. For example, #777777 on white should be approximately 4.48:1, whereas 0.1.1 computes approximately 2.03:1. Do not add a second competing WCAG implementation in the app. The package's Cartesian colour value also cannot retain a preferred hue at exactly zero chroma; that is a separate upstream editing behavior, not fixed by avoiding hex round trips.

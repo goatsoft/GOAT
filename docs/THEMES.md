@@ -126,3 +126,5 @@ composited window's alpha; dialogs and accessibility settings can add opacity.
 ## Visual colour editing
 
 In Appearance, select a user theme and choose **Edit Colours…**. Each colour opens the shared OKLab picker with swatches, a colour wheel, sliders and harmonies. Changes stay in the draft until **Save**; **Cancel** leaves the theme unchanged. Built-in themes first require **Duplicate to Edit…**. **Edit JSON…** remains available for other theme properties. Theme colour slots remain opaque `#RRGGBB` values.
+
+The picker retains precise OKLab values during an edit; saving projects colours into the format’s sRGB hex slots. Contrast ratios/AA feedback await a corrected shared-package WCAG utility; this editor does not automatically adjust contrast.

@@ -822,7 +822,7 @@ private struct ThemeColorsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var draft: ThemeSpec
     @State private var saving = false
-    @State private var error: String?
+    @State private var saveResult: ThemeSaveResult?
 
     init(spec: ThemeSpec) { _draft = State(initialValue: spec) }
 
@@ -845,8 +845,14 @@ private struct ThemeColorsSheet: View {
                     }
                 }
                 .disabled(saving)
-                if let error {
-                    Text(error).foregroundStyle(Caprine.Semantic.warning)
+                if case .failed(let reason) = saveResult {
+                    Text("The theme could not be saved. Your edits are still here. \(reason)")
+                        .foregroundStyle(Caprine.Semantic.warning)
+                } else if saveResult == .superseded {
+                    Text(
+                        "This save was interrupted. Your edits are still here; save again to apply them."
+                    )
+                    .foregroundStyle(.secondary)
                 }
                 HStack {
                     Button("Cancel") { dismiss() }
@@ -854,13 +860,12 @@ private struct ThemeColorsSheet: View {
                     Spacer()
                     Button("Save") {
                         saving = true
+                        saveResult = nil
                         Task { @MainActor in
                             defer { saving = false }
-                            if await model.saveTheme(draft) {
-                                dismiss()
-                            } else {
-                                error = "The theme could not be saved. Your colour changes are still here; try again."
-                            }
+                            let result = await model.saveTheme(draft)
+                            saveResult = result
+                            if result == .saved { dismiss() }
                         }
                     }
                     .keyboardShortcut(.defaultAction)

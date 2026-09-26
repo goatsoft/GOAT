@@ -7,7 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		EABE25C511B14761B229FF01 /* OKLabColorPicker in Frameworks */ = {isa = PBXBuildFile; productRef = EABE25C511B14761B229FF03 /* OKLabColorPicker */; };
 		00D05EB310864CC79FB0B18B /* EngineRecoveryController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95AE81071E463320EAA77CBE /* EngineRecoveryController.swift */; };
 		019D3569FFC4BD5A25F0AF8E /* ResponseDetailsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E2BA5E1763E4AFE11427CDF /* ResponseDetailsView.swift */; };
 		038245916A8530E93C6B420C /* AppModel+Pens.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62A4D904562FF87B0C028785 /* AppModel+Pens.swift */; };
@@ -203,6 +202,7 @@
 		E71AEEFA209E48217BB4DF92 /* TranscriptActivityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3B6B97E9455E055632A2B70 /* TranscriptActivityTests.swift */; };
 		E8297294CF06C828B14425FA /* ShepherdModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A768CE605BD2A8E4D973A62 /* ShepherdModelTests.swift */; };
 		E8D0A216B329F9C4D86487B7 /* AppToolRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A90B747E93342447A0C0310F /* AppToolRouter.swift */; };
+		EABE25C511B14761B229FF01 /* OKLabColorPicker in Frameworks */ = {isa = PBXBuildFile; productRef = EABE25C511B14761B229FF03 /* OKLabColorPicker */; };
 		EADB133D051470C1E80E92D8 /* HerdWorkspaceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD330E840460D97D1F16ACF6 /* HerdWorkspaceTests.swift */; };
 		EB24FE5C5363E66467352044 /* AgentProgressView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AD28F8E9F0795648C880C15 /* AgentProgressView.swift */; };
 		EC0B17D98697D61FE90806EE /* JUDAS in Frameworks */ = {isa = PBXBuildFile; productRef = 0C2E19BA77DA82B622ADCCB8 /* JUDAS */; };
@@ -1591,11 +1591,6 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-        EABE25C511B14761B229FF02 /* XCRemoteSwiftPackageReference "OKLabColorPicker" */ = {
-            isa = XCRemoteSwiftPackageReference;
-            repositoryURL = "https://github.com/goatsoft/OKLabColorPicker";
-            requirement = { kind = exactVersion; version = 0.1.1; };
-        };
 		801BF9E9D400E47259B4D079 /* XCRemoteSwiftPackageReference "HighlightKit" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/goatsoft/HighlightKit";
@@ -1612,14 +1607,17 @@
 				minimumVersion = 2.4.0;
 			};
 		};
+		EABE25C511B14761B229FF02 /* XCRemoteSwiftPackageReference "OKLabColorPicker" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/goatsoft/OKLabColorPicker";
+			requirement = {
+				kind = exactVersion;
+				version = 0.1.1;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-        EABE25C511B14761B229FF03 /* OKLabColorPicker */ = {
-            isa = XCSwiftPackageProductDependency;
-            package = EABE25C511B14761B229FF02 /* XCRemoteSwiftPackageReference "OKLabColorPicker" */;
-            productName = OKLabColorPicker;
-        };
 		0C2E19BA77DA82B622ADCCB8 /* JUDAS */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = JUDAS;
@@ -1685,6 +1683,11 @@
 		DB26B25C82708955C159E948 /* Pens */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = Pens;
+		};
+		EABE25C511B14761B229FF03 /* OKLabColorPicker */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = EABE25C511B14761B229FF02 /* XCRemoteSwiftPackageReference "OKLabColorPicker" */;
+			productName = OKLabColorPicker;
 		};
 		EE3B972F605E9DB7CEAA36B5 /* Inference */ = {
 			isa = XCSwiftPackageProductDependency;

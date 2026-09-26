@@ -1,4 +1,5 @@
 import AppKit
+import Caprine
 import OKLabColorPicker
 import Pens
 import Testing
@@ -99,6 +100,37 @@ extension AppTests.Caprine {
         func themeColoursKeepTheirStoredRGB(hex: String) throws {
             let value = try #require(OKLabColorValue.from(hex: hex))
             #expect(ColorPickerValues.themeHex(value) == hex)
+        }
+
+        @Test func preciseThemeEditsIgnoreTheirOwnStorageEchoButAcceptExternalChanges() throws {
+            var draft = ThemeColorDraft(hex: "#3AA0FF")
+            let outsideGamut = OKLabColorValue(lightness: 0.7, chroma: 0.35, hueDegrees: 150)
+            for _ in 0..<20 {
+                let hex = draft.edit(outsideGamut)
+                draft.receive(hex)
+                #expect(draft.value == outsideGamut)
+            }
+            draft.receive("#FFFFFF")
+            #expect(draft.value == OKLabColorValue.from(hex: "#FFFFFF"))
+        }
+
+        @Test func outOfGamutThemeColoursPassTheThemeStoreValidator() throws {
+            let color = OKLabColorValue(lightness: 0.7, chroma: 0.35, hueDegrees: 150)
+            let hex = ColorPickerValues.themeHex(color)
+            #expect(hex.count == 7 && hex.first == "#")
+            var spec = ThemeCatalog.light
+            spec.ink = hex
+            let imported = try ThemeStore.makeImportable(from: ThemeStore.exportJSON(spec))
+            #expect(imported.ink == hex)
+        }
+
+        @Test func newPenSelectionsKeepTheExistingPickerBounds() {
+            let dark = ColorPickerValues.pen(OKLabColorValue(lightness: 0, chroma: 0.4, hueDegrees: 30))
+            let light = ColorPickerValues.pen(OKLabColorValue(lightness: 1, chroma: 0, hueDegrees: 30))
+            #expect(dark.l == 0.35 && dark.c == 0.30)
+            #expect(light.l == 0.92 && light.c == 0)
+            // Opening an existing Pen is a read, not a migration of saved values.
+            #expect(ColorPickerValues.picker(OKLCH(l: 0.1, c: 0.35, h: 30)).lightness == 0.1)
         }
 
         @Test func themeSlotsStayOpaqueEvenWhenHexIncludesAlpha() throws {
