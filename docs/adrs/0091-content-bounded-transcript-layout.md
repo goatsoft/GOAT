@@ -132,7 +132,14 @@ segment rather than per message. Deliver it in three reviewable steps:
      main-actor `PreparedMarkdownDocumentCache` (first-frame reuse) are charged rendered bytes plus
      source bytes. The window charges a prepared reply its rendered bytes. Segments stack with the gap
      MarkdownUI's block sequence would leave between the same blocks (the larger adjacent margin, or
-     the default padding when neither block sets one). Pieces marked `continuesPrevious` have no gap.
+     the default padding when neither block sets one). Margins come from the parsed blocks, not the
+     segment's first and last lines: each parse's HTML is scanned once, and a top-level block takes
+     the largest margin set anywhere inside it, as MarkdownUI reduces its margin preference, so a
+     quote or list holding only code sets none. Hosted tests hold eight multi-block shapes (nested
+     and code-only quotes, lists, headings inside quotes, thematic breaks, tables, HTML blocks)
+     within 1 pt of the whole reply. Pieces marked `continuesPrevious` have no gap, which is a
+     stated degradation: a split paragraph ends its line early and each code piece has its own
+     chrome.
      Only a reply's first segment can be an HTML or SVG artifact. The caret is placed by
      structure, not text: a tail segment carries it only when its last leaf block is a paragraph
      (read from the parsed segment's HTML), and it is drawn over the last of the segment's text
