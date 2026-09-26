@@ -671,9 +671,8 @@ extension AppTests.Bleet {
             let replyBytes = reply.utf8.count
             let total =
                 streaming.parsedBytes + work.scannedBytes + work.copiedBytes + work.comparedBytes + work.caretBytes
-            // Temporary: surface each record as a CI annotation for the PR description.
             print(
-                "::notice title=SEGMENT_PREPARATION::SEGMENT_PREPARATION shape=\(shape) reply_bytes=\(replyBytes) refreshes=\(work.refreshes) "
+                "SEGMENT_PREPARATION shape=\(shape) reply_bytes=\(replyBytes) refreshes=\(work.refreshes) "
                     + "parse_count=\(streaming.parseCount) parsed_bytes=\(streaming.parsedBytes) "
                     + "scanned_bytes=\(work.scannedBytes) copied_bytes=\(work.copiedBytes) "
                     + "compared_bytes=\(work.comparedBytes) caret_html_bytes=\(work.caretBytes) "
