@@ -25,6 +25,21 @@ enum TranscriptTextParts {
         if !part.isEmpty || parts.isEmpty { parts.append(String(part)) }
         return parts
     }
+
+    /// The source's last scalars within `maximumBytes`, found without walking the rest, shown until
+    /// the parts are prepared. The final part can be shorter, since parts are split from the start.
+    static func tail(_ source: String, maximumBytes: Int = maximumBytes) -> String {
+        let scalars = source.unicodeScalars
+        var start = scalars.endIndex
+        var bytes = 0
+        while start > scalars.startIndex {
+            let previous = scalars.index(before: start)
+            bytes += scalars[previous].utf8.count
+            if bytes > max(4, maximumBytes) { break }
+            start = previous
+        }
+        return String(scalars[start...])
+    }
 }
 
 private actor TranscriptPartPreparation {
@@ -145,7 +160,10 @@ struct TranscriptTextPartsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Caprine.Activity.spacing) {
             if parts.isEmpty {
-                Text("Preparing text…").foregroundStyle(.secondary)
+                // The latest text until the parts are ready, never a placeholder.
+                Text(verbatim: TranscriptTextParts.tail(source))
+                    .font(Font(ReadingFonts.nsFont(model.effectiveChatFontID, size: fontSize, role: .chat)))
+                    .textSelection(.enabled)
             } else {
                 Text(verbatim: parts[index])
                     .font(Font(ReadingFonts.nsFont(model.effectiveChatFontID, size: fontSize, role: .chat)))

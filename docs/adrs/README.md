@@ -102,6 +102,7 @@ Older records retain the package and type names used when accepted. [ADR-0054](0
 | [0093](0093-maintained-xcode-project.md) | Maintained Xcode project and build-time release identity | Proposed · supersedes project ownership in 0004 |
 | [0094](0094-pure-swift-syntax-highlighting-and-tool-diffs.md) | Pure-Swift syntax highlighting and tool diff presentation | Proposed · refines 0010, 0074 and 0091 |
 | [0096](0096-bounded-read-only-subagent-delegation.md) | Bounded read-only subagent delegation and prompt optimization | Proposed · refines 0006, 0023, 0042 and 0074 |
+| [0097](0097-appkit-transcript-scroll-executor.md) | AppKit transcript scroll executor | Proposed · refines 0002 and 0091 |
 
 | [0095](0095-parallel-verification-and-preview-diagnostics.md) | Parallel verification and preview diagnostics | Accepted, amended |
 

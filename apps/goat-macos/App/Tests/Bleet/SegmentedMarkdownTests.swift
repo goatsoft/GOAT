@@ -36,6 +36,31 @@ private func longReply(bytes: Int) -> String {
     return String(reply.utf8.prefix(bytes)) ?? reply
 }
 
+/// Segment sources with their expected leading and trailing margins and whether the last leaf is a
+/// paragraph (#60 A1).
+private let structureCases: [(String, Double?, Double?, Bool)] = [
+    ("Paragraph.", 0, 1, true), ("# Title\n\nText", 1.5, 1, true),
+    ("\(fence)\ncode\n\(fence)", nil, nil, false), ("> \(fence)\n> code\n> \(fence)", nil, nil, false),
+    ("> # Title\n> text", 1.5, 1, true), ("> text\n>\n> > nested", 0, 1, true), ("- a\n- b", 0, 1, true),
+    ("- \(fence)\n  code\n  \(fence)", nil, nil, false), ("---", 2, 2, false), ("Text\n\n---", 0, 2, false),
+    ("| a |\n| - |\n| 1 |", 0, 1, false), ("<div>x</div>", 0, 1, false), ("- [ ] task", 0, 1, true),
+    ("- item\n\n  ---", 2, 2, false), ("Title\n=====", 1.5, 1, false), ("![alt](x.png)", 0, 1, false),
+]
+
+/// `reply` in appends of about `bytes` UTF-8 bytes, each ending on a scalar boundary.
+private func chunks(of reply: String, bytes step: Int) -> [String] {
+    let bytes = Array(reply.utf8)
+    var result: [String] = []
+    var start = 0
+    while start < bytes.count {
+        var end = min(bytes.count, start + step)
+        while end < bytes.count, bytes[end] & 0xC0 == 0x80 { end += 1 }
+        result.append(String(decoding: bytes[start..<end], as: UTF8.self))
+        start = end
+    }
+    return result
+}
+
 /// Streams `reply` into `cache` in `step`-byte appends, then completes it.
 private func stream(
     _ reply: String, step: Int, into cache: MarkdownSegmentCache, id: UUID = UUID(),
@@ -181,6 +206,19 @@ extension AppTests.Bleet {
             #expect(complete.segments.map(\.endsInParagraph) == [nil])
         }
 
+        /// #60 A1: a parsed segment's first and last margins are the largest any block inside each
+        /// top-level block sets (nil when none does), read from cmark's structure, not its text.
+        @Test(arguments: structureCases)
+        func parsedStructureGivesMarginsAndTheLastLeaf(
+            source: String, leading: Double?, trailing: Double?, lastLeafIsParagraph: Bool
+        ) {
+            let html = MarkdownContent(GOATMarkdownSyntax.normalized(source, detectsArtifacts: false)).renderHTML()
+            let structure = MarkdownSegmentSpacing.structure(html: html)
+            #expect(structure.leadingMargin == leading, "\(html)")
+            #expect(structure.trailingMargin == trailing, "\(html)")
+            #expect(structure.lastLeafIsParagraph == lastLeafIsParagraph, "\(html)")
+        }
+
         @Test func cacheChargesRenderedBytesAndEvictsWithinBounds() async throws {
             let cache = MarkdownSegmentCache(maximumEntries: 2, maximumCost: 600, maximumEntryCost: 400, targetBytes: 1)
             let reference = "Use [a][x].\n\nThen [a][x] again.\n\n[x]: https://example.com/x\n"
@@ -205,16 +243,24 @@ extension AppTests.Bleet {
         @Test @MainActor func frontCacheServesExactAndLatestDocumentsWithinItsBudget() async throws {
             let segments = MarkdownSegmentCache()
             let cache = PreparedMarkdownDocumentCache(maximumEntries: 2, maximumTotalCost: 200, maximumEntryCost: 120)
-            let id = UUID()
-            let streaming = try #require(await segments.prepare(id: id, source: "Partial", isComplete: false))
-            #expect(cache.store(streaming, for: id))
-            #expect(cache.document(for: id, source: "Partial reply") == nil)
-            #expect(cache.latest(for: id)?.source == "Partial")
-            #expect(cache.renderedBytes(for: id, source: "Partial") == streaming.renderedBytes)
+            let message = ChatMessage(role: .assistant)
+            message.appendStream(text: "Partial", thinking: "")
+            let partial = message.textRevision
+            let streaming = try #require(
+                await segments.prepare(id: message.id, source: message.text, revision: partial, isComplete: false))
+            #expect(cache.store(streaming, for: message.id))
+            message.appendStream(text: " reply", thinking: "")
+            #expect(cache.document(for: message.id, revision: message.textRevision) == nil)
+            #expect(cache.document(for: message.id, revision: partial)?.source == "Partial")
+            #expect(cache.latest(for: message.id)?.source == "Partial")
+            #expect(cache.renderedBytes(for: message.id, revision: partial) == streaming.renderedBytes)
+            #expect(cache.renderedBytes(for: message.id, revision: message.textRevision) == nil)
+            message.text = String(repeating: "x", count: 100)
             let large = try #require(
-                await segments.prepare(id: id, source: String(repeating: "x", count: 100), isComplete: true))
-            #expect(!cache.store(large, for: id))
-            #expect(cache.latest(for: id) == nil, "A declined store drops the older document")
+                await segments.prepare(
+                    id: message.id, source: message.text, revision: message.textRevision, isComplete: true))
+            #expect(!cache.store(large, for: message.id))
+            #expect(cache.latest(for: message.id) == nil, "A declined store drops the older document")
             for _ in 0..<3 {
                 let other = UUID()
                 cache.store(
@@ -230,11 +276,266 @@ extension AppTests.Bleet {
             #expect(TranscriptWindow.displayCost(message) == message.text.utf8.count)
             let document = try #require(
                 await MarkdownSegmentCache(targetBytes: 1).prepare(
-                    id: message.id, source: message.text, isComplete: true))
+                    id: message.id, source: message.text, revision: message.textRevision, isComplete: true))
             PreparedMarkdownDocumentCache.shared.store(document, for: message.id)
             #expect(TranscriptWindow.displayCost(message) == document.renderedBytes)
             message.text += "\n\nMore."
             #expect(TranscriptWindow.displayCost(message) == message.text.utf8.count)
+        }
+
+        /// #60 A1: a streamed reply extends its segmentation by revision, so a refresh compares only
+        /// the bytes it re-prepares, never the reply's prefix, and visits only new and provisional
+        /// segments.
+        @Test @MainActor func revisionsExtendTheReplyWithoutComparingItsText() async throws {
+            let cache = MarkdownSegmentCache(maximumEntryCost: 8 * 1_024 * 1_024)
+            let message = ChatMessage(role: .assistant)
+            let reply = mixedBlocks.joined(separator: "\n\n") + "\n\n" + longReply(bytes: 256 * 1_024)
+            var refreshes = 0
+            for chunk in chunks(of: reply, bytes: 1_024) {
+                message.appendStream(text: chunk, thinking: "")
+                _ = try #require(
+                    await cache.prepare(
+                        id: message.id, source: message.text, revision: message.textRevision, isComplete: false))
+                refreshes += 1
+                #expect(await cache.snapshot().streamCount == 1, "The scanner is retained while streaming")
+            }
+            let complete = try #require(
+                await cache.prepare(
+                    id: message.id, source: message.text, revision: message.textRevision, isComplete: true))
+            let work = await cache.snapshot().work
+            let whole = MarkdownSegmenter.segment(reply, isComplete: true)
+            #expect(complete.segments.map(\.text) == whole.map(\.text))
+            // Only re-prepared bodies are compared: at most the provisional bytes per refresh.
+            #expect(
+                work.comparedBytes <= (refreshes + 1) * 3 * MarkdownSegmenter.maximumBytes,
+                "Compared \(work.comparedBytes) bytes over \(refreshes) refreshes")
+            #expect(work.maximumVisitedSegments <= 6, "Visited at most \(work.maximumVisitedSegments) per refresh")
+            #expect(work.visitedSegments <= whole.count + (refreshes + 1) * 3)
+        }
+
+        /// #60 A1: an edit, a trim or a replacement starts a new segmentation even when the new text
+        /// is longer, and a stale revision never extends a newer one.
+        @Test @MainActor func editsTrimsAndReplacementsStartANewSegmentation() async throws {
+            let cache = MarkdownSegmentCache(targetBytes: 1, maximumBytes: 1_024)
+            let message = ChatMessage(role: .assistant)
+            func prepare(complete: Bool = false) async throws -> PreparedMarkdownDocument {
+                try #require(
+                    await cache.prepare(
+                        id: message.id, source: message.text, revision: message.textRevision, isComplete: complete))
+            }
+            message.appendStream(text: "First.\n\nSecond.\n\nThird.\n\n", thinking: "")
+            let streamed = try await prepare()
+            // Completion trims trailing whitespace: a new epoch, reusing unchanged preparations.
+            message.text = "First.\n\nSecond.\n\nThird."
+            let trimmed = try await prepare(complete: true)
+            #expect(trimmed.segments.map(\.text) == ["First.\n\n", "Second.\n\n", "Third."])
+            #expect(trimmed.segments[0].preparationID == streamed.segments[0].preparationID)
+            // An edit that makes the text longer still starts over.
+            message.text = "Changed and longer first paragraph.\n\nSecond.\n\nThird."
+            let edited = try await prepare()
+            #expect(edited.segments.map(\.text).first == "Changed and longer first paragraph.\n\n")
+            #expect(edited.segments[1].preparationID == streamed.segments[1].preparationID)
+            // A replacement of the same length renders the new text.
+            message.text = "Replaced and longer first paragraph.\n\nSecond.\n\nThird."
+            let replaced = try await prepare()
+            #expect(replaced.segments.first?.text == "Replaced and longer first paragraph.\n\n")
+            // A stale sample (an older revision of another epoch) starts over rather than extending.
+            let stale = try #require(
+                await cache.prepare(
+                    id: message.id, source: "Stale.", revision: TextRevision(epoch: 0, utf8Count: 6),
+                    isComplete: false))
+            #expect(stale.segments.map(\.text) == ["Stale."])
+            let current = try await prepare()
+            #expect(current.segments.map(\.text) == replaced.segments.map(\.text))
+        }
+
+        /// #60 A1: a later reference definition prepares again only settled segments that can use it.
+        @Test func laterDefinitionsReprepareOnlySegmentsThatCanUseThem() async throws {
+            let cache = MarkdownSegmentCache(targetBytes: 1, maximumBytes: 1_024)
+            let id = UUID()
+            let opening = "Plain one.\n\nSee the [guide][g].\n\nPlain two.\n\n`code` only.\n\n"
+            let before = try #require(await cache.prepare(id: id, source: opening, isComplete: false))
+            let after = try #require(
+                await cache.prepare(id: id, source: opening + "[g]: https://example.com\n\nMore.", isComplete: false))
+            for index in [0, 2, 3] {
+                #expect(after.segments[index].preparationID == before.segments[index].preparationID)
+            }
+            #expect(after.segments[1].preparationID != before.segments[1].preparationID)
+            guard case .parsed(let content) = after.segments[1].preparation else {
+                Issue.record("Expected Markdown")
+                return
+            }
+            #expect(content.value.renderHTML().contains("href=\"https://example.com\""))
+            #expect(await cache.snapshot().work.definitionVisits >= 3)
+        }
+
+        /// #60 A1 step 3: a window parses only its segments; the others keep their text unparsed, and
+        /// parses outside the window's margin are released, so retention follows the window.
+        @Test func aWindowParsesOnlyItsSegmentsAndReleasesTheRest() async throws {
+            let cache = MarkdownSegmentCache(targetBytes: 1, maximumBytes: 1_024)
+            let id = UUID()
+            let source = (0..<200).map { "Paragraph \($0) of a long reply." }.joined(separator: "\n\n")
+            let windowed = try #require(
+                await cache.prepare(id: id, source: source, isComplete: true, window: 100..<105))
+            #expect(windowed.segments.count == 200)
+            #expect(windowed.segments.filter(\.isParsed).map(\.index) == Array(100..<105))
+            #expect(await cache.snapshot().parseCount == 5)
+            #expect(windowed.retainedBytes == windowed.segments[100..<105].reduce(0) { $0 + $1.text.utf8.count })
+            #expect(windowed.renderedBytes > windowed.retainedBytes * 30)
+            // Unparsed segments keep their bodies, which the cost charges with the source and parses.
+            #expect(windowed.bodyBytes == windowed.segments.reduce(0) { $0 + $1.bodyBytes })
+            #expect(windowed.cost == source.utf8.count + windowed.bodyBytes + windowed.retainedBytes)
+
+            // Moving within the margin parses only the new segments and keeps nearby ones.
+            let moved = try #require(await cache.prepare(id: id, source: source, isComplete: true, window: 102..<108))
+            #expect(await cache.snapshot().parseCount == 8)
+            #expect(moved.segments.filter(\.isParsed).map(\.index) == Array(100..<108))
+            // A distant window releases the old parses; a document already handed out keeps its own.
+            let far = try #require(await cache.prepare(id: id, source: source, isComplete: true, window: 10..<12))
+            #expect(far.segments.filter(\.isParsed).map(\.index) == [10, 11])
+            #expect(moved.segments[103].isParsed)
+            // Asking for every segment parses the rest.
+            let whole = try #require(await cache.prepare(id: id, source: source, isComplete: true))
+            #expect(whole.segments.allSatisfy(\.isParsed) && whole.retainedBytes == whole.renderedBytes)
+        }
+
+        /// Repeated definitions are shared, not copied into every segment, and the cost charges what is
+        /// retained: the source, every body (parsed or not), the shared suffix and the parses. Budgets
+        /// admit and evict by that cost (review of #77: 200 reference paragraphs with a 3,000-byte
+        /// definition render over 600 KB, but retain about the source twice).
+        @Test func repeatedDefinitionsAreSharedAndMostlyUnparsedSegmentsAreCharged() async throws {
+            let definition = "[ref]: https://example.com/" + String(repeating: "p", count: 3_000) + "\n"
+            let source =
+                (0..<200).map { "Paragraph \($0) cites [the reference][ref]." }.joined(separator: "\n\n")
+                + "\n\n" + definition
+            // The default segment maximum: a definition line longer than it has no block syntax.
+            let cache = MarkdownSegmentCache(targetBytes: 1)
+            let windowed = try #require(
+                await cache.prepare(id: UUID(), source: source, isComplete: true, window: 50..<55))
+            #expect(windowed.renderedBytes > 600_000, "Every bracketed segment renders the definitions")
+            #expect(windowed.definitionBytes <= MarkdownSegmenter.definitionLimit)
+            #expect(windowed.definitionBytes >= definition.utf8.count - 1)
+            #expect(windowed.bodyBytes < source.utf8.count + 1_024)
+            let expected = source.utf8.count + windowed.bodyBytes + windowed.definitionBytes + windowed.retainedBytes
+            #expect(windowed.cost == expected)
+            #expect(windowed.cost * 10 < windowed.renderedBytes, "\(windowed.cost) for \(windowed.renderedBytes)")
+            #expect(windowed.retainedBytes < 5 * 4_096, "Only the window's parses are charged for content")
+
+            // A budget one byte below the document's cost declines it; at the cost it is retained.
+            let tight = MarkdownSegmentCache(maximumEntryCost: windowed.cost - 1, targetBytes: 1)
+            _ = await tight.prepare(id: UUID(), source: source, isComplete: true, window: 50..<55)
+            #expect(await tight.snapshot().entryCount == 0)
+            let exact = MarkdownSegmentCache(
+                maximumCost: windowed.cost + 1, maximumEntryCost: windowed.cost, targetBytes: 1)
+            _ = await exact.prepare(id: UUID(), source: source, isComplete: true, window: 50..<55)
+            #expect(await exact.snapshot().entryCount == 1)
+            // A second reply of the same cost evicts the first: the total never exceeds the budget.
+            _ = await exact.prepare(id: UUID(), source: source, isComplete: true, window: 50..<55)
+            let snapshot = await exact.snapshot()
+            #expect(snapshot.entryCount == 1 && snapshot.cost <= windowed.cost + 1)
+        }
+
+        /// While a long reply streams with a window on its tail, retained parses stay bounded however
+        /// long the reply grows, and late definitions re-parse only segments in the window.
+        @Test(arguments: [PreparationShape.mixed, .lateDefinitions])
+        @MainActor func aStreamingTailWindowBoundsRetainedParses(shape: PreparationShape) async throws {
+            func run(windowed: Bool) async throws -> (maximumRetained: Int, maximumParses: Int) {
+                let cache = MarkdownSegmentCache(maximumCost: 64 * 1_024 * 1_024, maximumEntryCost: 64 * 1_024 * 1_024)
+                let message = ChatMessage(role: .assistant)
+                var window = 0..<4
+                var maximumRetained = 0
+                var maximumParses = 0
+                for chunk in chunks(of: shape.reply(bytes: 256 * 1_024), bytes: 4_096) {
+                    message.appendStream(text: chunk, thinking: "")
+                    let before = await cache.snapshot().parseCount
+                    let document = try #require(
+                        await cache.prepare(
+                            id: message.id, source: message.text, revision: message.textRevision, isComplete: false,
+                            window: windowed ? window : nil))
+                    maximumParses = max(maximumParses, await cache.snapshot().parseCount - before)
+                    maximumRetained = max(maximumRetained, document.retainedBytes)
+                    // Following keeps the last segments in the window, as the view does.
+                    window = max(0, document.segments.count - 3)..<document.segments.count + 1
+                }
+                return (maximumRetained, maximumParses)
+            }
+            let windowed = try await run(windowed: true)
+            let whole = try await run(windowed: false)
+            #expect(windowed.maximumRetained <= 6 * MarkdownSegmenter.maximumBytes, "\(windowed)")
+            #expect(whole.maximumRetained > 3 * windowed.maximumRetained, "\(whole) vs \(windowed)")
+            #expect(windowed.maximumParses <= 6, "One refresh parses at most the window: \(windowed)")
+            if shape == .lateDefinitions {
+                #expect(whole.maximumParses > 20, "Without a window, definitions re-parse the reply: \(whole)")
+            }
+        }
+
+        /// #60 A1 step 3: under the default bounds a reply streams to the rich limit showing its latest
+        /// segments. The cache keeps its scanner at every refresh (no rescans), the view lays out at most
+        /// the reply budget, and parses are retained for the window only, not the reply.
+        @Test @MainActor func aReplyStreamsToTheRichLimitUnderTheDefaultBounds() async throws {
+            let cache = MarkdownSegmentCache()
+            let message = ChatMessage(role: .assistant)
+            var maximumShown = 0
+            var maximumRetained = 0
+            var last: PreparedMarkdownDocument?
+            for chunk in chunks(of: PreparationShape.mixed.reply(bytes: ReplyWindow.richLimit - 8_192), bytes: 32_768) {
+                message.appendStream(text: chunk, thinking: "")
+                let document = try #require(
+                    await cache.prepare(
+                        id: message.id, source: message.text, revision: message.textRevision, isComplete: false,
+                        window: .latest))
+                maximumShown = max(maximumShown, document.shownBytes)
+                maximumRetained = max(maximumRetained, document.retainedBytes)
+                #expect(await cache.snapshot().streamCount == 1, "Refresh at \(message.textRevision.utf8Count) bytes")
+                last = document
+            }
+            let streamed = try #require(last)
+            #expect(message.textRevision.utf8Count <= ReplyWindow.richLimit)
+            #expect(streamed.window?.upperBound == streamed.segments.count, "Following shows the latest segments")
+            let segmentBound = MarkdownSegmenter.maximumBytes + MarkdownSegmenter.definitionLimit
+            #expect(maximumShown <= max(ReplyWindow.budget, 2 * segmentBound), "\(maximumShown)")
+            let margins = 2 * MarkdownSegmentCache.retentionMargin * segmentBound
+            #expect(maximumRetained <= maximumShown + margins, "\(maximumRetained)")
+            #expect(streamed.retainedBytes * 10 < streamed.renderedBytes)
+
+            message.complete = true
+            let complete = try #require(
+                await cache.prepare(
+                    id: message.id, source: message.text, revision: message.textRevision, isComplete: true,
+                    window: .latest))
+            #expect(complete.window?.upperBound == complete.segments.count)
+            #expect(await cache.snapshot().entryCount == 1, "The completed reply stays retained")
+            let front = PreparedMarkdownDocumentCache()
+            #expect(front.store(complete, for: message.id), "The front cache retains a windowed reply at the limit")
+            #expect(front.shownBytes(for: message.id, revision: message.textRevision) == complete.shownBytes)
+        }
+
+        /// Documents handed to views keep their segments while the cache prepares later refreshes.
+        @Test func preparedSegmentListsShareUnchangedChunks() async throws {
+            let cache = MarkdownSegmentCache(targetBytes: 1, maximumBytes: 1_024)
+            let id = UUID()
+            let paragraphs = (0..<150).map { "Paragraph \($0)." }
+            let first = try #require(
+                await cache.prepare(id: id, source: paragraphs.joined(separator: "\n\n"), isComplete: false))
+            let firstTexts = first.segments.map(\.text)
+            let second = try #require(
+                await cache.prepare(
+                    id: id, source: paragraphs.joined(separator: "\n\n") + "\n\nMore", isComplete: false))
+            #expect(first.segments.map(\.text) == firstTexts, "An earlier document is unchanged")
+            #expect(second.segments.count == first.segments.count + 1)
+
+            var list = PreparedSegmentList(first.segments)
+            var mirror = Array(first.segments)
+            for position in [0, 63, 64, 149] {
+                list.set(second.segments[150], at: position)
+                mirror[position] = second.segments[150]
+            }
+            #expect(list.map(\.preparationID) == mirror.map(\.preparationID))
+            for cut in [140, 128, 65, 64, 1, 0] {
+                list.removeSuffix(from: cut)
+                mirror.removeLast(mirror.count - cut)
+                #expect(list.map(\.preparationID) == mirror.map(\.preparationID) && list.count == cut)
+            }
         }
     }
 }
@@ -312,6 +613,46 @@ extension AppTests.Bleet {
             }
         }
 
+        /// #60 A1: margins come from the parsed blocks, reduced over each block's subtree as MarkdownUI
+        /// does, so shapes whose first or last line misleads still space as the whole reply.
+        @Test(arguments: [
+            ["> # Quoted title\n> quoted text", "After the quote."],
+            ["Before.", "> \(fence)\n> code only\n> \(fence)", "After."],
+            ["> outer\n>\n> > nested quote", "A paragraph."],
+            ["- item\n\n  ---\n\n- next item", "A paragraph."],
+            ["# Heading", "- a\n- b", "---", "Text after a break."],
+            ["\(fence)\ncode\n\(fence)", "> quoted", "\(fence)\nmore code\n\(fence)"],
+            ["<div>html block</div>", "Text.", "- [ ] a task", "Setext\n---", "Closing."],
+            ["1. one\n2. two", "| a | b |\n| - | - |\n| 1 | 2 |", "## Section", "- \(fence)\n  code\n  \(fence)"],
+        ])
+        @MainActor func parsedMarginsSpaceShapesAsTheWholeReply(blocks: [String]) async throws {
+            let fontSize = AppModel.shared.chatFontSize
+            let source = blocks.joined(separator: "\n\n")
+            let document = try #require(
+                await MarkdownSegmentCache(targetBytes: 1).prepare(id: UUID(), source: source, isComplete: true))
+            #expect(document.segments.count == blocks.count, "One segment per top-level block")
+            let segmented = try await height(
+                SegmentedMarkdownView(document: document, fontSize: fontSize, isStreaming: false))
+            let whole = try await height(wholeReply(source, fontSize: fontSize))
+            #expect(abs(segmented - whole) < 1, "Segmented \(segmented) pt, whole \(whole) pt")
+        }
+
+        /// Pieces of one oversized block join without a gap. They are not the whole block (a split
+        /// paragraph ends its line early; each code piece has its own chrome), so this checks the gap
+        /// rather than the height.
+        @Test func continuationPiecesJoinWithoutAGap() async throws {
+            let paragraph = String(repeating: "word ", count: 400)
+            let document = try #require(
+                await MarkdownSegmentCache(targetBytes: 256, maximumBytes: 512).prepare(
+                    id: UUID(), source: "Intro.\n\n" + paragraph, isComplete: true))
+            let pieces = document.segments.filter(\.continuesPrevious)
+            #expect(!pieces.isEmpty)
+            for piece in pieces {
+                let previous = document.segments[piece.index - 1]
+                #expect(MarkdownSegmentSpacing.gap(after: previous, before: piece, fontSize: 14) == 0)
+            }
+        }
+
         /// Completion without reflow: a two-segment reply keeps its height when it completes.
         @Test @MainActor func completingASegmentedReplyKeepsItsHeight() async throws {
             let message = ChatMessage(role: .assistant)
@@ -346,7 +687,9 @@ extension AppTests.Bleet {
             try await Task.sleep(for: .milliseconds(400))
             host.layoutSubtreeIfNeeded()
             #expect(host.fittingSize.height == streaming, "Completion must not reflow a segmented reply")
-            #expect(PreparedMarkdownDocumentCache.shared.document(for: message.id, source: reply)?.isComplete == true)
+            #expect(
+                PreparedMarkdownDocumentCache.shared.document(for: message.id, revision: message.textRevision)?
+                    .isComplete == true)
         }
 
         /// #60 B1: the caret marks only the end of the reply, in its final line, including when earlier
@@ -408,6 +751,147 @@ extension AppTests.Bleet {
                     return
                 }
             }
+        }
+    }
+}
+
+/// Reply shapes for the whole-path preparation workload (#60 A1).
+enum PreparationShape: String, CaseIterable, CustomStringConvertible {
+    case mixed, paragraphs, fences, tables, lateDefinitions
+
+    var description: String { rawValue }
+
+    func reply(bytes: Int) -> String {
+        var reply = ""
+        var index = 0
+        while reply.utf8.count < bytes {
+            reply += block(index)
+            index += 1
+        }
+        if self == .lateDefinitions {
+            // Definitions arrive at the end, as they usually do, changing every settled segment
+            // that references them.
+            reply += (0..<16).map { "[ref \($0)]: https://example.com/\($0)" }.joined(separator: "\n") + "\n"
+        }
+        return reply
+    }
+
+    private func block(_ index: Int) -> String {
+        switch self {
+        case .mixed:
+            return longReply(bytes: 2_048) + "\n\n"
+        case .paragraphs:
+            // One long line per paragraph, as models often emit.
+            return String(repeating: "A sentence that keeps a long paragraph going \(index). ", count: 60) + "\n\n"
+        case .fences:
+            // Mostly segment-sized fences, and every eighth one larger than a segment.
+            let lines = index % 8 == 7 ? 1_200 : 120
+            return "\(fence)swift\n" + (0..<lines).map { "let value\($0) = \(index) // line" }.joined(separator: "\n")
+                + "\n\(fence)\n\n"
+        case .tables:
+            let rows = index % 8 == 7 ? 1_500 : 60
+            return "| Name | Value | Note |\n| --- | ---: | --- |\n"
+                + (0..<rows).map { "| row \($0) | \(index) | text |" }.joined(separator: "\n") + "\n\n"
+        case .lateDefinitions:
+            return "Paragraph \(index) cites [a source][ref \(index % 16)] and continues with plain words. "
+                + String(repeating: "More words follow. ", count: 12) + "\n\n"
+        }
+    }
+}
+
+extension AppTests.Bleet {
+    /// #60 A1: the whole preparation path (scanning, copying, comparing, parsing, assembling,
+    /// placing the caret and handing documents to the main actor) at a fixed refresh cadence, for
+    /// replies from 32 KiB to 2 MiB. This measures the preparation layer, not live rendering: the
+    /// live view still uses the 8 KiB parts fallback. Counters are asserted; durations are printed as
+    /// `SEGMENT_PREPARATION` records for profiles.
+    @Suite(.serialized) struct SegmentPreparationWorkloadTests {
+
+        @Test(arguments: PreparationShape.allCases)
+        @MainActor func wholePreparationPathWorkIsLinearInTheReply(shape: PreparationShape) async throws {
+            var ratios: [Int: Double] = [:]
+            for kibibytes in [32, 128, 512, 2_048] {
+                let result = try await measure(shape: shape, bytes: kibibytes * 1_024)
+                ratios[kibibytes] = result.workPerByte
+                #expect(result.maximumVisited <= 12, "\(shape) \(kibibytes) KiB visited \(result.maximumVisited)")
+            }
+            let small = try #require(ratios[32])
+            let large = try #require(ratios[2_048])
+            // 64 times the reply: linear work keeps work per reply byte flat, quadratic work would
+            // multiply it by 64.
+            #expect(large < small * 1.5, "\(shape) work per reply byte: \(ratios.sorted { $0.key < $1.key })")
+        }
+
+        private struct Result {
+            let workPerByte: Double
+            let maximumVisited: Int
+        }
+
+        @MainActor private func measure(shape: PreparationShape, bytes: Int) async throws -> Result {
+            // Budgets large enough to retain the reply, so the measurement covers the retained path.
+            let cache = MarkdownSegmentCache(
+                maximumCost: 64 * 1_024 * 1_024, maximumEntryCost: 64 * 1_024 * 1_024)
+            let front = PreparedMarkdownDocumentCache(
+                maximumTotalCost: 64 * 1_024 * 1_024, maximumEntryCost: 64 * 1_024 * 1_024)
+            let message = ChatMessage(role: .assistant)
+            let reply = shape.reply(bytes: bytes)
+            let clock = ContinuousClock()
+            var refreshTimes: [Duration] = []
+            var mainActorTimes: [Duration] = []
+            for chunk in chunks(of: reply, bytes: 4_096) {
+                message.appendStream(text: chunk, thinking: "")
+                let started = clock.now
+                let document = try #require(
+                    await cache.prepare(
+                        id: message.id, source: message.text, revision: message.textRevision, isComplete: false))
+                refreshTimes.append(clock.now - started)
+                let handed = clock.now
+                front.store(document, for: message.id)
+                _ = front.renderedBytes(for: message.id, revision: message.textRevision)
+                mainActorTimes.append(clock.now - handed)
+            }
+            let streaming = await cache.snapshot()
+            #expect(streaming.streamCount == 1, "The scanner must be retained for this measurement")
+            _ = try #require(
+                await cache.prepare(
+                    id: message.id, source: message.text, revision: message.textRevision, isComplete: true))
+            let work = await cache.snapshot().work
+            let document = try #require(front.latest(for: message.id))
+
+            // Completion that trims whitespace starts a new epoch: one pass over the whole reply.
+            message.text = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimStarted = clock.now
+            _ = try #require(
+                await cache.prepare(
+                    id: message.id, source: message.text, revision: message.textRevision, isComplete: true))
+            let trim = clock.now - trimStarted
+
+            refreshTimes.sort()
+            mainActorTimes.sort()
+            func micros(_ duration: Duration) -> Int { Int(duration / .microseconds(1)) }
+            func millis(_ duration: Duration) -> Int { Int(duration / .milliseconds(1)) }
+            func percentile(_ values: [Duration], _ p: Double) -> Duration {
+                values.isEmpty ? .zero : values[min(values.count - 1, Int(Double(values.count) * p))]
+            }
+            let replyBytes = reply.utf8.count
+            let total =
+                streaming.parsedBytes + work.scannedBytes + work.copiedBytes + work.comparedBytes + work.htmlBytes
+            print(
+                "SEGMENT_PREPARATION shape=\(shape) reply_bytes=\(replyBytes) refreshes=\(work.refreshes) "
+                    + "parse_count=\(streaming.parseCount) parsed_bytes=\(streaming.parsedBytes) "
+                    + "scanned_bytes=\(work.scannedBytes) copied_bytes=\(work.copiedBytes) "
+                    + "compared_bytes=\(work.comparedBytes) html_bytes=\(work.htmlBytes) "
+                    + "visited_segments=\(work.visitedSegments) max_visited=\(work.maximumVisitedSegments) "
+                    + "definition_visits=\(work.definitionVisits) segments=\(document.segments.count) "
+                    + "segmentation_ms=\(millis(work.segmentationTime)) parse_ms=\(millis(work.parseTime)) "
+                    + "assembly_ms=\(millis(work.assemblyTime)) "
+                    + "refresh_p50_us=\(micros(percentile(refreshTimes, 0.5))) "
+                    + "refresh_p95_us=\(micros(percentile(refreshTimes, 0.95))) "
+                    + "refresh_max_us=\(micros(refreshTimes.last ?? .zero)) "
+                    + "main_actor_p95_us=\(micros(percentile(mainActorTimes, 0.95))) "
+                    + "streaming_retained_cost=\(streaming.cost) front_cost=\(front.snapshot().totalCost) "
+                    + "completion_trim_ms=\(millis(trim)) work_per_reply_byte=\(Double(total) / Double(replyBytes))")
+            return Result(workPerByte: Double(total) / Double(replyBytes), maximumVisited: work.maximumVisitedSegments)
         }
     }
 }

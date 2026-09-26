@@ -215,41 +215,85 @@ struct PreparedMarkdownView<Rendered: View>: View {
 }
 
 /// Unified, stable Markdown view for both streaming and complete states without view-identity swapping.
-/// The reply renders as segments (#60 A1 step 2, ADR-0091): settled segments are prepared once and
-/// keep their views while only the streaming tail is re-prepared. Text above 8 KiB keeps the
-/// plain-text parts fallback until segment-level windowing (step 3) bounds what one reply lays out.
+/// The reply renders as segments (#60 A1, ADR-0091): settled segments are prepared once and keep
+/// their views while only the streaming tail is re-prepared. The message's text revision identifies
+/// each sample, so refreshes never compare the reply's text.
+///
+/// A long reply lays out a window of its segments (`ReplyWindow`): its latest segments, or those the
+/// reader paged to through the transcript's navigation owner. Loaders at the window's edges page it as
+/// they come into view, keeping the reader's segment in place. Replies above `ReplyWindow.richLimit`
+/// keep bounded selectable text parts.
 struct StreamingMarkdownView: View {
     @Bindable var message: ChatMessage
     @Environment(AppModel.self) private var model
+    @Environment(\.transcriptSegments) private var navigation
     @State private var snapshot: Snapshot
     @State private var document: PreparedMarkdownDocument?
+    /// The window request `document` was prepared for.
+    @State private var preparedWindow: SegmentWindow?
+    /// A reader's window when no navigation owner hosts this view.
+    @State private var localWindow: Range<Int>?
 
-    /// The text and completion sampled together, so completion always prepares the final text.
+    /// The text and completion sampled together, so completion always prepares the final text. The
+    /// revision identifies the text, so equality never reads it.
     private struct Snapshot: Equatable {
-        let source: String
+        let revision: TextRevision
         let isComplete: Bool
+        let source: String
+
+        static func == (lhs: Snapshot, rhs: Snapshot) -> Bool {
+            lhs.revision == rhs.revision && lhs.isComplete == rhs.isComplete
+        }
+    }
+
+    private struct Preparation: Equatable {
+        let snapshot: Snapshot
+        let window: SegmentWindow
     }
 
     init(message: ChatMessage) {
         self.message = message
-        _snapshot = State(initialValue: Snapshot(source: message.text, isComplete: message.complete))
+        _snapshot = State(
+            initialValue: Snapshot(revision: message.textRevision, isComplete: message.complete, source: message.text))
         // Seed only from an already-prepared document. SwiftUI evaluates this initializer on every
         // parent update, so it must stay a lookup. A streaming reply may show its last prepared
         // document until the current text is ready, as the view itself does between refreshes.
         let cache = PreparedMarkdownDocumentCache.shared
         _document = State(
-            initialValue: cache.document(for: message.id, source: message.text)
+            initialValue: cache.document(for: message.id, revision: message.textRevision)
                 ?? (message.complete ? nil : cache.latest(for: message.id)))
     }
 
+    /// The segments to show: the window the owner holds for this reply, else its latest segments.
+    /// While the reader owns the viewport, a reply showing its latest segments keeps the ones shown,
+    /// as the owner keeps the message window: output below them waits behind the later loader. The
+    /// owner holds them from the next turn (`holdIfKept`).
+    private var requestedWindow: SegmentWindow {
+        guard let viewport = navigation.viewport else { return localWindow.map(SegmentWindow.segments) ?? .latest }
+        if let held = viewport.segmentWindow(for: message.id) { return .segments(held) }
+        if let kept = keptWindow { return .segments(kept) }
+        return .latest
+    }
+
+    /// The shown window this reply keeps because the reader owns the viewport, until the owner holds it.
+    private var keptWindow: Range<Int>? {
+        guard let viewport = navigation.viewport, viewport.readerOwnsViewport,
+            viewport.segmentWindow(for: message.id) == nil
+        else { return nil }
+        return document?.window
+    }
+
     var body: some View {
+        let window = requestedWindow
         Group {
-            if snapshot.source.utf8.count > TranscriptTextParts.maximumBytes {
+            if snapshot.revision.utf8Count > ReplyWindow.richLimit {
                 TranscriptTextPartsView(
                     source: snapshot.source, fontSize: model.chatFontSize, cacheKey: "\(message.id.uuidString):text",
                     onPrepared: { message.markRenderChanged() })
             } else if let document {
-                SegmentedMarkdownView(document: document, fontSize: model.chatFontSize, isStreaming: !message.complete)
+                SegmentedMarkdownView(
+                    document: document, fontSize: model.chatFontSize, isStreaming: !message.complete,
+                    messageID: message.id, page: { page(to: $0, keeping: $1, segmentCount: $2) })
             } else {
                 // Never flash raw Markdown while a saved reply is being prepared off the main actor.
                 Label("Formatting response…", systemImage: "text.badge.checkmark")
@@ -260,16 +304,22 @@ struct StreamingMarkdownView: View {
         // Align the document boundary without searching nested lists and code scrollers.
         .alignmentGuide(.leading) { _ in 0 }
         .alignmentGuide(.trailing) { dimensions in dimensions.width }
-        .task(id: snapshot) {
+        .task(id: Preparation(snapshot: snapshot, window: window)) {
             let request = snapshot
-            guard request.source.utf8.count <= TranscriptTextParts.maximumBytes else { return }
-            if let document, document.source == request.source, document.isComplete == request.isComplete { return }
+            guard request.revision.utf8Count <= ReplyWindow.richLimit else { return }
+            if let document, document.matches(request.revision, isComplete: request.isComplete),
+                preparedWindow == window
+            {
+                return
+            }
             guard
                 let prepared = await MarkdownSegmentCache.shared.prepare(
-                    id: message.id, source: request.source, isComplete: request.isComplete),
+                    id: message.id, source: request.source, revision: request.revision,
+                    isComplete: request.isComplete, window: window),
                 !Task.isCancelled
             else { return }
             document = prepared
+            preparedWindow = window
             PreparedMarkdownDocumentCache.shared.store(prepared, for: message.id)
             message.markRenderChanged()
         }
@@ -282,10 +332,29 @@ struct StreamingMarkdownView: View {
             sample()
         }
         .onChange(of: message.complete) { sample() }
+        .onChange(of: keptWindow, initial: true) { holdIfKept() }
+    }
+
+    /// Registers a kept window with the owner, so the owner, not this view, knows the reply is held.
+    private func holdIfKept() {
+        guard let kept = keptWindow, let document else { return }
+        navigation.hold(message.id, kept, document.segments.count)
+    }
+
+    /// Pages the shown window to `target` of the reply's `segmentCount` segments, keeping segment
+    /// `kept` where the reader sees it.
+    private func page(to target: Range<Int>, keeping kept: Int, segmentCount: Int) {
+        if navigation.viewport != nil {
+            navigation.page(message.id, target, kept, segmentCount)
+        } else {
+            // Without an owner, a window at the end shows the latest segments again.
+            localWindow = target.upperBound >= segmentCount ? nil : target
+        }
     }
 
     private func sample() {
-        let next = Snapshot(source: message.text, isComplete: message.complete)
-        if snapshot != next { snapshot = next }
+        let revision = message.textRevision
+        guard revision != snapshot.revision || message.complete != snapshot.isComplete else { return }
+        snapshot = Snapshot(revision: revision, isComplete: message.complete, source: message.text)
     }
 }
