@@ -583,12 +583,13 @@ struct ChatTranscriptView: View {
                 viewport.note("reader offset \(Int(previous.offset))->\(Int(metrics.offset))")
                 reader.commandGeneration = nil
                 // The binding still holds the executor's last target, which SwiftUI re-applies on the next
-                // update, scrolling the reader back. The executor records where the reader is instead.
-                reader.positionNeedsSync = true
+                // update, scrolling the reader back. Record where the reader is now, before `readerMoved`
+                // triggers that update: re-applying the reader's own offset is a no-op, not a scroll. An
+                // empty position would fall back to the default bottom anchor.
+                command(y: metrics.offset)
                 if viewport.readerOwnsViewport || !atBottom {
                     viewport.readerMoved(currentRange: messageRange, anchor: reader.measuredAnchor())
                 }
-                executePendingRequest()
             }
             if metrics.offset != previous.offset { reader.commandGeneration = nil }
         }
@@ -607,14 +608,9 @@ struct ChatTranscriptView: View {
     /// later turn of the main actor (never inside a geometry callback), once its target is laid out;
     /// it is fulfilled when the geometry shows it and re-issued as layout settles, at most
     /// `maximumScrollAttempts` times. A target that has no row yet is retried on the same bound, so one
-    /// that never renders is abandoned. Reader input cancels it through the owner. With no request, it
-    /// records a direct reader move in the scroll binding.
+    /// that never renders is abandoned. Reader input cancels it through the owner.
     private func executePendingRequest() {
-        guard reader.executorTask == nil, !reader.isScrolling else { return }
-        guard let request = viewport.request else {
-            if reader.positionNeedsSync { synchronizePosition() }
-            return
-        }
+        guard let request = viewport.request, reader.executorTask == nil, !reader.isScrolling else { return }
         if reader.attemptGeneration != request.generation {
             reader.attemptGeneration = request.generation
             reader.attempts = 0
@@ -687,23 +683,8 @@ struct ChatTranscriptView: View {
         }
     }
 
-    /// Records a direct reader move in the binding on a later turn, so the executor's last target is
-    /// never re-applied. A pending request's own command replaces it.
-    private func synchronizePosition() {
-        reader.executorTask = Task { @MainActor in
-            await Task.yield()
-            reader.executorTask = nil
-            guard !Task.isCancelled, reader.positionNeedsSync, !reader.isScrolling else { return }
-            guard viewport.request == nil else { return executePendingRequest() }
-            // Re-applying the reader's own offset is a no-op; an empty position would fall back to the
-            // default bottom anchor.
-            command(y: reader.metrics.offset)
-        }
-    }
-
     /// The only writer of the scroll binding.
     private func command(y: CGFloat) {
-        reader.positionNeedsSync = false
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) { position.scrollTo(y: y) }
@@ -756,8 +737,6 @@ private let transcriptContentSpace = "transcript-content"
     /// wherever clamping lands it, while the request is pending. Reader takeover and cancellation clear
     /// it; any other offset change without a gesture is the reader's.
     var commandGeneration: UInt64?
-    /// A direct reader move left the binding at the executor's last target.
-    var positionNeedsSync = false
     /// The pending attempt waits, with a deadline, for its target row's first layout.
     var awaitingFrame = false
     var attemptGeneration: UInt64 = 0
