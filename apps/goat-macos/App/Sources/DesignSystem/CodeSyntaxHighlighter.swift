@@ -23,6 +23,8 @@ struct SyntaxPalette: Hashable, Sendable {
 
     static let minimumContrast = 4.5
 
+    /// The palette of `theme`, which must already be resolved (`ThemeSpec.resolved(dark:)`): System's
+    /// own colours are placeholders.
     init(theme: ThemeSpec) {
         // The background is converted once per palette, not inside the mixing loop.
         let background = Self.value(Self.rgb(theme.bg) ?? 0x000000)

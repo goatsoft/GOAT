@@ -228,10 +228,11 @@ extension AppTests.Caprine {
             return channel(color.redComponent) << 16 | channel(color.greenComponent) << 8 | channel(color.blueComponent)
         }
 
-        /// Every built-in theme derives AA-readable syntax colours from its own tokens.
-        @Test(arguments: ThemeCatalog.builtins.map(\.id))
-        func syntaxPaletteDerivesReadableColoursFromTheTheme(id: String) throws {
-            let theme = try Self.theme(id)
+        /// Every built-in theme, in each appearance System resolves to, derives AA-readable syntax colours
+        /// from its own tokens.
+        @Test(arguments: ThemeCatalog.builtins.map(\.id), [false, true])
+        func syntaxPaletteDerivesReadableColoursFromTheTheme(id: String, dark: Bool) throws {
+            let theme = try Self.theme(id).resolved(dark: dark)
             let palette = SyntaxPalette(theme: theme)
             let background = try #require(SyntaxPalette.rgb(theme.bg))
             for colour in [palette.keyword, palette.string, palette.number, palette.comment, palette.type] {
@@ -270,6 +271,17 @@ extension AppTests.Caprine {
             #expect(SyntaxPalette.contrast(0x909090, 0x808080) < SyntaxPalette.minimumContrast)
             let palette = SyntaxPalette(theme: theme)
             #expect(palette.keyword == 0x909090)
+        }
+
+        /// System has placeholder colours: in light mode its palette is Light's, never one derived from its
+        /// black placeholder background, and in dark mode Midnight's.
+        @Test func systemUsesThePaletteOfTheThemeItResolvesTo() throws {
+            let system = try Self.theme("system")
+            #expect(SyntaxPalette(theme: system.resolved(dark: false)) == SyntaxPalette(theme: ThemeCatalog.light))
+            #expect(SyntaxPalette(theme: system.resolved(dark: true)) == SyntaxPalette(theme: ThemeCatalog.midnight))
+            let light = SyntaxPalette(theme: ThemeCatalog.light)
+            let background = try #require(SyntaxPalette.rgb(ThemeCatalog.light.bg))
+            #expect(SyntaxPalette.contrast(light.keyword, background) >= SyntaxPalette.minimumContrast)
         }
 
         /// Themes highlight the same code in their own colours.
