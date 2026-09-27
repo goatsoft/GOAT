@@ -99,3 +99,71 @@ The combined stack in [PR #36](https://github.com/goatsoft/GOAT/pull/36) passed 
 A disposable native window on Golden Gate exercised earlier-part navigation, text selection, Command-C, keyboard-adjusted selection and complete copy/paste of a 400-line Unicode fixture spanning two parts. No saved conversations were loaded. This is targeted interaction evidence, not a claim that every application workflow was manually audited.
 
 Compaction-specific keyboard expansion/collapse and restoration passed with the actual macOS Reduce Motion setting enabled. A fresh process restored compaction preferences, summary text and file metadata; deleting the summary retained both original messages in SQLite. These checks used disposable synthetic data.
+
+
+## Delivery 3 integrated qualification (2026-09-27)
+
+Delivery 3 is **not qualified complete**. A Release production-view workload on main
+`90f4037` found an integrated live-follow performance problem despite the linear preparation
+measurements above. The opt-in `TranscriptPerformanceTests.testInteractiveDelivery3Qualification`
+hosts `ChatView` with synthetic messages and an isolated test home. It never sends to an engine.
+
+Run the interactive surface with:
+
+```sh
+TEST_RUNNER_GOAT_DELIVERY3_QUALIFY=1 make test-app CONFIG=Release TEST_PLAN=Qualification \
+  XCODE_FLAGS='GOAT_APP_BUNDLE_IDENTIFIER=dev.leet.goat.qualification -only-testing:GOATTests/TranscriptPerformanceTests/testInteractiveDelivery3Qualification'
+```
+
+The separate qualification bundle identifier also isolates its UserDefaults from normal app tests.
+It provides theme, font, animation and synthetic inspector controls, a short code fixture, and
+2 MiB answer/reasoning streams. Finish closes the fixture; the opt-in test is skipped in normal
+runs. For automatic answer then reasoning streams, also set `TEST_RUNNER_GOAT_DELIVERY3_AUTORUN=1`.
+The host prints its PID, waits 15 seconds before automatic work, and waits 5 seconds after each
+stream action so Instruments can attach and UI inspection can finish before measurement starts.
+
+The stress source repeats a short paragraph and one-line Swift fence to exactly 2 MiB, published
+in 16 KiB batches separated by a nominal 120 ms sleep. This deliberately tests high block density;
+it is not a claim about a typical model response. The timer includes a 3-second completion settle.
+The scheduling-delay metric is main-actor sleep overrun, not measured key-to-pixel input latency.
+
+On M1 Max (10 CPU cores, 32 GiB), macOS 27.0 (26A428), Xcode 27, Release, initial 1180 × 780
+content size and 14 pt reading font:
+
+| Scenario | Wall time | Process CPU | Scheduling delay p95 | Process lifetime peak RSS |
+| --- | ---: | ---: | ---: | ---: |
+| Answer, reader held, Time Profiler plus AX polling | 49.36 s | 47.95 s | 239.52 ms | 719.48 MiB |
+| Expanded reasoning, reader held, Time Profiler plus interaction | 19.33 s | 8.90 s | 11.09 ms | 719.48 MiB |
+| Answer, fresh host following live, no AX polling | 173.20 s | 171.75 s | 2018.28 ms | 537.88 MiB |
+
+A 120-second Time Profiler recording began before the fresh-host stream; the final counters cover
+the whole answer, including the period after recording ended. Its subsequent reasoning phase was
+interrupted and is not a result. Other desktop applications and the XCTest host were running.
+These are diagnostic single-host samples, not portable performance thresholds.
+
+The polled trace was dominated by main-thread AttributeGraph and SwiftUI work, including
+accessibility-tree construction. The unpolled run and a stack sample also show sustained
+main-thread SwiftUI/AttributeGraph work. This identifies the integrated view/following path for
+investigation; it does not prove one app function is the cause. Geometry and onChange
+multiple-updates-per-frame warnings reproduced. Do not attribute all delay to parsing, or all
+delay to the accessibility observer.
+
+Separate Allocations captures were collected. The full reader-held reasoning capture recorded
+229.61 MiB cumulative `Swift.__StringStorage` allocations with 5.36 MiB persistent at the end of
+the 90-second recording, and 280 KiB persistent `ThinkingSegment` array storage. These are allocation
+categories, not total process memory or cache-only retention. The answer allocation capture ended
+before that instrumented stream completed, so final answer retention remains unqualified. Raw
+traces stay private; they include machine paths and process environment information.
+
+Manual checks observed live code recolouring in System/dark, Light, Pasture and Midnight, reading
+font changes from 14 to 16 pt, and reflow with a synthetic 260 pt inspector. Reader-held expanded
+reasoning accepted composer input and Earlier/Later paging and preserved position on completion.
+These observations do not complete the entire manual matrix. The locked 1337 experience, actual
+inspector at narrow widths, Reduce Motion/animations-off streaming, full keyboard/VoiceOver
+navigation, font-family changes and macOS 26 still require qualification.
+
+With VoiceOver enabled, the code block's outer accessibility label was exposed on its expansion,
+wrap, save and open buttons as the same generic artifact name. Copy retained its own label.
+This needs correction and a complete keyboard/VoiceOver retest. Light/Pasture also showed a
+low-contrast model-selector label in the synthetic host; reproduce in the regular window before
+classifying it as a product defect. Delivery 3 remains open in issue #60.
