@@ -319,6 +319,14 @@ private let fenceInfoCases: [(String?, String?, String?)] = [
 extension AppTests.Bleet {
     /// #60 A6: persistent code block chrome, info strings, collapse and remembered choices.
     @Suite(.serialized) struct CodeBlockChromeTests {
+        @Test func preparedIdentityDistinguishesOptOutFromNoCode() {
+            let optedOut = PreparedMarkdownContent(value: MarkdownContent("Plain text"), preparesCodeIdentity: false)
+            let prepared = PreparedMarkdownContent(value: MarkdownContent("Plain text"))
+            #expect(optedOut.codeLiterals == nil)
+            #expect(optedOut.codeLiteralBytes == 0)
+            #expect(prepared.codeLiterals == [])
+        }
+
         @Test(arguments: fenceInfoCases)
         func fenceInfoStringsGiveALanguageAndAFilename(info: String?, language: String?, filename: String?) {
             let parsed = FenceInfo(info)

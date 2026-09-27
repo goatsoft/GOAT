@@ -109,9 +109,9 @@ bound on every nested view. The existing byte limits still apply. See the comple
 [ADR-0091](../adrs/0091-content-bounded-transcript-layout.md).
 
 Cache admission includes prepared/scanner metadata and prepared code literals, so tiny segments
-cannot bypass a byte-only budget. Actor limits are 48 MiB total / 32 MiB per reply; front-cache
-limits are 32 MiB total / 24 MiB per reply. These charged costs are not measurements of process RSS.
+cannot bypass a byte-only budget. Actor limits are 32 MiB total / 24 MiB per reply, with completed replies capped at 16 MiB
+inside that total and evicted before active streams. Front-cache limits are 16 MiB total and per reply. These charged costs are not measurements of process RSS.
 Code identity HTML extraction runs in preparation, using the existing parse's HTML, rather than
 in main-thread view evaluation. Dense 2 MiB tests verify scanner retention, bounded admission,
-linear scanning and off-main preparation. Container responsiveness is measured separately in the
+linear scanning and cache lifecycle. Container responsiveness is measured separately in the
 [container comparison](transcript-container-comparison.md).

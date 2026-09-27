@@ -208,13 +208,15 @@ enum SegmentWindow: Hashable, Sendable {
 /// every segment's body, the shared definition suffixes and the parsed segments, plus the source bytes
 /// again for the segment bodies a streaming reply's scanner holds. A reply whose cost
 /// exceeds `maximumEntryCost` is prepared and returned but not retained, and keeps no scanner state.
-/// Least recently used entries are evicted with their scanner state. Memory pressure clears it
+/// Completed entries are evicted before active streams, then least recently used streams if needed.
+/// Completed retention has its own cap inside the total budget. Memory pressure clears it
 /// through `RenderingCaches`.
 actor MarkdownSegmentCache {
     struct Snapshot: Sendable, Equatable {
         let entryCount: Int
         let streamCount: Int
         let cost: Int
+        let completedCost: Int
         /// Segments parsed, and the bytes they rendered, since this cache was created (#60 measurement 1).
         let parseCount: Int
         let parsedBytes: Int
@@ -226,8 +228,6 @@ actor MarkdownSegmentCache {
     struct Work: Sendable, Equatable {
         /// `prepare` calls that were not exact hits.
         var refreshes = 0
-        /// Qualification diagnostic: expensive preparation must not execute on the UI thread.
-        var mainThreadPreparations = 0
         /// Prepared segments examined or rebuilt while assembling documents, and the most in one refresh.
         var visitedSegments = 0
         var maximumVisitedSegments = 0
@@ -283,12 +283,14 @@ actor MarkdownSegmentCache {
     let maximumEntries: Int
     let maximumCost: Int
     let maximumEntryCost: Int
+    let maximumCompletedCost: Int
     private let targetBytes: Int
     private let maximumBytes: Int
     private var entries: [UUID: Entry] = [:]
     /// Present only while the entry for the same reply was prepared from it and the reply streams.
     private var streams: [UUID: Stream] = [:]
     private var cost = 0
+    private var completedCost = 0
     private var access: UInt64 = 0
     private var parseCount = 0
     private var parsedBytes = 0
@@ -297,17 +299,19 @@ actor MarkdownSegmentCache {
 
     /// Defaults retain a streaming reply through `ReplyWindow.richLimit` (its source, its segment
     /// bodies, its scanner's copy, shared definitions, metadata and its window's parses),
-    /// and at most 48 MiB in all.
+    /// and at most 32 MiB in all, of which completed replies retain at most 16 MiB.
     init(
         maximumEntries: Int = 32,
-        maximumCost: Int = 48 * 1_024 * 1_024,
-        maximumEntryCost: Int = 32 * 1_024 * 1_024,
+        maximumCost: Int = 32 * 1_024 * 1_024,
+        maximumEntryCost: Int = 24 * 1_024 * 1_024,
+        maximumCompletedCost: Int = 16 * 1_024 * 1_024,
         targetBytes: Int = MarkdownSegmenter.targetBytes,
         maximumBytes: Int = MarkdownSegmenter.maximumBytes
     ) {
         self.maximumEntries = max(1, maximumEntries)
         self.maximumCost = max(1, maximumCost)
         self.maximumEntryCost = max(1, min(maximumEntryCost, maximumCost))
+        self.maximumCompletedCost = max(1, min(maximumCompletedCost, maximumCost))
         self.targetBytes = targetBytes
         self.maximumBytes = maximumBytes
     }
@@ -350,7 +354,6 @@ actor MarkdownSegmentCache {
                 insert(previous.document, cost: previous.cost, for: id, window: window)
                 return previous.document
             }
-            if Thread.isMainThread { work.mainThreadPreparations += 1 }
             // The same text for another window: parse and release segments, never rescan.
             let old = previous.document
             var windowed = old.segments
@@ -372,7 +375,6 @@ actor MarkdownSegmentCache {
             return document
         }
         work.refreshes += 1
-        if Thread.isMainThread { work.mainThreadPreparations += 1 }
         let clock = ContinuousClock()
 
         // Segmentation: extend the held scanner when the source only grew.
@@ -432,11 +434,13 @@ actor MarkdownSegmentCache {
         entries.removeAll()
         streams.removeAll()
         cost = 0
+        completedCost = 0
     }
 
     func snapshot() -> Snapshot {
         Snapshot(
-            entryCount: entries.count, streamCount: streams.count, cost: cost, parseCount: parseCount,
+            entryCount: entries.count, streamCount: streams.count, cost: cost, completedCost: completedCost,
+            parseCount: parseCount,
             parsedBytes: parsedBytes, work: work)
     }
 
@@ -616,6 +620,7 @@ actor MarkdownSegmentCache {
     private func takeEntry(_ id: UUID) -> Entry? {
         guard let entry = entries.removeValue(forKey: id) else { return nil }
         cost -= entry.cost
+        if entry.document.isComplete { completedCost -= entry.cost }
         return entry
     }
 
@@ -628,9 +633,13 @@ actor MarkdownSegmentCache {
         guard entryCost <= maximumEntryCost else { return false }
         entries[id] = Entry(document: document, cost: entryCost, access: access, window: window)
         cost += entryCost
-        while cost > maximumCost || entries.count > maximumEntries,
-            let victim = entries.min(by: { $0.value.access < $1.value.access })?.key
-        {
+        if document.isComplete { completedCost += entryCost }
+        while cost > maximumCost || completedCost > maximumCompletedCost || entries.count > maximumEntries {
+            // Completed-document churn must not throw away an active reply's incremental scanner.
+            // Streams still obey the same hard total/count limits and are LRU-evicted if necessary.
+            let completed = entries.filter { $0.value.document.isComplete }
+            let candidates = completed.isEmpty ? entries : completed
+            guard let victim = candidates.min(by: { $0.value.access < $1.value.access })?.key else { break }
             _ = takeEntry(victim)
             streams[victim] = nil
         }
@@ -707,10 +716,10 @@ final class PreparedMarkdownDocumentCache {
     private var clock: UInt64 = 0
 
     /// Defaults retain a windowed reply through `ReplyWindow.richLimit` (its source, its segment bodies,
-    /// shared definitions, metadata and its window's parses), and at most 32 MiB in all.
+    /// shared definitions, metadata and its window's parses), and at most 16 MiB in all.
     init(
-        maximumEntries: Int = 64, maximumTotalCost: Int = 32 * 1_024 * 1_024,
-        maximumEntryCost: Int = 24 * 1_024 * 1_024
+        maximumEntries: Int = 64, maximumTotalCost: Int = 16 * 1_024 * 1_024,
+        maximumEntryCost: Int = 16 * 1_024 * 1_024
     ) {
         self.maximumEntries = max(1, maximumEntries)
         self.maximumTotalCost = max(1, maximumTotalCost)

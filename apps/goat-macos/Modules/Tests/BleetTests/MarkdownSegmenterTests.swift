@@ -84,6 +84,14 @@ private func stream(
         #expect(segments.allSatisfy { $0.body.filter { $0 == "x" }.count <= MarkdownSegmenter.maximumGroupBlocks })
     }
 
+    @Test func fenceInteriorAndCloserDoNotConsumePackingWork() {
+        let block = "```swift\n" + code(lines: 12) + "```\n\n"
+        let source = String(repeating: block, count: 4)
+        let result = MarkdownSegmenter.segment(source, isComplete: true)
+        #expect(result.count == 1, "Four fence openers cost 16; interior and closing lines add no work")
+        #expect(result.map(\.body).joined() == source)
+    }
+
     @Test func tinyTableCandidatesDoNotAmplifySegmentMetadata() {
         let source = String(repeating: "|\n|-\n\n", count: 1_000)
         let segments = MarkdownSegmenter.segment(source, isComplete: true)

@@ -518,6 +518,33 @@ extension AppTests.Bleet {
             #expect(front.shownBytes(for: message.id, revision: message.textRevision) == complete.shownBytes)
         }
 
+        @Test @MainActor func completedChurnKeepsStreamingStateInsideTheTotalBudget() async throws {
+            let cache = MarkdownSegmentCache(
+                maximumEntries: 3, maximumCost: 80_000, maximumEntryCost: 64_000, maximumCompletedCost: 24_000)
+            let stream = ChatMessage(role: .assistant)
+            stream.appendStream(text: String(repeating: "Streaming paragraph.\n\n", count: 50), thinking: "")
+            _ = try #require(
+                await cache.prepare(
+                    id: stream.id, source: stream.text, revision: stream.textRevision, isComplete: false,
+                    window: .latest))
+            for index in 0..<12 {
+                _ = await cache.prepare(
+                    id: UUID(), source: "Completed \(index). " + String(repeating: "x", count: 1_000), isComplete: true)
+                let snapshot = await cache.snapshot()
+                #expect(snapshot.streamCount == 1, "Completed history cannot evict the active scanner")
+                #expect(snapshot.completedCost <= 24_000 && snapshot.cost <= 80_000 && snapshot.entryCount <= 3)
+            }
+            stream.complete = true
+            _ = await cache.prepare(
+                id: stream.id, source: stream.text, revision: stream.textRevision, isComplete: true, window: .latest)
+            let complete = await cache.snapshot()
+            #expect(complete.streamCount == 0 && complete.cost == complete.completedCost)
+            #expect(complete.cost <= 24_000)
+            await cache.removeAll()
+            let empty = await cache.snapshot()
+            #expect(empty.cost == 0 && empty.completedCost == 0)
+        }
+
         /// Tiny fences maximize row metadata per source byte. Default budgets must retain the
         /// incremental scanner, otherwise every publication silently starts a full scan again.
         @Test(arguments: ["```\n```\n", "Text.\n\n```swift\nlet x = 1\n```\n\n", "|\n|-\n\n"])
@@ -545,6 +572,9 @@ extension AppTests.Bleet {
             }
             let document = try #require(last)
             let snapshot = await cache.snapshot()
+            print(
+                "DENSE_CACHE source=\(source.utf8.count) segments=\(document.segments.count) document=\(document.cost) actor=\(snapshot.cost)"
+            )
             #expect(document.metadataBytes >= document.segments.count * MemoryLayout<PreparedMarkdownSegment>.stride)
             #expect(snapshot.cost > document.cost + source.utf8.count, "Scanner metadata is also charged")
             // Table lookahead does more byte visits than a fence. Compare growth, not a universal
@@ -552,7 +582,6 @@ extension AppTests.Bleet {
             #expect(
                 halfwayScanned > 0 && snapshot.work.scannedBytes < halfwayScanned * 21 / 10,
                 "No repeated full scan: \(snapshot.work)")
-            #expect(snapshot.work.mainThreadPreparations == 0)
             #expect(document.segments.filter(\.isParsed).count <= 32 + 2 * MarkdownSegmentCache.retentionMargin)
             let front = PreparedMarkdownDocumentCache()
             #expect(front.store(document, for: message.id))

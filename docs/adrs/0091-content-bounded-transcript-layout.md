@@ -263,9 +263,9 @@ settled boundaries must remain unchanged as input grows.
 Dense content creates many more small segments. Cache admission now includes reserved prepared
 segment slots, scanner segment slots and a string-allocation allowance, alongside source/body,
 shared definitions and parsed text. Prepared code literals are charged separately. These are
-bounded admission proxies, not exact heap measurements. The actor retains at most 48 MiB total
-and 32 MiB per reply; the synchronous front cache retains at most 32 MiB total and 24 MiB per
-reply. Both release under the existing memory-pressure policy. The larger entry budgets keep a
+bounded admission proxies, not exact heap measurements. The actor retains at most 32 MiB total
+and 24 MiB per reply, with completed replies capped at 16 MiB inside that total; the synchronous
+front cache retains at most 16 MiB total and per reply. Both release under the existing memory-pressure policy. The larger entry budgets keep a
 2 MiB tiny-fence reply's incremental scanner retained; declining it every publication would
 reintroduce repeated full scanning. Rich-limit tests cover that pathological metadata density.
 
@@ -273,4 +273,16 @@ Code-block identity literals are extracted from the same HTML already produced b
 actor for spacing and caret structure. View identity resolution consumes those prepared literals;
 it no longer renders Markdown to HTML on MainActor or keeps a separate literal cache. Whole-document
 views do not prepare unused identity data. UI construction, layout and scrolling remain on
-MainActor. Qualification records unexpected main-thread preparation alongside CPU and responsiveness.
+MainActor. An actor-local thread counter cannot detect work outside the actor and is not used
+as qualification evidence. Scoped content explicitly distinguishes prepared identities from an
+opt-out; accidentally installing a code scope over opted-out content asserts in debug builds.
+
+The combined actor/front-cache admission ceiling is 48 MiB while streaming and 32 MiB when
+only completed replies remain. These are lazy retention ceilings, not allocations per chat; shared
+parsed storage is conservatively charged by both owners. Completed entries are evicted before
+active streams, preserving incremental scanners during history-cache churn. If active streams
+alone exceed the global byte/count limits, they are evicted by recency too. Completion releases
+the scanner and applies the smaller completed budget immediately. Nothing is pinned outside the
+accounted lifecycle. The dense 2 MiB empty-fence test charges 14,162,944 bytes for the document
+and 22,217,304 bytes including its scanner on the qualification host; these measurements support
+the entry limits without raising steady-state retention. Tests cover churn, completion and clearing.

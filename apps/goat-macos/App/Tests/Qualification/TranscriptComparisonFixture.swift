@@ -19,6 +19,8 @@ import SwiftUI
     let id: String
     var content: Content
     var revision = 0
+    var prepared: PreparedMarkdownSegment?
+    var preparedRevision = -1
     init(_ id: String, _ content: Content) {
         self.id = id
         self.content = content
@@ -28,11 +30,15 @@ import SwiftUI
 @MainActor @Observable final class TranscriptComparisonFixture {
     var rows: [ComparisonRow] = []
     var generation = 0
+    var structureRevision = 0
     var viewportWidth: CGFloat = 0
     var following = true
     var latestRequest = 0
     var visible: Set<String> = []
-    var frames: [String: CGRect] = [:]
+    // Measurement state must not invalidate either candidate during scrolling.
+    @ObservationIgnored var frames: [String: CGRect] = [:]
+    @ObservationIgnored var sampleFrames: (() -> Void)?
+    @ObservationIgnored var compensatedScroll: CGFloat = 0
     var peakVisible = 0
     var heightUpdates = 0
     var status = "Ready"
@@ -110,10 +116,10 @@ import SwiftUI
     func append(_ delta: String, reasoning: Bool, complete: Bool = false) async throws {
         active.appendStream(text: reasoning ? "" : delta, thinking: reasoning ? delta : "")
         active.complete = complete
-        let start = reasoning ? reasoningStart : answerStart
         if reasoning {
             let prepared = try await thinking.prepare(
                 id: active.id, source: active.thinking, revision: active.thinkingRevision)
+            let start = reasoningStart
             let oldCount = rows.count - start
             let first = min(prepared.segments.count, max(0, oldCount - 2))
             if rows.count > start + prepared.segments.count {
@@ -133,6 +139,9 @@ import SwiftUI
         } else if let doc = await markdown.prepare(
             id: active.id, source: active.text, revision: active.textRevision, isComplete: complete, window: .latest)
         {
+            // History can be inserted while the actor prepares. Resolve the live row base only
+            // after the await, so publication never overwrites a historical or earlier live row.
+            let start = answerStart
             let oldCount = rows.count - start
             let first = min(doc.segments.count, max(0, oldCount - 2))
             if rows.count > start + doc.segments.count { rows.removeLast(rows.count - start - doc.segments.count) }
@@ -258,9 +267,10 @@ struct ComparisonRowView: View {
     let row: ComparisonRow
     let fixture: TranscriptComparisonFixture
     var reportsSwiftUIFrame = true
-    var measured: (CGFloat) -> Void = { _ in }
+    var measured: (CGSize) -> Void = { _ in }
     @Environment(AppModel.self) private var model
-    @State private var prepared: PreparedMarkdownSegment?
+    var preparesMarkdown = true
+    var recordsVisibility = true
 
     var body: some View {
         content
@@ -268,20 +278,32 @@ struct ComparisonRowView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 6)
             .fixedSize(horizontal: false, vertical: true)
-            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { measured($0) }
+            .onGeometryChange(for: CGSize.self, of: { $0.size }) { measured($0) }
             .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) {
                 if reportsSwiftUIFrame { fixture.frames[row.id] = $0 }
             }
-            .onAppear { fixture.appeared(row.id) }
-            .onDisappear { fixture.disappeared(row.id) }
+            .onAppear { if recordsVisibility { fixture.appeared(row.id) } }
+            .onDisappear {
+                if recordsVisibility {
+                    fixture.disappeared(row.id)
+                    if reportsSwiftUIFrame {
+                        row.prepared = nil
+                        row.preparedRevision = -1
+                    }
+                }
+            }
             .task(id: row.revision) {
-                guard case .markdown(let message, let segment, _) = row.content else { return }
+                guard preparesMarkdown, case .markdown(let message, let segment, _) = row.content else { return }
+                let rowRevision = row.revision
                 let revision = message.textRevision
                 let doc = await fixture.markdown.prepare(
                     id: message.id, source: message.text, revision: revision, isComplete: message.complete,
                     window: .segments(segment.index..<(segment.index + 1)))
-                guard !Task.isCancelled, let doc, doc.segments.indices.contains(segment.index) else { return }
-                prepared = doc.segments[segment.index]
+                guard !Task.isCancelled, row.revision == rowRevision, let doc,
+                    doc.segments.indices.contains(segment.index)
+                else { return }
+                row.prepared = doc.segments[segment.index]
+                row.preparedRevision = rowRevision
             }
     }
 
@@ -294,7 +316,7 @@ struct ComparisonRowView: View {
         case .reasoning(let segment): ThinkingSegmentView(segment: segment, joinsNext: false)
         case .label(let label): Text(label).font(.caption).foregroundStyle(model.theme.tokens.muted)
         case .markdown(let message, let segment, let codeSegment):
-            if let prepared {
+            if let prepared = row.prepared, row.preparedRevision == row.revision {
                 MarkdownSegmentView(
                     segment: prepared, fontSize: model.chatFontSize, isStreaming: !message.complete,
                     isTail: !message.complete && !segment.isSettled, codeSegment: codeSegment

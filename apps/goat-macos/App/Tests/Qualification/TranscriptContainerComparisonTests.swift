@@ -65,6 +65,10 @@ extension TranscriptPerformanceTests {
             return
         }
         XCTAssertGreaterThan(scroll.documentView?.bounds.height ?? 0, scroll.contentSize.height)
+        if environment["GOAT_COMPARE_NAVIGATION"] == "1" {
+            try await comparisonNavigation(fixture, backend: backend, host: host, scroll: scroll)
+            return
+        }
         let initial = comparisonUsage()
         let scrollStart = ProcessInfo.processInfo.systemUptime
         try await comparisonGesture(scroll, direction: 1)
@@ -113,15 +117,14 @@ extension TranscriptPerformanceTests {
             let beforeCompletion = comparisonAnchor(fixture, host: host)
             try await fixture.append("", reasoning: reasoning, complete: true)
             try await Task.sleep(for: .seconds(3))
+            fixture.sampleFrames?()
             let after = comparisonUsage()
             let anchorDrift = anchor.flatMap { saved in fixture.frames[saved.0].map { Double($0.minY - saved.1) } }
             let completionDrift = beforeCompletion.flatMap { saved in
                 fixture.frames[saved.0].map { Double($0.minY - saved.1) }
             }
             let preparation = await fixture.markdown.snapshot()
-            XCTAssertEqual(preparation.work.mainThreadPreparations, 0)
             let result: [String: Any] = [
-                "preparation_main_thread_refreshes": preparation.work.mainThreadPreparations,
                 "preparation_cache_bytes": preparation.cost,
                 "preparation_scanned_bytes": preparation.work.scannedBytes,
                 "backend": backend, "phase": phase, "bytes": published, "follows": follows,
@@ -152,6 +155,7 @@ extension TranscriptPerformanceTests {
         let anchor = comparisonAnchor(fixture, host: host)
         window.setContentSize(NSSize(width: 820, height: 780))
         try await Task.sleep(for: .seconds(1))
+        fixture.sampleFrames?()
         if let anchor, let frame = fixture.frames[anchor.0] {
             print("COMPARISON_REFLOW backend=\(backend) anchor_drift_pt=\(frame.minY - anchor.1)")
         } else {
@@ -171,22 +175,182 @@ extension TranscriptPerformanceTests {
 
 @MainActor private func comparisonAnchor(_ fixture: TranscriptComparisonFixture, host: NSView) -> (String, CGFloat)? {
     // Include a partially visible tall row, not only rows whose top edge is on screen.
-    fixture.frames.filter { $0.value.maxY > 80 && $0.value.minY < host.bounds.height - 60 }
+    fixture.sampleFrames?()
+    guard let scroll = comparisonScroll(host) else { return nil }
+    let rect = scroll.contentView.convert(scroll.contentView.bounds, to: host)
+    let top = host.isFlipped ? rect.minY : host.bounds.height - rect.maxY
+    let bottom = top + rect.height
+    return fixture.frames.filter { $0.value.maxY > top + 1 && $0.value.minY < bottom }
         .min(by: { $0.value.minY < $1.value.minY }).map { ($0.key, $0.value.minY) }
+}
+
+/// Replays the direct-move regression and sends upward input while async preparation, insertion
+/// above the viewport and streamed tail growth run concurrently. Scripted events are not hardware
+/// momentum; the latter remains manual qualification on each supported OS.
+@MainActor private func comparisonNavigation(
+    _ fixture: TranscriptComparisonFixture, backend: String, host: NSView, scroll: NSScrollView
+) async throws {
+    fixture.following = true
+    fixture.latestRequest += 1
+    try await Task.sleep(for: .milliseconds(50))
+    fixture.following = false
+    print(
+        "COMPARISON_GEOMETRY document=\(scroll.documentView?.bounds ?? .zero) clip=\(scroll.contentView.bounds) scroll=\(type(of: scroll))"
+    )
+    let target = max(0, ((scroll.documentView?.bounds.height ?? 0) - scroll.contentSize.height) / 2)
+    scroll.contentView.scroll(to: NSPoint(x: 0, y: target))
+    scroll.reflectScrolledClipView(scroll.contentView)
+    host.layoutSubtreeIfNeeded()
+    let directOrigin = scroll.contentView.bounds.minY
+    let directCompensation = fixture.compensatedScroll
+    try await Task.sleep(for: .milliseconds(500))
+    host.layoutSubtreeIfNeeded()
+    let replayDrift = abs(
+        scroll.contentView.bounds.minY - directOrigin - (fixture.compensatedScroll - directCompensation))
+    print("COMPARISON_NAVIGATION backend=\(backend) direct_move_drift_pt=\(replayDrift)")
+    XCTAssertLessThanOrEqual(replayDrift, 1, "ADR-0097 direct-move replay")
+
+    // Start below unmeasured historical rows, then climb while the live answer grows to 2 MiB.
+    fixture.following = false
+    let source = TranscriptComparisonFixture.source(bytes: 2 * 1_024 * 1_024, reasoning: false, dense: false)
+    let historicalIDs = Set(fixture.rows.map(\.id))
+    let growth = Task { @MainActor in
+        var offset = source.startIndex
+        while offset < source.endIndex {
+            var end = source.utf8.index(offset, offsetBy: 16_384, limitedBy: source.utf8.endIndex) ?? source.endIndex
+            while end < source.endIndex, String.Index(end, within: source) == nil {
+                end = source.utf8.index(before: end)
+            }
+            try Task.checkCancellation()
+            try await fixture.append(String(source[offset..<end]), reasoning: false)
+            offset = end
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        try await fixture.append("", reasoning: false, complete: true)
+    }
+    defer { growth.cancel() }
+    var residuals: [CGFloat] = []
+    var missing = 0
+    for tick in 0..<192 {
+        host.layoutSubtreeIfNeeded()
+        guard let anchor = comparisonAnchor(fixture, host: host) else {
+            missing += 1
+            try await Task.sleep(for: .milliseconds(16))
+            continue
+        }
+        let before = scroll.contentView.bounds.minY
+        let requestedDelta = comparisonWheel(scroll, direction: 1, tick: tick % 24)
+        let maximumOrigin = max(0, (scroll.documentView?.bounds.height ?? 0) - scroll.contentSize.height)
+        let applied = max(0, min(maximumOrigin, before + requestedDelta)) - before
+        let immediateDelta = scroll.contentView.bounds.minY - before
+        if tick == 24, let index = fixture.rows.firstIndex(where: { $0.id == anchor.0 }) {
+            fixture.rows.insert(
+                ComparisonRow("inserted-during-gesture", .label("Inserted above the reader")), at: index)
+            fixture.reasoningStart += 1
+            fixture.answerStart += 1
+            fixture.structureRevision += 1
+            fixture.generation += 1
+        }
+        if tick == 48, let index = fixture.rows.firstIndex(where: { $0.id == anchor.0 }), index > 0 {
+            let above = fixture.rows[index - 1]
+            above.content = .label(String(repeating: "Height changed above the reader.\n", count: 8))
+            above.revision += 1
+            fixture.lastChanged = (index - 1)..<index
+            fixture.generation += 1
+        }
+        try await Task.sleep(for: .milliseconds(16))
+        host.layoutSubtreeIfNeeded()
+        fixture.sampleFrames?()
+        if let frame = fixture.frames[anchor.0] {
+            // Compare with the event's requested pixel delta, not the final clip-origin delta:
+            // treating an unwanted programmatic scroll as input would hide the very regression.
+            let residual = abs(frame.minY - anchor.1 + applied)
+            residuals.append(residual)
+            if residual > 1 {
+                print(
+                    "COMPARISON_EVENT tick=\(tick) id=\(anchor.0) before=\(before) immediate_delta=\(immediateDelta) requested_delta=\(applied) final_offset=\(scroll.contentView.bounds.minY) frame_delta=\(frame.minY - anchor.1) residual=\(residual)"
+                )
+            }
+        } else {
+            missing += 1
+        }
+    }
+    try await growth.value
+    let worst = residuals.max() ?? .infinity
+    print(
+        "COMPARISON_NAVIGATION backend=\(backend) gesture_growth_max_residual_pt=\(worst) samples=\(residuals.count) missing=\(missing)"
+    )
+    XCTAssertGreaterThan(residuals.count, 96, "At least half the events must retain a measurable anchor")
+    XCTAssertEqual(fixture.active.text.utf8.count, 2 * 1_024 * 1_024)
+    let finalIDs = Set(fixture.rows.map(\.id))
+    XCTAssertEqual(finalIDs.count, fixture.rows.count)
+    XCTAssertTrue(historicalIDs.isSubset(of: finalIDs), "Concurrent insertion must preserve all historical rows")
+    let answer = fixture.rows.compactMap { row -> String? in
+        guard case .markdown(let message, let segment, _) = row.content, message.id == fixture.active.id else {
+            return nil
+        }
+        return segment.body
+    }.joined()
+    XCTAssertEqual(answer, fixture.active.text, "Every streamed byte remains in the row model after insertion")
+    XCTAssertLessThanOrEqual(worst, 1, "Height changes must preserve the anchor after accounting for input")
+
+    fixture.following = true
+    fixture.latestRequest += 1
+    try await Task.sleep(for: .milliseconds(500))
+    host.layoutSubtreeIfNeeded()
+    let gap = (scroll.documentView?.bounds.height ?? 0) - scroll.contentView.bounds.maxY
+    print("COMPARISON_NAVIGATION backend=\(backend) following_gap_pt=\(gap)")
+    XCTAssertLessThanOrEqual(abs(gap), 1, "Following uses the laid-out document height")
+
+    fixture.following = false
+    scroll.contentView.scroll(to: NSPoint(x: 0, y: (scroll.documentView?.bounds.height ?? 0) / 2))
+    scroll.reflectScrolledClipView(scroll.contentView)
+    try await Task.sleep(for: .milliseconds(500))
+    let window = try XCTUnwrap(host.window)
+    for (width, font) in [(820.0, 20.0), (1180.0, 14.0)] {
+        host.layoutSubtreeIfNeeded()
+        let anchor = try XCTUnwrap(comparisonAnchor(fixture, host: host))
+        AppModel.shared.chatFontSize = font
+        window.setContentSize(NSSize(width: width, height: 780))
+        try await Task.sleep(for: .milliseconds(500))
+        host.layoutSubtreeIfNeeded()
+        fixture.sampleFrames?()
+        print("COMPARISON_REFLOW_ANCHOR id=\(anchor.0) old_y=\(anchor.1) current_ids=\(fixture.frames.keys.sorted())")
+        let frame = try XCTUnwrap(fixture.frames[anchor.0], "Reflow must retain a measurable anchor")
+        let drift = abs(frame.minY - anchor.1)
+        print("COMPARISON_NAVIGATION backend=\(backend) reflow_width=\(width) font=\(font) drift_pt=\(drift)")
+        XCTAssertLessThanOrEqual(drift, 1)
+    }
+}
+
+@discardableResult
+@MainActor private func comparisonWheel(_ scroll: NSScrollView, direction: Int32, tick: Int) -> CGFloat {
+    let boundary = [15, 23].contains(tick)
+    guard
+        let event = CGEvent(
+            scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: boundary ? 0 : direction * 60,
+            wheel2: 0, wheel3: 0
+        )
+    else {
+        XCTFail("Could not construct the scrolling event")
+        return 0
+    }
+    event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+    event.setIntegerValueField(.scrollWheelEventScrollPhase, value: tick == 0 ? 1 : tick == 15 ? 4 : tick < 15 ? 2 : 0)
+    event.setIntegerValueField(
+        .scrollWheelEventMomentumPhase, value: tick == 16 ? 1 : tick == 23 ? 3 : tick > 16 ? 2 : 0)
+    guard let native = NSEvent(cgEvent: event) else {
+        XCTFail("Could not bridge the scrolling event")
+        return 0
+    }
+    let requested = -native.scrollingDeltaY
+    scroll.scrollWheel(with: native)
+    return requested
 }
 
 @MainActor private func comparisonGesture(_ scroll: NSScrollView, direction: Int32) async throws {
     for tick in 0..<24 {
-        guard
-            let event = CGEvent(
-                scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: direction * 60, wheel2: 0, wheel3: 0
-            )
-        else { continue }
-        event.setIntegerValueField(
-            .scrollWheelEventScrollPhase, value: tick == 0 ? 1 : tick == 15 ? 4 : tick < 15 ? 2 : 0)
-        event.setIntegerValueField(
-            .scrollWheelEventMomentumPhase, value: tick == 16 ? 1 : tick == 23 ? 3 : tick > 16 ? 2 : 0)
-        if let native = NSEvent(cgEvent: event) { scroll.scrollWheel(with: native) }
+        comparisonWheel(scroll, direction: direction, tick: tick)
         try await Task.sleep(for: .milliseconds(16))
     }
 }

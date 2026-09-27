@@ -186,13 +186,16 @@ extension EnvironmentValues {
     static let shared = CodeBlockPositions()
 
     func identity(of code: String, occurrence: Int?, in scope: CodeBlockScope) -> CodeBlockIdentity? {
+        guard let list = scope.content.codeLiterals else {
+            assertionFailure("CodeBlockScope requires prepared code identities")
+            return nil
+        }
         if scope.isFencePiece {
             return CodeBlockIdentity(messageID: scope.messageID, segment: scope.segment, position: 0)
         }
         if let occurrence {
             return CodeBlockIdentity(messageID: scope.messageID, segment: scope.segment, position: occurrence)
         }
-        let list = scope.content.codeLiterals
         // MarkdownUI may drop the literal's final newline; match either way.
         func trimmed(_ text: String) -> Substring {
             text.dropLast(text.reversed().prefix(while: { $0 == "\n" }).count)

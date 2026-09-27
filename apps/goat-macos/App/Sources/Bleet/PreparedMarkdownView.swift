@@ -10,16 +10,18 @@ import SwiftUI
 struct PreparedMarkdownContent: @unchecked Sendable {
     let value: MarkdownContent
     /// Prepared with the parse, never by a code-block view on MainActor.
-    let codeLiterals: [String]
+    let codeLiterals: [String]?
     let codeLiteralBytes: Int
 
     init(value: MarkdownContent, renderedHTML: String? = nil, preparesCodeIdentity: Bool = true) {
         self.value = value
         codeLiterals =
-            preparesCodeIdentity ? CodeBlockPositions.codeBlocks(html: renderedHTML ?? value.renderHTML()) : []
+            preparesCodeIdentity ? CodeBlockPositions.codeBlocks(html: renderedHTML ?? value.renderHTML()) : nil
         codeLiteralBytes =
-            codeLiterals.reduce(0) { $0 + $1.utf8.count }
-            + codeLiterals.capacity * MemoryLayout<String>.stride + codeLiterals.count * 32
+            codeLiterals.map { literals in
+                literals.reduce(0) { $0 + $1.utf8.count }
+                    + literals.capacity * MemoryLayout<String>.stride + literals.count * 32
+            } ?? 0
     }
 }
 

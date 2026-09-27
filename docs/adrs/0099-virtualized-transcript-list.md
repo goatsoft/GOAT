@@ -68,9 +68,13 @@ complete qualification remain open before accepting this decision.
 
 The complexity-bound follow-up reduced dense SwiftUI wall time from 94.85 to 20.29 seconds and
 CPU from 93.10 to 16.53 seconds. Dense AppKit improved to 73.89 seconds but still stalls. This
-supports finer segment packing without selecting a container. The native following reflow still
-moves 870 pt, and reader-held answer growth moves 65.5 pt, and SwiftUI geometry-cycling warnings remain. The reference separates these
-new observations from the initial evidence; acceptance and full qualification remain open.
+supports finer segment packing without selecting a container. Those measurements used the original prototype, whose deferred measurements, unconditional
+restoration and per-cell presentation did not implement the proposed native policy. Its 870 pt
+following reflow and 65.5 pt reader-growth drift are not evidence against that policy. The revised
+harness measures overscan before display, applies geometry deltas to the current origin, retains
+height variants across reflow and inherits one window presentation environment. It adds strict
+concurrent-input and direct-move regressions for both candidates. The reference separates the
+historical measurements from review follow-up results; acceptance and full qualification remain open.
 
 ## Proposed decision
 

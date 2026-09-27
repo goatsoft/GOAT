@@ -40,6 +40,7 @@ Optional environment variables (all prefixed `TEST_RUNNER_` when invoking Make):
 | `GOAT_COMPARE_CHANNEL` | both | `answer`, `reasoning`, or both |
 | `GOAT_COMPARE_FOLLOW` | 1 | Set 0 to hold the reader after scrolling upward |
 | `GOAT_COMPARE_DENSE` | 0 | Set 1 for dense paragraph/fence regression input |
+| `GOAT_COMPARE_NAVIGATION` | 0 | Set 1 to assert direct-move and concurrent upward-input/growth regressions instead of timing |
 | `GOAT_COMPARE_INSTRUMENTS` | 0 | Set 1 for a 15-second attach interval after READY |
 | `GOAT_COMPARE_INTERACTIVE` | 0 | Set 1 to leave the window open for manual checks |
 
@@ -73,12 +74,47 @@ kept separate from intended movement during a gesture. The initial gesture is id
 not a guarantee of identical visible content: the containers estimate unmeasured heights
 differently. Reader-held numbers primarily test each candidate's own anchor stability.
 
-The native candidate uses estimated heights and asynchronously reported SwiftUI measurements,
-then applies table height updates and anchor correction in one animation-disabled transaction.
-This is a prototype of the proposed policy, not proof that every correction precedes presentation
-or preserves momentum on all supported operating systems. Cold Markdown initially uses plain text
-in both candidates so its formatting transition can be observed; this does not satisfy the no-flash
-acceptance criterion.
+The revised native candidate measures visible rows and one viewport of overscan with a sizing
+host before display. Exact heights are keyed by row identity, content revision, parsed preparation,
+width and typography, with 4,096 cached variants. Visible rows have priority; additional overscan
+measurement has an 8 ms budget per pass. Previous offscreen heights survive reflow as scaled
+estimates. Reader correction applies only the document-coordinate delta above the anchor to the
+current clip origin. Following reads the document height after layout. Neither path writes an
+unchanged origin. SwiftUI height callbacks collect updates for the pre-display transaction;
+bounds notifications never re-enter table data-source/layout work. Prepared rows remain alive
+through the native overscan and are released when they leave it.
+
+Cells use a concrete SwiftUI root and inherit the window's resolved environment. The window alone
+installs presentation styling. Reuse identifiers distinguish row kinds; changing the row identity
+intentionally resets its local content/disclosure state, while updating the same row preserves it.
+Frame observations in both candidates are outside observable UI state.
+
+`GOAT_COMPARE_NAVIGATION=1` exercises a direct move after Latest, 192 upward wheel events while
+an answer grows to 2 MiB, insertion and height changes above the reader, final bottom alignment,
+and width/font changes in both directions. All assertions use a 1 pt tolerance. Gesture residuals
+compare the row's screen displacement with the input event's pixel delta,
+clamped at the document edges. They do not treat the observed clip-origin change as input, which
+could hide an unwanted programmatic scroll. Gesture/momentum ending events carry zero delta; beginning events carry the requested input.
+The direct-move probe accounts separately for explicit native height compensation and records
+unexplained offset movement after the reader takes ownership. A failure does not identify a
+particular private SwiftUI mechanism. These synthetic probes expose regressions, but cannot certify hardware momentum,
+every possible layout transition or supported-OS behavior. A failing candidate remains unqualified;
+the assertions are not converted to expected successes.
+
+Cold Markdown initially uses plain text in both candidates so its formatting transition can be
+observed; this does not satisfy the no-flash acceptance criterion.
+
+## Interpretation correction after review
+
+The initial and complexity-bound tables below are historical measurements of the prototypes at
+`8bb7c88` and `13ad243`.
+They are **not a like-for-like comparison of the proposed container policies**. The original
+native candidate corrected displayed heights on a later turn, restored an absolute scroll target
+on every publication, read the following target before layout, discarded all heights on resize,
+and installed window presentation in each hosted cell. Its drift and timing cannot establish
+that AppKit or ADR-0099's proposed policy is inferior. The original SwiftUI runs did not exercise
+ADR-0097's direct-move replay or upward input overlapping growth. Their zero held-anchor result
+is only an idle-reader observation, not scroll qualification. No container is selected.
 
 ## Initial comparison, 2026-09-27
 
@@ -201,7 +237,8 @@ containers, not the shipping paged transcript's complete composition.
 Dense SwiftUI CPU fell about 82%, and peak host RSS fell from 530.0 to 285.8 MiB. Dense AppKit
 also improved, but still consumed 72.33 seconds CPU and showed 169.10 ms p95 overrun. The result
 supports complexity-aware packing; it does not establish a frame-rate or key-to-pixel guarantee.
-All recorded Markdown preparation diagnostics were zero for execution on the main thread.
+The original actor-local main-thread counter has been removed: it could not detect HTML work
+performed outside that actor, so its zero values were not evidence of off-main coverage.
 The package tests prove full/incremental equivalence and settled-boundary stability. Three default-
 budget 2 MiB cache cases (tiny empty fences, mixed tiny fences/prose and tiny table candidates)
 retain the scanner, charge metadata, scan linearly, bound retained parses and admit the front-cache
@@ -257,3 +294,19 @@ the final CPU-profile run passed. The code-chrome suite also passed three fresh-
 repetitions after fixing its measurement host. Website unit tests, both site builds and built-
 content checks cover the updated reference and ADRs. Performance and geometry acceptance remain
 separate from these successful test invocations.
+
+
+## Review checkpoint: qualification remains open
+
+This checkpoint publishes the review changes for inspection, not container acceptance.
+The cache and identity changes passed `make verify CONFIG=Release` with 551 app tests,
+three opt-in skips and the existing expected ScrollPosition limitation. Subsequent changes
+to the opt-in comparison harness have not completed the full verification gate.
+
+The stricter navigation probe still fails. Runs showed requested scrolling that was not
+reflected in viewport movement, anchor loss during reflow, and one stalled Debug run whose
+app process reached approximately 3.5 GB resident memory before it was stopped. These are
+unresolved observations, not established production defects: event injection, sizing and
+container behavior still need to be isolated. Historical timing tables below their dated
+headings do not qualify this revised harness. No current container winner, bounded-memory
+qualification or Delivery 3 completion is claimed. ADR-0099 remains Proposed.
