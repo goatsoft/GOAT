@@ -219,9 +219,24 @@ extension AppTests.Bleet {
             #expect(structure.lastLeafIsParagraph == lastLeafIsParagraph, "\(html)")
         }
 
+        @Test func smallListsAllocateOnlyTheirGrowingTail() {
+            var list = ChunkedList<Int>()
+            list.append(1)
+            #expect(list.allocatedCapacity < ChunkedList<Int>.chunkSize)
+            let snapshot = list
+            for value in 2...65 { list.append(value) }
+            #expect(Array(snapshot) == [1])
+            #expect(Array(list) == Array(1...65))
+            list.set(99, at: 0)
+            #expect(snapshot[0] == 1)
+            list.removeSuffix(from: 64)
+            list.append(66)
+            #expect(list[64] == 66)
+        }
+
         @Test func cacheChargesRenderedBytesAndEvictsWithinBounds() async throws {
             let cache = MarkdownSegmentCache(
-                maximumEntries: 2, maximumCost: 48_000, maximumEntryCost: 24_000, targetBytes: 1)
+                maximumEntries: 2, maximumCost: 2_400, maximumEntryCost: 1_800, targetBytes: 1)
             let reference = "Use [a][x].\n\nThen [a][x] again.\n\n[x]: https://example.com/x\n"
             let document = try #require(await cache.prepare(id: UUID(), source: reference, isComplete: true))
             // Each segment that accepts definitions renders the suffix, so rendered bytes exceed the source.
@@ -232,7 +247,7 @@ extension AppTests.Bleet {
             _ = await cache.prepare(id: UUID(), source: "Two.", isComplete: true)
             _ = await cache.prepare(id: UUID(), source: "Three.", isComplete: true)
             let bounded = await cache.snapshot()
-            #expect(bounded.entryCount == 2 && bounded.cost <= 48_000)
+            #expect(bounded.entryCount == 2 && bounded.cost <= 2_400)
 
             let oversized = String(repeating: "word ", count: 10_000)
             #expect(await cache.prepare(id: UUID(), source: oversized, isComplete: false) != nil)
@@ -244,7 +259,7 @@ extension AppTests.Bleet {
         @Test @MainActor func frontCacheServesExactAndLatestDocumentsWithinItsBudget() async throws {
             let segments = MarkdownSegmentCache()
             let cache = PreparedMarkdownDocumentCache(
-                maximumEntries: 2, maximumTotalCost: 48_000, maximumEntryCost: 24_000)
+                maximumEntries: 2, maximumTotalCost: 1_200, maximumEntryCost: 600)
             let message = ChatMessage(role: .assistant)
             message.appendStream(text: "Partial", thinking: "")
             let partial = message.textRevision

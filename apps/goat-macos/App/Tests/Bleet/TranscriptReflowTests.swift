@@ -27,6 +27,17 @@ import Testing
     Issue.record("Native scrolling did not settle within two seconds: \(scroll.contentView.bounds)")
 }
 
+/// Keep the window's size owner separate from SwiftUI's changing ideal content size.
+/// In CI the direct hosting root contracted a requested 980 pt viewport to 65 pt on reflow,
+/// despite sizingOptions being empty. Production receives its viewport from surrounding chrome.
+@MainActor private func installReflowHost(_ host: NSView, in window: NSWindow) {
+    let viewport = NSView(frame: NSRect(origin: .zero, size: window.contentLayoutRect.size))
+    host.frame = viewport.bounds
+    host.autoresizingMask = [.width, .height]
+    viewport.addSubview(host)
+    window.contentView = viewport
+}
+
 @MainActor private func reflowScroll(_ view: NSView) -> NSScrollView? {
     if let scroll = view as? NSScrollView { return scroll }
     return view.subviews.lazy.compactMap(reflowScroll).first
@@ -81,7 +92,7 @@ extension AppTests.Bleet {
             // exports content-derived min/ideal/max sizes to the window while Markdown reflows.
             // In the app the transcript receives its width from the surrounding chat layout.
             host.sizingOptions = []
-            window.contentView = host
+            installReflowHost(host, in: window)
             // Exercise a displayed window: native scroll settling and display-cycle layout
             // are suspended differently for a hidden hosting view.
             window.orderFront(nil)
@@ -168,7 +179,7 @@ extension AppTests.Bleet {
             // exports content-derived min/ideal/max sizes to the window while Markdown reflows.
             // In the app the transcript receives its width from the surrounding chat layout.
             host.sizingOptions = []
-            window.contentView = host
+            installReflowHost(host, in: window)
             // Exercise a displayed window: native scroll settling and display-cycle layout
             // are suspended differently for a hidden hosting view.
             window.orderFront(nil)

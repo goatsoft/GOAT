@@ -159,7 +159,6 @@ private struct ComparisonNativeList: NSViewRepresentable {
         var measurementOrder: [HeightKey] = []
         var measurementHost: NSHostingView<MeasurementRoot>?
         var measurementCount = 0
-        var retainedRows: [String: ComparisonRow] = [:]
         var generation = -1
         var structureRevision = -1
         var appearance = ""
@@ -175,11 +174,7 @@ private struct ComparisonNativeList: NSViewRepresentable {
             observers = []
             fixture.sampleFrames = nil
             measurementHost = nil
-            for row in retainedRows.values {
-                row.prepared = nil
-                row.preparedRevision = -1
-            }
-            retainedRows.removeAll()
+            fixture.setPreparationOverscan([])
         }
 
         func observe(_ scroll: NSScrollView) {
@@ -443,12 +438,7 @@ private struct ComparisonNativeList: NSViewRepresentable {
             pendingHeights.removeAll()
             let candidates = range.location..<min(rows.count, range.location + range.length)
             let retained = Set(candidates.map { rows[$0].id })
-            for (id, row) in retainedRows where !retained.contains(id) {
-                row.prepared = nil
-                row.preparedRevision = -1
-                retainedRows[id] = nil
-            }
-            for index in candidates { retainedRows[rows[index].id] = rows[index] }
+            fixture.setPreparationOverscan(retained)
             let visibleRows = table.rows(in: visible)
             let visibleIndices =
                 visibleRows.location == NSNotFound
@@ -462,7 +452,7 @@ private struct ComparisonNativeList: NSViewRepresentable {
                 let row = rows[index]
                 let key = HeightKey(
                     id: row.id, revision: row.revision,
-                    preparation: row.preparedRevision == row.revision ? row.prepared?.preparationID ?? 0 : 0,
+                    preparation: fixture.preparedSegment(for: row)?.preparationID ?? 0,
                     width: width, typography: typography)
                 let height: CGFloat
                 if let known = measuredHeights[key] {
@@ -533,7 +523,7 @@ private struct ComparisonNativeList: NSViewRepresentable {
         var body: some View {
             ComparisonRowView(
                 row: row, fixture: fixture, reportsSwiftUIFrame: false,
-                preparesMarkdown: false, recordsVisibility: false
+                recordsVisibility: false
             )
             .id(row.id)
             .environment(\.self, environment)

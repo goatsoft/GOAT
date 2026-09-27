@@ -19,8 +19,6 @@ import SwiftUI
     let id: String
     var content: Content
     var revision = 0
-    var prepared: PreparedMarkdownSegment?
-    var preparedRevision = -1
     init(_ id: String, _ content: Content) {
         self.id = id
         self.content = content
@@ -45,6 +43,85 @@ import SwiftUI
     var composer = ""
     var finished = false
     let markdown = MarkdownSegmentCache()
+    @ObservationIgnored let documents = PreparedMarkdownDocumentCache()
+    @ObservationIgnored private var markdownRows: [String: ComparisonRow] = [:]
+    @ObservationIgnored private var overscan: Set<String> = []
+    @ObservationIgnored private var preparationTask: Task<Void, Never>?
+    @ObservationIgnored private var preparationPending = false
+    private(set) var preparationRevision = 0
+
+    /// One owner combines all visible segments of each message into one cache window.
+    /// Rows consume the production front cache synchronously, including on scroll-back.
+    func preparedSegment(for row: ComparisonRow) -> PreparedMarkdownSegment? {
+        _ = preparationRevision
+        guard case .markdown(let message, let segment, _) = row.content,
+            let document = documents.document(for: message.id, revision: message.textRevision),
+            document.segments.indices.contains(segment.index), document.shownSegments.contains(segment.index)
+        else { return nil }
+        return document.segments[segment.index]
+    }
+
+    func setPreparationOverscan(_ ids: Set<String>) {
+        guard overscan != ids else { return }
+        overscan = ids
+        schedulePreparation()
+    }
+
+    func stopPreparation() {
+        preparationTask?.cancel()
+        preparationTask = nil
+    }
+
+    private func schedulePreparation() {
+        preparationPending = true
+        guard preparationTask == nil else { return }
+        preparationTask = Task { @MainActor [weak self] in
+            await Task.yield()  // Coalesce row lifecycle callbacks into one viewport request.
+            guard let self else { return }
+            while self.preparationPending, !Task.isCancelled {
+                self.preparationPending = false
+                await self.prepareRequestedRows()
+            }
+            self.preparationTask = nil
+        }
+    }
+
+    private func requestedWindows() -> [UUID: (ChatMessage, Range<Int>)] {
+        var requests: [UUID: (ChatMessage, Range<Int>)] = [:]
+        for id in visible.union(overscan) {
+            guard let row = markdownRows[id], case .markdown(let message, let segment, _) = row.content else {
+                continue
+            }
+            let previous = requests[message.id]?.1 ?? segment.index..<(segment.index + 1)
+            requests[message.id] = (
+                message, min(previous.lowerBound, segment.index)..<max(previous.upperBound, segment.index + 1)
+            )
+        }
+        return requests
+    }
+
+    func prepareRequestedRows() async {
+        for (_, request) in requestedWindows() {
+            let (message, window) = request
+            let revision = message.textRevision
+            let complete = message.complete
+            if let cached = documents.document(for: message.id, revision: revision),
+                cached.isComplete == complete,
+                cached.shownSegments.lowerBound <= window.lowerBound,
+                cached.shownSegments.upperBound >= window.upperBound
+            {
+                continue
+            }
+            guard
+                let document = await markdown.prepare(
+                    id: message.id, source: message.text, revision: revision, isComplete: complete,
+                    window: .segments(window)), !Task.isCancelled, message.textRevision == revision,
+                message.complete == complete
+            else { continue }
+            documents.store(document, for: message.id)
+            preparationRevision += 1
+        }
+    }
     let thinking = ThinkingPreparation()
     let active = ChatMessage(role: .assistant)
     let liveTools = ChatMessage(role: .assistant)
@@ -55,10 +132,12 @@ import SwiftUI
     func appeared(_ id: String) {
         visible.insert(id)
         peakVisible = max(peakVisible, visible.count)
+        schedulePreparation()
     }
     func disappeared(_ id: String) {
         visible.remove(id)
         frames[id] = nil
+        schedulePreparation()
     }
 
     func seed(rounds: Int = 48) async throws {
@@ -83,6 +162,7 @@ import SwiftUI
             if let doc = await markdown.prepare(
                 id: answer.id, source: answer.text, revision: answer.textRevision, isComplete: true)
             {
+                documents.store(doc, for: answer.id)
                 for segment in doc.segments {
                     rows.append(
                         ComparisonRow(
@@ -91,6 +171,11 @@ import SwiftUI
             }
             rows.append(ComparisonRow("footer-\(round)", .label("Completed · synthetic replay · response \(round)")))
         }
+        markdownRows = Dictionary(
+            uniqueKeysWithValues: rows.compactMap { row in
+                guard case .markdown = row.content else { return nil }
+                return (row.id, row)
+            })
         rows.append(ComparisonRow("live-header", .label("GOAT · live replay")))
         rows.append(ComparisonRow("live-tools", .tools(liveTools)))
         reasoningStart = rows.count
@@ -137,10 +222,13 @@ import SwiftUI
             lastChanged = (start + first)..<rows.count
             answerStart = rows.count
         } else if let doc = await markdown.prepare(
-            id: active.id, source: active.text, revision: active.textRevision, isComplete: complete, window: .latest)
+            id: active.id, source: active.text, revision: active.textRevision, isComplete: complete,
+            window: following ? .latest : requestedWindows()[active.id].map { .segments($0.1) } ?? .latest)
         {
             // History can be inserted while the actor prepares. Resolve the live row base only
             // after the await, so publication never overwrites a historical or earlier live row.
+            documents.store(doc, for: active.id)
+            preparationRevision += 1
             let start = answerStart
             let oldCount = rows.count - start
             let first = min(doc.segments.count, max(0, oldCount - 2))
@@ -156,6 +244,7 @@ import SwiftUI
                     rows.append(ComparisonRow("live-answer-\(index)", content))
                 }
             }
+            for index in (start + first)..<rows.count { markdownRows[rows[index].id] = rows[index] }
             lastChanged = (start + first)..<rows.count
         }
         generation += 1
@@ -269,7 +358,6 @@ struct ComparisonRowView: View {
     var reportsSwiftUIFrame = true
     var measured: (CGSize) -> Void = { _ in }
     @Environment(AppModel.self) private var model
-    var preparesMarkdown = true
     var recordsVisibility = true
 
     var body: some View {
@@ -286,25 +374,9 @@ struct ComparisonRowView: View {
             .onDisappear {
                 if recordsVisibility {
                     fixture.disappeared(row.id)
-                    if reportsSwiftUIFrame {
-                        row.prepared = nil
-                        row.preparedRevision = -1
-                    }
                 }
             }
-            .task(id: row.revision) {
-                guard preparesMarkdown, case .markdown(let message, let segment, _) = row.content else { return }
-                let rowRevision = row.revision
-                let revision = message.textRevision
-                let doc = await fixture.markdown.prepare(
-                    id: message.id, source: message.text, revision: revision, isComplete: message.complete,
-                    window: .segments(segment.index..<(segment.index + 1)))
-                guard !Task.isCancelled, row.revision == rowRevision, let doc,
-                    doc.segments.indices.contains(segment.index)
-                else { return }
-                row.prepared = doc.segments[segment.index]
-                row.preparedRevision = rowRevision
-            }
+
     }
 
     @ViewBuilder private var content: some View {
@@ -316,14 +388,14 @@ struct ComparisonRowView: View {
         case .reasoning(let segment): ThinkingSegmentView(segment: segment, joinsNext: false)
         case .label(let label): Text(label).font(.caption).foregroundStyle(model.theme.tokens.muted)
         case .markdown(let message, let segment, let codeSegment):
-            if let prepared = row.prepared, row.preparedRevision == row.revision {
+            if let prepared = fixture.preparedSegment(for: row) {
                 MarkdownSegmentView(
                     segment: prepared, fontSize: model.chatFontSize, isStreaming: !message.complete,
                     isTail: !message.complete && !segment.isSettled, codeSegment: codeSegment
                 )
                 .environment(\.codeBlockMessageID, message.id)
             } else {
-                Text(verbatim: segment.body).font(.system(size: model.chatFontSize))
+                ProgressView("Preparing text").frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }

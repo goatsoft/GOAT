@@ -81,8 +81,8 @@ measurement has an 8 ms budget per pass. Previous offscreen heights survive refl
 estimates. Reader correction applies only the document-coordinate delta above the anchor to the
 current clip origin. Following reads the document height after layout. Neither path writes an
 unchanged origin. SwiftUI height callbacks collect updates for the pre-display transaction;
-bounds notifications never re-enter table data-source/layout work. Prepared rows remain alive
-through the native overscan and are released when they leave it.
+bounds notifications never re-enter table data-source/layout work. Native overscan contributes
+to the fixture owner's combined per-message preparation request.
 
 Cells use a concrete SwiftUI root and inherit the window's resolved environment. The window alone
 installs presentation styling. Reuse identifiers distinguish row kinds; changing the row identity
@@ -101,8 +101,17 @@ particular private SwiftUI mechanism. These synthetic probes expose regressions,
 every possible layout transition or supported-OS behavior. A failing candidate remains unqualified;
 the assertions are not converted to expected successes.
 
-Cold Markdown initially uses plain text in both candidates so its formatting transition can be
-observed; this does not satisfy the no-flash acceptance criterion.
+The fixture owns one combined preparation window per message and uses the production
+`PreparedMarkdownDocumentCache` for synchronous row reads. Neighbouring rows do not prepare
+independent one-segment windows. Unmounting a row does not discard the cached document;
+scroll-back reuses it while admitted under the production cache budget. Cold misses show a
+preparation indicator, never raw Markdown as temporary prose. A regression checks that two
+neighbouring rows retain both preparation identities through hide/show and scroll-back without
+additional parsing. This removes the artificial per-row cache contention, but does not certify
+cold-miss geometry or no-flash behavior; those still require the opt-in qualification.
+
+All timings from the earlier per-row preparation fixture are historical and unsuitable for a
+container selection. Both candidates must be remeasured with the shared preparation owner.
 
 ## Interpretation correction after review
 
@@ -310,3 +319,26 @@ unresolved observations, not established production defects: event injection, si
 container behavior still need to be isolated. Historical timing tables below their dated
 headings do not qualify this revised harness. No current container winner, bounded-memory
 qualification or Delivery 3 completion is claimed. ADR-0099 remains Proposed.
+
+
+## Allocation and evidence correction
+
+Prepared segment chunks now grow on demand rather than reserving 64 elements for the first
+segment. Admission charges actual allocated element capacity plus a per-live-segment string
+allowance. Capacity accounting updates with copy-on-write mutations, and snapshots remain
+independent. Small-cache regressions use 2,400 / 1,800 byte actor limits and 1,200 / 600 byte
+front-cache limits instead of 48,000 / 24,000. Dense multi-chunk replies still need metadata
+budgeting; removing the small-reply floor is not proof of a lower worst-case 2 MiB cost.
+
+The removed actor-local thread counter is not replaced with another assertion inside the same
+actor. Only profiling across the actual preparation/rendering call paths can establish how much
+work occurs on the main thread. Earlier local verification and remote CI are separate evidence;
+the PR body identifies the applicable checkpoint and outstanding checks.
+
+
+The reflow CI failure on `32fe141` was not just an ink threshold miss: the test requested
+980 pt and recorded a 65 pt hosting view and window. The reflow fixtures and comparison
+window now install the SwiftUI host inside an AppKit viewport owner instead of making the
+hosting view the window's direct content root. Existing width, scroll-fill and visible-ink
+assertions are unchanged. This addresses the observed test-host sizing failure; it does not
+establish a cause for all earlier comparison failures or qualify either container.

@@ -77,6 +77,7 @@ struct ChunkedList<Element: Sendable>: RandomAccessCollection, Sendable {
     private var chunks: [[Element]] = []
     private(set) var endIndex = 0
     var startIndex: Int { 0 }
+    private(set) var allocatedCapacity = 0
 
     init() {}
 
@@ -92,15 +93,18 @@ struct ChunkedList<Element: Sendable>: RandomAccessCollection, Sendable {
     mutating func set(_ element: Element, at position: Int) {
         precondition(position >= 0 && position <= endIndex)
         if position < endIndex {
-            chunks[position / Self.chunkSize][position % Self.chunkSize] = element
+            let chunk = position / Self.chunkSize
+            let previousCapacity = chunks[chunk].capacity
+            chunks[chunk][position % Self.chunkSize] = element
+            allocatedCapacity += chunks[chunk].capacity - previousCapacity
             return
         }
         if position % Self.chunkSize == 0 {
-            var chunk: [Element] = []
-            chunk.reserveCapacity(Self.chunkSize)
-            chunks.append(chunk)
+            chunks.append([])
         }
+        let previousCapacity = chunks[chunks.count - 1].capacity
         chunks[chunks.count - 1].append(element)
+        allocatedCapacity += chunks[chunks.count - 1].capacity - previousCapacity
         endIndex += 1
     }
 
@@ -115,6 +119,7 @@ struct ChunkedList<Element: Sendable>: RandomAccessCollection, Sendable {
         chunks.removeLast(chunks.count - keptChunks)
         let kept = position % Self.chunkSize
         if kept > 0 { chunks[chunks.count - 1].removeLast(chunks[chunks.count - 1].count - kept) }
+        allocatedCapacity = chunks.reduce(0) { $0 + $1.capacity }
         endIndex = position
     }
 }
@@ -156,9 +161,7 @@ struct PreparedMarkdownDocument: Sendable {
 
     /// Reserved prepared-segment slots plus a per-segment string-allocation allowance.
     var metadataBytes: Int {
-        let chunkSize = PreparedSegmentList.chunkSize
-        return ((segments.count + chunkSize - 1) / chunkSize) * chunkSize
-            * (MemoryLayout<PreparedMarkdownSegment>.stride + 32)
+        segments.allocatedCapacity * MemoryLayout<PreparedMarkdownSegment>.stride + segments.count * 32
     }
 
     /// Admission proxy: source, bodies, shared definitions, prepared content and metadata.

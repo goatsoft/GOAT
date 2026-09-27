@@ -261,7 +261,8 @@ arbitrarily cutting them to satisfy the score. Incremental and full segmentation
 settled boundaries must remain unchanged as input grows.
 
 Dense content creates many more small segments. Cache admission now includes reserved prepared
-segment slots, scanner segment slots and a string-allocation allowance, alongside source/body,
+segment capacity (chunks grow on demand, with no 64-slot floor for short replies), scanner
+segment slots and a per-live-segment string-allocation allowance, alongside source/body,
 shared definitions and parsed text. Prepared code literals are charged separately. These are
 bounded admission proxies, not exact heap measurements. The actor retains at most 32 MiB total
 and 24 MiB per reply, with completed replies capped at 16 MiB inside that total; the synchronous
@@ -283,6 +284,6 @@ parsed storage is conservatively charged by both owners. Completed entries are e
 active streams, preserving incremental scanners during history-cache churn. If active streams
 alone exceed the global byte/count limits, they are evicted by recency too. Completion releases
 the scanner and applies the smaller completed budget immediately. Nothing is pinned outside the
-accounted lifecycle. The dense 2 MiB empty-fence test charges 14,162,944 bytes for the document
-and 22,217,304 bytes including its scanner on the qualification host; these measurements support
+accounted lifecycle. The dense 2 MiB empty-fence test charges 14,654,464 bytes for the document
+and 22,708,824 bytes including its scanner on the qualification host; these measurements support
 the entry limits without raising steady-state retention. Tests cover churn, completion and clearing.

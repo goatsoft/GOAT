@@ -8,6 +8,37 @@ import XCTest
 @testable import GOAT
 
 extension TranscriptPerformanceTests {
+    @MainActor func testComparisonPreparesNeighbouringRowsTogetherAndReusesScrollBack() async throws {
+        let fixture = TranscriptComparisonFixture()
+        defer { fixture.stopPreparation() }
+        try await fixture.seed(rounds: 1)
+        let neighbours = fixture.rows.filter {
+            if case .markdown = $0.content { return true }
+            return false
+        }
+        XCTAssertGreaterThanOrEqual(neighbours.count, 2)
+        let first = try XCTUnwrap(neighbours.first)
+        let second = neighbours[1]
+        fixture.documents.removeAll()
+        await fixture.markdown.removeAll()
+        fixture.visible = [first.id, second.id]
+        await fixture.prepareRequestedRows()
+        let firstID = try XCTUnwrap(fixture.preparedSegment(for: first)?.preparationID)
+        let secondID = try XCTUnwrap(fixture.preparedSegment(for: second)?.preparationID)
+        let count = await fixture.markdown.snapshot().parseCount
+        // Recreating either row does not issue a narrower request or discard its neighbour.
+        fixture.visible = [second.id]
+        await fixture.prepareRequestedRows()
+        fixture.visible = []
+        await fixture.prepareRequestedRows()
+        fixture.visible = [first.id, second.id]
+        XCTAssertEqual(fixture.preparedSegment(for: first)?.preparationID, firstID)
+        XCTAssertEqual(fixture.preparedSegment(for: second)?.preparationID, secondID)
+        await fixture.prepareRequestedRows()
+        let after = await fixture.markdown.snapshot().parseCount
+        XCTAssertEqual(after, count)
+    }
+
     /// Run each backend in a fresh Release process. Defaults exercise 2 MiB per live channel.
     @MainActor func testContainerComparison() async throws {
         let environment = ProcessInfo.processInfo.environment
@@ -52,11 +83,18 @@ extension TranscriptPerformanceTests {
             backing: .buffered, defer: false)
         window.title = "GOAT container comparison: \(backend)"
         window.isReleasedWhenClosed = false
-        window.contentView = host
+        // Both candidates receive a viewport owned by the surrounding AppKit layout, as in
+        // the app. A direct hosting root can resize its window to changing ideal content.
+        let viewport = NSView(frame: NSRect(origin: .zero, size: window.contentLayoutRect.size))
+        host.frame = viewport.bounds
+        host.autoresizingMask = [.width, .height]
+        viewport.addSubview(host)
+        window.contentView = viewport
         window.makeKeyAndOrderFront(nil)
         defer {
             window.contentView = nil
             window.close()
+            fixture.stopPreparation()
         }
         print("COMPARISON_READY backend=\(backend) pid=\(getpid()) bytes=\(bytes) dense=\(dense) follows=\(follows)")
         try await Task.sleep(for: .seconds(environment["GOAT_COMPARE_INSTRUMENTS"] == "1" ? 15 : 3))
