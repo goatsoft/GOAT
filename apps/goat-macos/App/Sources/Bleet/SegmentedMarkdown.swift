@@ -1013,7 +1013,7 @@ struct SegmentLoader: View {
 }
 
 /// Equal preparations render equal content, so SwiftUI skips a settled segment while the tail streams.
-private struct MarkdownSegmentView: View, Equatable {
+struct MarkdownSegmentView: View, Equatable {
     let segment: PreparedMarkdownSegment
     let fontSize: CGFloat
     let isStreaming: Bool

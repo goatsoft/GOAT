@@ -1,7 +1,7 @@
 # ADR-0099: Virtualized transcript list
 
 Status: Proposed · 2026-09-27
-Supersedes the admission window and endless paging of
+If accepted, supersedes the admission window and endless paging of
 [ADR-0091](0091-content-bounded-transcript-layout.md) (its decision, its 2026-09-22 amendment and
 the segment-level windowing of its segmented rendering amendment), section 4 of
 [ADR-0094](0094-pure-swift-syntax-highlighting-and-tool-diffs.md), and
@@ -42,12 +42,31 @@ measure (ADR-0091's own context), not a scrolling design, and repairing each swa
 (ADR-0097) cannot make it smooth. The preparation work built for #60 (segmentation, incremental
 preparation, caches, code-block identities) is sound; the presentation around it is the problem.
 
-ADR-0002 allows AppKit where SwiftUI falls short, decided by measurement: the transcript is that
-case. A lazy SwiftUI stack does not bound a huge row, and it re-estimates heights of variable rows
-while scrolling upward, which moves content. SwiftUI keeps programmatic scroll targets that
-ADR-0097 had to work around.
+ADR-0002 allows AppKit where SwiftUI falls short, decided by measurement. A lazy stack of whole
+messages does not bound a huge row. A flat stack of bounded segments is a different candidate and
+needs measurement before ruling it out. Variable-height estimation and retained programmatic
+scroll targets are risks to test, including the interactions documented in ADR-0097.
 
-## Decision
+## Comparison before acceptance
+
+The owner requested a measured comparison under #60 before selecting the container. This ADR
+remains **Proposed**. Compare a flat `LazyVStack` of bounded segment rows using modern SwiftUI
+scroll APIs with the proposed `NSTableView`, using identical production content views, preparation,
+fixtures and publication cadence. The current paged implementation's failures do not by themselves
+rule out a flat SwiftUI list. In particular, segmentation bounds a huge message in either candidate.
+
+The test-only comparison and its qualification limits are documented in
+[Transcript container comparison](../reference/transcript-container-comparison.md). Neither
+candidate replaces the shipping transcript until the results have been reviewed. Keep the existing
+regression tests until equivalent behavior is demonstrated, including keyboard and momentum input.
+
+The initial comparison does not validate the proposed native height/anchor policy: its prototype
+moves the reader during growth and reflow. Both candidates also fail the dense short-fence
+responsiveness case. A 6 KiB row can contain roughly 120 code blocks, so source-byte bounds alone
+are insufficient evidence of cheap visible-row layout. Row granularity, geometry corrections and
+complete qualification remain open before accepting this decision.
+
+## Proposed decision
 
 ### One list of block rows, all in the document
 
@@ -68,8 +87,10 @@ The chat becomes a flat sequence of **block rows**, every one of them part of th
 - compaction and the live progress row.
 
 Answer and reasoning segments are exactly those of #68/#69/#78 and #80 (`MarkdownSegmentation`,
-`ThinkingSegmentation`), with their global indices. A 2 MiB reply is a few hundred rows; there is
-no admission window, no segment window, no loader and no "part n of m". Reasoning and text above
+`ThinkingSegmentation`), with their global indices. Packed answers can produce a few hundred
+rows at 2 MiB, while expanded reasoning with short blocks can produce several thousand. Both
+shapes must be measured. There is no admission window, no segment window, no loader and no
+"part n of m". Reasoning and text above
 2 MiB become plain-text rows in the same list, bounded per row, with full-source copy unchanged.
 
 Every row has a stable identity: the message ID, the row kind, and the segment index where there is
@@ -183,9 +204,10 @@ within a row, as it is within a view today; copying a whole reply or chat is #60
 - **Keep windowing and fix its behaviour.** Never swap during a gesture, correct position in the
   same pass, grow instead of replace, raise the budgets. Rejected as the design: it keeps loaders,
   swaps and a scrollbar that describes a window. Its synchronous correction rule is kept here.
-- **SwiftUI `LazyVStack`.** Rejected: it does not bound a huge row, re-estimates variable heights
-  while scrolling upward (content moves), and keeps the SwiftUI scroll-target behaviour ADR-0097
-  had to work around.
+- **Flat SwiftUI `LazyVStack` with bounded segment rows.** Under comparison. Segmentation bounds
+  individual rows; modern position, geometry and phase APIs handle navigation. Remaining questions
+  are height-estimate corrections during momentum, retained views and real content layout cost.
+  ADR-0097's existing regressions must also be replayed without mixing scroll writers.
 - **SwiftUI `List`.** Bridges to `NSTableView` without exposing height caching or in-pass origin
   correction, and imposes list styling and selection semantics.
 - **`NSCollectionView`.** Equivalent virtualization with more layout machinery than one column

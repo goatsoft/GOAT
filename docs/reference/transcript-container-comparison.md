@@ -1,0 +1,185 @@
+# Transcript container comparison
+
+Issue #60 owns this qualification. ADR-0099 remains proposed until the owner reviews the comparison.
+The candidates are a flat SwiftUI `LazyVStack` with modern scroll APIs and an AppKit `NSTableView`
+with reusable `NSHostingView` cells. Neither replaces the shipping transcript in this experiment.
+
+Both consume the same test-only row model and use the production Markdown segment, reasoning,
+user-message and tool activity views. Publication updates existing tail row objects and adds new
+segment rows. The historical messages are deterministic synthetic input, never saved user chats.
+Memory lookups, delegated investigations, file reads, command results and failures are replayed
+records: the fixture does not execute tools, commands or inference, or contact a memory service.
+
+The default history has 48 rounds. Answers contain prose, lists, tables, Swift fences (including
+96-line collapsible blocks), HTML and SVG previews. Reasoning includes prose and fenced code.
+Each live channel then grows to exactly 2 MiB, in UTF-8-safe publications of at most 16 KiB, with a
+nominal 120 ms pause. A separate dense case repeats short paragraphs and one-line fences to
+exercise the dense-content regression exposed by the earlier qualification. Both large streams repeat deterministic
+blocks; the historical rounds vary their code/preview identifiers. This tests mixed presentation
+and scale, not the cache-miss distribution of a unique 2 MiB model response.
+
+## Reproduce
+
+Run each candidate in a fresh Release process. Use the same machine, window dimensions, settings,
+fixture parameters and instrumentation. Do not run Instruments captures concurrently.
+
+```sh
+TEST_RUNNER_GOAT_COMPARE=swiftui make test-app CONFIG=Release TEST_PLAN=Qualification \
+  XCODE_FLAGS='GOAT_APP_BUNDLE_IDENTIFIER=dev.leet.goat.comparison -only-testing:GOATTests/TranscriptPerformanceTests/testContainerComparison'
+```
+
+Use `TEST_RUNNER_GOAT_COMPARE=appkit` for the other candidate. The separate bundle identifier
+isolates test preferences from normal app use; the test plan supplies an isolated app home.
+
+Optional environment variables (all prefixed `TEST_RUNNER_` when invoking Make):
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `GOAT_COMPARE_BYTES` | 2097152 | Bytes per live channel; smaller smoke test only |
+| `GOAT_COMPARE_ROUNDS` | 48 | Historical mixed rounds |
+| `GOAT_COMPARE_CHANNEL` | both | `answer`, `reasoning`, or both |
+| `GOAT_COMPARE_FOLLOW` | 1 | Set 0 to hold the reader after scrolling upward |
+| `GOAT_COMPARE_DENSE` | 0 | Set 1 for dense paragraph/fence regression input |
+| `GOAT_COMPARE_INSTRUMENTS` | 0 | Set 1 for a 15-second attach interval after READY |
+| `GOAT_COMPARE_INTERACTIVE` | 0 | Set 1 to leave the window open for manual checks |
+
+The interactive surface supports theme and font-size changes, a synthetic inspector, Latest,
+a composer text field, and the production code/tool controls. It is not the complete application
+shell: message header/footer labels are fixture scaffolding and the inspector reserves width.
+Do not claim real engine/tool integration, complete app navigation, footer action parity or actual
+inspector qualification from this harness. Segment rows use common fixture padding, not the
+shipping transcript's complete boundary-margin and 68ch-column composition. Tool cards start
+collapsed. Expanded tool details, actual trackpad momentum and spoken VoiceOver navigation need
+separate manual qualification.
+
+## Evidence to record
+
+- Fresh-process cold and warm scrolling through mixed content, in both directions.
+- 2 MiB answer and expanded-reasoning streams while following and while reading older content.
+- Dense 2 MiB regression, alongside realistic input rather than as its substitute.
+- User gesture and momentum behavior, including content-height changes above the anchor.
+- Narrow width, font changes, code expansion/wrap, tool/delegation details and preview transitions.
+- Keyboard and VoiceOver, including focus surviving reuse and scrolling to offscreen content.
+- Instruments CPU, allocations and post-completion retention, including preview subprocesses when
+  evaluating total application memory.
+
+The test emits `COMPARISON_RESULT` JSON with process CPU, wall time, main-actor sleep overrun p95,
+publication duration p95, resident memory and lifetime peak RSS, appeared-row counts, measured
+height-update counts, and anchor displacement where the row remains measurable. Sleep overrun is
+not key-to-pixel latency or FPS. Appeared-row counts do not prove how many offscreen views remain
+retained. RSS covers the test-host process, not WebKit subprocesses. Null anchor values mean no
+measurement, never a zero-displacement pass. Static reader and completion displacement must be
+kept separate from intended movement during a gesture. The initial gesture is identical input,
+not a guarantee of identical visible content: the containers estimate unmeasured heights
+differently. Reader-held numbers primarily test each candidate's own anchor stability.
+
+The native candidate uses estimated heights and asynchronously reported SwiftUI measurements,
+then applies table height updates and anchor correction in one animation-disabled transaction.
+This is a prototype of the proposed policy, not proof that every correction precedes presentation
+or preserves momentum on all supported operating systems. Cold Markdown initially uses plain text
+in both candidates so its formatting transition can be observed; this does not satisfy the no-flash
+acceptance criterion.
+
+## Initial comparison, 2026-09-27
+
+Release, Apple M1 Max, 10 CPU cores, 32 GiB RAM, macOS 27 build 26A428. Each scenario used a
+fresh process and 48 history rounds (402 initial rows). The mixed scenario streams 2 MiB of
+expanded reasoning, then 2 MiB of answer text, ending at 5,019 rows. These are single runs,
+not statistical estimates. The supported macOS 26 target still needs qualification. The machine
+was not a controlled performance lab; do not interpret small differences as significant.
+
+| Scenario | Container | Wall s | CPU s | Sleep overrun p95 ms | Publication p95 ms | Peak host MiB |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| follow reasoning | swiftui | 20.29 | 5.36 | 9.45 | 12.04 | 224.3 |
+| follow answer | swiftui | 20.31 | 14.63 | 34.13 | 19.12 | 369.6 |
+| follow reasoning | appkit | 19.75 | 6.10 | 8.31 | 10.72 | 247.4 |
+| follow answer | appkit | 24.81 | 22.33 | 76.25 | 64.97 | 404.6 |
+| reader reasoning | swiftui | 19.96 | 1.19 | 9.84 | 8.93 | 211.1 |
+| reader answer | swiftui | 20.12 | 1.20 | 9.63 | 9.37 | 286.3 |
+| reader reasoning | appkit | 20.04 | 1.57 | 9.31 | 9.51 | 213.7 |
+| reader answer | appkit | 20.01 | 1.54 | 9.68 | 9.25 | 286.5 |
+| dense answer | swiftui | 94.85 | 93.10 | 887.44 | 1021.47 | 530.0 |
+| dense answer | appkit | 193.41 | 192.86 | 1492.27 | 1865.56 | 616.6 |
+
+Wall time includes the nominal streaming pauses and three seconds of completion settling.
+Publication time includes awaiting preparation and regaining the main actor, so it is not a
+pure parser benchmark. Peak RSS is cumulative within each process, including the preceding
+reasoning phase for mixed answers. Instruments runs are separate from these timing runs.
+
+### Geometry findings
+
+- SwiftUI reader-held growth and completion: **0 pt** displacement for both channels.
+- AppKit reader-held growth: **-65 pt** per channel; completion: **-0.5 pt**. The prototype fails
+  the issue's 1 pt anchor criterion during growth. A successful test invocation is not a geometry pass.
+- Narrow reflow after following: SwiftUI **0.01 pt**, AppKit **1,131.63 pt**. After reader-held
+  streaming: SwiftUI **-0.21 pt**; AppKit's original anchor was unavailable, which is unqualified.
+- Following answer completion moved a measured row by **-619 pt in both candidates**. Production
+  HTML/SVG previews become available at completion, changing content height. This common movement
+  is not evidence of a reader-owned jump: the held-reader case is measured separately. Exact
+  bottom alignment and all completion shapes remain qualification work.
+- The dense SwiftUI case reflowed within **0.06 pt**, but its streaming responsiveness failed.
+  The dense AppKit case moved its measured row **-8,677.64 pt** at completion and **8,674.11 pt**
+  on reflow, further evidence that the prototype's height/anchor policy needs correction.
+
+The SwiftUI reader and dense logs each contained four `Geometry action is cycling between
+duplicate values` warnings. Determine whether these originate in the fixture measurement hooks
+or shared rendering before accepting the implementation; they are not waived by the anchor result.
+
+### Instruments capture limits
+
+A separate **CPU-only** Time Profiler capture of the dense SwiftUI run reproduced the stall
+(92.03 s for the whole workload). Of 61,591 weighted CPU samples in the recorded interval,
+97.8% were on the main thread. AttributeGraph appeared in 71.4% of sampled stacks and SwiftUICore
+in 91.8%. Those inclusive stack-presence percentages overlap and are not exclusive CPU costs.
+This supports investigating main-thread rendering/update work; it does not identify one offending
+view or establish that a particular segment cap fixes it. The 60-second capture is a diagnostic
+interval, not a complete allocation or retention qualification.
+
+A separate mixed SwiftUI run was captured with Time Profiler plus Allocations. The 65-second
+recording stopped before that instrumented answer completed. Its allocation statistics show
+1,484,979,040 total heap bytes allocated and 75,594,864 persistent heap bytes at the recording
+boundary. Those are allocation traffic and live tracked heap, not RSS or a final retention pass.
+The 4 GiB JavaScript VM reservation is address space, not 4 GiB resident memory. Allocation stack
+recording itself dominates many CPU samples, so these samples do not identify a rendering root
+cause and their timings are excluded from the table above.
+
+The matching AppKit attachment stalled before the first streaming phase and was terminated after
+a stack sample showed XCTest waiting in its run loop. This is an inconclusive instrumentation run,
+not evidence of a table-layout CPU hang. Complete, separate CPU and allocation captures through
+post-completion settling, plus preview subprocess accounting, remain qualification gates.
+
+### Interpretation and remaining checks
+
+The initial evidence does **not** justify accepting the AppKit proposal or ruling out flat
+SwiftUI. The native prototype needs anchor and reflow corrections before a fair acceptance run.
+The flat SwiftUI candidate performs better on this mixed answer and preserves the measured reader
+anchor, but the dense fence case still causes unacceptable main-actor delays. Neither is ready to
+replace the production transcript. A container change alone has not completed #60.
+
+A concrete follow-up hypothesis is **row complexity rather than source bytes alone**. The dense
+repetition is 51 bytes: roughly 120 fenced code blocks plus paragraphs fit in a 6 KiB segment.
+Both prototypes still lay out that whole segment as one row. Measure a rendered-block/complexity
+cap or finer row units while preserving Markdown semantics and code identities; do not assume
+that byte-bounded segmentation makes the work inside each visible row cheap. This is a hypothesis
+from the fixture structure and timings, not an established profile attribution.
+
+This experiment has not certified full-history reachability, real trackpad momentum, retained
+focus during cell reuse, expanded tool details, code-action VoiceOver labels, the complete theme
+and font matrix, actual inspectors, or the no-flash requirement. The UI-control bridge did not
+reliably select the isolated comparison host; no manual accessibility pass is claimed. Replay
+those checks in the selected production integration, retaining the existing navigation regressions.
+The current tests record observations rather than asserting all of those acceptance criteria.
+
+## Verification
+
+`make verify CONFIG=Release` passed: lint, package tests, the app test plan (548 passed,
+three opt-in skips, one existing expected ScrollPosition limitation), and the Release app build.
+All six opt-in uninstrumented scenario invocations passed their workload integrity assertions.
+The website's 21 unit tests, both builds and content checks passed. The first sandboxed website
+build hit an EMFILE watcher limit; the rerun with a larger per-process file-descriptor limit passed.
+
+These green checks do not override the measured performance and geometry failures above.
+
+## Decision
+
+Pending owner review. Keep ADR-0099 proposed and Delivery 3's qualification gates open.
