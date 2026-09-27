@@ -100,12 +100,12 @@ Older records retain the package and type names used when accepted. [ADR-0054](0
 | [0092](0092-selected-toolchain-resolution-for-pen-commands.md) | Selected toolchain resolution for Pen commands | Accepted · refines 0070 |
 
 | [0093](0093-maintained-xcode-project.md) | Maintained Xcode project and build-time release identity | Proposed · supersedes project ownership in 0004 |
-| [0094](0094-pure-swift-syntax-highlighting-and-tool-diffs.md) | Pure-Swift syntax highlighting and tool diff presentation | Proposed · refines 0010, 0074 and 0091 |
+| [0094](0094-pure-swift-syntax-highlighting-and-tool-diffs.md) | Pure-Swift syntax highlighting and tool diff presentation | Accepted · refines 0010, 0074 and 0091 |
 | [0096](0096-bounded-read-only-subagent-delegation.md) | Bounded read-only subagent delegation and prompt optimization | Proposed · refines 0006, 0023, 0042 and 0074 |
-| [0097](0097-appkit-transcript-scroll-executor.md) | AppKit transcript scroll executor | Proposed · refines 0002 and 0091 |
+| [0097](0097-appkit-transcript-scroll-executor.md) | AppKit transcript scroll executor | Accepted · refines 0002 and 0091 |
 
 | [0095](0095-parallel-verification-and-preview-diagnostics.md) | Parallel verification and preview diagnostics | Accepted, amended |
 
-| [0098](0098-shared-oklab-colour-picker.md) | Shared OKLab colour picker | Proposed · refines 0022 |
+| [0098](0098-shared-oklab-colour-picker.md) | Shared OKLab colour picker | Accepted · refines 0022 |
 
 New session? Start with **[../../AGENT.md](../../AGENT.md)**, then [the roadmap](../ROADMAP.md).
