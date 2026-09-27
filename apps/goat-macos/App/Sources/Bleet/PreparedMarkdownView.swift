@@ -9,6 +9,18 @@ import SwiftUI
 /// MainActor. Views remain the only consumer and never mutate the wrapped content.
 struct PreparedMarkdownContent: @unchecked Sendable {
     let value: MarkdownContent
+    /// Prepared with the parse, never by a code-block view on MainActor.
+    let codeLiterals: [String]
+    let codeLiteralBytes: Int
+
+    init(value: MarkdownContent, renderedHTML: String? = nil, preparesCodeIdentity: Bool = true) {
+        self.value = value
+        codeLiterals =
+            preparesCodeIdentity ? CodeBlockPositions.codeBlocks(html: renderedHTML ?? value.renderHTML()) : []
+        codeLiteralBytes =
+            codeLiterals.reduce(0) { $0 + $1.utf8.count }
+            + codeLiterals.capacity * MemoryLayout<String>.stride + codeLiterals.count * 32
+    }
 }
 
 enum MarkdownPreparation: Sendable {
@@ -102,7 +114,9 @@ actor MarkdownRenderCache {
         }
 
         let content = RenderSignposts.measure("MarkdownParse") {
-            PreparedMarkdownContent(value: MarkdownContent(GOATMarkdownSyntax.normalized(source)))
+            // Whole-document views do not install a CodeBlockScope. Only segmented replies need literals.
+            PreparedMarkdownContent(
+                value: MarkdownContent(GOATMarkdownSyntax.normalized(source)), preparesCodeIdentity: false)
         }
         guard !Task.isCancelled else { return .plainText }
 

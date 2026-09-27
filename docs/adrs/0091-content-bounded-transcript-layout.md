@@ -83,7 +83,8 @@ segment rather than per message. Deliver it in three reviewable steps:
 1. **Segmentation** (`MarkdownSegmenter` in Bleet, pure). Segments break only at valid top-level
    block boundaries: a column-0 line after a blank line, a column-0 fence opener, or the line after a
    container closes, never inside fenced code, multi-line HTML or display math. A column-0 item of
-   the same list continues it, so loose lists stay whole. Whole blocks pack to about 6 KiB.
+   the same list continues it, so loose lists stay whole. Whole blocks pack to about 6 KiB,
+   additionally bounded by the block-count and work budgets below.
    - **Bounds.** A segment's Markdown body never exceeds 16 KiB. Two things sit outside that bound
      and are stated separately: an HTML or SVG artifact document stays one whole segment, and the
      reply's reference definitions (at most 4 KiB, none once they exceed it) are appended to the
@@ -199,7 +200,8 @@ segment rather than per message. Deliver it in three reviewable steps:
      the window, not the reply. Prepared-cache retention is bounded separately and charges what is
      retained: the source, every segment body (parsed or not), the shared definition suffixes (segments
      keep one shared string rather than a copy each) and the parsed segments. An entry may hold a
-     streaming reply at the rich limit, with its scanner's copy, and each cache at most 16 MiB. The message window charges a prepared reply the bytes of its shown
+     streaming reply at the rich limit, with its scanner's copy. The complexity amendment below
+     accounts for segment metadata and defines the cache budgets. The message window charges a prepared reply the bytes of its shown
      segments.
    - **Navigation.** `TranscriptViewport` owns each paged reply window. Loaders at a window's edges
      page it when they come into view, like the message loaders; the kept segment (the old window's
@@ -243,3 +245,32 @@ that grows linearly with the reply. The fallback is retired only when step 3 pas
 parsed prefix is permanently stable (definitions and container openers can change it). A second
 scroll owner inside long messages (it would compete with #54's navigation model).
 
+
+## Amendment: complexity-aware packing and background identity preparation
+
+The #60 container comparison found that a 6 KiB segment can contain roughly 120 short code
+fences. A source-byte bound alone does not bound SwiftUI view construction and layout.
+
+Packing now ends at 16 top-level blocks or 16 work units, as well as the existing byte target.
+A fence costs four units; each nonblank prose or table line costs one. The score
+saturates after the threshold. Nested fence openers also cost four. This is a conservative packing
+heuristic, not an exact count of MarkdownUI nodes or a time guarantee. An indivisible list, table
+or quote can exceed the work threshold and is isolated in its own segment. Existing 16 KiB body
+splitting and artifact exceptions remain in force. Preserve list/table semantics rather than
+arbitrarily cutting them to satisfy the score. Incremental and full segmentation must agree, and
+settled boundaries must remain unchanged as input grows.
+
+Dense content creates many more small segments. Cache admission now includes reserved prepared
+segment slots, scanner segment slots and a string-allocation allowance, alongside source/body,
+shared definitions and parsed text. Prepared code literals are charged separately. These are
+bounded admission proxies, not exact heap measurements. The actor retains at most 48 MiB total
+and 32 MiB per reply; the synchronous front cache retains at most 32 MiB total and 24 MiB per
+reply. Both release under the existing memory-pressure policy. The larger entry budgets keep a
+2 MiB tiny-fence reply's incremental scanner retained; declining it every publication would
+reintroduce repeated full scanning. Rich-limit tests cover that pathological metadata density.
+
+Code-block identity literals are extracted from the same HTML already produced by the preparation
+actor for spacing and caret structure. View identity resolution consumes those prepared literals;
+it no longer renders Markdown to HTML on MainActor or keeps a separate literal cache. Whole-document
+views do not prepare unused identity data. UI construction, layout and scrolling remain on
+MainActor. Qualification records unexpected main-thread preparation alongside CPU and responsiveness.

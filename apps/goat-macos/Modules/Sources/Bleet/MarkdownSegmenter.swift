@@ -83,6 +83,11 @@ public enum MarkdownSegmenter {
     public static let targetBytes = 6 * 1_024
     public static let maximumBytes = 16 * 1_024
     public static let definitionLimit = 4 * 1_024
+    /// Packing budgets are independent of source bytes. An indivisible block stays intact and
+    /// occupies its own group when it exceeds the work budget; the existing byte cap still applies.
+    public static let maximumGroupBlocks = 16
+    public static let maximumGroupWork = 16
+    public static let codeBlockWork = 4
 
     public static func segment(
         _ source: String, isComplete: Bool, targetBytes: Int = targetBytes, maximumBytes: Int = maximumBytes
@@ -138,6 +143,11 @@ public struct MarkdownSegmentation: Sendable {
 
     /// The segments, settled ones first. Accessing one is O(1); `text` concatenates on access.
     public var segments: [MarkdownSegment] { Array(self) }
+
+    /// Conservative storage charge, including reserved array slots and a string allocation allowance.
+    public var metadataBytes: Int {
+        (settled.capacity + provisional.capacity) * (MemoryLayout<StoredSegment>.stride + 32)
+    }
 
     /// Segments below this index are settled: their range, kind and body never change again within
     /// this segmentation. Only their definition suffix can grow.
@@ -492,6 +502,7 @@ private struct Block {
 
     let start: Int
     var classified = false
+    var renderWork = 0
     var listMarker: ListMarker?
     var oversized = false
     var emitted = 0
@@ -525,6 +536,8 @@ private struct Engine: Sendable {
     var previousDefinition = false
     var block: Block?
     var group: Range<Int>?
+    var groupBlocks = 0
+    var groupWork = 0
     var lastSpaceEnd = -1
 
     /// Advances over decided lines. With `provisional`, treats the source as ending here instead
@@ -597,6 +610,11 @@ private struct Engine: Sendable {
         if !facts.blank { afterContainer = false }
         let classifying = !block!.classified && !facts.blank
         if classifying { classify(line, facts, lookahead: lookahead, &input) }
+        if !facts.blank {
+            // Table/prose lines have no per-block controls. Weight fenced code's chrome separately.
+            let work = facts.fence == nil ? 1 : MarkdownSegmenter.codeBlockWork
+            block!.renderWork = min(MarkdownSegmenter.maximumGroupWork + 1, block!.renderWork + work)
+        }
         if let fence = facts.fence {
             container = .fence(marker: fence.marker, minimum: fence.length)
             if !block!.ownFence {
@@ -610,6 +628,9 @@ private struct Engine: Sendable {
             containerOpened(at: line.start, plan: nil, &input)
         } else if !facts.blank, let fence = Scan.nestedFence(line.range, &input) {
             nested = fence
+            block!.renderWork = min(
+                MarkdownSegmenter.maximumGroupWork + 1,
+                block!.renderWork + MarkdownSegmenter.codeBlockWork - 1)
             let plan = fence.rebuildable ? Scan.fencePlan(line, fence.opener, &input) : nil
             containerOpened(at: line.start, plan: plan, &input)
         }
@@ -779,20 +800,28 @@ private struct Engine: Sendable {
                         shape: current.mode.shape, closed: false), &input, &out)
             }
         } else {
-            pack(current.start..<end, &input, &out)
+            pack(current.start..<end, work: max(1, current.renderWork), &input, &out)
         }
         block = nil
     }
 
     /// Adds a whole block to the open group. A group is emitted as soon as it reaches the target,
     /// so it settles without waiting for the next block to end.
-    private mutating func pack(_ range: Range<Int>, _ input: inout Input, _ out: inout Output) {
-        if let current = group, current.count + range.count > input.limits.maximum {
+    private mutating func pack(_ range: Range<Int>, work: Int, _ input: inout Input, _ out: inout Output) {
+        if let current = group,
+            current.count + range.count > input.limits.maximum
+                || groupBlocks + 1 > MarkdownSegmenter.maximumGroupBlocks
+                || groupWork + work > MarkdownSegmenter.maximumGroupWork
+        {
             emitGroup(current, &input, &out)
             group = nil
         }
         let merged = group.map { $0.lowerBound..<range.upperBound } ?? range
-        if merged.count >= input.limits.target {
+        groupBlocks += 1
+        groupWork += work
+        if merged.count >= input.limits.target || groupBlocks >= MarkdownSegmenter.maximumGroupBlocks
+            || groupWork >= MarkdownSegmenter.maximumGroupWork
+        {
             emitGroup(merged, &input, &out)
             group = nil
         } else {
@@ -801,6 +830,8 @@ private struct Engine: Sendable {
     }
 
     private mutating func emitGroup(_ range: Range<Int>, _ input: inout Input, _ out: inout Output) {
+        groupBlocks = 0
+        groupWork = 0
         let body = String(decoding: input.copy(range), as: UTF8.self)
         out.segments.append(
             StoredSegment(range: range, body: body, kind: .blocks, acceptsDefinitions: true, continues: false))

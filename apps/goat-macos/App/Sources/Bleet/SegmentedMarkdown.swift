@@ -37,6 +37,11 @@ struct PreparedMarkdownSegment: Sendable {
     let bodyBytes: Int
 
     var isParsed: Bool { preparation != nil }
+    var preparedCost: Int {
+        guard let preparation else { return 0 }
+        if case .parsed(let content) = preparation { return textBytes + content.codeLiteralBytes }
+        return textBytes
+    }
 
     /// The Markdown rendered: the body followed by the definitions. Built only when needed (a parse,
     /// a verbatim piece's text), never retained, so definitions are not copied into every segment.
@@ -149,9 +154,15 @@ struct PreparedMarkdownDocument: Sendable {
         return window.reduce(0) { $0 + segments[$1].textBytes }
     }
 
-    /// What caches charge for a document: the source, every segment's body, the shared definitions
-    /// and the parsed segments' content.
-    var cost: Int { source.utf8.count + bodyBytes + definitionBytes + retainedBytes }
+    /// Reserved prepared-segment slots plus a per-segment string-allocation allowance.
+    var metadataBytes: Int {
+        let chunkSize = PreparedSegmentList.chunkSize
+        return ((segments.count + chunkSize - 1) / chunkSize) * chunkSize
+            * (MemoryLayout<PreparedMarkdownSegment>.stride + 32)
+    }
+
+    /// Admission proxy: source, bodies, shared definitions, prepared content and metadata.
+    var cost: Int { source.utf8.count + bodyBytes + definitionBytes + retainedBytes + metadataBytes }
 
     func matches(_ revision: TextRevision, isComplete: Bool) -> Bool {
         self.revision == revision && self.isComplete == isComplete
@@ -215,6 +226,8 @@ actor MarkdownSegmentCache {
     struct Work: Sendable, Equatable {
         /// `prepare` calls that were not exact hits.
         var refreshes = 0
+        /// Qualification diagnostic: expensive preparation must not execute on the UI thread.
+        var mainThreadPreparations = 0
         /// Prepared segments examined or rebuilt while assembling documents, and the most in one refresh.
         var visitedSegments = 0
         var maximumVisitedSegments = 0
@@ -283,11 +296,12 @@ actor MarkdownSegmentCache {
     private var work = Work()
 
     /// Defaults retain a streaming reply through `ReplyWindow.richLimit` (its source, its segment
-    /// bodies, its scanner's copy, shared definitions and its window's parses) and at most 16 MiB in all.
+    /// bodies, its scanner's copy, shared definitions, metadata and its window's parses),
+    /// and at most 48 MiB in all.
     init(
         maximumEntries: Int = 32,
-        maximumCost: Int = 16 * 1_024 * 1_024,
-        maximumEntryCost: Int = 3 * ReplyWindow.richLimit + 512 * 1_024,
+        maximumCost: Int = 48 * 1_024 * 1_024,
+        maximumEntryCost: Int = 32 * 1_024 * 1_024,
         targetBytes: Int = MarkdownSegmenter.targetBytes,
         maximumBytes: Int = MarkdownSegmenter.maximumBytes
     ) {
@@ -336,6 +350,7 @@ actor MarkdownSegmentCache {
                 insert(previous.document, cost: previous.cost, for: id, window: window)
                 return previous.document
             }
+            if Thread.isMainThread { work.mainThreadPreparations += 1 }
             // The same text for another window: parse and release segments, never rescan.
             let old = previous.document
             var windowed = old.segments
@@ -357,6 +372,7 @@ actor MarkdownSegmentCache {
             return document
         }
         work.refreshes += 1
+        if Thread.isMainThread { work.mainThreadPreparations += 1 }
         let clock = ContinuousClock()
 
         // Segmentation: extend the held scanner when the source only grew.
@@ -406,7 +422,7 @@ actor MarkdownSegmentCache {
             renderedBytes: stream.renderedBytes, retainedBytes: stream.retainedBytes, bodyBytes: stream.bodyBytes,
             definitionBytes: stream.definitionBytes, window: window)
         // A streaming reply's scanner also holds its segment bodies, about the source again.
-        let streamCost = isComplete ? 0 : source.utf8.count
+        let streamCost = isComplete ? 0 : source.utf8.count + stream.segmentation.metadataBytes
         if !isComplete { streams[id] = stream }
         if !insert(document, cost: document.cost + streamCost, for: id, window: window) { streams[id] = nil }
         return document
@@ -479,7 +495,7 @@ actor MarkdownSegmentCache {
             for index in count..<stream.prepared.count {
                 stream.renderedBytes -= stream.prepared[index].textBytes
                 stream.bodyBytes -= stream.prepared[index].bodyBytes
-                if stream.prepared[index].isParsed { stream.retainedBytes -= stream.prepared[index].textBytes }
+                if stream.prepared[index].isParsed { stream.retainedBytes -= stream.prepared[index].preparedCost }
             }
             stream.prepared.removeSuffix(from: count)
         }
@@ -505,7 +521,7 @@ actor MarkdownSegmentCache {
             let parsed = fresh.updating(
                 isSettled: old.isSettled, continuesPrevious: old.continuesPrevious,
                 endsInParagraph: index == tail ? fresh.lastLeafIsParagraph : nil)
-            retainedBytes += parsed.textBytes
+            retainedBytes += parsed.preparedCost
             segments.set(parsed, at: index)
         }
         guard let window else { return }
@@ -515,7 +531,7 @@ actor MarkdownSegmentCache {
         }
         let keep = kept(window)
         for index in previous.map(kept) ?? all where !keep.contains(index) && segments[index].isParsed {
-            retainedBytes -= segments[index].textBytes
+            retainedBytes -= segments[index].preparedCost
             segments.set(segments[index].unparsed(), at: index)
         }
     }
@@ -525,11 +541,11 @@ actor MarkdownSegmentCache {
             let old = stream.prepared[index]
             stream.renderedBytes -= old.textBytes
             stream.bodyBytes -= old.bodyBytes
-            if old.isParsed { stream.retainedBytes -= old.textBytes }
+            if old.isParsed { stream.retainedBytes -= old.preparedCost }
         }
         stream.renderedBytes += segment.textBytes
         stream.bodyBytes += segment.bodyBytes
-        if segment.isParsed { stream.retainedBytes += segment.textBytes }
+        if segment.isParsed { stream.retainedBytes += segment.preparedCost }
         stream.prepared.set(segment, at: index)
     }
 
@@ -570,13 +586,12 @@ actor MarkdownSegmentCache {
             structure = .verbatim
         } else {
             // Only the reply's first segment can be an HTML or SVG artifact, as in the whole reply.
-            let content = RenderSignposts.measure("MarkdownSegmentParse") {
-                PreparedMarkdownContent(
-                    value: Self.content(GOATMarkdownSyntax.normalized(text, detectsArtifacts: segment.index == 0)))
+            let parsed = RenderSignposts.measure("MarkdownSegmentParse") {
+                Self.content(GOATMarkdownSyntax.normalized(text, detectsArtifacts: segment.index == 0))
             }
-            preparation = .parsed(content)
-            // One HTML rendering gives the parsed blocks' margins and the last leaf block's kind.
-            let html = content.value.renderHTML()
+            // Share this off-main HTML traversal between spacing, caret and code identity preparation.
+            let html = parsed.renderHTML()
+            preparation = .parsed(PreparedMarkdownContent(value: parsed, renderedHTML: html))
             work.htmlBytes += html.utf8.count
             structure = MarkdownSegmentSpacing.structure(html: html)
             parseCount += 1
@@ -692,10 +707,10 @@ final class PreparedMarkdownDocumentCache {
     private var clock: UInt64 = 0
 
     /// Defaults retain a windowed reply through `ReplyWindow.richLimit` (its source, its segment bodies,
-    /// shared definitions and its window's parses) and at most 16 MiB in all.
+    /// shared definitions, metadata and its window's parses), and at most 32 MiB in all.
     init(
-        maximumEntries: Int = 64, maximumTotalCost: Int = 16 * 1_024 * 1_024,
-        maximumEntryCost: Int = 2 * ReplyWindow.richLimit + 512 * 1_024
+        maximumEntries: Int = 64, maximumTotalCost: Int = 32 * 1_024 * 1_024,
+        maximumEntryCost: Int = 24 * 1_024 * 1_024
     ) {
         self.maximumEntries = max(1, maximumEntries)
         self.maximumTotalCost = max(1, maximumTotalCost)

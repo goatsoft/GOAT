@@ -66,6 +66,12 @@ responsiveness case. A 6 KiB row can contain roughly 120 code blocks, so source-
 are insufficient evidence of cheap visible-row layout. Row granularity, geometry corrections and
 complete qualification remain open before accepting this decision.
 
+The complexity-bound follow-up reduced dense SwiftUI wall time from 94.85 to 20.29 seconds and
+CPU from 93.10 to 16.53 seconds. Dense AppKit improved to 73.89 seconds but still stalls. This
+supports finer segment packing without selecting a container. The native following reflow still
+moves 870 pt, and reader-held answer growth moves 65.5 pt, and SwiftUI geometry-cycling warnings remain. The reference separates these
+new observations from the initial evidence; acceptance and full qualification remain open.
+
 ## Proposed decision
 
 ### One list of block rows, all in the document

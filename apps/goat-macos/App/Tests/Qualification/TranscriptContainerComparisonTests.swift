@@ -118,7 +118,12 @@ extension TranscriptPerformanceTests {
             let completionDrift = beforeCompletion.flatMap { saved in
                 fixture.frames[saved.0].map { Double($0.minY - saved.1) }
             }
+            let preparation = await fixture.markdown.snapshot()
+            XCTAssertEqual(preparation.work.mainThreadPreparations, 0)
             let result: [String: Any] = [
+                "preparation_main_thread_refreshes": preparation.work.mainThreadPreparations,
+                "preparation_cache_bytes": preparation.cost,
+                "preparation_scanned_bytes": preparation.work.scannedBytes,
                 "backend": backend, "phase": phase, "bytes": published, "follows": follows,
                 "dense": dense, "rows": fixture.rows.count,
                 "wall_s": ProcessInfo.processInfo.systemUptime - started,

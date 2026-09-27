@@ -333,11 +333,19 @@ extension AppTests.Bleet {
         }
 
         @MainActor private func height(_ source: String, scope: CodeBlockScope? = nil) async throws -> CGFloat {
+            final class Measurement { var height: CGFloat = 0 }
+            let measurement = Measurement()
             let content = scope?.content.value ?? MarkdownContent(source)
             let host = NSHostingView(
                 rootView: Markdown(content).goatMarkdownStyle(fontSize: 14)
                     .environment(\.codeBlockScope, scope)
-                    .frame(width: 600).environment(AppModel.shared))
+                    .frame(width: 600).fixedSize(horizontal: false, vertical: true)
+                    .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { measurement.height = $0 }
+                    // Measure the inner content, while keeping the outer host/window independent of
+                    // asynchronous code-height changes. Fitting the window to them creates a loop.
+                    .frame(width: 600, height: 400, alignment: .topLeading)
+                    .environment(AppModel.shared))
+            host.sizingOptions = []
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled], backing: .buffered,
                 defer: false)
@@ -349,7 +357,9 @@ extension AppTests.Bleet {
             }
             try await Task.sleep(for: .milliseconds(400))
             host.layoutSubtreeIfNeeded()
-            return host.fittingSize.height
+            #expect(abs(window.contentLayoutRect.height - 400) < 1, "The measurement window stays fixed")
+            try #require(measurement.height > 0, "Measure laid-out content rather than a window fitting proposal")
+            return measurement.height
         }
 
         /// Blocks over the limit show their first lines; expanding is remembered when the block is

@@ -170,7 +170,71 @@ reliably select the isolated comparison host; no manual accessibility pass is cl
 those checks in the selected production integration, retaining the existing navigation regressions.
 The current tests record observations rather than asserting all of those acceptance criteria.
 
-## Verification
+## Complexity-bound follow-up, 2026-09-27
+
+The same Release fixtures now use packing capped at 16 top-level blocks or 16 work units, in
+addition to bytes. A fence costs four units; nonblank prose/table lines cost one. Indivisible
+lists/tables/quotes retain their semantics and are isolated when over the work threshold; this
+is not a hard cap on every nested view. Code-identity HTML extraction moved into preparation,
+sharing the existing HTML traversal. Prepared/scanner metadata and code literals now count
+toward cache admission. See the [ADR-0091 amendment](../adrs/0091-content-bounded-transcript-layout.md).
+
+Same machine, source content, window, cadence and fresh-process method as the initial run. The
+smaller segments increase the initial row count to 434, the mixed final count to 5,288 and the
+dense final count to 14,141. Container code is unchanged. These remain single-run observations.
+The changes affect production preparation, but the timings below measure the comparison
+containers, not the shipping paged transcript's complete composition.
+
+| Scenario | Container | Wall s | CPU s | Sleep overrun p95 ms | Publication p95 ms | Peak host MiB |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| dense answer | swiftui | 20.29 | 16.53 | 27.49 | 5.87 | 285.8 |
+| dense answer | appkit | 73.89 | 72.33 | 169.10 | 376.54 | 442.6 |
+| follow reasoning | swiftui | 20.32 | 3.96 | 9.73 | 13.83 | 227.2 |
+| follow answer | swiftui | 19.64 | 11.06 | 8.17 | 3.85 | 377.3 |
+| follow reasoning | appkit | 19.83 | 6.07 | 8.33 | 12.43 | 251.6 |
+| follow answer | appkit | 23.17 | 19.30 | 62.61 | 57.67 | 388.7 |
+| reader reasoning | swiftui | 20.24 | 1.36 | 9.50 | 9.31 | 206.6 |
+| reader answer | swiftui | 20.16 | 1.48 | 9.25 | 9.25 | 280.4 |
+| reader reasoning | appkit | 20.14 | 1.37 | 9.41 | 8.92 | 222.4 |
+| reader answer | appkit | 20.17 | 1.40 | 9.68 | 9.48 | 291.3 |
+
+Dense SwiftUI CPU fell about 82%, and peak host RSS fell from 530.0 to 285.8 MiB. Dense AppKit
+also improved, but still consumed 72.33 seconds CPU and showed 169.10 ms p95 overrun. The result
+supports complexity-aware packing; it does not establish a frame-rate or key-to-pixel guarantee.
+All recorded Markdown preparation diagnostics were zero for execution on the main thread.
+The package tests prove full/incremental equivalence and settled-boundary stability. Three default-
+budget 2 MiB cache cases (tiny empty fences, mixed tiny fences/prose and tiny table candidates)
+retain the scanner, charge metadata, scan linearly, bound retained parses and admit the front-cache
+document. Table lines deliberately have ordinary line cost: weighting every tiny table line like
+fence controls amplified metadata enough to threaten scanner retention. The table-density
+regression covers this distinction without increasing the cache budgets again.
+
+SwiftUI held the reader anchor at 0 pt through both channels and completion, with -0.02 pt reader
+reflow. The native answer drifted -65.5 pt while reading, and its reasoning-growth anchor was
+unavailable. Native completion shifted -0.5 pt per channel; reader reflow was -1.01 pt. Following
+reflow was -0.23 pt for SwiftUI and +869.62 pt for AppKit. Dense reflow was -0.02 pt for SwiftUI
+and unavailable for AppKit. Most following completion anchors were unavailable, so no completion-
+geometry pass is claimed. Exact bottom alignment is not certified by the requested follow mode.
+SwiftUI still logged three geometry-cycling warnings in the dense run.
+
+A separate CPU-only Time Profiler run completed the dense workload in 21.80 seconds wall and
+19.20 seconds CPU. Across the recorded interval, 20,130 weighted samples put 95.3% on the main
+thread; SwiftUICore and AttributeGraph appeared in 88.2% and 70.9% of inclusive stacks. These
+percentages overlap. The absolute workload is much smaller, but UI update/layout work still
+predominates. This supports reducing view work, not moving UI layout off MainActor. The capture
+includes setup and settling and is not an allocation or input-latency certification.
+
+ADR-0099 remains proposed. The native estimate/anchor policy and SwiftUI geometry cycling still
+need investigation; supported-OS, input, accessibility, allocation/retention and no-flash gates
+remain open. Neither this improvement nor successful workload assertions certify Delivery 3.
+
+The code-height regression helper now measures the inner rendered content inside a fixed outer
+host. This removes window/content sizing feedback during asynchronous code preparation, while
+retaining its collapse/expansion assertions and adding a fixed-window assertion. Three fresh-
+process chrome-suite repetitions passed. No timing threshold or original height assertion was
+relaxed to address the reproduced AppKit constraint-loop crash.
+
+## Initial verification
 
 `make verify CONFIG=Release` passed: lint, package tests, the app test plan (548 passed,
 three opt-in skips, one existing expected ScrollPosition limitation), and the Release app build.
@@ -183,3 +247,13 @@ These green checks do not override the measured performance and geometry failure
 ## Decision
 
 Pending owner review. Keep ADR-0099 proposed and Delivery 3's qualification gates open.
+
+## Follow-up verification
+
+`make verify CONFIG=Release` passed on the final implementation: lint, package tests (including
+32 Bleet tests), 549 app tests passed, three opt-in skips, the existing expected ScrollPosition
+limitation, and the Release app build. All six final uninstrumented workload-integrity runs and
+the final CPU-profile run passed. The code-chrome suite also passed three fresh-process
+repetitions after fixing its measurement host. Website unit tests, both site builds and built-
+content checks cover the updated reference and ADRs. Performance and geometry acceptance remain
+separate from these successful test invocations.

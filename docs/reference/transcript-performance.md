@@ -99,3 +99,19 @@ The combined stack in [PR #36](https://github.com/goatsoft/GOAT/pull/36) passed 
 A disposable native window on Golden Gate exercised earlier-part navigation, text selection, Command-C, keyboard-adjusted selection and complete copy/paste of a 400-line Unicode fixture spanning two parts. No saved conversations were loaded. This is targeted interaction evidence, not a claim that every application workflow was manually audited.
 
 Compaction-specific keyboard expansion/collapse and restoration passed with the actual macOS Reduce Motion setting enabled. A fresh process restored compaction preferences, summary text and file metadata; deleting the summary retained both original messages in SQLite. These checks used disposable synthetic data.
+
+## Dense-block bounds
+
+Markdown packing also stops at 16 top-level blocks or 16 work units, with a fence costing four.
+The score counts nonblank prose and table lines; it isolates an indivisible complex
+block without changing its internal Markdown semantics. It is a packing heuristic, not a hard
+bound on every nested view. The existing byte limits still apply. See the complexity amendment in
+[ADR-0091](../adrs/0091-content-bounded-transcript-layout.md).
+
+Cache admission includes prepared/scanner metadata and prepared code literals, so tiny segments
+cannot bypass a byte-only budget. Actor limits are 48 MiB total / 32 MiB per reply; front-cache
+limits are 32 MiB total / 24 MiB per reply. These charged costs are not measurements of process RSS.
+Code identity HTML extraction runs in preparation, using the existing parse's HTML, rather than
+in main-thread view evaluation. Dense 2 MiB tests verify scanner retention, bounded admission,
+linear scanning and off-main preparation. Container responsiveness is measured separately in the
+[container comparison](transcript-container-comparison.md).
