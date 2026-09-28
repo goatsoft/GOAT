@@ -186,6 +186,7 @@ extension EnvironmentValues {
     static let shared = CodeBlockPositions()
 
     func identity(of code: String, occurrence: Int?, in scope: CodeBlockScope) -> CodeBlockIdentity? {
+        // Validate the scope contract even when a shortcut would not need literal lookup.
         guard let list = scope.content.codeLiterals else {
             assertionFailure("CodeBlockScope requires prepared code identities")
             return nil

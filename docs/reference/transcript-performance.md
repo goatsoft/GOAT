@@ -110,7 +110,7 @@ bound on every nested view. The existing byte limits still apply. See the comple
 
 Cache admission includes prepared/scanner metadata and prepared code literals, so tiny segments
 cannot bypass a byte-only budget. Actor limits are 32 MiB total / 24 MiB per reply, with completed replies capped at 16 MiB
-inside that total and evicted before active streams. Front-cache limits are 16 MiB total and per reply. These charged costs are not measurements of process RSS.
+inside that total and evicted before active streams. Front-cache limits are 16 MiB total / 4 MiB per reply; larger replies render from view-owned working documents without displacing unrelated cached history. These charged costs are not measurements of process RSS.
 Code identity HTML extraction runs in preparation, using the existing parse's HTML, rather than
 in main-thread view evaluation. Dense 2 MiB tests verify scanner retention, bounded admission,
 linear scanning and cache lifecycle. Container responsiveness is measured separately in the

@@ -278,12 +278,15 @@ extension AppTests.Bleet {
                     id: message.id, source: message.text, revision: message.textRevision, isComplete: true))
             #expect(!cache.store(large, for: message.id))
             #expect(cache.latest(for: message.id) == nil, "A declined store drops the older document")
+            #expect(
+                cache.shownBytes(for: message.id, revision: message.textRevision) == large.shownBytes,
+                "Declining rich content must preserve exact transcript admission accounting")
             for _ in 0..<3 {
                 let other = UUID()
                 cache.store(
                     try #require(await segments.prepare(id: other, source: "Short", isComplete: true)), for: other)
             }
-            #expect(cache.snapshot().entryCount == 2 && cache.snapshot().totalCost <= 48_000)
+            #expect(cache.snapshot().entryCount == 2 && cache.snapshot().totalCost <= 1_200)
         }
 
         @Test @MainActor func windowChargesThePreparedRepresentation() async throws {
@@ -529,7 +532,8 @@ extension AppTests.Bleet {
             #expect(complete.window?.upperBound == complete.segments.count)
             #expect(await cache.snapshot().entryCount == 1, "The completed reply stays retained")
             let front = PreparedMarkdownDocumentCache()
-            #expect(front.store(complete, for: message.id), "The front cache retains a windowed reply at the limit")
+            #expect(!front.store(complete, for: message.id), "A rich-limit document exceeds the quarter-cache cap")
+            #expect(complete.segments[complete.shownSegments.lowerBound].isParsed, "The working document still renders")
             #expect(front.shownBytes(for: message.id, revision: message.textRevision) == complete.shownBytes)
         }
 
@@ -587,9 +591,6 @@ extension AppTests.Bleet {
             }
             let document = try #require(last)
             let snapshot = await cache.snapshot()
-            print(
-                "DENSE_CACHE source=\(source.utf8.count) segments=\(document.segments.count) document=\(document.cost) actor=\(snapshot.cost)"
-            )
             #expect(document.metadataBytes >= document.segments.count * MemoryLayout<PreparedMarkdownSegment>.stride)
             #expect(snapshot.cost > document.cost + source.utf8.count, "Scanner metadata is also charged")
             // Table lookahead does more byte visits than a fence. Compare growth, not a universal
@@ -599,7 +600,15 @@ extension AppTests.Bleet {
                 "No repeated full scan: \(snapshot.work)")
             #expect(document.segments.filter(\.isParsed).count <= 32 + 2 * MarkdownSegmentCache.retentionMargin)
             let front = PreparedMarkdownDocumentCache()
-            #expect(front.store(document, for: message.id))
+            let historyID = UUID()
+            let history = try #require(
+                await cache.prepare(id: historyID, source: "Keep this reply warm.", isComplete: true))
+            #expect(front.store(history, for: historyID))
+            #expect(front.store(document, for: message.id) == (document.cost <= front.maximumEntryCost))
+            #expect(front.latest(for: historyID) != nil, "A large reply cannot displace unrelated history")
+            #expect(
+                document.segments[document.shownSegments.lowerBound].isParsed,
+                "The working document remains renderable even when front-cache admission declines")
             await cache.removeAll()
             #expect(await cache.snapshot().cost == 0)
             #expect(await cache.snapshot().streamCount == 0)

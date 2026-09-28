@@ -25,6 +25,11 @@ import SwiftUI
     }
 }
 
+/// Mounted rows share their message's working document, independently of cache admission.
+@MainActor @Observable final class ComparisonMessagePreparation {
+    var document: PreparedMarkdownDocument?
+}
+
 @MainActor @Observable final class TranscriptComparisonFixture {
     var rows: [ComparisonRow] = []
     var generation = 0
@@ -48,14 +53,21 @@ import SwiftUI
     @ObservationIgnored private var overscan: Set<String> = []
     @ObservationIgnored private var preparationTask: Task<Void, Never>?
     @ObservationIgnored private var preparationPending = false
-    private(set) var preparationRevision = 0
+    @ObservationIgnored private var preparations: [UUID: ComparisonMessagePreparation] = [:]
+
+    func preparation(for id: UUID) -> ComparisonMessagePreparation {
+        if let existing = preparations[id] { return existing }
+        let state = ComparisonMessagePreparation()
+        preparations[id] = state
+        return state
+    }
 
     /// One owner combines all visible segments of each message into one cache window.
     /// Rows consume the production front cache synchronously, including on scroll-back.
     func preparedSegment(for row: ComparisonRow) -> PreparedMarkdownSegment? {
-        _ = preparationRevision
         guard case .markdown(let message, let segment, _) = row.content,
-            let document = documents.document(for: message.id, revision: message.textRevision),
+            let document = preparation(for: message.id).document
+                ?? documents.document(for: message.id, revision: message.textRevision),
             document.segments.indices.contains(segment.index), document.shownSegments.contains(segment.index)
         else { return nil }
         return document.segments[segment.index]
@@ -70,6 +82,7 @@ import SwiftUI
     func stopPreparation() {
         preparationTask?.cancel()
         preparationTask = nil
+        for state in preparations.values { state.document = nil }
     }
 
     private func schedulePreparation() {
@@ -101,15 +114,22 @@ import SwiftUI
     }
 
     func prepareRequestedRows() async {
-        for (_, request) in requestedWindows() {
+        let requests = requestedWindows()
+        for (id, state) in preparations where requests[id] == nil && !(id == active.id && following) {
+            state.document = nil
+        }
+        for (_, request) in requests {
             let (message, window) = request
             let revision = message.textRevision
             let complete = message.complete
-            if let cached = documents.document(for: message.id, revision: revision),
+            let state = preparation(for: message.id)
+            if let cached = state.document ?? documents.document(for: message.id, revision: revision),
+                cached.revision == revision,
                 cached.isComplete == complete,
                 cached.shownSegments.lowerBound <= window.lowerBound,
                 cached.shownSegments.upperBound >= window.upperBound
             {
+                if state.document == nil { state.document = cached }
                 continue
             }
             guard
@@ -119,7 +139,7 @@ import SwiftUI
                 message.complete == complete
             else { continue }
             documents.store(document, for: message.id)
-            preparationRevision += 1
+            state.document = document
         }
     }
     let thinking = ThinkingPreparation()
@@ -228,7 +248,7 @@ import SwiftUI
             // History can be inserted while the actor prepares. Resolve the live row base only
             // after the await, so publication never overwrites a historical or earlier live row.
             documents.store(doc, for: active.id)
-            preparationRevision += 1
+            preparation(for: active.id).document = following || requestedWindows()[active.id] != nil ? doc : nil
             let start = answerStart
             let oldCount = rows.count - start
             let first = min(doc.segments.count, max(0, oldCount - 2))
@@ -395,7 +415,9 @@ struct ComparisonRowView: View {
                 )
                 .environment(\.codeBlockMessageID, message.id)
             } else {
-                ProgressView("Preparing text").frame(maxWidth: .infinity, alignment: .leading)
+                // ADR-0099: cold rows retain their text and approximate height, never a spinner.
+                Text(verbatim: segment.body)
+                    .font(Font(ReadingFonts.nsFont(model.effectiveChatFontID, size: model.chatFontSize, role: .chat)))
             }
         }
     }

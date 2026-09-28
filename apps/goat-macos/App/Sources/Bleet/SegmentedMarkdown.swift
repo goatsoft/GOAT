@@ -705,7 +705,10 @@ final class PreparedMarkdownDocumentCache {
     }
 
     private struct Entry {
-        let document: PreparedMarkdownDocument
+        let document: PreparedMarkdownDocument?
+        let revision: TextRevision?
+        let renderedBytes: Int
+        let cost: Int
         /// Summed once: the transcript window reads it for every admitted row on every update.
         let shownBytes: Int
         var access: UInt64
@@ -718,11 +721,12 @@ final class PreparedMarkdownDocumentCache {
     private var totalCost = 0
     private var clock: UInt64 = 0
 
-    /// Defaults retain a windowed reply through `ReplyWindow.richLimit` (its source, its segment bodies,
-    /// shared definitions, metadata and its window's parses), and at most 16 MiB in all.
+    /// Keep at most 16 MiB, with any one reply limited to a quarter of that cache.
+    /// Larger replies remain renderable through the view's working document and actor cache;
+    /// declined rich content leaves only a small admission-accounting record in this cache.
     init(
         maximumEntries: Int = 64, maximumTotalCost: Int = 16 * 1_024 * 1_024,
-        maximumEntryCost: Int = 16 * 1_024 * 1_024
+        maximumEntryCost: Int = 4 * 1_024 * 1_024
     ) {
         self.maximumEntries = max(1, maximumEntries)
         self.maximumTotalCost = max(1, maximumTotalCost)
@@ -731,7 +735,7 @@ final class PreparedMarkdownDocumentCache {
 
     /// The document prepared from exactly `revision`, complete or not.
     func document(for id: UUID, revision: TextRevision) -> PreparedMarkdownDocument? {
-        guard let entry = entries[id], entry.document.revision == revision else { return nil }
+        guard let entry = entries[id], entry.revision == revision else { return nil }
         return touch(id)
     }
 
@@ -741,30 +745,35 @@ final class PreparedMarkdownDocumentCache {
 
     /// The rendered bytes of exactly `revision` when prepared, without changing recency.
     func renderedBytes(for id: UUID, revision: TextRevision) -> Int? {
-        guard let document = entries[id]?.document, document.revision == revision else { return nil }
-        return document.renderedBytes
+        guard let entry = entries[id], entry.revision == revision else { return nil }
+        return entry.renderedBytes
     }
 
     /// The rendered bytes of the segments shown for exactly `revision`, without changing recency.
     func shownBytes(for id: UUID, revision: TextRevision) -> Int? {
-        guard let entry = entries[id], entry.document.revision == revision else { return nil }
+        guard let entry = entries[id], entry.revision == revision else { return nil }
         return entry.shownBytes
     }
 
-    /// Returns whether the document was retained. A declined store also drops the older entry.
+    /// Returns whether the document was retained. A declined document keeps only revision and
+    /// byte counts, charged inside the same byte/count caps, so transcript admission stays exact.
     @discardableResult
     func store(_ document: PreparedMarkdownDocument, for id: UUID) -> Bool {
         remove(id)
-        guard document.cost <= maximumEntryCost else { return false }
+        let admitted = document.cost <= maximumEntryCost
+        let cost = admitted ? document.cost : MemoryLayout<Entry>.stride
+        guard cost <= maximumEntryCost else { return false }
         clock &+= 1
-        entries[id] = Entry(document: document, shownBytes: document.shownBytes, access: clock)
-        totalCost += document.cost
+        entries[id] = Entry(
+            document: admitted ? document : nil, revision: document.revision,
+            renderedBytes: document.renderedBytes, cost: cost, shownBytes: document.shownBytes, access: clock)
+        totalCost += cost
         while totalCost > maximumTotalCost || entries.count > maximumEntries,
             let victim = entries.min(by: { $0.value.access < $1.value.access })?.key
         {
             remove(victim)
         }
-        return entries[id] != nil
+        return admitted && entries[id] != nil
     }
 
     func removeAll() {
@@ -784,7 +793,7 @@ final class PreparedMarkdownDocumentCache {
 
     private func remove(_ id: UUID) {
         guard let old = entries.removeValue(forKey: id) else { return }
-        totalCost -= old.document.cost
+        totalCost -= old.cost
     }
 }
 

@@ -2,6 +2,7 @@ import AppKit
 import Bleet
 import Darwin
 import Hoofprint
+import Observation
 import SwiftUI
 import XCTest
 
@@ -37,6 +38,32 @@ extension TranscriptPerformanceTests {
         await fixture.prepareRequestedRows()
         let after = await fixture.markdown.snapshot().parseCount
         XCTAssertEqual(after, count)
+    }
+
+    @MainActor func testHistoricalPreparationDoesNotObserveLivePublications() async throws {
+        let fixture = TranscriptComparisonFixture()
+        defer { fixture.stopPreparation() }
+        try await fixture.seed(rounds: 1)
+        let row = try XCTUnwrap(
+            fixture.rows.first {
+                if case .markdown = $0.content { return true }
+                return false
+            })
+        let invalidated = XCTestExpectation(description: "Historical document must not be invalidated")
+        invalidated.isInverted = true
+        withObservationTracking {
+            _ = fixture.preparedSegment(for: row)
+        } onChange: {
+            invalidated.fulfill()
+        }
+        try await fixture.append("A live **answer**.", reasoning: false)
+        XCTAssertNotNil(fixture.preparation(for: fixture.active.id).document)
+        await fulfillment(of: [invalidated], timeout: 0.05)
+        fixture.following = false
+        try await fixture.append(" Offscreen growth.", reasoning: false)
+        XCTAssertNil(
+            fixture.preparation(for: fixture.active.id).document,
+            "An offscreen unfollowed message must release its working document")
     }
 
     /// Run each backend in a fresh Release process. Defaults exercise 2 MiB per live channel.
@@ -109,7 +136,7 @@ extension TranscriptPerformanceTests {
         }
         let initial = comparisonUsage()
         let scrollStart = ProcessInfo.processInfo.systemUptime
-        try await comparisonGesture(scroll, direction: 1)
+        try await comparisonWheelSequence(scroll, direction: 1)
         try await Task.sleep(for: .milliseconds(500))
         print(
             "COMPARISON_SCROLL backend=\(backend) wall_s=\(ProcessInfo.processInfo.systemUptime - scrollStart) cpu_s=\(comparisonUsage().cpu - initial.cpu) offset=\(scroll.contentView.bounds.minY) peak_visible=\(fixture.peakVisible)"
@@ -188,7 +215,7 @@ extension TranscriptPerformanceTests {
         }
         fixture.status = "Streaming complete; scroll, inspect tools and test controls"
         fixture.following = false
-        try await comparisonGesture(scroll, direction: 1)
+        try await comparisonWheelSequence(scroll, direction: 1)
         try await Task.sleep(for: .milliseconds(500))
         let anchor = comparisonAnchor(fixture, host: host)
         window.setContentSize(NSSize(width: 820, height: 780))
@@ -228,13 +255,15 @@ extension TranscriptPerformanceTests {
 @MainActor private func comparisonNavigation(
     _ fixture: TranscriptComparisonFixture, backend: String, host: NSView, scroll: NSScrollView
 ) async throws {
+    let calibration = try await comparisonInputCalibration()
+    print(
+        "COMPARISON_NAVIGATION backend=\(backend) input_mode=discrete_pixel_wheel input_control_max_error_pt=\(calibration)"
+    )
+    XCTAssertLessThanOrEqual(calibration, 1, "Synthetic input must work on a static AppKit control")
     fixture.following = true
     fixture.latestRequest += 1
     try await Task.sleep(for: .milliseconds(50))
     fixture.following = false
-    print(
-        "COMPARISON_GEOMETRY document=\(scroll.documentView?.bounds ?? .zero) clip=\(scroll.contentView.bounds) scroll=\(type(of: scroll))"
-    )
     let target = max(0, ((scroll.documentView?.bounds.height ?? 0) - scroll.contentSize.height) / 2)
     scroll.contentView.scroll(to: NSPoint(x: 0, y: target))
     scroll.reflectScrolledClipView(scroll.contentView)
@@ -247,6 +276,38 @@ extension TranscriptPerformanceTests {
         scroll.contentView.bounds.minY - directOrigin - (fixture.compensatedScroll - directCompensation))
     print("COMPARISON_NAVIGATION backend=\(backend) direct_move_drift_pt=\(replayDrift)")
     XCTAssertLessThanOrEqual(replayDrift, 1, "ADR-0097 direct-move replay")
+
+    var inputError: CGFloat = 0
+    for direction: Int32 in [1, -1, 1] {
+        let before = scroll.contentView.bounds.minY
+        let compensation = fixture.compensatedScroll
+        let requested = comparisonWheel(scroll, direction: direction, tick: 0)
+        let maximum = max(0, (scroll.documentView?.bounds.height ?? 0) - scroll.contentSize.height)
+        let applied = max(0, min(maximum, before + requested)) - before
+        try await Task.sleep(for: .milliseconds(100))
+        inputError = max(
+            inputError,
+            abs(
+                scroll.contentView.bounds.minY - before - applied
+                    - (fixture.compensatedScroll - compensation)))
+    }
+    print("COMPARISON_NAVIGATION backend=\(backend) candidate_static_input_error_pt=\(inputError)")
+    XCTAssertLessThanOrEqual(inputError, 1, "The candidate must receive input before growth is interpreted")
+    if ProcessInfo.processInfo.environment["GOAT_COMPARE_INPUT_ONLY"] == "1" { return }
+
+    let beforeAppend = scroll.contentView.bounds.minY
+    let beforeCompensation = fixture.compensatedScroll
+    fixture.rows.append(ComparisonRow("initial-offset-replay", .label("Appended after a non-gesture move")))
+    fixture.reasoningStart += 1
+    fixture.answerStart += 1
+    fixture.lastChanged = (fixture.rows.count - 1)..<fixture.rows.count
+    fixture.generation += 1
+    try await Task.sleep(for: .milliseconds(500))
+    let initialDrift = abs(
+        scroll.contentView.bounds.minY - beforeAppend
+            - (fixture.compensatedScroll - beforeCompensation))
+    print("COMPARISON_NAVIGATION backend=\(backend) initial_offset_growth_drift_pt=\(initialDrift)")
+    XCTAssertLessThanOrEqual(initialDrift, 1, "Initial offset must not reapply after placement")
 
     // Start below unmeasured historical rows, then climb while the live answer grows to 2 MiB.
     fixture.following = false
@@ -280,7 +341,6 @@ extension TranscriptPerformanceTests {
         let requestedDelta = comparisonWheel(scroll, direction: 1, tick: tick % 24)
         let maximumOrigin = max(0, (scroll.documentView?.bounds.height ?? 0) - scroll.contentSize.height)
         let applied = max(0, min(maximumOrigin, before + requestedDelta)) - before
-        let immediateDelta = scroll.contentView.bounds.minY - before
         if tick == 24, let index = fixture.rows.firstIndex(where: { $0.id == anchor.0 }) {
             fixture.rows.insert(
                 ComparisonRow("inserted-during-gesture", .label("Inserted above the reader")), at: index)
@@ -304,19 +364,16 @@ extension TranscriptPerformanceTests {
             // treating an unwanted programmatic scroll as input would hide the very regression.
             let residual = abs(frame.minY - anchor.1 + applied)
             residuals.append(residual)
-            if residual > 1 {
-                print(
-                    "COMPARISON_EVENT tick=\(tick) id=\(anchor.0) before=\(before) immediate_delta=\(immediateDelta) requested_delta=\(applied) final_offset=\(scroll.contentView.bounds.minY) frame_delta=\(frame.minY - anchor.1) residual=\(residual)"
-                )
-            }
+
         } else {
             missing += 1
         }
     }
     try await growth.value
+    print("COMPARISON_NAVIGATION backend=\(backend) phase=growth_complete resident_bytes=\(comparisonUsage().resident)")
     let worst = residuals.max() ?? .infinity
     print(
-        "COMPARISON_NAVIGATION backend=\(backend) gesture_growth_max_residual_pt=\(worst) samples=\(residuals.count) missing=\(missing)"
+        "COMPARISON_NAVIGATION backend=\(backend) wheel_growth_max_residual_pt=\(worst) samples=\(residuals.count) missing=\(missing)"
     )
     XCTAssertGreaterThan(residuals.count, 96, "At least half the events must retain a measurable anchor")
     XCTAssertEqual(fixture.active.text.utf8.count, 2 * 1_024 * 1_024)
@@ -347,18 +404,55 @@ extension TranscriptPerformanceTests {
     let window = try XCTUnwrap(host.window)
     for (width, font) in [(820.0, 20.0), (1180.0, 14.0)] {
         host.layoutSubtreeIfNeeded()
-        let anchor = try XCTUnwrap(comparisonAnchor(fixture, host: host))
+        let anchor = comparisonAnchor(fixture, host: host)
+        print(
+            "COMPARISON_NAVIGATION backend=\(backend) phase=reflow_start width=\(width) font=\(font) resident_bytes=\(comparisonUsage().resident)"
+        )
         AppModel.shared.chatFontSize = font
         window.setContentSize(NSSize(width: width, height: 780))
         try await Task.sleep(for: .milliseconds(500))
         host.layoutSubtreeIfNeeded()
         fixture.sampleFrames?()
-        print("COMPARISON_REFLOW_ANCHOR id=\(anchor.0) old_y=\(anchor.1) current_ids=\(fixture.frames.keys.sorted())")
-        let frame = try XCTUnwrap(fixture.frames[anchor.0], "Reflow must retain a measurable anchor")
+        guard let anchor, let frame = fixture.frames[anchor.0] else {
+            print("COMPARISON_NAVIGATION backend=\(backend) reflow_width=\(width) font=\(font) anchor_missing=true")
+            XCTFail("Reflow must retain a measurable anchor at width \(width)")
+            continue
+        }
         let drift = abs(frame.minY - anchor.1)
         print("COMPARISON_NAVIGATION backend=\(backend) reflow_width=\(width) font=\(font) drift_pt=\(drift)")
         XCTAssertLessThanOrEqual(drift, 1)
     }
+}
+
+/// Same events, no SwiftUI, preparation, height changes or anchor correction.
+@MainActor private func comparisonInputCalibration() async throws -> CGFloat {
+    let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+    scroll.hasVerticalScroller = true
+    let document = ComparisonCalibrationDocument(frame: NSRect(x: 0, y: 0, width: 800, height: 100_000))
+    scroll.documentView = document
+    let window = NSWindow(contentRect: scroll.frame, styleMask: [.titled], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    window.contentView = scroll
+    window.orderFront(nil)
+    defer {
+        window.contentView = nil
+        window.close()
+    }
+    scroll.contentView.scroll(to: NSPoint(x: 0, y: 50_000))
+    scroll.reflectScrolledClipView(scroll.contentView)
+    try await Task.sleep(for: .milliseconds(100))
+    var worst: CGFloat = 0
+    for tick in 0..<24 {
+        let before = scroll.contentView.bounds.minY
+        let requested = comparisonWheel(scroll, direction: 1, tick: tick)
+        try await Task.sleep(for: .milliseconds(16))
+        worst = max(worst, abs(scroll.contentView.bounds.minY - before - requested))
+    }
+    return worst
+}
+
+@MainActor private final class ComparisonCalibrationDocument: NSView {
+    override var isFlipped: Bool { true }
 }
 
 @discardableResult
@@ -374,9 +468,9 @@ extension TranscriptPerformanceTests {
         return 0
     }
     event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
-    event.setIntegerValueField(.scrollWheelEventScrollPhase, value: tick == 0 ? 1 : tick == 15 ? 4 : tick < 15 ? 2 : 0)
-    event.setIntegerValueField(
-        .scrollWheelEventMomentumPhase, value: tick == 16 ? 1 : tick == 23 ? 3 : tick > 16 ? 2 : 0)
+    // Do not fabricate gesture phases: a direct began call enters AppKit's event-tracking
+    // loop, which expects subsequent events in its queue, not later direct method calls.
+    // These are discrete pixel-wheel inputs. Hardware momentum remains manual qualification.
     guard let native = NSEvent(cgEvent: event) else {
         XCTFail("Could not bridge the scrolling event")
         return 0
@@ -386,7 +480,7 @@ extension TranscriptPerformanceTests {
     return requested
 }
 
-@MainActor private func comparisonGesture(_ scroll: NSScrollView, direction: Int32) async throws {
+@MainActor private func comparisonWheelSequence(_ scroll: NSScrollView, direction: Int32) async throws {
     for tick in 0..<24 {
         comparisonWheel(scroll, direction: direction, tick: tick)
         try await Task.sleep(for: .milliseconds(16))

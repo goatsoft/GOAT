@@ -41,6 +41,7 @@ Optional environment variables (all prefixed `TEST_RUNNER_` when invoking Make):
 | `GOAT_COMPARE_FOLLOW` | 1 | Set 0 to hold the reader after scrolling upward |
 | `GOAT_COMPARE_DENSE` | 0 | Set 1 for dense paragraph/fence regression input |
 | `GOAT_COMPARE_NAVIGATION` | 0 | Set 1 to assert direct-move and concurrent upward-input/growth regressions instead of timing |
+| `GOAT_COMPARE_INPUT_ONLY` | 0 | With navigation mode, stop after static candidate input calibration |
 | `GOAT_COMPARE_INSTRUMENTS` | 0 | Set 1 for a 15-second attach interval after READY |
 | `GOAT_COMPARE_INTERACTIVE` | 0 | Set 1 to leave the window open for manual checks |
 
@@ -91,10 +92,10 @@ Frame observations in both candidates are outside observable UI state.
 
 `GOAT_COMPARE_NAVIGATION=1` exercises a direct move after Latest, 192 upward wheel events while
 an answer grows to 2 MiB, insertion and height changes above the reader, final bottom alignment,
-and width/font changes in both directions. All assertions use a 1 pt tolerance. Gesture residuals
+and width/font changes in both directions. All assertions use a 1 pt tolerance. Wheel residuals
 compare the row's screen displacement with the input event's pixel delta,
 clamped at the document edges. They do not treat the observed clip-origin change as input, which
-could hide an unwanted programmatic scroll. Gesture/momentum ending events carry zero delta; beginning events carry the requested input.
+could hide an unwanted programmatic scroll. The sequence contains discrete pixel-wheel inputs with two zero-delta pauses; it does not fabricate gesture or momentum phases.
 The direct-move probe accounts separately for explicit native height compensation and records
 unexplained offset movement after the reader takes ownership. A failure does not identify a
 particular private SwiftUI mechanism. These synthetic probes expose regressions, but cannot certify hardware momentum,
@@ -104,8 +105,10 @@ the assertions are not converted to expected successes.
 The fixture owns one combined preparation window per message and uses the production
 `PreparedMarkdownDocumentCache` for synchronous row reads. Neighbouring rows do not prepare
 independent one-segment windows. Unmounting a row does not discard the cached document;
-scroll-back reuses it while admitted under the production cache budget. Cold misses show a
-preparation indicator, never raw Markdown as temporary prose. A regression checks that two
+scroll-back reuses it while admitted under the production cache budget. Per-message observable
+working documents isolate live publications from historical rows and remain renderable when a
+large document is declined by the 4 MiB front-cache entry cap. Cold misses lay out the segment
+body as plain text, as ADR-0099 requires, rather than a spinner or an empty row. A regression checks that two
 neighbouring rows retain both preparation identities through hide/show and scroll-back without
 additional parsing. This removes the artificial per-row cache contention, but does not certify
 cold-miss geometry or no-flash behavior; those still require the opt-in qualification.
@@ -250,8 +253,8 @@ The original actor-local main-thread counter has been removed: it could not dete
 performed outside that actor, so its zero values were not evidence of off-main coverage.
 The package tests prove full/incremental equivalence and settled-boundary stability. Three default-
 budget 2 MiB cache cases (tiny empty fences, mixed tiny fences/prose and tiny table candidates)
-retain the scanner, charge metadata, scan linearly, bound retained parses and admit the front-cache
-document. Table lines deliberately have ordinary line cost: weighting every tiny table line like
+retain the scanner, charge metadata, scan linearly, bound retained parses and verify front-cache admission independently of renderability. Oversized
+entries are declined without evicting unrelated cached history. Table lines deliberately have ordinary line cost: weighting every tiny table line like
 fence controls amplified metadata enough to threaten scanner retention. The table-density
 regression covers this distinction without increasing the cache budgets again.
 
@@ -342,3 +345,85 @@ window now install the SwiftUI host inside an AppKit viewport owner instead of m
 hosting view the window's direct content root. Existing width, scroll-fill and visible-ink
 assertions are unchanged. This addresses the observed test-host sizing failure; it does not
 establish a cause for all earlier comparison failures or qualify either container.
+
+
+## Follow-up scope: production hosting and unresolved failures
+
+`GOATApp` creates the transcript window through SwiftUI `WindowGroup`, applying a minimum
+880 by 560 point frame around `ContentView`; `ContentView` supplies `NavigationSplitView`
+chrome around `ChatView`. No production source explicitly assigns a transcript `NSHostingView`
+to `NSWindow.contentView`. About uses `NSHostingController` with its own window and has no
+transcript; sheets are SwiftUI-managed. This source audit does not prove that SwiftUI's internal
+hosting implementation can never resize unexpectedly. A separate direct-root regression now
+keeps a transcript in a direct `NSHostingView` with the production minimum-size contract and
+asserts requested widths through font and width changes.
+
+The earlier `reflowRestoresTheReadersAnchor` pending-request failure was not root-caused.
+Its rerun and local repetitions passed; its additional diagnostics remain. It is not attributed
+to the later 980-to-65 point host contraction. A repeat failure still needs investigation.
+
+Tracked qualification failure Q1: the AppKit Debug navigation run stalled after reporting
+`following_gap_pt=0`, before completing the first width/font reflow, with approximately 3.5 GB
+app resident memory. That observation predates shared preparation and per-message invalidation.
+The cause remains unproved. Q1 belongs to issue #60's container qualification, not to completed
+Delivery 3 work; subsequent results must explicitly state whether the run reaches both reflows.
+
+
+### Input calibration correction
+
+Directly calling `scrollWheel(with:)` with a fabricated began phase is not equivalent to
+feeding a native gesture event stream. On the static AppKit control, a sampled stalled call
+was inside AppKit's gesture tracking loop waiting for queued events; later direct changed-phase
+calls were not a valid substitute. Those earlier residuals are not container evidence.
+
+The probe now sends unphased pixel-wheel input and first runs the identical sequence against a
+static flipped AppKit document with no SwiftUI, preparation or anchor correction. The standalone
+control delivered all 60 pt inputs exactly (zero error). Each candidate run records its own
+control result too. The summary is named `wheel_growth_max_residual_pt`, replacing the misleading
+`gesture_growth_max_residual_pt`; hardware trackpad gestures and momentum remain unqualified.
+The initial-offset regression now explicitly appends a row after the non-gesture move and records
+`initial_offset_growth_drift_pt`, separately from direct-move replay and concurrent wheel input.
+
+
+### Release navigation results after the review fixes (2026-09-28)
+
+Same qualification host as above, fresh Release processes, 48 mixed history rounds and a
+2 MiB live answer. These are navigation probes, not FPS or full-app qualification. The static
+candidate input checks were separate follow-up runs with the same fixture and containers;
+`GOAT_COMPARE_INPUT_ONLY=1` makes that isolation reproducible. Both delivered input with zero
+error. Thus the growth residuals below cannot simply be dismissed as absent input delivery.
+Hardware event dispatch and trackpad momentum are still outside this synthetic test.
+
+All geometric tolerances are 1 pt. **Unmeasured means no result, never a pass.**
+
+| Check / summary field | AppKit | SwiftUI |
+| --- | --- | --- |
+| `input_control_max_error_pt` (static AppKit control) | 0, pass | 0, pass |
+| `candidate_static_input_error_pt` (follow-up) | 0, pass | 0, pass |
+| `direct_move_drift_pt` (main run) | 0, pass | 0, pass |
+| `direct_move_drift_pt` (static-input follow-up) | 0, pass | 83, **fail** |
+| `initial_offset_growth_drift_pt` | 0, pass | 677, **fail** |
+| `wheel_growth_max_residual_pt` | 1, pass | 60, **fail** |
+| Wheel samples / missing anchors | 192 / 0 | 192 / 0 |
+| `following_gap_pt` | Unmeasured: resource abort | 0, pass |
+| Reflow: 820 pt width / 20 pt font | Unmeasured: resource abort | 39.318 pt, **fail** |
+| Reflow: 1180 pt width / 14 pt font | Unmeasured: resource abort | 38.640 pt, **fail** |
+| Resident bytes at growth completion | 1,793,540,096 | 351,109,120 |
+| Overall probe | **Aborted / unqualified** | **Failed / unqualified** |
+
+The SwiftUI direct-move discrepancy is preserved rather than selecting the passing sample.
+The failures establish behavior under this probe; they do not identify a private SwiftUI cause.
+The new static-input assertion is now also part of the full navigation probe.
+
+**Q1 reproduced:** AppKit exceeded an external runaway guard after the wheel/growth summary and
+before the bottom-alignment result. The sampled host RSS was 3,274,976 KiB (about 3.12 GiB),
+so the runner terminated that test host. The guard is resource protection, not an accepted
+product memory budget. No following/reflow result can be inferred from that aborted run.
+This is a more precise observation than the older 3.5 GB paragraph, and remains tracked in #60.
+Per-message invalidation and the smaller front-cache cap did not eliminate the failure; its cause
+is still unproved. No container winner or Delivery 3 completion follows from these measurements.
+
+Validation for the review implementation: full local `make verify CONFIG=Release` passed,
+including the quarter-cache accounting and direct-host regressions. The explicit shared-window
+reuse and historical-invalidation/offscreen-release tests passed. The opt-in navigation runs
+above failed as recorded; their assertions are not suppressed by the normal test-plan skips.

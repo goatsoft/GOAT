@@ -266,7 +266,7 @@ segment slots and a per-live-segment string-allocation allowance, alongside sour
 shared definitions and parsed text. Prepared code literals are charged separately. These are
 bounded admission proxies, not exact heap measurements. The actor retains at most 32 MiB total
 and 24 MiB per reply, with completed replies capped at 16 MiB inside that total; the synchronous
-front cache retains at most 16 MiB total and per reply. Both release under the existing memory-pressure policy. The larger entry budgets keep a
+front cache retains at most 16 MiB total and 4 MiB per reply. Both release under the existing memory-pressure policy. The larger actor entry budget keeps a
 2 MiB tiny-fence reply's incremental scanner retained; declining it every publication would
 reintroduce repeated full scanning. Rich-limit tests cover that pathological metadata density.
 
@@ -287,3 +287,24 @@ the scanner and applies the smaller completed budget immediately. Nothing is pin
 accounted lifecycle. The dense 2 MiB empty-fence test charges 14,654,464 bytes for the document
 and 22,708,824 bytes including its scanner on the qualification host; these measurements support
 the entry limits without raising steady-state retention. Tests cover churn, completion and clearing.
+
+
+### Front-cache admission and visible working documents
+
+A single front-cache entry is capped at one quarter of its 16 MiB total, preserving room for
+unrelated prepared history. Requesting a parsed segment window alone is not enough to make
+an entry small: `PreparedMarkdownDocument` still carries the complete source and segment
+metadata. A dense 2 MiB document can therefore exceed 4 MiB even with a small parsed window.
+
+Such documents are returned for rendering but their rich content is declined by the synchronous
+front cache. Only revision and rendered/shown byte counts remain in a small record charged
+inside the same byte/count limits, preserving exact transcript admission without holding source
+or segment storage. The
+production `StreamingMarkdownView` keeps its current document in view state; cache admission
+never controls whether an already-prepared visible reply can render. The actor can still retain
+the document and incremental scanner under its separate budgets. A cold remount may await
+that actor again, which is the explicit tradeoff for preserving unrelated front-cache history.
+Visible working documents are rendering state, not additional cache capacity; cache ceilings
+must not be presented as total process-memory bounds. The comparison mirrors this ownership
+with per-message working documents released when neither visible nor in overscan (apart from
+the actively followed reply), and per-message observation rather than a global refresh counter.
