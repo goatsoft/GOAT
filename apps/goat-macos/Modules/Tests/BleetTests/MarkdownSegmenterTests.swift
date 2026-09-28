@@ -76,6 +76,66 @@ private func stream(
 
 @Suite struct MarkdownSegmenterTests {
 
+    @Test func tinyParagraphsAreBoundedByBlockCount() {
+        let source = String(repeating: "x\n\n", count: 160)
+        let segments = MarkdownSegmenter.segment(source, isComplete: true)
+        #expect(segments.map(\.body).joined() == source)
+        #expect(segments.count == 10)
+        #expect(segments.allSatisfy { $0.body.filter { $0 == "x" }.count <= MarkdownSegmenter.maximumGroupBlocks })
+    }
+
+    @Test func fenceInteriorAndCloserDoNotConsumePackingWork() {
+        let block = "```swift\n" + code(lines: 12) + "```\n\n"
+        let source = String(repeating: block, count: 4)
+        let result = MarkdownSegmenter.segment(source, isComplete: true)
+        #expect(result.count == 1, "Four fence openers cost 16; interior and closing lines add no work")
+        #expect(result.map(\.body).joined() == source)
+    }
+
+    @Test func tinyTableCandidatesDoNotAmplifySegmentMetadata() {
+        let source = String(repeating: "|\n|-\n\n", count: 1_000)
+        let segments = MarkdownSegmenter.segment(source, isComplete: true)
+        #expect(segments.map(\.body).joined() == source)
+        // A table's plain cells have no fence controls. Packing them must not create more
+        // metadata per byte than the worst-case four empty fences in a 32-byte group.
+        #expect(segments.count <= source.utf8.count / 32 + 1)
+    }
+
+    @Test func denseCodeIsBoundedByWorkBeforeBytes() {
+        let source = String(repeating: "Paragraph.\n\n```swift\nlet x = 1\n```\n\n", count: 200)
+        let result = MarkdownSegmenter.segment(source, isComplete: true)
+        expectTiling(result)
+        #expect(result.count > 40)
+        #expect(result.map(\.body).joined() == source)
+        for segment in result {
+            #expect(fenceLineCount(segment.body) <= 8)
+            #expect(segment.body.utf8.count < MarkdownSegmenter.targetBytes)
+        }
+    }
+
+    @Test(arguments: [7, 61, 509]) func workBoundariesRemainStableDuringStreaming(step: Int) {
+        let source = String(repeating: "Paragraph.\n\n```swift\nlet x = 1\n```\n\n", count: 50)
+        var finished: [MarkdownSegment] = []
+        stream(source, step: step, target: MarkdownSegmenter.targetBytes, maximum: MarkdownSegmenter.maximumBytes) {
+            current, _ in
+            let whole = MarkdownSegmenter.segment(current.source, isComplete: false)
+            #expect(current == whole)
+            #expect(Array(current.prefix(finished.count)) == finished)
+            finished = Array(current.prefix(current.settledCount))
+        }
+    }
+
+    @Test func complexityDoesNotTearApartAnAtomicListOrTable() {
+        let list = (0..<40).map { "- Item \($0)\n" }.joined() + "\n"
+        let table = "| A | B |\n| --- | --- |\n" + String(repeating: "| a | b |\n", count: 30) + "\n"
+        let source = "Before.\n\n" + list + table + "After.\n"
+        let result = MarkdownSegmenter.segment(source, isComplete: true)
+        expectTiling(result)
+        #expect(result.contains { $0.body == list })
+        #expect(result.contains { $0.body == table })
+        #expect(result.map(\.body).joined() == source)
+    }
+
     @Test func segmentsTileTheSourceAndPackWholeBlocks() {
         let result = MarkdownSegmenter.segment(mixedReply, isComplete: true, targetBytes: 256, maximumBytes: 1_024)
         expectTiling(result)

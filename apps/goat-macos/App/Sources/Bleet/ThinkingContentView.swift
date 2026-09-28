@@ -1121,7 +1121,7 @@ struct ThinkingSegmentsView: View {
     }
 }
 
-private struct ThinkingSegmentView: View {
+struct ThinkingSegmentView: View {
     let segment: ThinkingSegment
     /// The next segment continues this one, so the line break ending this one is where they join.
     let joinsNext: Bool

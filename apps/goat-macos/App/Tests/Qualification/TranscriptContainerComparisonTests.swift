@@ -1,0 +1,511 @@
+import AppKit
+import Bleet
+import Darwin
+import Hoofprint
+import Observation
+import SwiftUI
+import XCTest
+
+@testable import GOAT
+
+extension TranscriptPerformanceTests {
+    @MainActor func testComparisonPreparesNeighbouringRowsTogetherAndReusesScrollBack() async throws {
+        let fixture = TranscriptComparisonFixture()
+        defer { fixture.stopPreparation() }
+        try await fixture.seed(rounds: 1)
+        let neighbours = fixture.rows.filter {
+            if case .markdown = $0.content { return true }
+            return false
+        }
+        XCTAssertGreaterThanOrEqual(neighbours.count, 2)
+        let first = try XCTUnwrap(neighbours.first)
+        let second = neighbours[1]
+        fixture.documents.removeAll()
+        await fixture.markdown.removeAll()
+        fixture.visible = [first.id, second.id]
+        await fixture.prepareRequestedRows()
+        let firstID = try XCTUnwrap(fixture.preparedSegment(for: first)?.preparationID)
+        let secondID = try XCTUnwrap(fixture.preparedSegment(for: second)?.preparationID)
+        let count = await fixture.markdown.snapshot().parseCount
+        // Recreating either row does not issue a narrower request or discard its neighbour.
+        fixture.visible = [second.id]
+        await fixture.prepareRequestedRows()
+        fixture.visible = []
+        await fixture.prepareRequestedRows()
+        fixture.visible = [first.id, second.id]
+        XCTAssertEqual(fixture.preparedSegment(for: first)?.preparationID, firstID)
+        XCTAssertEqual(fixture.preparedSegment(for: second)?.preparationID, secondID)
+        await fixture.prepareRequestedRows()
+        let after = await fixture.markdown.snapshot().parseCount
+        XCTAssertEqual(after, count)
+    }
+
+    @MainActor func testHistoricalPreparationDoesNotObserveLivePublications() async throws {
+        let fixture = TranscriptComparisonFixture()
+        defer { fixture.stopPreparation() }
+        try await fixture.seed(rounds: 1)
+        let row = try XCTUnwrap(
+            fixture.rows.first {
+                if case .markdown = $0.content { return true }
+                return false
+            })
+        let invalidated = XCTestExpectation(description: "Historical document must not be invalidated")
+        invalidated.isInverted = true
+        withObservationTracking {
+            _ = fixture.preparedSegment(for: row)
+        } onChange: {
+            invalidated.fulfill()
+        }
+        try await fixture.append("A live **answer**.", reasoning: false)
+        XCTAssertNotNil(fixture.preparation(for: fixture.active.id).document)
+        await fulfillment(of: [invalidated], timeout: 0.05)
+        fixture.following = false
+        try await fixture.append(" Offscreen growth.", reasoning: false)
+        XCTAssertNil(
+            fixture.preparation(for: fixture.active.id).document,
+            "An offscreen unfollowed message must release its working document")
+    }
+
+    /// Run each backend in a fresh Release process. Defaults exercise 2 MiB per live channel.
+    @MainActor func testContainerComparison() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let backend = environment["GOAT_COMPARE"], ["swiftui", "appkit"].contains(backend) else {
+            throw XCTSkip("Set TEST_RUNNER_GOAT_COMPARE=swiftui or appkit")
+        }
+        let bytes = Int(environment["GOAT_COMPARE_BYTES"] ?? "") ?? 2 * 1_024 * 1_024
+        let rounds = Int(environment["GOAT_COMPARE_ROUNDS"] ?? "") ?? 48
+        let dense = environment["GOAT_COMPARE_DENSE"] == "1"
+        let follows = environment["GOAT_COMPARE_FOLLOW"] != "0"
+        let channel = environment["GOAT_COMPARE_CHANNEL"] ?? "both"
+        let model = AppModel.shared
+        let oldTheme = model.themeID
+        let oldFont = model.chatFontSize
+        let oldAnimations = model.animationsEnabled
+        model.themeID = "system"
+        model.chatFontSize = 14
+        model.animationsEnabled = false
+        defer {
+            model.themeID = oldTheme
+            model.chatFontSize = oldFont
+            model.animationsEnabled = oldAnimations
+        }
+        print(
+            "COMPARISON_HOST os=\(ProcessInfo.processInfo.operatingSystemVersionString) cores=\(ProcessInfo.processInfo.processorCount) memory_bytes=\(ProcessInfo.processInfo.physicalMemory)"
+        )
+        let fixture = TranscriptComparisonFixture()
+        let setup = ProcessInfo.processInfo.systemUptime
+        try await fixture.seed(rounds: rounds)
+        XCTAssertEqual(Set(fixture.rows.map(\.id)).count, fixture.rows.count)
+        let delegate = try XCTUnwrap(
+            TranscriptComparisonFixture.tools(0).first { $0.tool == "subagent_delegate" }?.result)
+        XCTAssertEqual(try JSONDecoder().decode(SubagentReceipt.self, from: Data(delegate.utf8)).status, .completed)
+        print(
+            "COMPARISON_SETUP backend=\(backend) rounds=\(rounds) rows=\(fixture.rows.count) seconds=\(ProcessInfo.processInfo.systemUptime - setup)"
+        )
+        let host = NSHostingView(
+            rootView: TranscriptComparisonSurface(fixture: fixture, backend: backend).environment(model))
+        host.sizingOptions = []
+        let window = NSWindow(
+            contentRect: NSRect(x: 60, y: 60, width: 1180, height: 780), styleMask: [.titled, .closable, .resizable],
+            backing: .buffered, defer: false)
+        window.title = "GOAT container comparison: \(backend)"
+        window.isReleasedWhenClosed = false
+        // Both candidates receive a viewport owned by the surrounding AppKit layout, as in
+        // the app. A direct hosting root can resize its window to changing ideal content.
+        let viewport = NSView(frame: NSRect(origin: .zero, size: window.contentLayoutRect.size))
+        host.frame = viewport.bounds
+        host.autoresizingMask = [.width, .height]
+        viewport.addSubview(host)
+        window.contentView = viewport
+        window.makeKeyAndOrderFront(nil)
+        defer {
+            window.contentView = nil
+            window.close()
+            fixture.stopPreparation()
+        }
+        print("COMPARISON_READY backend=\(backend) pid=\(getpid()) bytes=\(bytes) dense=\(dense) follows=\(follows)")
+        try await Task.sleep(for: .seconds(environment["GOAT_COMPARE_INSTRUMENTS"] == "1" ? 15 : 3))
+        guard let scroll = comparisonScroll(host) else {
+            XCTFail("No outer transcript scroll view")
+            return
+        }
+        XCTAssertGreaterThan(scroll.documentView?.bounds.height ?? 0, scroll.contentSize.height)
+        if environment["GOAT_COMPARE_NAVIGATION"] == "1" {
+            try await comparisonNavigation(fixture, backend: backend, host: host, scroll: scroll)
+            return
+        }
+        let initial = comparisonUsage()
+        let scrollStart = ProcessInfo.processInfo.systemUptime
+        try await comparisonWheelSequence(scroll, direction: 1)
+        try await Task.sleep(for: .milliseconds(500))
+        print(
+            "COMPARISON_SCROLL backend=\(backend) wall_s=\(ProcessInfo.processInfo.systemUptime - scrollStart) cpu_s=\(comparisonUsage().cpu - initial.cpu) offset=\(scroll.contentView.bounds.minY) peak_visible=\(fixture.peakVisible)"
+        )
+        if follows {
+            fixture.following = true
+            fixture.latestRequest += 1
+        } else {
+            fixture.following = false
+        }
+        try await Task.sleep(for: .seconds(1))
+        try await fixture.replayTools()
+        for reasoning in [true, false] where channel == "both" || channel == (reasoning ? "reasoning" : "answer") {
+            let source = TranscriptComparisonFixture.source(bytes: bytes, reasoning: reasoning, dense: dense)
+            let phase = reasoning ? "reasoning" : "answer"
+            fixture.status = "Streaming \(phase), \(bytes) bytes"
+            let anchor = comparisonAnchor(fixture, host: host)
+            let before = comparisonUsage()
+            let started = ProcessInfo.processInfo.systemUptime
+            var delays: [Double] = []
+            var work: [Double] = []
+            var offset = source.startIndex
+            var published = 0
+            print("COMPARISON_PHASE_START backend=\(backend) phase=\(phase) pid=\(getpid())")
+            RenderSignposts.event("TranscriptWorkloadPhase")
+            while offset < source.endIndex {
+                // Cut by UTF-8 bytes without splitting a Character. Publications are <= 16 KiB.
+                var end =
+                    source.utf8.index(offset, offsetBy: 16_384, limitedBy: source.utf8.endIndex) ?? source.endIndex
+                while end < source.endIndex, String.Index(end, within: source) == nil {
+                    end = source.utf8.index(before: end)
+                }
+                let delta = String(source[offset..<end])
+                published += delta.utf8.count
+                let publicationStart = ProcessInfo.processInfo.systemUptime
+                try await fixture.append(delta, reasoning: reasoning)
+                work.append(ProcessInfo.processInfo.systemUptime - publicationStart)
+                offset = end
+                let scheduled = ProcessInfo.processInfo.systemUptime
+                try await Task.sleep(for: .milliseconds(120))
+                delays.append(max(0, ProcessInfo.processInfo.systemUptime - scheduled - 0.120))
+            }
+            let beforeCompletion = comparisonAnchor(fixture, host: host)
+            try await fixture.append("", reasoning: reasoning, complete: true)
+            try await Task.sleep(for: .seconds(3))
+            fixture.sampleFrames?()
+            let after = comparisonUsage()
+            let anchorDrift = anchor.flatMap { saved in fixture.frames[saved.0].map { Double($0.minY - saved.1) } }
+            let completionDrift = beforeCompletion.flatMap { saved in
+                fixture.frames[saved.0].map { Double($0.minY - saved.1) }
+            }
+            let preparation = await fixture.markdown.snapshot()
+            let result: [String: Any] = [
+                "preparation_cache_bytes": preparation.cost,
+                "preparation_scanned_bytes": preparation.work.scannedBytes,
+                "backend": backend, "phase": phase, "bytes": published, "follows": follows,
+                "dense": dense, "rows": fixture.rows.count,
+                "wall_s": ProcessInfo.processInfo.systemUptime - started,
+                "cpu_s": after.cpu - before.cpu,
+                "sleep_overrun_p95_ms": comparisonPercentile(delays) * 1_000,
+                "publication_p95_ms": comparisonPercentile(work) * 1_000,
+                "peak_rss_bytes": after.peakRSS, "resident_bytes": after.resident,
+                "peak_appeared_rows": fixture.peakVisible, "height_updates": fixture.heightUpdates,
+                "reader_anchor_drift_pt": anchorDrift as Any? ?? NSNull(),
+                "completion_anchor_drift_pt": completionDrift as Any? ?? NSNull(),
+            ]
+            print(
+                "COMPARISON_RESULT "
+                    + String(
+                        decoding: try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]),
+                        as: UTF8.self))
+            XCTAssertEqual(published, bytes)
+            XCTAssertEqual((reasoning ? fixture.active.thinking : fixture.active.text).utf8.count, bytes)
+            XCTAssertEqual(Set(fixture.rows.map(\.id)).count, fixture.rows.count)
+            XCTAssertFalse(fixture.rows.isEmpty)
+        }
+        fixture.status = "Streaming complete; scroll, inspect tools and test controls"
+        fixture.following = false
+        try await comparisonWheelSequence(scroll, direction: 1)
+        try await Task.sleep(for: .milliseconds(500))
+        let anchor = comparisonAnchor(fixture, host: host)
+        window.setContentSize(NSSize(width: 820, height: 780))
+        try await Task.sleep(for: .seconds(1))
+        fixture.sampleFrames?()
+        if let anchor, let frame = fixture.frames[anchor.0] {
+            print("COMPARISON_REFLOW backend=\(backend) anchor_drift_pt=\(frame.minY - anchor.1)")
+        } else {
+            print("COMPARISON_REFLOW backend=\(backend) anchor_unavailable=true")
+        }
+        if environment["GOAT_COMPARE_INTERACTIVE"] == "1" {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(900))
+            while !fixture.finished, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(100)) }
+        }
+    }
+}
+
+@MainActor private func comparisonScroll(_ view: NSView) -> NSScrollView? {
+    if let scroll = view as? NSScrollView, scroll.hasVerticalScroller { return scroll }
+    return view.subviews.lazy.compactMap(comparisonScroll).first
+}
+
+@MainActor private func comparisonAnchor(_ fixture: TranscriptComparisonFixture, host: NSView) -> (String, CGFloat)? {
+    // Include a partially visible tall row, not only rows whose top edge is on screen.
+    fixture.sampleFrames?()
+    guard let scroll = comparisonScroll(host) else { return nil }
+    let rect = scroll.contentView.convert(scroll.contentView.bounds, to: host)
+    let top = host.isFlipped ? rect.minY : host.bounds.height - rect.maxY
+    let bottom = top + rect.height
+    return fixture.frames.filter { $0.value.maxY > top + 1 && $0.value.minY < bottom }
+        .min(by: { $0.value.minY < $1.value.minY }).map { ($0.key, $0.value.minY) }
+}
+
+/// Replays the direct-move regression and sends upward input while async preparation, insertion
+/// above the viewport and streamed tail growth run concurrently. Scripted events are not hardware
+/// momentum; the latter remains manual qualification on each supported OS.
+@MainActor private func comparisonNavigation(
+    _ fixture: TranscriptComparisonFixture, backend: String, host: NSView, scroll: NSScrollView
+) async throws {
+    let calibration = try await comparisonInputCalibration()
+    print(
+        "COMPARISON_NAVIGATION backend=\(backend) input_mode=discrete_pixel_wheel input_control_max_error_pt=\(calibration)"
+    )
+    XCTAssertLessThanOrEqual(calibration, 1, "Synthetic input must work on a static AppKit control")
+    fixture.following = true
+    fixture.latestRequest += 1
+    try await Task.sleep(for: .milliseconds(50))
+    fixture.following = false
+    let target = max(0, ((scroll.documentView?.bounds.height ?? 0) - scroll.contentSize.height) / 2)
+    scroll.contentView.scroll(to: NSPoint(x: 0, y: target))
+    scroll.reflectScrolledClipView(scroll.contentView)
+    host.layoutSubtreeIfNeeded()
+    let directOrigin = scroll.contentView.bounds.minY
+    let directCompensation = fixture.compensatedScroll
+    try await Task.sleep(for: .milliseconds(500))
+    host.layoutSubtreeIfNeeded()
+    let replayDrift = abs(
+        scroll.contentView.bounds.minY - directOrigin - (fixture.compensatedScroll - directCompensation))
+    print("COMPARISON_NAVIGATION backend=\(backend) direct_move_drift_pt=\(replayDrift)")
+    XCTAssertLessThanOrEqual(replayDrift, 1, "ADR-0097 direct-move replay")
+
+    var inputError: CGFloat = 0
+    for direction: Int32 in [1, -1, 1] {
+        let before = scroll.contentView.bounds.minY
+        let compensation = fixture.compensatedScroll
+        let requested = comparisonWheel(scroll, direction: direction, tick: 0)
+        let maximum = max(0, (scroll.documentView?.bounds.height ?? 0) - scroll.contentSize.height)
+        let applied = max(0, min(maximum, before + requested)) - before
+        try await Task.sleep(for: .milliseconds(100))
+        inputError = max(
+            inputError,
+            abs(
+                scroll.contentView.bounds.minY - before - applied
+                    - (fixture.compensatedScroll - compensation)))
+    }
+    print("COMPARISON_NAVIGATION backend=\(backend) candidate_static_input_error_pt=\(inputError)")
+    XCTAssertLessThanOrEqual(inputError, 1, "The candidate must receive input before growth is interpreted")
+    if ProcessInfo.processInfo.environment["GOAT_COMPARE_INPUT_ONLY"] == "1" { return }
+
+    let beforeAppend = scroll.contentView.bounds.minY
+    let beforeCompensation = fixture.compensatedScroll
+    fixture.rows.append(ComparisonRow("initial-offset-replay", .label("Appended after a non-gesture move")))
+    fixture.reasoningStart += 1
+    fixture.answerStart += 1
+    fixture.lastChanged = (fixture.rows.count - 1)..<fixture.rows.count
+    fixture.generation += 1
+    try await Task.sleep(for: .milliseconds(500))
+    let initialDrift = abs(
+        scroll.contentView.bounds.minY - beforeAppend
+            - (fixture.compensatedScroll - beforeCompensation))
+    print("COMPARISON_NAVIGATION backend=\(backend) initial_offset_growth_drift_pt=\(initialDrift)")
+    XCTAssertLessThanOrEqual(initialDrift, 1, "Initial offset must not reapply after placement")
+
+    // Start below unmeasured historical rows, then climb while the live answer grows to 2 MiB.
+    fixture.following = false
+    let source = TranscriptComparisonFixture.source(bytes: 2 * 1_024 * 1_024, reasoning: false, dense: false)
+    let historicalIDs = Set(fixture.rows.map(\.id))
+    let growth = Task { @MainActor in
+        var offset = source.startIndex
+        while offset < source.endIndex {
+            var end = source.utf8.index(offset, offsetBy: 16_384, limitedBy: source.utf8.endIndex) ?? source.endIndex
+            while end < source.endIndex, String.Index(end, within: source) == nil {
+                end = source.utf8.index(before: end)
+            }
+            try Task.checkCancellation()
+            try await fixture.append(String(source[offset..<end]), reasoning: false)
+            offset = end
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        try await fixture.append("", reasoning: false, complete: true)
+    }
+    defer { growth.cancel() }
+    var residuals: [CGFloat] = []
+    var missing = 0
+    for tick in 0..<192 {
+        host.layoutSubtreeIfNeeded()
+        guard let anchor = comparisonAnchor(fixture, host: host) else {
+            missing += 1
+            try await Task.sleep(for: .milliseconds(16))
+            continue
+        }
+        let before = scroll.contentView.bounds.minY
+        let requestedDelta = comparisonWheel(scroll, direction: 1, tick: tick % 24)
+        let maximumOrigin = max(0, (scroll.documentView?.bounds.height ?? 0) - scroll.contentSize.height)
+        let applied = max(0, min(maximumOrigin, before + requestedDelta)) - before
+        if tick == 24, let index = fixture.rows.firstIndex(where: { $0.id == anchor.0 }) {
+            fixture.rows.insert(
+                ComparisonRow("inserted-during-gesture", .label("Inserted above the reader")), at: index)
+            fixture.reasoningStart += 1
+            fixture.answerStart += 1
+            fixture.structureRevision += 1
+            fixture.generation += 1
+        }
+        if tick == 48, let index = fixture.rows.firstIndex(where: { $0.id == anchor.0 }), index > 0 {
+            let above = fixture.rows[index - 1]
+            above.content = .label(String(repeating: "Height changed above the reader.\n", count: 8))
+            above.revision += 1
+            fixture.lastChanged = (index - 1)..<index
+            fixture.generation += 1
+        }
+        try await Task.sleep(for: .milliseconds(16))
+        host.layoutSubtreeIfNeeded()
+        fixture.sampleFrames?()
+        if let frame = fixture.frames[anchor.0] {
+            // Compare with the event's requested pixel delta, not the final clip-origin delta:
+            // treating an unwanted programmatic scroll as input would hide the very regression.
+            let residual = abs(frame.minY - anchor.1 + applied)
+            residuals.append(residual)
+
+        } else {
+            missing += 1
+        }
+    }
+    try await growth.value
+    print("COMPARISON_NAVIGATION backend=\(backend) phase=growth_complete resident_bytes=\(comparisonUsage().resident)")
+    let worst = residuals.max() ?? .infinity
+    print(
+        "COMPARISON_NAVIGATION backend=\(backend) wheel_growth_max_residual_pt=\(worst) samples=\(residuals.count) missing=\(missing)"
+    )
+    XCTAssertGreaterThan(residuals.count, 96, "At least half the events must retain a measurable anchor")
+    XCTAssertEqual(fixture.active.text.utf8.count, 2 * 1_024 * 1_024)
+    let finalIDs = Set(fixture.rows.map(\.id))
+    XCTAssertEqual(finalIDs.count, fixture.rows.count)
+    XCTAssertTrue(historicalIDs.isSubset(of: finalIDs), "Concurrent insertion must preserve all historical rows")
+    let answer = fixture.rows.compactMap { row -> String? in
+        guard case .markdown(let message, let segment, _) = row.content, message.id == fixture.active.id else {
+            return nil
+        }
+        return segment.body
+    }.joined()
+    XCTAssertEqual(answer, fixture.active.text, "Every streamed byte remains in the row model after insertion")
+    XCTAssertLessThanOrEqual(worst, 1, "Height changes must preserve the anchor after accounting for input")
+
+    fixture.following = true
+    fixture.latestRequest += 1
+    try await Task.sleep(for: .milliseconds(500))
+    host.layoutSubtreeIfNeeded()
+    let gap = (scroll.documentView?.bounds.height ?? 0) - scroll.contentView.bounds.maxY
+    print("COMPARISON_NAVIGATION backend=\(backend) following_gap_pt=\(gap)")
+    XCTAssertLessThanOrEqual(abs(gap), 1, "Following uses the laid-out document height")
+
+    fixture.following = false
+    scroll.contentView.scroll(to: NSPoint(x: 0, y: (scroll.documentView?.bounds.height ?? 0) / 2))
+    scroll.reflectScrolledClipView(scroll.contentView)
+    try await Task.sleep(for: .milliseconds(500))
+    let window = try XCTUnwrap(host.window)
+    for (width, font) in [(820.0, 20.0), (1180.0, 14.0)] {
+        host.layoutSubtreeIfNeeded()
+        let anchor = comparisonAnchor(fixture, host: host)
+        print(
+            "COMPARISON_NAVIGATION backend=\(backend) phase=reflow_start width=\(width) font=\(font) resident_bytes=\(comparisonUsage().resident)"
+        )
+        AppModel.shared.chatFontSize = font
+        window.setContentSize(NSSize(width: width, height: 780))
+        try await Task.sleep(for: .milliseconds(500))
+        host.layoutSubtreeIfNeeded()
+        fixture.sampleFrames?()
+        guard let anchor, let frame = fixture.frames[anchor.0] else {
+            print("COMPARISON_NAVIGATION backend=\(backend) reflow_width=\(width) font=\(font) anchor_missing=true")
+            XCTFail("Reflow must retain a measurable anchor at width \(width)")
+            continue
+        }
+        let drift = abs(frame.minY - anchor.1)
+        print("COMPARISON_NAVIGATION backend=\(backend) reflow_width=\(width) font=\(font) drift_pt=\(drift)")
+        XCTAssertLessThanOrEqual(drift, 1)
+    }
+}
+
+/// Same events, no SwiftUI, preparation, height changes or anchor correction.
+@MainActor private func comparisonInputCalibration() async throws -> CGFloat {
+    let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+    scroll.hasVerticalScroller = true
+    let document = ComparisonCalibrationDocument(frame: NSRect(x: 0, y: 0, width: 800, height: 100_000))
+    scroll.documentView = document
+    let window = NSWindow(contentRect: scroll.frame, styleMask: [.titled], backing: .buffered, defer: false)
+    window.isReleasedWhenClosed = false
+    window.contentView = scroll
+    window.orderFront(nil)
+    defer {
+        window.contentView = nil
+        window.close()
+    }
+    scroll.contentView.scroll(to: NSPoint(x: 0, y: 50_000))
+    scroll.reflectScrolledClipView(scroll.contentView)
+    try await Task.sleep(for: .milliseconds(100))
+    var worst: CGFloat = 0
+    for tick in 0..<24 {
+        let before = scroll.contentView.bounds.minY
+        let requested = comparisonWheel(scroll, direction: 1, tick: tick)
+        try await Task.sleep(for: .milliseconds(16))
+        worst = max(worst, abs(scroll.contentView.bounds.minY - before - requested))
+    }
+    return worst
+}
+
+@MainActor private final class ComparisonCalibrationDocument: NSView {
+    override var isFlipped: Bool { true }
+}
+
+@discardableResult
+@MainActor private func comparisonWheel(_ scroll: NSScrollView, direction: Int32, tick: Int) -> CGFloat {
+    let boundary = [15, 23].contains(tick)
+    guard
+        let event = CGEvent(
+            scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: boundary ? 0 : direction * 60,
+            wheel2: 0, wheel3: 0
+        )
+    else {
+        XCTFail("Could not construct the scrolling event")
+        return 0
+    }
+    event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+    // Do not fabricate gesture phases: a direct began call enters AppKit's event-tracking
+    // loop, which expects subsequent events in its queue, not later direct method calls.
+    // These are discrete pixel-wheel inputs. Hardware momentum remains manual qualification.
+    guard let native = NSEvent(cgEvent: event) else {
+        XCTFail("Could not bridge the scrolling event")
+        return 0
+    }
+    let requested = -native.scrollingDeltaY
+    scroll.scrollWheel(with: native)
+    return requested
+}
+
+@MainActor private func comparisonWheelSequence(_ scroll: NSScrollView, direction: Int32) async throws {
+    for tick in 0..<24 {
+        comparisonWheel(scroll, direction: direction, tick: tick)
+        try await Task.sleep(for: .milliseconds(16))
+    }
+}
+
+private func comparisonPercentile(_ samples: [Double]) -> Double {
+    guard !samples.isEmpty else { return 0 }
+    let sorted = samples.sorted()
+    return sorted[min(sorted.count - 1, Int(Double(sorted.count) * 0.95))]
+}
+
+private func comparisonUsage() -> (cpu: Double, peakRSS: Int, resident: UInt64) {
+    var usage = rusage()
+    getrusage(RUSAGE_SELF, &usage)
+    var info = mach_task_basic_info()
+    var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<integer_t>.size)
+    let result = withUnsafeMutablePointer(to: &info) {
+        $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+            task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+        }
+    }
+    return (
+        Double(usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) + Double(usage.ru_utime.tv_usec + usage.ru_stime.tv_usec)
+            / 1e6,
+        Int(usage.ru_maxrss), result == KERN_SUCCESS ? info.resident_size : 0
+    )
+}

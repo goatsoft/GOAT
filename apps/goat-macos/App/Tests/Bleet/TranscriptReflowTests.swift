@@ -27,6 +27,17 @@ import Testing
     Issue.record("Native scrolling did not settle within two seconds: \(scroll.contentView.bounds)")
 }
 
+/// Keep the window's size owner separate from SwiftUI's changing ideal content size.
+/// In CI the direct hosting root contracted a requested 980 pt viewport to 65 pt on reflow,
+/// despite sizingOptions being empty. Production receives its viewport from surrounding chrome.
+@MainActor private func installReflowHost(_ host: NSView, in window: NSWindow) {
+    let viewport = NSView(frame: NSRect(origin: .zero, size: window.contentLayoutRect.size))
+    host.frame = viewport.bounds
+    host.autoresizingMask = [.width, .height]
+    viewport.addSubview(host)
+    window.contentView = viewport
+}
+
 @MainActor private func reflowScroll(_ view: NSView) -> NSScrollView? {
     if let scroll = view as? NSScrollView { return scroll }
     return view.subviews.lazy.compactMap(reflowScroll).first
@@ -81,7 +92,7 @@ extension AppTests.Bleet {
             // exports content-derived min/ideal/max sizes to the window while Markdown reflows.
             // In the app the transcript receives its width from the surrounding chat layout.
             host.sizingOptions = []
-            window.contentView = host
+            installReflowHost(host, in: window)
             // Exercise a displayed window: native scroll settling and display-cycle layout
             // are suspended differently for a hidden hosting view.
             window.orderFront(nil)
@@ -136,6 +147,48 @@ extension AppTests.Bleet {
             }
         }
 
+        @Test @MainActor func directHostingRootKeepsTheProductionMinimumDuringReflow() async throws {
+            let model = AppModel.shared
+            let originalFont = model.chatFontSize
+            defer { model.chatFontSize = originalFont }
+            let session = ChatSession(effort: .trot, modelID: nil)
+            session.messagesLoaded = true
+            session.messages = (0..<12).map { index in
+                let message = ChatMessage(role: .assistant)
+                message.text = "## Direct root \(index)\n\n" + String(repeating: "Reflow text. ", count: 80)
+                message.complete = true
+                return message
+            }
+            let window = NSWindow(
+                contentRect: NSRect(x: 80, y: 80, width: 980, height: 600),
+                styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            // GOATApp's WindowGroup applies these exact minimum dimensions around ContentView.
+            // Keep a direct hosting root covered separately from the isolated viewport fixtures.
+            let host = NSHostingView(
+                rootView: ChatTranscriptView(session: session).environment(model)
+                    .frame(minWidth: 880, minHeight: 560))
+            host.sizingOptions = []
+            window.contentView = host
+            window.orderFront(nil)
+            defer {
+                window.contentView = nil
+                window.close()
+            }
+            for (width, font) in [(980.0, 11.0), (1180, 28), (880, 14), (980, 24)] {
+                model.chatFontSize = font
+                window.setContentSize(NSSize(width: width, height: 600))
+                for _ in 0..<10 {
+                    host.layoutSubtreeIfNeeded()
+                    try await Task.sleep(for: .milliseconds(30))
+                }
+                #expect(
+                    abs(host.bounds.width - width) <= 1,
+                    "Direct host must retain requested width \(width), got \(host.bounds)")
+                #expect(host.bounds.height >= 560)
+            }
+        }
+
         @Test @MainActor func streamingAndReflowRespectAReaderWhoScrolledUp() async throws {
             let model = AppModel.shared
             let originalFont = model.chatFontSize
@@ -168,7 +221,7 @@ extension AppTests.Bleet {
             // exports content-derived min/ideal/max sizes to the window while Markdown reflows.
             // In the app the transcript receives its width from the surrounding chat layout.
             host.sizingOptions = []
-            window.contentView = host
+            installReflowHost(host, in: window)
             // Exercise a displayed window: native scroll settling and display-cycle layout
             // are suspended differently for a hidden hosting view.
             window.orderFront(nil)

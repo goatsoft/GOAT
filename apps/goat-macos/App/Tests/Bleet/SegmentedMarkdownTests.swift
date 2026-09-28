@@ -219,8 +219,24 @@ extension AppTests.Bleet {
             #expect(structure.lastLeafIsParagraph == lastLeafIsParagraph, "\(html)")
         }
 
+        @Test func smallListsAllocateOnlyTheirGrowingTail() {
+            var list = ChunkedList<Int>()
+            list.append(1)
+            #expect(list.allocatedCapacity < ChunkedList<Int>.chunkSize)
+            let snapshot = list
+            for value in 2...65 { list.append(value) }
+            #expect(Array(snapshot) == [1])
+            #expect(Array(list) == Array(1...65))
+            list.set(99, at: 0)
+            #expect(snapshot[0] == 1)
+            list.removeSuffix(from: 64)
+            list.append(66)
+            #expect(list[64] == 66)
+        }
+
         @Test func cacheChargesRenderedBytesAndEvictsWithinBounds() async throws {
-            let cache = MarkdownSegmentCache(maximumEntries: 2, maximumCost: 600, maximumEntryCost: 400, targetBytes: 1)
+            let cache = MarkdownSegmentCache(
+                maximumEntries: 2, maximumCost: 2_400, maximumEntryCost: 1_800, targetBytes: 1)
             let reference = "Use [a][x].\n\nThen [a][x] again.\n\n[x]: https://example.com/x\n"
             let document = try #require(await cache.prepare(id: UUID(), source: reference, isComplete: true))
             // Each segment that accepts definitions renders the suffix, so rendered bytes exceed the source.
@@ -231,9 +247,9 @@ extension AppTests.Bleet {
             _ = await cache.prepare(id: UUID(), source: "Two.", isComplete: true)
             _ = await cache.prepare(id: UUID(), source: "Three.", isComplete: true)
             let bounded = await cache.snapshot()
-            #expect(bounded.entryCount == 2 && bounded.cost <= 600)
+            #expect(bounded.entryCount == 2 && bounded.cost <= 2_400)
 
-            let oversized = String(repeating: "word ", count: 100)
+            let oversized = String(repeating: "word ", count: 10_000)
             #expect(await cache.prepare(id: UUID(), source: oversized, isComplete: false) != nil)
             #expect(await cache.snapshot().streamCount == 0, "An unretained reply keeps no scanner state")
             await cache.removeAll()
@@ -242,7 +258,8 @@ extension AppTests.Bleet {
 
         @Test @MainActor func frontCacheServesExactAndLatestDocumentsWithinItsBudget() async throws {
             let segments = MarkdownSegmentCache()
-            let cache = PreparedMarkdownDocumentCache(maximumEntries: 2, maximumTotalCost: 200, maximumEntryCost: 120)
+            let cache = PreparedMarkdownDocumentCache(
+                maximumEntries: 2, maximumTotalCost: 1_200, maximumEntryCost: 600)
             let message = ChatMessage(role: .assistant)
             message.appendStream(text: "Partial", thinking: "")
             let partial = message.textRevision
@@ -255,18 +272,21 @@ extension AppTests.Bleet {
             #expect(cache.latest(for: message.id)?.source == "Partial")
             #expect(cache.renderedBytes(for: message.id, revision: partial) == streaming.renderedBytes)
             #expect(cache.renderedBytes(for: message.id, revision: message.textRevision) == nil)
-            message.text = String(repeating: "x", count: 100)
+            message.text = String(repeating: "x", count: 30_000)
             let large = try #require(
                 await segments.prepare(
                     id: message.id, source: message.text, revision: message.textRevision, isComplete: true))
             #expect(!cache.store(large, for: message.id))
             #expect(cache.latest(for: message.id) == nil, "A declined store drops the older document")
+            #expect(
+                cache.shownBytes(for: message.id, revision: message.textRevision) == large.shownBytes,
+                "Declining rich content must preserve exact transcript admission accounting")
             for _ in 0..<3 {
                 let other = UUID()
                 cache.store(
                     try #require(await segments.prepare(id: other, source: "Short", isComplete: true)), for: other)
             }
-            #expect(cache.snapshot().entryCount == 2 && cache.snapshot().totalCost <= 200)
+            #expect(cache.snapshot().entryCount == 2 && cache.snapshot().totalCost <= 1_200)
         }
 
         @Test @MainActor func windowChargesThePreparedRepresentation() async throws {
@@ -384,7 +404,9 @@ extension AppTests.Bleet {
             #expect(windowed.renderedBytes > windowed.retainedBytes * 30)
             // Unparsed segments keep their bodies, which the cost charges with the source and parses.
             #expect(windowed.bodyBytes == windowed.segments.reduce(0) { $0 + $1.bodyBytes })
-            #expect(windowed.cost == source.utf8.count + windowed.bodyBytes + windowed.retainedBytes)
+            #expect(
+                windowed.cost == source.utf8.count + windowed.bodyBytes + windowed.retainedBytes
+                    + windowed.metadataBytes)
 
             // Moving within the margin parses only the new segments and keeps nearby ones.
             let moved = try #require(await cache.prepare(id: id, source: source, isComplete: true, window: 102..<108))
@@ -416,9 +438,13 @@ extension AppTests.Bleet {
             #expect(windowed.definitionBytes <= MarkdownSegmenter.definitionLimit)
             #expect(windowed.definitionBytes >= definition.utf8.count - 1)
             #expect(windowed.bodyBytes < source.utf8.count + 1_024)
-            let expected = source.utf8.count + windowed.bodyBytes + windowed.definitionBytes + windowed.retainedBytes
+            let expected =
+                source.utf8.count + windowed.bodyBytes + windowed.definitionBytes + windowed.retainedBytes
+                + windowed.metadataBytes
             #expect(windowed.cost == expected)
-            #expect(windowed.cost * 10 < windowed.renderedBytes, "\(windowed.cost) for \(windowed.renderedBytes)")
+            #expect(
+                (windowed.cost - windowed.metadataBytes) * 10 < windowed.renderedBytes,
+                "\(windowed.cost) for \(windowed.renderedBytes)")
             #expect(windowed.retainedBytes < 5 * 4_096, "Only the window's parses are charged for content")
 
             // A budget one byte below the document's cost declines it; at the cost it is retained.
@@ -506,8 +532,86 @@ extension AppTests.Bleet {
             #expect(complete.window?.upperBound == complete.segments.count)
             #expect(await cache.snapshot().entryCount == 1, "The completed reply stays retained")
             let front = PreparedMarkdownDocumentCache()
-            #expect(front.store(complete, for: message.id), "The front cache retains a windowed reply at the limit")
+            #expect(!front.store(complete, for: message.id), "A rich-limit document exceeds the quarter-cache cap")
+            #expect(complete.segments[complete.shownSegments.lowerBound].isParsed, "The working document still renders")
             #expect(front.shownBytes(for: message.id, revision: message.textRevision) == complete.shownBytes)
+        }
+
+        @Test @MainActor func completedChurnKeepsStreamingStateInsideTheTotalBudget() async throws {
+            let cache = MarkdownSegmentCache(
+                maximumEntries: 3, maximumCost: 80_000, maximumEntryCost: 64_000, maximumCompletedCost: 24_000)
+            let stream = ChatMessage(role: .assistant)
+            stream.appendStream(text: String(repeating: "Streaming paragraph.\n\n", count: 50), thinking: "")
+            _ = try #require(
+                await cache.prepare(
+                    id: stream.id, source: stream.text, revision: stream.textRevision, isComplete: false,
+                    window: .latest))
+            for index in 0..<12 {
+                _ = await cache.prepare(
+                    id: UUID(), source: "Completed \(index). " + String(repeating: "x", count: 1_000), isComplete: true)
+                let snapshot = await cache.snapshot()
+                #expect(snapshot.streamCount == 1, "Completed history cannot evict the active scanner")
+                #expect(snapshot.completedCost <= 24_000 && snapshot.cost <= 80_000 && snapshot.entryCount <= 3)
+            }
+            stream.complete = true
+            _ = await cache.prepare(
+                id: stream.id, source: stream.text, revision: stream.textRevision, isComplete: true, window: .latest)
+            let complete = await cache.snapshot()
+            #expect(complete.streamCount == 0 && complete.cost == complete.completedCost)
+            #expect(complete.cost <= 24_000)
+            await cache.removeAll()
+            let empty = await cache.snapshot()
+            #expect(empty.cost == 0 && empty.completedCost == 0)
+        }
+
+        /// Tiny fences maximize row metadata per source byte. Default budgets must retain the
+        /// incremental scanner, otherwise every publication silently starts a full scan again.
+        @Test(arguments: ["```\n```\n", "Text.\n\n```swift\nlet x = 1\n```\n\n", "|\n|-\n\n"])
+        @MainActor func denseRichLimitRetainsScannerAndChargesMetadata(unit: String) async throws {
+            let cache = MarkdownSegmentCache()
+            let message = ChatMessage(role: .assistant)
+            let source = String(
+                ("Intro.\n\n" + String(repeating: unit, count: ReplyWindow.richLimit / unit.utf8.count + 1))
+                    .prefix(ReplyWindow.richLimit))
+            var halfwayScanned = 0
+            var last: PreparedMarkdownDocument?
+            for chunk in chunks(of: source, bytes: 32_768) {
+                message.appendStream(text: chunk, thinking: "")
+                let prepared = try #require(
+                    await cache.prepare(
+                        id: message.id, source: message.text, revision: message.textRevision,
+                        isComplete: false, window: .latest))
+                last = prepared
+                let snapshot = await cache.snapshot()
+                if message.textRevision.utf8Count == ReplyWindow.richLimit / 2 {
+                    halfwayScanned = snapshot.work.scannedBytes
+                }
+                #expect(snapshot.streamCount == 1 && snapshot.entryCount == 1)
+                #expect(snapshot.cost <= (await cache.maximumCost))
+            }
+            let document = try #require(last)
+            let snapshot = await cache.snapshot()
+            #expect(document.metadataBytes >= document.segments.count * MemoryLayout<PreparedMarkdownSegment>.stride)
+            #expect(snapshot.cost > document.cost + source.utf8.count, "Scanner metadata is also charged")
+            // Table lookahead does more byte visits than a fence. Compare growth, not a universal
+            // visits-per-byte constant: doubling input should double scanning, not quadruple it.
+            #expect(
+                halfwayScanned > 0 && snapshot.work.scannedBytes < halfwayScanned * 21 / 10,
+                "No repeated full scan: \(snapshot.work)")
+            #expect(document.segments.filter(\.isParsed).count <= 32 + 2 * MarkdownSegmentCache.retentionMargin)
+            let front = PreparedMarkdownDocumentCache()
+            let historyID = UUID()
+            let history = try #require(
+                await cache.prepare(id: historyID, source: "Keep this reply warm.", isComplete: true))
+            #expect(front.store(history, for: historyID))
+            #expect(front.store(document, for: message.id) == (document.cost <= front.maximumEntryCost))
+            #expect(front.latest(for: historyID) != nil, "A large reply cannot displace unrelated history")
+            #expect(
+                document.segments[document.shownSegments.lowerBound].isParsed,
+                "The working document remains renderable even when front-cache admission declines")
+            await cache.removeAll()
+            #expect(await cache.snapshot().cost == 0)
+            #expect(await cache.snapshot().streamCount == 0)
         }
 
         /// Documents handed to views keep their segments while the cache prepares later refreshes.
@@ -653,7 +757,7 @@ extension AppTests.Bleet {
             }
         }
 
-        /// Completion without reflow: a two-segment reply keeps its height when it completes.
+        /// Completion without reflow: a multi-segment reply keeps its height when it completes.
         @Test @MainActor func completingASegmentedReplyKeepsItsHeight() async throws {
             let message = ChatMessage(role: .assistant)
             var reply = ""
@@ -681,7 +785,7 @@ extension AppTests.Bleet {
             host.layoutSubtreeIfNeeded()
             let streaming = host.fittingSize.height
             let prepared = try #require(PreparedMarkdownDocumentCache.shared.latest(for: message.id))
-            #expect(prepared.source == reply && prepared.segments.count == 2)
+            #expect(prepared.source == reply && prepared.segments.count > 1)
 
             message.complete = true
             try await Task.sleep(for: .milliseconds(400))
