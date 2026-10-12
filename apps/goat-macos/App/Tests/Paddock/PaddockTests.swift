@@ -398,6 +398,68 @@ final class ChatArtifactSyntaxTests: XCTestCase {
 }
 
 @MainActor final class ChatArtifactPreviewTests: XCTestCase {
+    func testSettledArtifactSegmentsPreviewWhileOnlyTheTailStreams() async throws {
+        for (language, body) in [
+            ("html", "<main>Settled preview</main>"),
+            ("svg", "<svg xmlns='http://www.w3.org/2000/svg'><text>Settled</text></svg>"),
+            ("mermaid", "graph TD; A-->B"),
+        ] {
+            let cache = MarkdownSegmentCache(targetBytes: 1, maximumBytes: 1_024)
+            let source = "```\(language)\n\(body)\n```\n\nA committed paragraph.\n\nStill streaming"
+            let prepared = await cache.prepare(id: UUID(), source: source, isComplete: false)
+            let document = try XCTUnwrap(prepared)
+            let segment = try XCTUnwrap(document.segments.first)
+            XCTAssertTrue(segment.isSettled)
+            let host = NSHostingView(
+                rootView: MarkdownSegmentView(
+                    segment: segment, fontSize: 14, isStreaming: true, isTail: false, codeSegment: 0
+                ).environment(AppModel.shared))
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 640, height: 480), styleMask: [.titled],
+                backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            defer {
+                window.contentView = nil
+                window.close()
+            }
+            for _ in 0..<100 where webView(in: host) == nil {
+                host.layoutSubtreeIfNeeded()
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            XCTAssertNotNil(webView(in: host), "A complete settled \(language) fence need not wait for the reply")
+        }
+    }
+
+    func testOversizedArtifactPiecesNeverPreviewSyntheticDocuments() async throws {
+        for language in ["html", "svg", "mermaid"] {
+            let cache = MarkdownSegmentCache(targetBytes: 64, maximumBytes: 128)
+            let source = "```\(language)\n" + String(repeating: "partial artifact line\n", count: 40) + "```\n"
+            let prepared = await cache.prepare(id: UUID(), source: source, isComplete: true)
+            let document = try XCTUnwrap(prepared)
+            let segment = try XCTUnwrap(document.segments.first)
+            XCTAssertEqual(segment.kind, .fencedCodePiece)
+            let host = NSHostingView(
+                rootView: MarkdownSegmentView(
+                    segment: segment, fontSize: 14, isStreaming: false, isTail: false, codeSegment: 0
+                ).environment(AppModel.shared).environment(\.codeBlockMessageID, UUID()))
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 640, height: 480), styleMask: [.titled],
+                backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = host
+            defer {
+                window.contentView = nil
+                window.close()
+            }
+            for _ in 0..<30 {
+                host.layoutSubtreeIfNeeded()
+                XCTAssertNil(webView(in: host), "A \(language) piece is source, not an independent document")
+                try await Task.sleep(for: .milliseconds(10))
+            }
+        }
+    }
+
     func testStreamingArtifactsStaySourceOnlyUntilTheResponseFinishes() async throws {
         for language in ["html", "svg"] {
             for fenced in [false, true] {

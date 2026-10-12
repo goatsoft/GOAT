@@ -1,8 +1,10 @@
 import AppKit
 import Bleet
+import Observation
 import Persistence
 import SwiftUI
 import Testing
+import XCTest
 
 @testable import GOAT
 
@@ -25,6 +27,17 @@ import Testing
         try await Task.sleep(for: .milliseconds(50))
     }
     Issue.record("Native scrolling did not settle within two seconds: \(scroll.contentView.bounds)")
+}
+
+/// Keep the window's size owner separate from SwiftUI's changing ideal content size.
+/// In CI the direct hosting root contracted a requested 980 pt viewport to 65 pt on reflow,
+/// despite sizingOptions being empty. Production receives its viewport from surrounding chrome.
+@MainActor private func installReflowHost(_ host: NSView, in window: NSWindow) {
+    let viewport = NSView(frame: NSRect(origin: .zero, size: window.contentLayoutRect.size))
+    host.frame = viewport.bounds
+    host.autoresizingMask = [.width, .height]
+    viewport.addSubview(host)
+    window.contentView = viewport
 }
 
 @MainActor private func reflowScroll(_ view: NSView) -> NSScrollView? {
@@ -81,7 +94,7 @@ extension AppTests.Bleet {
             // exports content-derived min/ideal/max sizes to the window while Markdown reflows.
             // In the app the transcript receives its width from the surrounding chat layout.
             host.sizingOptions = []
-            window.contentView = host
+            installReflowHost(host, in: window)
             // Exercise a displayed window: native scroll settling and display-cycle layout
             // are suspended differently for a hidden hosting view.
             window.orderFront(nil)
@@ -136,6 +149,52 @@ extension AppTests.Bleet {
             }
         }
 
+        @Test @MainActor func directHostingRootKeepsTheProductionMinimumDuringReflow() async throws {
+            let model = AppModel.shared
+            let originalFont = model.chatFontSize
+            defer { model.chatFontSize = originalFont }
+            let session = ChatSession(effort: .trot, modelID: nil)
+            session.messagesLoaded = true
+            session.messages = (0..<12).map { index in
+                let message = ChatMessage(role: .assistant)
+                message.text = "## Direct root \(index)\n\n" + String(repeating: "Reflow text. ", count: 80)
+                message.complete = true
+                return message
+            }
+            let window = NSWindow(
+                contentRect: NSRect(x: 80, y: 80, width: 980, height: 600),
+                styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            // GOATApp's WindowGroup applies these exact minimum dimensions around ContentView.
+            // Keep a direct hosting root covered separately from the isolated viewport fixtures.
+            let host = NSHostingView(
+                rootView: ChatTranscriptView(session: session).environment(model)
+                    .frame(minWidth: 880, minHeight: 560))
+            host.sizingOptions = [.minSize]
+            window.contentView = host
+            window.orderFront(nil)
+            defer {
+                window.contentView = nil
+                window.close()
+            }
+            for (width, font) in [(980.0, 11.0), (1180, 28), (880, 14), (980, 24)] {
+                model.chatFontSize = font
+                window.setContentSize(NSSize(width: width, height: 600))
+                for _ in 0..<10 {
+                    host.layoutSubtreeIfNeeded()
+                    try await Task.sleep(for: .milliseconds(30))
+                }
+                #expect(
+                    abs(host.bounds.width - width) <= 1,
+                    "Direct host must retain requested width \(width), got \(host.bounds)")
+                #expect(window.contentMinSize.width >= 880 && window.contentMinSize.height >= 560)
+                window.setContentSize(NSSize(width: 100, height: 100))
+                host.layoutSubtreeIfNeeded()
+                try await Task.sleep(for: .milliseconds(100))
+                #expect(host.bounds.width >= 880 && host.bounds.height >= 560, "The exported minimum prevents collapse")
+            }
+        }
+
         @Test @MainActor func streamingAndReflowRespectAReaderWhoScrolledUp() async throws {
             let model = AppModel.shared
             let originalFont = model.chatFontSize
@@ -168,7 +227,7 @@ extension AppTests.Bleet {
             // exports content-derived min/ideal/max sizes to the window while Markdown reflows.
             // In the app the transcript receives its width from the surrounding chat layout.
             host.sizingOptions = []
-            window.contentView = host
+            installReflowHost(host, in: window)
             // Exercise a displayed window: native scroll settling and display-cycle layout
             // are suspended differently for a hidden hosting view.
             window.orderFront(nil)
@@ -223,4 +282,138 @@ extension AppTests.Bleet {
                 "Font and width reflow must preserve reading away from the bottom")
         }
     }
+}
+
+final class TranscriptComparisonPreparationTests: XCTestCase {
+    @MainActor func testSwiftUIOverscanPreparesColdNeighboursBeforeTheyAppear() async throws {
+        let fixture = TranscriptComparisonFixture()
+        defer { fixture.stopPreparation() }
+        try await fixture.seed(rounds: 3)
+        fixture.documents.removeAll()
+        await fixture.markdown.removeAll()
+        let index = try XCTUnwrap(fixture.rows.firstIndex { $0.id == "header-1" })
+        let visible = fixture.rows[index]
+        fixture.updateSwiftUIVisibility([visible.id], viewportHeight: 780)
+        await fixture.prepareRequestedRows()
+        let neighbour = try XCTUnwrap(
+            fixture.rows[(index + 1)...].first {
+                if case .markdown = $0.content { return true }
+                return false
+            })
+        XCTAssertFalse(fixture.visible.contains(neighbour.id), "The neighbour has not appeared")
+        XCTAssertNotNil(fixture.preparedSegment(for: neighbour), "Cold upcoming content is prepared in advance")
+        let identity = fixture.preparedSegment(for: neighbour)?.preparationID
+        fixture.updateSwiftUIVisibility([neighbour.id], viewportHeight: 780)
+        await fixture.prepareRequestedRows()
+        XCTAssertEqual(fixture.preparedSegment(for: neighbour)?.preparationID, identity)
+        fixture.updateSwiftUIVisibility([], viewportHeight: 780)
+        await fixture.prepareRequestedRows()
+        if case .markdown(let message, _, _) = neighbour.content {
+            XCTAssertNil(fixture.preparation(for: message.id).document)
+        }
+    }
+    @MainActor func testComparisonPreparesNeighbouringRowsTogetherAndReusesScrollBack() async throws {
+        let fixture = TranscriptComparisonFixture()
+        defer { fixture.stopPreparation() }
+        try await fixture.seed(rounds: 1)
+        let neighbours = fixture.rows.filter {
+            if case .markdown = $0.content { return true }
+            return false
+        }
+        XCTAssertGreaterThanOrEqual(neighbours.count, 2)
+        let first = try XCTUnwrap(neighbours.first)
+        let second = neighbours[1]
+        fixture.documents.removeAll()
+        await fixture.markdown.removeAll()
+        fixture.visible = [first.id, second.id]
+        await fixture.prepareRequestedRows()
+        let firstID = try XCTUnwrap(fixture.preparedSegment(for: first)?.preparationID)
+        let secondID = try XCTUnwrap(fixture.preparedSegment(for: second)?.preparationID)
+        let count = await fixture.markdown.snapshot().parseCount
+        // Recreating either row does not issue a narrower request or discard its neighbour.
+        fixture.visible = [second.id]
+        await fixture.prepareRequestedRows()
+        fixture.visible = []
+        await fixture.prepareRequestedRows()
+        fixture.visible = [first.id, second.id]
+        XCTAssertEqual(fixture.preparedSegment(for: first)?.preparationID, firstID)
+        XCTAssertEqual(fixture.preparedSegment(for: second)?.preparationID, secondID)
+        await fixture.prepareRequestedRows()
+        let after = await fixture.markdown.snapshot().parseCount
+        XCTAssertEqual(after, count)
+    }
+
+    @MainActor func testFrameSamplingUsesTheCurrentClipOrigin() throws {
+        let fixture = TranscriptComparisonFixture()
+        defer { fixture.stopPreparation() }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 600), styleMask: [], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        let document = ComparisonFrameSamplingDocument(frame: NSRect(x: 0, y: 0, width: 800, height: 2_000))
+        let row = NSView(frame: NSRect(x: 0, y: 600, width: 800, height: 200))
+        document.addSubview(row)
+        scroll.documentView = document
+        window.contentView = scroll
+        defer {
+            window.contentView = nil
+            window.close()
+        }
+        fixture.registerFrameView(row, id: "row")
+        fixture.following = false
+        fixture.recordReaderGeometry(width: scroll.contentView.bounds.width, font: AppModel.shared.chatFontSize)
+        fixture.observeSwiftUIReader()
+        fixture.sampleFrames()
+        let before = try XCTUnwrap(fixture.frames["row"])
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 60))
+        fixture.sampleFrames()
+        let after = try XCTUnwrap(fixture.frames["row"])
+        XCTAssertEqual(after.minY - before.minY, -60, accuracy: 0.01)
+        XCTAssertEqual(fixture.capturedReader?.id, "row")
+        XCTAssertEqual(try XCTUnwrap(fixture.capturedReader?.offset), after.minY, accuracy: 0.01)
+        XCTAssertEqual(try XCTUnwrap(fixture.readerRestoreOffset(id: "row", offset: before.minY)), 0, accuracy: 0.01)
+        row.frame.origin.y += 100
+        XCTAssertEqual(try XCTUnwrap(fixture.readerRestoreOffset(id: "row", offset: after.minY)), 160, accuracy: 0.01)
+        let font = AppModel.shared.chatFontSize
+        defer { AppModel.shared.chatFontSize = font }
+        AppModel.shared.chatFontSize = font + 1
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 100))
+        XCTAssertEqual(
+            try XCTUnwrap(fixture.capturedReader?.offset), after.minY, accuracy: 0.01,
+            "A reflow notification must not replace the pre-reflow reader anchor")
+        fixture.unregisterFrameView(row, id: "row")
+        fixture.sampleFrames()
+        XCTAssertNil(fixture.frames["row"])
+    }
+
+    @MainActor func testHistoricalPreparationDoesNotObserveLivePublications() async throws {
+        let fixture = TranscriptComparisonFixture()
+        defer { fixture.stopPreparation() }
+        try await fixture.seed(rounds: 1)
+        let row = try XCTUnwrap(
+            fixture.rows.first {
+                if case .markdown = $0.content { return true }
+                return false
+            })
+        let invalidated = XCTestExpectation(description: "Historical document must not be invalidated")
+        invalidated.isInverted = true
+        withObservationTracking {
+            _ = fixture.preparedSegment(for: row)
+        } onChange: {
+            invalidated.fulfill()
+        }
+        try await fixture.append("A live **answer**.", reasoning: false)
+        XCTAssertNotNil(fixture.preparation(for: fixture.active.id).document)
+        await fulfillment(of: [invalidated], timeout: 0.05)
+        fixture.following = false
+        try await fixture.append(" Offscreen growth.", reasoning: false)
+        XCTAssertNil(
+            fixture.preparation(for: fixture.active.id).document,
+            "An offscreen unfollowed message must release its working document")
+    }
+
+}
+
+@MainActor private final class ComparisonFrameSamplingDocument: NSView {
+    override var isFlipped: Bool { true }
 }

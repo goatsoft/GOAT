@@ -96,16 +96,17 @@ Older records retain the package and type names used when accepted. [ADR-0054](0
 | [0088](0088-single-round-tool-results.md) | Single-round tool results: synchronous commands, plain-text reads, glob, concurrent reads | Accepted · refines 0069 and 0070 |
 | [0089](0089-turn-continuity-and-engine-resilience.md) | Turn continuity and engine resilience: failed turns kept, repetition guard, retry, stall watchdog | Accepted · refines 0023, 0065, 0066 and 0084 |
 | [0090](0090-omlx-capability-status-and-generation-ownership.md) | oMLX capability status and generation-setting ownership | Accepted · refines 0008, 0017, 0021 and 0086 |
-| [0091](0091-content-bounded-transcript-layout.md) | Content-bounded transcript layout | Accepted · amended 2026-09-22 · segmented rendering proposed 2026-09-26 · refines 0056 and 0074 |
+| [0091](0091-content-bounded-transcript-layout.md) | Content-bounded transcript layout | Accepted · amended 2026-09-22 · segmented rendering proposed 2026-09-26 · refines 0056 and 0074 · admission window and paging superseded by 0099 (proposed) |
 | [0092](0092-selected-toolchain-resolution-for-pen-commands.md) | Selected toolchain resolution for Pen commands | Accepted · refines 0070 |
 
 | [0093](0093-maintained-xcode-project.md) | Maintained Xcode project and build-time release identity | Proposed · supersedes project ownership in 0004 |
-| [0094](0094-pure-swift-syntax-highlighting-and-tool-diffs.md) | Pure-Swift syntax highlighting and tool diff presentation | Proposed · refines 0010, 0074 and 0091 |
+| [0094](0094-pure-swift-syntax-highlighting-and-tool-diffs.md) | Pure-Swift syntax highlighting and tool diff presentation | Proposed · refines 0010, 0074 and 0091 · section 4 superseded by 0099 (proposed) |
 | [0096](0096-bounded-read-only-subagent-delegation.md) | Bounded read-only subagent delegation and prompt optimization | Proposed · refines 0006, 0023, 0042 and 0074 |
-| [0097](0097-appkit-transcript-scroll-executor.md) | AppKit transcript scroll executor | Proposed · refines 0002 and 0091 |
+| [0097](0097-appkit-transcript-scroll-executor.md) | AppKit transcript scroll executor | Proposed · superseded by 0099 (proposed) |
 
 | [0095](0095-parallel-verification-and-preview-diagnostics.md) | Parallel verification and preview diagnostics | Accepted, amended |
 
 | [0098](0098-shared-oklab-colour-picker.md) | Shared OKLab colour picker | Proposed · refines 0022 |
+| [0099](0099-virtualized-transcript-list.md) | Virtualized transcript list | Proposed · supersedes 0091 windowing, 0094 §4 and 0097; refines 0002 and 0028 |
 
 New session? Start with **[../../AGENT.md](../../AGENT.md)**, then [the roadmap](../ROADMAP.md).

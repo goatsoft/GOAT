@@ -1916,7 +1916,7 @@
     },
     {
       "path": "apps/goat-macos/GOAT.xcodeproj/project.pbxproj",
-      "sha256": "608f0e99ef4ad80971e9997527cc415b4869bc18be2085edd7509e8a0a5b6cfc"
+      "sha256": "cd28e7a60209c4e287cafca36aaf615a95edc639441e6051afaf8c0bf8c7fadf"
     },
     {
       "path": "scripts/distribution-notices.py",

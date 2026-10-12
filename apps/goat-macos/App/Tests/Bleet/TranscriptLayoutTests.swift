@@ -1168,7 +1168,9 @@ extension AppTests.Bleet {
                 window.close()
             }
             try await settle(viewport, host: host)
-            #expect(viewport.anchor?.messageID == anchorID && viewport.request == nil)
+            #expect(
+                viewport.anchor?.messageID == anchorID && viewport.request == nil,
+                "Initial reflow restoration: \(viewport.diagnostics.suffix(20))")
             for (width, font) in [(500.0, 24.0), (900, 11), (700, 14)] {
                 model.chatFontSize = font
                 window.setContentSize(NSSize(width: width, height: 450))

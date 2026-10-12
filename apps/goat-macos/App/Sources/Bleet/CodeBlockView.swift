@@ -180,39 +180,22 @@ extension EnvironmentValues {
     @Entry var codeBlockMessageID: UUID? = nil
 }
 
-/// The code blocks of each parsed segment, in order, read once per preparation from the parse's HTML
-/// (the same literal MarkdownUI gives a code block). Bounded; cleared when full.
+/// Resolves identities from literals already extracted by the preparation actor.
+/// Holds no content cache: literals share the prepared document's bounded lifetime.
 @MainActor final class CodeBlockPositions {
     static let shared = CodeBlockPositions()
 
-    private struct Key: Hashable {
-        let messageID: UUID
-        let segment: Int
-        let preparationID: UInt64
-    }
-
-    let limit: Int
-    private var blocks: [Key: [String]] = [:]
-
-    init(limit: Int = 256) {
-        self.limit = max(1, limit)
-    }
-
     func identity(of code: String, occurrence: Int?, in scope: CodeBlockScope) -> CodeBlockIdentity? {
+        // Validate the scope contract even when a shortcut would not need literal lookup.
+        guard let list = scope.content.codeLiterals else {
+            assertionFailure("CodeBlockScope requires prepared code identities")
+            return nil
+        }
         if scope.isFencePiece {
             return CodeBlockIdentity(messageID: scope.messageID, segment: scope.segment, position: 0)
         }
         if let occurrence {
             return CodeBlockIdentity(messageID: scope.messageID, segment: scope.segment, position: occurrence)
-        }
-        let key = Key(messageID: scope.messageID, segment: scope.segment, preparationID: scope.preparationID)
-        let list: [String]
-        if let cached = blocks[key] {
-            list = cached
-        } else {
-            list = Self.codeBlocks(html: scope.content.value.renderHTML())
-            if blocks.count >= limit { blocks.removeAll() }
-            blocks[key] = list
         }
         // MarkdownUI may drop the literal's final newline; match either way.
         func trimmed(_ text: String) -> Substring {
@@ -447,7 +430,10 @@ struct CodeBlockView: View {
     }
 
     private var isInlinePreviewable: Bool {
-        switch kind {
+        // Oversized fence pieces have synthetic closures, not complete artifact documents.
+        // Keep their source presentation even after the piece or message settles.
+        guard scope?.isFencePiece != true else { return false }
+        return switch kind {
         case .html, .svg, .mermaid: true
         case .markdown, .code: false
         }
