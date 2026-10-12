@@ -89,6 +89,7 @@ private struct GoatMarkdownStyle: ViewModifier {
             }
             .markdownTextStyle { ForegroundColor(.primary) }
         }
+        .markdownBlockSpacing(MarkdownSegmentSpacing.blockSpacing)
     }
 }
 

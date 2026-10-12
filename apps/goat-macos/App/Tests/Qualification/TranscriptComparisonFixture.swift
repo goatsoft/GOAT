@@ -79,6 +79,7 @@ import SwiftUI
     }
 
     func registerFrameView(_ view: NSView, id: String) { frameViews[id] = WeakComparisonFrameView(view) }
+
     func unregisterFrameView(_ view: NSView, id: String) {
         if frameViews[id]?.view === view { frameViews[id] = nil }
     }
@@ -135,6 +136,7 @@ import SwiftUI
     let markdown = MarkdownSegmentCache()
     @ObservationIgnored let documents = PreparedMarkdownDocumentCache()
     @ObservationIgnored private var markdownRows: [String: ComparisonRow] = [:]
+    @ObservationIgnored private var messageRows: [String: ComparisonRow] = [:]
     @ObservationIgnored private var overscan: Set<String> = []
     @ObservationIgnored private var preparationTask: Task<Void, Never>?
     @ObservationIgnored private var preparationPending = false
@@ -254,6 +256,18 @@ import SwiftUI
     }
 
     func prepareRequestedRows() async {
+        for id in visible.union(overscan) {
+            guard let row = messageRows[id], case .message(let message) = row.content,
+                message.text.utf8.count <= TranscriptTextParts.maximumBytes,
+                MarkdownContentCache.shared.peek(id: message.id, source: message.text) == nil
+            else { continue }
+            let source = message.text
+            let result = await MarkdownRenderCache.shared.prepare(id: message.id, source: source)
+            guard !Task.isCancelled, message.text == source else { continue }
+            if case .parsed(let content) = result {
+                MarkdownContentCache.shared.set(id: message.id, source: source, content: content)
+            }
+        }
         let requests = requestedWindows()
         for (id, state) in preparations where requests[id] == nil && !(id == active.id && following) {
             state.document = nil
@@ -337,6 +351,11 @@ import SwiftUI
                 return (row.id, row)
             })
         rows.append(ComparisonRow("live-header", .label("GOAT · live replay")))
+        messageRows = Dictionary(
+            uniqueKeysWithValues: rows.compactMap { row in
+                guard case .message = row.content else { return nil }
+                return (row.id, row)
+            })
         rows.append(ComparisonRow("live-tools", .tools(liveTools)))
         reasoningStart = rows.count
         answerStart = rows.count

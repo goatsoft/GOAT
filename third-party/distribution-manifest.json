@@ -85,10 +85,10 @@
     {
       "identity": "swift-markdown-ui",
       "kind": "remoteSourceControl",
-      "location": "https://github.com/gonzalezreal/swift-markdown-ui",
+      "location": "https://github.com/goatsoft/swift-markdown-ui",
       "state": {
-        "revision": "5f613358148239d0292c0cef674a3c2314737f9e",
-        "version": "2.4.1"
+        "revision": "005e1bbe81c4ee721bda416fd32ab2d0b4fa8252",
+        "version": "2.4.2-goat.1"
       }
     },
     {
@@ -1916,7 +1916,7 @@
     },
     {
       "path": "apps/goat-macos/GOAT.xcodeproj/project.pbxproj",
-      "sha256": "cd28e7a60209c4e287cafca36aaf615a95edc639441e6051afaf8c0bf8c7fadf"
+      "sha256": "580be3f28edab6499b5df834eb8225cc630bf5bb510771439cdbee1abfc9ed1c"
     },
     {
       "path": "scripts/distribution-notices.py",
@@ -1958,7 +1958,7 @@
   "outputs": [
     {
       "path": "apps/goat-macos/App/Resources/Licenses/THIRD-PARTY-NOTICES.txt",
-      "sha256": "2a9b6ce254651f2c87e4d8a69ca1f9c226a81f77df04199bdf345a98c9e41b9e"
+      "sha256": "23952e2eed1f5646f62e853e84030896aec61b95b0fadc262412ab18ff07ee9e"
     },
     {
       "path": "apps/goat-macos/App/Resources/Licenses/LICENSE.txt",

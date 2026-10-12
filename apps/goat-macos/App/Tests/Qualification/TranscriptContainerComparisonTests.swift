@@ -184,15 +184,20 @@ extension TranscriptPerformanceTests {
     return view.subviews.lazy.compactMap(comparisonScroll).first
 }
 
-@MainActor private func comparisonAnchor(_ fixture: TranscriptComparisonFixture, host: NSView) -> (String, CGFloat)? {
+@MainActor private func comparisonAnchor(
+    _ fixture: TranscriptComparisonFixture, host: NSView, inputDelta: CGFloat = 0
+) -> (String, CGFloat)? {
     // Include a partially visible tall row, not only rows whose top edge is on screen.
     fixture.sampleFrames()
     guard let scroll = comparisonScroll(host) else { return nil }
     let rect = scroll.contentView.convert(scroll.contentView.bounds, to: host)
     let top = host.isFlipped ? rect.minY : host.bounds.height - rect.maxY
     let bottom = top + rect.height
-    return fixture.frames.filter { $0.value.maxY > top + 1 && $0.value.minY < bottom }
-        .min(by: { $0.value.minY < $1.value.minY }).map { ($0.key, $0.value.minY) }
+    return fixture.frames.filter {
+        $0.value.maxY > top + 1 && $0.value.minY < bottom
+            && $0.value.maxY - inputDelta > top + 1 && $0.value.minY - inputDelta < bottom
+    }
+    .min(by: { $0.value.minY < $1.value.minY }).map { ($0.key, $0.value.minY) }
 }
 
 /// Replays the direct-move regression and sends upward input while async preparation, insertion
@@ -215,9 +220,15 @@ extension TranscriptPerformanceTests {
     scroll.reflectScrolledClipView(scroll.contentView)
     host.layoutSubtreeIfNeeded()
     let directAnchor = comparisonAnchor(fixture, host: host)
+    print(
+        "COMPARISON_DIRECT backend=\(backend) target=\(target) clip=\(scroll.contentView.bounds.minY) frames=\(fixture.frames.count) anchor=\(directAnchor?.0 ?? "none")"
+    )
     try await Task.sleep(for: .milliseconds(500))
     host.layoutSubtreeIfNeeded()
     fixture.sampleFrames()
+    print(
+        "COMPARISON_DIRECT backend=\(backend) settled_clip=\(scroll.contentView.bounds.minY) frames=\(fixture.frames.count) first_anchor=\(directAnchor?.0 ?? "none") first_anchor_mounted=\(directAnchor.map { fixture.frames[$0.0] != nil } ?? false)"
+    )
     let replayDrift =
         directAnchor.flatMap { anchor in fixture.frames[anchor.0].map { abs($0.minY - anchor.1) } } ?? .infinity
     print("COMPARISON_NAVIGATION backend=\(backend) direct_move_drift_pt=\(replayDrift)")
@@ -226,8 +237,12 @@ extension TranscriptPerformanceTests {
     var inputError: CGFloat = 0
     for direction: Int32 in [1, -1, 1] {
         let before = scroll.contentView.bounds.minY
-        let anchor = comparisonAnchor(fixture, host: host)
-        let requested = comparisonWheel(scroll, direction: direction, tick: 0)
+        let event = try XCTUnwrap(comparisonWheelEvent(direction: direction, tick: 0))
+        let requested = -event.scrollingDeltaY
+        // A reverse input can legitimately unmount the first short row. Track a visible
+        // row that will still intersect the viewport after the requested movement.
+        let anchor = comparisonAnchor(fixture, host: host, inputDelta: requested)
+        scroll.scrollWheel(with: event)
         let maximum = max(0, (scroll.documentView?.bounds.height ?? 0) - scroll.contentSize.height)
         let applied = max(0, min(maximum, before + requested)) - before
         try await Task.sleep(for: .milliseconds(100))
@@ -289,6 +304,9 @@ extension TranscriptPerformanceTests {
             continue
         }
         let before = scroll.contentView.bounds.minY
+        let beforeHeight = scroll.documentView?.bounds.height ?? 0
+        let beforeFrame = fixture.frames[anchor.0]
+        let beforeFrames = fixture.frames
         let requestedDelta = comparisonWheel(scroll, direction: 1, tick: tick % 24)
         let maximumOrigin = max(0, (scroll.documentView?.bounds.height ?? 0) - scroll.contentSize.height)
         let applied = max(0, min(maximumOrigin, before + requestedDelta)) - before
@@ -315,7 +333,19 @@ extension TranscriptPerformanceTests {
             // candidates. Clip movement used to preserve content is not itself reader drift.
             let residual = abs(frame.minY - anchor.1 + applied)
             residuals.append(residual)
-            if residual > 1 { failedTicks.append("\(tick):\(residual)") }
+            if residual > 1 {
+                failedTicks.append("\(tick):\(residual)")
+                print(
+                    "COMPARISON_DRIFT tick=\(tick) id=\(anchor.0) requested=\(applied) clip_delta=\(scroll.contentView.bounds.minY - before) document_delta=\((scroll.documentView?.bounds.height ?? 0) - beforeHeight) row_height_before=\(beforeFrame?.height ?? 0) row_height_after=\(frame.height) row_y_delta=\(frame.minY - anchor.1)"
+                )
+                for (id, old) in beforeFrames.sorted(by: { $0.value.minY < $1.value.minY }) {
+                    if let new = fixture.frames[id], abs(new.height - old.height) > 1 {
+                        print(
+                            "COMPARISON_HEIGHT tick=\(tick) id=\(id) before=\(old.height) after=\(new.height) width_before=\(old.width) width_after=\(new.width)"
+                        )
+                    }
+                }
+            }
 
         } else {
             missing += 1
@@ -429,6 +459,13 @@ extension TranscriptPerformanceTests {
 
 @discardableResult
 @MainActor private func comparisonWheel(_ scroll: NSScrollView, direction: Int32, tick: Int) -> CGFloat {
+    guard let native = comparisonWheelEvent(direction: direction, tick: tick) else { return 0 }
+    let requested = -native.scrollingDeltaY
+    scroll.scrollWheel(with: native)
+    return requested
+}
+
+@MainActor private func comparisonWheelEvent(direction: Int32, tick: Int) -> NSEvent? {
     let boundary = [15, 23].contains(tick)
     guard
         let event = CGEvent(
@@ -437,7 +474,7 @@ extension TranscriptPerformanceTests {
         )
     else {
         XCTFail("Could not construct the scrolling event")
-        return 0
+        return nil
     }
     event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
     // Do not fabricate gesture phases: a direct began call enters AppKit's event-tracking
@@ -445,11 +482,9 @@ extension TranscriptPerformanceTests {
     // These are discrete pixel-wheel inputs. Hardware momentum remains manual qualification.
     guard let native = NSEvent(cgEvent: event) else {
         XCTFail("Could not bridge the scrolling event")
-        return 0
+        return nil
     }
-    let requested = -native.scrollingDeltaY
-    scroll.scrollWheel(with: native)
-    return requested
+    return native
 }
 
 @MainActor private func comparisonWheelSequence(_ scroll: NSScrollView, direction: Int32) async throws {

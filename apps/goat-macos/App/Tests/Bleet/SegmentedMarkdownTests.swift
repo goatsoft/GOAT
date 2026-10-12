@@ -713,8 +713,8 @@ extension AppTests.Bleet {
         .textSelection(.enabled)
 }
 
-/// Renders through a displayed hosting view after layout settles. `ImageRenderer` can draw MarkdownUI
-/// before its preference-driven block margins apply, so its heights vary between runs.
+/// Captures the final-line caret through the native hosting and paint path after layout.
+/// `ImageRenderer` does not exercise that path.
 @MainActor private func caretPixels(_ document: PreparedMarkdownDocument, streaming: Bool) async throws
     -> NSBitmapImageRep
 {
@@ -743,6 +743,37 @@ extension AppTests.Bleet {
 extension AppTests.Bleet {
     /// Segmented rendering lays out as the whole reply does, before and after completion (#60 A1, A2).
     @Suite(.serialized) struct SegmentedMarkdownRenderingTests {
+
+        /// A cold mounted row must use its final margins on its first layout, rather than
+        /// changing height when nested-block preferences arrive on the next refresh.
+        @Test(arguments: [CGFloat(14), CGFloat(20)])
+        @MainActor func settledMarkdownHasFinalHeightOnItsFirstLayout(fontSize: CGFloat) async throws {
+            let source = mixedBlocks.joined(separator: "\n\n")
+            for width: CGFloat in [280, 600] {
+                let host = NSHostingView(
+                    rootView: wholeReply(source, fontSize: fontSize)
+                        .frame(width: width, alignment: .leading)
+                        .environment(AppModel.shared).environment(\.colorScheme, .light))
+                let window = NSWindow(
+                    contentRect: NSRect(x: 0, y: 0, width: width, height: 400),
+                    styleMask: [.titled], backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                window.contentView = host
+                defer {
+                    window.contentView = nil
+                    window.close()
+                }
+                host.layoutSubtreeIfNeeded()
+                let firstHeight = host.fittingSize.height
+                for _ in 0..<6 {
+                    try await Task.sleep(for: .milliseconds(50))
+                    host.layoutSubtreeIfNeeded()
+                    #expect(
+                        abs(host.fittingSize.height - firstHeight) < 1,
+                        "A settled row changed height after its first layout at width \(width)")
+                }
+            }
+        }
 
         /// Boundary crossings: with a boundary before every block, each streamed prefix renders at the
         /// height of the same prefix rendered as one document.

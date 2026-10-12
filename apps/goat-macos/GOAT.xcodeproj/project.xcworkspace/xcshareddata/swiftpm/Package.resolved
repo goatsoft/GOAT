@@ -84,10 +84,10 @@
     {
       "identity": "swift-markdown-ui",
       "kind": "remoteSourceControl",
-      "location": "https://github.com/gonzalezreal/swift-markdown-ui",
+      "location": "https://github.com/goatsoft/swift-markdown-ui",
       "state": {
-        "revision": "5f613358148239d0292c0cef674a3c2314737f9e",
-        "version": "2.4.1"
+        "revision": "005e1bbe81c4ee721bda416fd32ab2d0b4fa8252",
+        "version": "2.4.2-goat.1"
       }
     },
     {
