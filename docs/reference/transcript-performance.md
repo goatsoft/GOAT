@@ -228,8 +228,14 @@ mounting. [ADR-0100](../adrs/0100-synchronous-markdown-block-spacing.md) records
 MarkdownUI policy, exact maintained dependency and first-layout regression coverage. Nearby user
 messages are also prepared through the production caches before entering the comparison viewport.
 
-The strict SwiftUI navigation replay now passes all 192 growth samples without a missing anchor,
-with zero wheel/growth residual and zero reflow drift. Separate mixed and dense replays complete
+The earlier `3f62ebc` replay with renderer `2.4.2-goat.1` passed all 192 growth samples
+without a missing anchor, with zero wheel/growth residual and zero reflow drift. This is
+historical evidence, not qualification of the reviewed dependency. On `cea0538` with the merged
+`2.4.2-goat.2` renderer, the full replay fails startup anchor capture and records one missing
+growth sample. An input-only diagnostic passes, but does not resolve the full replay failure.
+A first-paint flush experiment also fails startup and is discarded. Container qualification
+remains open; later zero-drift phases do not validate failed startup preconditions.
+Separate earlier mixed and dense replays complete
 2 MiB of reasoning and 2 MiB of answers. Publication wall time includes awaited preparation;
 neither it nor sleep-overrun measurements establish frame rate. Process memory excludes preview
 subprocesses. CPU sampling and allocation recording require separate interpretation because

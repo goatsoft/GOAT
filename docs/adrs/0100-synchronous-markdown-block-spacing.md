@@ -13,6 +13,12 @@ reproduced a 22 pt change in neighbouring settled rows at unchanged width while 
 input moved the clip view by exactly the requested amount. Prefetching parsed Markdown alone
 did not remove this presentation change.
 
+Upstream [MarkdownUI is in maintenance mode](https://github.com/gonzalezreal/swift-markdown-ui)
+and directs new development to [Textual](https://github.com/gonzalezreal/textual). The fork is a
+bounded maintenance commitment for this renderer fix, not a decision to make MarkdownUI the
+long-term renderer. A future renderer migration requires separate evaluation of prepared-content
+reuse, bounded segments, code actions, typography, accessibility and reader-anchor behavior.
+
 Applying a layout-value key directly to margin modifiers lost inherited margins and failed the
 existing spacing tests. Applying extra scroll corrections around delayed presentation also
 interfered with reader input. The fix belongs in block layout.
@@ -20,7 +26,12 @@ interfered with reader input. The fix belongs in block layout.
 ## Decision
 
 Maintain a narrowly scoped MarkdownUI fork with an opt-in synchronous block-spacing policy.
-The default renderer and existing margin-preference API remain unchanged for other callers.
+The adopted source is `v2.4.2-goat.2` at
+`117d47541d19ca3dff036f8af782983aa9beb720`. Its upstream base is MarkdownUI 2.4.1 plus all four
+commits through `8371aeb`: documentation corrections, configurable list-marker minimum width,
+`Theme: Sendable` for Swift 6, and the maintenance-mode notice. The default list-marker setting
+is preserved. The synchronous-layout patch leaves that base's default renderer and existing
+margin-preference API unchanged for other callers.
 GOAT's shared reader style opts in with explicit margins matching its existing theme:
 paragraphs, HTML and tables have zero top and one em bottom margin; headings have 1.5 rem top
 and one rem bottom margin; thematic breaks have two em on both sides. Code chrome, quotes and
@@ -40,7 +51,9 @@ Layout regressions cover intrinsic width under finite and unlimited offers, coll
 spacing, measured default padding, and placement/alignment. Hosted GOAT tests insert content into
 an already displayed window and observe every height; disabling the policy makes that regression
 fail. Stock-renderer comparisons across block shapes, widths and fonts guard the explicit policy
-against changes to the shared styles and complement segment-boundary spacing coverage.
+against changes to the shared styles and complement segment-boundary spacing coverage. Both
+paths use the adopted upstream base; this comparison does not establish rendering parity with
+unmodified 2.4.1.
 
 Pin the fork to an exact release and commit, retain upstream licences, regenerate distribution
 notices, and qualify that resolved source before merging. Local edits to package checkouts are
@@ -62,4 +75,8 @@ experiments and cannot support a release verification claim.
 - **A constant gap between every block:** changes existing typography and nested-list spacing.
 - **Layout values on margin modifiers alone:** does not reduce descendant margins through containers.
 - **Render plain text before rich content:** retains a visible height transition and is not a fix.
-- **Replace MarkdownUI wholesale:** exceeds the maintenance fix and discards existing rendering contracts.
+- **Migrate to Textual now:** deferred, rather than rejected as unsuitable. Replacing the renderer
+  requires adapting and qualifying GOAT's preparation, segment, cache, styling and interaction
+  contracts. That migration has not been qualified against the realistic 2 MiB transcript workload
+  and would expand this maintenance fix. Evaluate Textual separately before extending the fork's
+  scope or committing to a long-term renderer.
