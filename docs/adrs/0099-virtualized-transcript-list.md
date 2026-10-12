@@ -78,10 +78,14 @@ historical measurements from review follow-up results; acceptance and full quali
 
 ## Candidate direction after review
 
-Prioritise the flat SwiftUI segment list for the next qualification pass. Its corrected probes
-retain substantially less resident memory than the native prototype, but growth and reflow still
-fail the anchor tolerance. This is a direction for the experiment, not an accepted production
-container decision. The SwiftUI follow-up prepares one estimated viewport ahead in either direction
+Recommend the flat SwiftUI segment list for the production migration, subject to owner acceptance
+and the remaining qualification gates. The synchronous Markdown spacing fix in
+[PR #84](https://github.com/goatsoft/GOAT/pull/84) removes the reproduced wheel/growth residual;
+its strict navigation replay passes growth, input, following and reflow checks. Separate mixed and
+dense replays complete both 2 MiB streams. These results supersede the earlier failed SwiftUI
+navigation observations, but do not qualify hardware momentum, supported-OS accessibility or
+full-app frame time. ADR-0099 remains Proposed and the shipping container remains unchanged.
+The SwiftUI follow-up prepares one estimated viewport ahead in either direction
 (up to 64 neighbouring rows per side), uses actual scroll-target visibility rather than lazy-row
 creation, and uses one bottom size-change anchor while following. Explicit Latest and reflow
 restoration use the same SwiftUI scroll-position binding; there is no per-publication bottom command.

@@ -1,5 +1,15 @@
 # Transcript container comparison
 
+The historical runs below are retained for context. The synchronous-spacing follow-up in
+[PR #84](https://github.com/goatsoft/GOAT/pull/84) supersedes the earlier SwiftUI wheel/growth
+failure: the strict navigation replay passes all 192 growth samples with no missing anchor and
+zero residual, and passes following, input and both width/font reflows. Mixed and dense replays
+complete 2 MiB each of reasoning and answers. [ADR-0100](../adrs/0100-synchronous-markdown-block-spacing.md)
+records the renderer fix. The recommendation is a flat SwiftUI production migration, subject to
+owner acceptance and the remaining qualification gates in issue 60; no shipping container changes
+in that fix. Timing, preview subprocess memory, supported-OS and manual/accessibility limits still
+apply. Exact run evidence belongs to the linked PR rather than a product performance guarantee.
+
 Issue #60 owns this qualification. ADR-0099 remains proposed until the owner reviews the comparison.
 The candidates are a flat SwiftUI `LazyVStack` with modern scroll APIs and an AppKit `NSTableView`
 with reusable `NSHostingView` cells. Neither replaces the shipping transcript in this experiment.
