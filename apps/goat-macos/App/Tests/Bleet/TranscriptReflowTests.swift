@@ -1,8 +1,10 @@
 import AppKit
 import Bleet
+import Observation
 import Persistence
 import SwiftUI
 import Testing
+import XCTest
 
 @testable import GOAT
 
@@ -168,7 +170,7 @@ extension AppTests.Bleet {
             let host = NSHostingView(
                 rootView: ChatTranscriptView(session: session).environment(model)
                     .frame(minWidth: 880, minHeight: 560))
-            host.sizingOptions = []
+            host.sizingOptions = [.minSize]
             window.contentView = host
             window.orderFront(nil)
             defer {
@@ -185,7 +187,11 @@ extension AppTests.Bleet {
                 #expect(
                     abs(host.bounds.width - width) <= 1,
                     "Direct host must retain requested width \(width), got \(host.bounds)")
-                #expect(host.bounds.height >= 560)
+                #expect(window.contentMinSize.width >= 880 && window.contentMinSize.height >= 560)
+                window.setContentSize(NSSize(width: 100, height: 100))
+                host.layoutSubtreeIfNeeded()
+                try await Task.sleep(for: .milliseconds(100))
+                #expect(host.bounds.width >= 880 && host.bounds.height >= 560, "The exported minimum prevents collapse")
             }
         }
 
@@ -276,4 +282,95 @@ extension AppTests.Bleet {
                 "Font and width reflow must preserve reading away from the bottom")
         }
     }
+}
+
+final class TranscriptComparisonPreparationTests: XCTestCase {
+    @MainActor func testComparisonPreparesNeighbouringRowsTogetherAndReusesScrollBack() async throws {
+        let fixture = TranscriptComparisonFixture()
+        defer { fixture.stopPreparation() }
+        try await fixture.seed(rounds: 1)
+        let neighbours = fixture.rows.filter {
+            if case .markdown = $0.content { return true }
+            return false
+        }
+        XCTAssertGreaterThanOrEqual(neighbours.count, 2)
+        let first = try XCTUnwrap(neighbours.first)
+        let second = neighbours[1]
+        fixture.documents.removeAll()
+        await fixture.markdown.removeAll()
+        fixture.visible = [first.id, second.id]
+        await fixture.prepareRequestedRows()
+        let firstID = try XCTUnwrap(fixture.preparedSegment(for: first)?.preparationID)
+        let secondID = try XCTUnwrap(fixture.preparedSegment(for: second)?.preparationID)
+        let count = await fixture.markdown.snapshot().parseCount
+        // Recreating either row does not issue a narrower request or discard its neighbour.
+        fixture.visible = [second.id]
+        await fixture.prepareRequestedRows()
+        fixture.visible = []
+        await fixture.prepareRequestedRows()
+        fixture.visible = [first.id, second.id]
+        XCTAssertEqual(fixture.preparedSegment(for: first)?.preparationID, firstID)
+        XCTAssertEqual(fixture.preparedSegment(for: second)?.preparationID, secondID)
+        await fixture.prepareRequestedRows()
+        let after = await fixture.markdown.snapshot().parseCount
+        XCTAssertEqual(after, count)
+    }
+
+    @MainActor func testFrameSamplingUsesTheCurrentClipOrigin() throws {
+        let fixture = TranscriptComparisonFixture()
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 600), styleMask: [], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        let document = ComparisonFrameSamplingDocument(frame: NSRect(x: 0, y: 0, width: 800, height: 2_000))
+        let row = NSView(frame: NSRect(x: 0, y: 600, width: 800, height: 200))
+        document.addSubview(row)
+        scroll.documentView = document
+        window.contentView = scroll
+        defer {
+            window.contentView = nil
+            window.close()
+        }
+        fixture.registerFrameView(row, id: "row")
+        fixture.sampleFrames()
+        let before = try XCTUnwrap(fixture.frames["row"])
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 60))
+        fixture.sampleFrames()
+        let after = try XCTUnwrap(fixture.frames["row"])
+        XCTAssertEqual(after.minY - before.minY, -60, accuracy: 0.01)
+        fixture.unregisterFrameView(row, id: "row")
+        fixture.sampleFrames()
+        XCTAssertNil(fixture.frames["row"])
+    }
+
+    @MainActor func testHistoricalPreparationDoesNotObserveLivePublications() async throws {
+        let fixture = TranscriptComparisonFixture()
+        defer { fixture.stopPreparation() }
+        try await fixture.seed(rounds: 1)
+        let row = try XCTUnwrap(
+            fixture.rows.first {
+                if case .markdown = $0.content { return true }
+                return false
+            })
+        let invalidated = XCTestExpectation(description: "Historical document must not be invalidated")
+        invalidated.isInverted = true
+        withObservationTracking {
+            _ = fixture.preparedSegment(for: row)
+        } onChange: {
+            invalidated.fulfill()
+        }
+        try await fixture.append("A live **answer**.", reasoning: false)
+        XCTAssertNotNil(fixture.preparation(for: fixture.active.id).document)
+        await fulfillment(of: [invalidated], timeout: 0.05)
+        fixture.following = false
+        try await fixture.append(" Offscreen growth.", reasoning: false)
+        XCTAssertNil(
+            fixture.preparation(for: fixture.active.id).document,
+            "An offscreen unfollowed message must release its working document")
+    }
+
+}
+
+@MainActor private final class ComparisonFrameSamplingDocument: NSView {
+    override var isFlipped: Bool { true }
 }

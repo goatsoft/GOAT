@@ -9,63 +9,6 @@ import XCTest
 @testable import GOAT
 
 extension TranscriptPerformanceTests {
-    @MainActor func testComparisonPreparesNeighbouringRowsTogetherAndReusesScrollBack() async throws {
-        let fixture = TranscriptComparisonFixture()
-        defer { fixture.stopPreparation() }
-        try await fixture.seed(rounds: 1)
-        let neighbours = fixture.rows.filter {
-            if case .markdown = $0.content { return true }
-            return false
-        }
-        XCTAssertGreaterThanOrEqual(neighbours.count, 2)
-        let first = try XCTUnwrap(neighbours.first)
-        let second = neighbours[1]
-        fixture.documents.removeAll()
-        await fixture.markdown.removeAll()
-        fixture.visible = [first.id, second.id]
-        await fixture.prepareRequestedRows()
-        let firstID = try XCTUnwrap(fixture.preparedSegment(for: first)?.preparationID)
-        let secondID = try XCTUnwrap(fixture.preparedSegment(for: second)?.preparationID)
-        let count = await fixture.markdown.snapshot().parseCount
-        // Recreating either row does not issue a narrower request or discard its neighbour.
-        fixture.visible = [second.id]
-        await fixture.prepareRequestedRows()
-        fixture.visible = []
-        await fixture.prepareRequestedRows()
-        fixture.visible = [first.id, second.id]
-        XCTAssertEqual(fixture.preparedSegment(for: first)?.preparationID, firstID)
-        XCTAssertEqual(fixture.preparedSegment(for: second)?.preparationID, secondID)
-        await fixture.prepareRequestedRows()
-        let after = await fixture.markdown.snapshot().parseCount
-        XCTAssertEqual(after, count)
-    }
-
-    @MainActor func testHistoricalPreparationDoesNotObserveLivePublications() async throws {
-        let fixture = TranscriptComparisonFixture()
-        defer { fixture.stopPreparation() }
-        try await fixture.seed(rounds: 1)
-        let row = try XCTUnwrap(
-            fixture.rows.first {
-                if case .markdown = $0.content { return true }
-                return false
-            })
-        let invalidated = XCTestExpectation(description: "Historical document must not be invalidated")
-        invalidated.isInverted = true
-        withObservationTracking {
-            _ = fixture.preparedSegment(for: row)
-        } onChange: {
-            invalidated.fulfill()
-        }
-        try await fixture.append("A live **answer**.", reasoning: false)
-        XCTAssertNotNil(fixture.preparation(for: fixture.active.id).document)
-        await fulfillment(of: [invalidated], timeout: 0.05)
-        fixture.following = false
-        try await fixture.append(" Offscreen growth.", reasoning: false)
-        XCTAssertNil(
-            fixture.preparation(for: fixture.active.id).document,
-            "An offscreen unfollowed message must release its working document")
-    }
-
     /// Run each backend in a fresh Release process. Defaults exercise 2 MiB per live channel.
     @MainActor func testContainerComparison() async throws {
         let environment = ProcessInfo.processInfo.environment
@@ -89,6 +32,9 @@ extension TranscriptPerformanceTests {
             model.chatFontSize = oldFont
             model.animationsEnabled = oldAnimations
         }
+        print(
+            "COMPARISON_RUN run_id=\(environment["GOAT_COMPARE_RUN_ID"] ?? "unlabelled") commit=\(environment["GOAT_COMPARE_COMMIT"] ?? "unrecorded") height_cache=\(environment["GOAT_COMPARE_NO_HEIGHT_CACHE"] != "1") previews=\(environment["GOAT_COMPARE_NO_PREVIEWS"] != "1")"
+        )
         print(
             "COMPARISON_HOST os=\(ProcessInfo.processInfo.operatingSystemVersionString) cores=\(ProcessInfo.processInfo.processorCount) memory_bytes=\(ProcessInfo.processInfo.physicalMemory)"
         )
@@ -182,7 +128,7 @@ extension TranscriptPerformanceTests {
             let beforeCompletion = comparisonAnchor(fixture, host: host)
             try await fixture.append("", reasoning: reasoning, complete: true)
             try await Task.sleep(for: .seconds(3))
-            fixture.sampleFrames?()
+            fixture.sampleFrames()
             let after = comparisonUsage()
             let anchorDrift = anchor.flatMap { saved in fixture.frames[saved.0].map { Double($0.minY - saved.1) } }
             let completionDrift = beforeCompletion.flatMap { saved in
@@ -220,7 +166,7 @@ extension TranscriptPerformanceTests {
         let anchor = comparisonAnchor(fixture, host: host)
         window.setContentSize(NSSize(width: 820, height: 780))
         try await Task.sleep(for: .seconds(1))
-        fixture.sampleFrames?()
+        fixture.sampleFrames()
         if let anchor, let frame = fixture.frames[anchor.0] {
             print("COMPARISON_REFLOW backend=\(backend) anchor_drift_pt=\(frame.minY - anchor.1)")
         } else {
@@ -240,7 +186,7 @@ extension TranscriptPerformanceTests {
 
 @MainActor private func comparisonAnchor(_ fixture: TranscriptComparisonFixture, host: NSView) -> (String, CGFloat)? {
     // Include a partially visible tall row, not only rows whose top edge is on screen.
-    fixture.sampleFrames?()
+    fixture.sampleFrames()
     guard let scroll = comparisonScroll(host) else { return nil }
     let rect = scroll.contentView.convert(scroll.contentView.bounds, to: host)
     let top = host.isFlipped ? rect.minY : host.bounds.height - rect.maxY
@@ -268,44 +214,43 @@ extension TranscriptPerformanceTests {
     scroll.contentView.scroll(to: NSPoint(x: 0, y: target))
     scroll.reflectScrolledClipView(scroll.contentView)
     host.layoutSubtreeIfNeeded()
-    let directOrigin = scroll.contentView.bounds.minY
-    let directCompensation = fixture.compensatedScroll
+    let directAnchor = comparisonAnchor(fixture, host: host)
     try await Task.sleep(for: .milliseconds(500))
     host.layoutSubtreeIfNeeded()
-    let replayDrift = abs(
-        scroll.contentView.bounds.minY - directOrigin - (fixture.compensatedScroll - directCompensation))
+    fixture.sampleFrames()
+    let replayDrift =
+        directAnchor.flatMap { anchor in fixture.frames[anchor.0].map { abs($0.minY - anchor.1) } } ?? .infinity
     print("COMPARISON_NAVIGATION backend=\(backend) direct_move_drift_pt=\(replayDrift)")
     XCTAssertLessThanOrEqual(replayDrift, 1, "ADR-0097 direct-move replay")
 
     var inputError: CGFloat = 0
     for direction: Int32 in [1, -1, 1] {
         let before = scroll.contentView.bounds.minY
-        let compensation = fixture.compensatedScroll
+        let anchor = comparisonAnchor(fixture, host: host)
         let requested = comparisonWheel(scroll, direction: direction, tick: 0)
         let maximum = max(0, (scroll.documentView?.bounds.height ?? 0) - scroll.contentSize.height)
         let applied = max(0, min(maximum, before + requested)) - before
         try await Task.sleep(for: .milliseconds(100))
-        inputError = max(
-            inputError,
-            abs(
-                scroll.contentView.bounds.minY - before - applied
-                    - (fixture.compensatedScroll - compensation)))
+        fixture.sampleFrames()
+        let residual =
+            anchor.flatMap { saved in fixture.frames[saved.0].map { abs($0.minY - saved.1 + applied) } } ?? .infinity
+        inputError = max(inputError, residual)
     }
     print("COMPARISON_NAVIGATION backend=\(backend) candidate_static_input_error_pt=\(inputError)")
     XCTAssertLessThanOrEqual(inputError, 1, "The candidate must receive input before growth is interpreted")
     if ProcessInfo.processInfo.environment["GOAT_COMPARE_INPUT_ONLY"] == "1" { return }
 
-    let beforeAppend = scroll.contentView.bounds.minY
-    let beforeCompensation = fixture.compensatedScroll
+    let beforeAppend = comparisonAnchor(fixture, host: host)
     fixture.rows.append(ComparisonRow("initial-offset-replay", .label("Appended after a non-gesture move")))
     fixture.reasoningStart += 1
     fixture.answerStart += 1
     fixture.lastChanged = (fixture.rows.count - 1)..<fixture.rows.count
     fixture.generation += 1
     try await Task.sleep(for: .milliseconds(500))
-    let initialDrift = abs(
-        scroll.contentView.bounds.minY - beforeAppend
-            - (fixture.compensatedScroll - beforeCompensation))
+    host.layoutSubtreeIfNeeded()
+    fixture.sampleFrames()
+    let initialDrift =
+        beforeAppend.flatMap { anchor in fixture.frames[anchor.0].map { abs($0.minY - anchor.1) } } ?? .infinity
     print("COMPARISON_NAVIGATION backend=\(backend) initial_offset_growth_drift_pt=\(initialDrift)")
     XCTAssertLessThanOrEqual(initialDrift, 1, "Initial offset must not reapply after placement")
 
@@ -323,6 +268,11 @@ extension TranscriptPerformanceTests {
             try Task.checkCancellation()
             try await fixture.append(String(source[offset..<end]), reasoning: false)
             offset = end
+            if fixture.active.text.utf8.count.isMultiple(of: 262_144) {
+                print(
+                    "COMPARISON_NAVIGATION backend=\(backend) phase=growth bytes=\(fixture.active.text.utf8.count) resident_bytes=\(comparisonUsage().resident)"
+                )
+            }
             try await Task.sleep(for: .milliseconds(20))
         }
         try await fixture.append("", reasoning: false, complete: true)
@@ -334,7 +284,7 @@ extension TranscriptPerformanceTests {
         host.layoutSubtreeIfNeeded()
         guard let anchor = comparisonAnchor(fixture, host: host) else {
             missing += 1
-            try await Task.sleep(for: .milliseconds(16))
+            try await Task.sleep(for: .milliseconds(50))
             continue
         }
         let before = scroll.contentView.bounds.minY
@@ -356,12 +306,12 @@ extension TranscriptPerformanceTests {
             fixture.lastChanged = (index - 1)..<index
             fixture.generation += 1
         }
-        try await Task.sleep(for: .milliseconds(16))
+        try await Task.sleep(for: .milliseconds(50))
         host.layoutSubtreeIfNeeded()
-        fixture.sampleFrames?()
+        fixture.sampleFrames()
         if let frame = fixture.frames[anchor.0] {
-            // Compare with the event's requested pixel delta, not the final clip-origin delta:
-            // treating an unwanted programmatic scroll as input would hide the very regression.
+            // The native marker samples the same anchor-row screen displacement in both
+            // candidates. Clip movement used to preserve content is not itself reader drift.
             let residual = abs(frame.minY - anchor.1 + applied)
             residuals.append(residual)
 
@@ -412,7 +362,7 @@ extension TranscriptPerformanceTests {
         window.setContentSize(NSSize(width: width, height: 780))
         try await Task.sleep(for: .milliseconds(500))
         host.layoutSubtreeIfNeeded()
-        fixture.sampleFrames?()
+        fixture.sampleFrames()
         guard let anchor, let frame = fixture.frames[anchor.0] else {
             print("COMPARISON_NAVIGATION backend=\(backend) reflow_width=\(width) font=\(font) anchor_missing=true")
             XCTFail("Reflow must retain a measurable anchor at width \(width)")

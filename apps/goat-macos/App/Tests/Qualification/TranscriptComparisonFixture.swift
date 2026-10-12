@@ -40,8 +40,26 @@ import SwiftUI
     var visible: Set<String> = []
     // Measurement state must not invalidate either candidate during scrolling.
     @ObservationIgnored var frames: [String: CGRect] = [:]
-    @ObservationIgnored var sampleFrames: (() -> Void)?
-    @ObservationIgnored var compensatedScroll: CGFloat = 0
+    @ObservationIgnored private var frameViews: [String: WeakComparisonFrameView] = [:]
+
+    func registerFrameView(_ view: NSView, id: String) { frameViews[id] = WeakComparisonFrameView(view) }
+    func unregisterFrameView(_ view: NSView, id: String) {
+        if frameViews[id]?.view === view { frameViews[id] = nil }
+    }
+
+    /// Both candidates sample the mounted row's native bounds synchronously after layout.
+    /// No asynchronous SwiftUI geometry callback can supply a frame from an older clip origin.
+    func sampleFrames() {
+        var sampled: [String: CGRect] = [:]
+        for (id, held) in frameViews {
+            guard let view = held.view, let root = view.window?.contentView else { continue }
+            let frame = view.convert(view.bounds, to: root)
+            sampled[id] = CGRect(
+                x: frame.minX, y: root.isFlipped ? frame.minY : root.bounds.height - frame.maxY,
+                width: frame.width, height: frame.height)
+        }
+        frames = sampled
+    }
     var peakVisible = 0
     var heightUpdates = 0
     var status = "Ready"
@@ -276,7 +294,7 @@ import SwiftUI
             ? "\n```swift title=Expanded\(index).swift\n"
                 + (0..<96).map { "let item\($0) = \($0) // line \($0), scroll and expand this block\n" }.joined()
                 + "```\n" : ""
-        return """
+        let block = """
             ## Change \(index): bounded rendering
 
             The investigation found a stable-prefix cache and a layout invalidation at the visible tail. Preserve **reader ownership**, account for `renderedBytes`, and keep cold preparation off the main actor.
@@ -316,6 +334,10 @@ import SwiftUI
 
 
             """
+        guard ProcessInfo.processInfo.environment["GOAT_COMPARE_NO_PREVIEWS"] == "1" else { return block }
+        // Ablation changes fence language only, retaining source bytes and all other content.
+        return block.replacingOccurrences(of: "```html", with: "```text")
+            .replacingOccurrences(of: "```svg", with: "```txt")
     }
 
     static func reasoningBlock(_ index: Int) -> String {
@@ -375,7 +397,6 @@ import SwiftUI
 struct ComparisonRowView: View {
     let row: ComparisonRow
     let fixture: TranscriptComparisonFixture
-    var reportsSwiftUIFrame = true
     var measured: (CGSize) -> Void = { _ in }
     @Environment(AppModel.self) private var model
     var recordsVisibility = true
@@ -387,8 +408,8 @@ struct ComparisonRowView: View {
             .padding(.vertical, 6)
             .fixedSize(horizontal: false, vertical: true)
             .onGeometryChange(for: CGSize.self, of: { $0.size }) { measured($0) }
-            .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) {
-                if reportsSwiftUIFrame { fixture.frames[row.id] = $0 }
+            .background {
+                if recordsVisibility { ComparisonFrameMarker(id: row.id, fixture: fixture) }
             }
             .onAppear { if recordsVisibility { fixture.appeared(row.id) } }
             .onDisappear {
@@ -420,5 +441,31 @@ struct ComparisonRowView: View {
                     .font(Font(ReadingFonts.nsFont(model.effectiveChatFontID, size: model.chatFontSize, role: .chat)))
             }
         }
+    }
+}
+
+@MainActor private final class WeakComparisonFrameView {
+    weak var view: NSView?
+    init(_ view: NSView) { self.view = view }
+}
+
+private struct ComparisonFrameMarker: NSViewRepresentable {
+    let id: String
+    let fixture: TranscriptComparisonFixture
+    func makeNSView(context: Context) -> Marker {
+        let view = Marker()
+        view.id = id
+        view.fixture = fixture
+        fixture.registerFrameView(view, id: id)
+        return view
+    }
+    func updateNSView(_ view: Marker, context: Context) {}
+    static func dismantleNSView(_ view: Marker, coordinator: ()) {
+        view.fixture?.unregisterFrameView(view, id: view.id)
+    }
+    @MainActor final class Marker: NSView {
+        var id = ""
+        weak var fixture: TranscriptComparisonFixture?
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
     }
 }

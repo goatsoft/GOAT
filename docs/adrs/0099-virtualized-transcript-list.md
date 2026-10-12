@@ -193,11 +193,13 @@ within a row, as it is within a view today; copying a whole reply or chat is #60
 
 ## Validation
 
-- **Gesture-level tests.** Native tests send real scroll-wheel events with gesture and momentum
-  phases to the hosted list, not programmatic scrolls followed by idle. During a gesture and its
-  momentum, while rows above the viewport are measured, folded, inserted or removed, and while
-  output streams below, the anchor row's screen position changes by at most 1 pt and pixels below it
-  do not change.
+- **Input and anchor tests.** Automated probes calibrate unphased pixel-wheel input against a
+  static control and each candidate. Both sample native row-marker bounds after a layout/settle
+  interval; asynchronous SwiftUI geometry reports are not measurement input. During insertion,
+  folding, remeasurement and growth, anchor-row displacement after accounting for requested input
+  stays within 1 pt. Synthetic gesture phases sent directly to `scrollWheel(with:)` are invalid:
+  AppKit can enter a tracking loop waiting for queued events. Actual trackpad gestures, momentum
+  and the pixels below the anchor remain separate manual qualification.
 - **Reachability and honesty.** Every message and every segment of a 2 MiB answer and 2 MiB
   reasoning is reachable by scrolling alone; the document height matches the sum of row heights
   within the estimate tolerance once measured.

@@ -116,9 +116,6 @@ private struct ComparisonNativeList: NSViewRepresentable {
         scroll.drawsBackground = false
         context.coordinator.table = table
         scroll.prepareForDisplay = { [weak coordinator = context.coordinator] in coordinator?.measureNearby() }
-        context.coordinator.fixture.sampleFrames = { [weak coordinator = context.coordinator] in
-            coordinator?.recordFrames()
-        }
         context.coordinator.observe(scroll)
         return scroll
     }
@@ -158,6 +155,7 @@ private struct ComparisonNativeList: NSViewRepresentable {
         var measuredHeights: [HeightKey: CGFloat] = [:]
         var measurementOrder: [HeightKey] = []
         var measurementHost: NSHostingView<MeasurementRoot>?
+        let usesHeightCache = ProcessInfo.processInfo.environment["GOAT_COMPARE_NO_HEIGHT_CACHE"] != "1"
         var measurementCount = 0
         var generation = -1
         var structureRevision = -1
@@ -172,7 +170,6 @@ private struct ComparisonNativeList: NSViewRepresentable {
         func stop() {
             for observer in observers { NotificationCenter.default.removeObserver(observer) }
             observers = []
-            fixture.sampleFrames = nil
             measurementHost = nil
             fixture.setPreparationOverscan([])
         }
@@ -206,20 +203,6 @@ private struct ComparisonNativeList: NSViewRepresentable {
                         self.fixture.following = table.bounds.height - table.visibleRect.maxY < 24
                     }
                 })
-        }
-
-        func recordFrames() {
-            guard let table, let root = table.window?.contentView else { return }
-            let range = table.rows(in: table.visibleRect)
-            guard range.location != NSNotFound else { return }
-            var frames: [String: CGRect] = [:]
-            for index in range.location..<min(rows.count, range.location + range.length) {
-                let frame = table.convert(table.rect(ofRow: index), to: root)
-                frames[rows[index].id] = CGRect(
-                    x: frame.minX, y: root.isFlipped ? frame.minY : root.bounds.height - frame.maxY, width: frame.width,
-                    height: frame.height)
-            }
-            fixture.frames = frames
         }
 
         func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
@@ -309,7 +292,6 @@ private struct ComparisonNativeList: NSViewRepresentable {
             guard abs(delta) > 0.01 else { return }
             let origin = scroll.contentView.bounds.origin
             scroll.contentView.scroll(to: NSPoint(x: origin.x, y: origin.y + delta))
-            fixture.compensatedScroll += scroll.contentView.bounds.minY - origin.y
             scroll.reflectScrolledClipView(scroll.contentView)
         }
 
@@ -402,7 +384,7 @@ private struct ComparisonNativeList: NSViewRepresentable {
             } else if resized || changedGeneration {
                 correctAnchor(saved?.0, previousY: previousAnchorY, table: table)
             }
-            recordFrames()
+            fixture.sampleFrames()
         }
 
         func scheduleHeight(_ height: CGFloat, id: String) {
@@ -455,7 +437,7 @@ private struct ComparisonNativeList: NSViewRepresentable {
                     preparation: fixture.preparedSegment(for: row)?.preparationID ?? 0,
                     width: width, typography: typography)
                 let height: CGFloat
-                if let known = measuredHeights[key] {
+                if usesHeightCache, let known = measuredHeights[key] {
                     height = known
                 } else {
                     let root = MeasurementRoot(row: row, fixture: fixture, environment: environment, width: width)
@@ -471,14 +453,16 @@ private struct ComparisonNativeList: NSViewRepresentable {
                     host.frame = NSRect(x: 0, y: 0, width: width, height: 1)
                     host.layoutSubtreeIfNeeded()
                     height = max(1, ceil(host.fittingSize.height))
-                    measuredHeights[key] = height
-                    measurementOrder.append(key)
+                    if usesHeightCache {
+                        measuredHeights[key] = height
+                        measurementOrder.append(key)
+                    }
                     measurementCount += 1
                 }
                 // A live host can capture async image/code state unavailable to the sizing host.
                 // Its reported height wins for this pass, then becomes the same keyed measurement.
                 if let reported = updates[row.id] {
-                    measuredHeights[key] = reported
+                    if usesHeightCache { measuredHeights[key] = reported }
                 } else {
                     updates[row.id] = height
                 }
@@ -522,7 +506,7 @@ private struct ComparisonNativeList: NSViewRepresentable {
         let width: CGFloat
         var body: some View {
             ComparisonRowView(
-                row: row, fixture: fixture, reportsSwiftUIFrame: false,
+                row: row, fixture: fixture,
                 recordsVisibility: false
             )
             .id(row.id)
@@ -542,7 +526,7 @@ private struct ComparisonNativeList: NSViewRepresentable {
         let measured: (CGSize) -> Void
 
         var body: some View {
-            ComparisonRowView(row: row, fixture: fixture, reportsSwiftUIFrame: false, measured: measured)
+            ComparisonRowView(row: row, fixture: fixture, measured: measured)
                 .id(row.id)
                 .environment(\.self, environment)
         }

@@ -42,6 +42,10 @@ Optional environment variables (all prefixed `TEST_RUNNER_` when invoking Make):
 | `GOAT_COMPARE_DENSE` | 0 | Set 1 for dense paragraph/fence regression input |
 | `GOAT_COMPARE_NAVIGATION` | 0 | Set 1 to assert direct-move and concurrent upward-input/growth regressions instead of timing |
 | `GOAT_COMPARE_INPUT_ONLY` | 0 | With navigation mode, stop after static candidate input calibration |
+| `GOAT_COMPARE_RUN_ID` | unlabelled | Label each fresh-process repetition |
+| `GOAT_COMPARE_COMMIT` | unrecorded | Exact measured implementation SHA, supplied by the runner |
+| `GOAT_COMPARE_NO_HEIGHT_CACHE` | 0 | Native ablation: disable keyed height-cache reads/writes |
+| `GOAT_COMPARE_NO_PREVIEWS` | 0 | Ablation: replace HTML/SVG fence languages with same-length text languages |
 | `GOAT_COMPARE_INSTRUMENTS` | 0 | Set 1 for a 15-second attach interval after READY |
 | `GOAT_COMPARE_INTERACTIVE` | 0 | Set 1 to leave the window open for manual checks |
 
@@ -85,6 +89,11 @@ unchanged origin. SwiftUI height callbacks collect updates for the pre-display t
 bounds notifications never re-enter table data-source/layout work. Native overscan contributes
 to the fixture owner's combined per-message preparation request.
 
+The SwiftUI candidate deliberately tests stock `LazyVStack` with its position/anchor APIs. It
+has no explicit preparation overscan, reader-anchor capture or corrective restore policy. The
+native candidate implements ADR-0099's proposed policy. This compares stock SwiftUI with a
+policy-implementing prototype, not two equivalent implementations of that policy.
+
 Cells use a concrete SwiftUI root and inherit the window's resolved environment. The window alone
 installs presentation styling. Reuse identifiers distinguish row kinds; changing the row identity
 intentionally resets its local content/disclosure state, while updating the same row preserves it.
@@ -96,8 +105,11 @@ and width/font changes in both directions. All assertions use a 1 pt tolerance. 
 compare the row's screen displacement with the input event's pixel delta,
 clamped at the document edges. They do not treat the observed clip-origin change as input, which
 could hide an unwanted programmatic scroll. The sequence contains discrete pixel-wheel inputs with two zero-delta pauses; it does not fabricate gesture or momentum phases.
-The direct-move probe accounts separately for explicit native height compensation and records
-unexplained offset movement after the reader takes ownership. A failure does not identify a
+Direct-move, append-after-placement and reflow checks measure the same anchor row's screen
+displacement, rather than interpreting clip-origin correction as reader drift. Both candidates
+use native marker bounds converted synchronously to the window content root after layout;
+SwiftUI's asynchronous geometry callbacks are excluded from the sampler. Wheel checks settle
+for at least 50 ms before the same sample, instead of the previous 16 ms interval. A failure does not identify a
 particular private SwiftUI mechanism. These synthetic probes expose regressions, but cannot certify hardware momentum,
 every possible layout transition or supported-OS behavior. A failing candidate remains unqualified;
 the assertions are not converted to expected successes.
@@ -220,7 +232,7 @@ The current tests record observations rather than asserting all of those accepta
 
 ## Complexity-bound follow-up, 2026-09-27
 
-The same Release fixtures now use packing capped at 16 top-level blocks or 16 work units, in
+The same Release fixtures now use packing capped at 16 work units, in
 addition to bytes. A fence costs four units; nonblank prose/table lines cost one. Indivisible
 lists/tables/quotes retain their semantics and are isolated when over the work threshold; this
 is not a hard cap on every nested view. Code-identity HTML extraction moved into preparation,
@@ -355,8 +367,9 @@ chrome around `ChatView`. No production source explicitly assigns a transcript `
 to `NSWindow.contentView`. About uses `NSHostingController` with its own window and has no
 transcript; sheets are SwiftUI-managed. This source audit does not prove that SwiftUI's internal
 hosting implementation can never resize unexpectedly. A separate direct-root regression now
-keeps a transcript in a direct `NSHostingView` with the production minimum-size contract and
-asserts requested widths through font and width changes.
+keeps a transcript in a direct `NSHostingView` with `.minSize` sizing enabled. It verifies that
+the 880 by 560 minimum is exported to the window, checks width/font reflow, then attempts to
+shrink the window to 100 by 100 and requires the hosting minimum to prevent collapse.
 
 The earlier `reflowRestoresTheReadersAnchor` pending-request failure was not root-caused.
 Its rerun and local repetitions passed; its additional diagnostics remain. It is not attributed
@@ -385,7 +398,13 @@ The initial-offset regression now explicitly appends a row after the non-gesture
 `initial_offset_growth_drift_pt`, separately from direct-move replay and concurrent wheel input.
 
 
-### Release navigation results after the review fixes (2026-09-28)
+### Historical navigation results, withdrawn as decision evidence (2026-09-28)
+
+The following values were recorded while preparing `f0a39a7`, using asymmetric
+sampling and a 16 ms wheel settle. Review 5486579356 reproduced different values in both
+candidates: SwiftUI 0 pt initial-offset drift and up to 22 pt residual at 50 ms; AppKit 384 pt
+residual and eight missing samples. The table is historical and withdrawn as container decision
+evidence. Static calibration alone did not establish frame freshness.
 
 Same qualification host as above, fresh Release processes, 48 mixed history rounds and a
 2 MiB live answer. These are navigation probes, not FPS or full-app qualification. The static
@@ -415,8 +434,11 @@ The SwiftUI direct-move discrepancy is preserved rather than selecting the passi
 The failures establish behavior under this probe; they do not identify a private SwiftUI cause.
 The new static-input assertion is now also part of the full navigation probe.
 
-**Q1 reproduced:** AppKit exceeded an external runaway guard after the wheel/growth summary and
-before the bottom-alignment result. The sampled host RSS was 3,274,976 KiB (about 3.12 GiB),
+**Historical Q1 abort:** the guard observed AppKit above its threshold after the wheel/growth
+summary, before the bottom-alignment result. This is an observation point, not when growth began.
+The reviewer sampled substantial memory growth during the entire offscreen stream, then a further
+runaway after Latest. AppKit has a resource defect in the prototype; a late abort does not imply
+a late onset. In the earlier run, the sampled host RSS was 3,274,976 KiB (about 3.12 GiB),
 so the runner terminated that test host. The guard is resource protection, not an accepted
 product memory budget. No following/reflow result can be inferred from that aborted run.
 This is a more precise observation than the older 3.5 GB paragraph, and remains tracked in #60.
