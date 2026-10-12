@@ -102,7 +102,8 @@ segment rather than per message. Deliver it in three reviewable steps:
      the budget becomes verbatim pieces, which render as plain monospaced text. Known limits of
      pieces: a split paragraph or list item ends early, inline markup across a cut is not kept, and
      a one-item piece of a loose list renders tight. Consumers join pieces marked
-     `continuesPrevious` without a block gap.
+     `continuesPrevious` without a block gap. Fenced HTML/SVG/Mermaid pieces remain source-only;
+     synthetic closures are not complete preview documents.
    - **Validation.** App tests render segments with MarkdownUI: whole-block segments produce exactly
      the whole reply's HTML (loose and tight lists, quotes, alerts, HTML comments, math, reference
      links), and fence, table and paragraph pieces keep every code line, row and word.
@@ -117,7 +118,9 @@ segment rather than per message. Deliver it in three reviewable steps:
 2. **Stable-prefix rendering** inside the existing message window. Settled segments are prepared
    once; only provisional segments are re-prepared as the reply streams. Rendered segments and
    prepared-content cache bytes are bounded independently of total reply length. The streaming caret
-   (B1) marks only the tail. Integration contracts from the step 1 review:
+   (B1) marks only the provisional tail. Each settled segment already uses its final presentation,
+   including previews of complete fences; message completion does not flip every settled segment's
+   streaming style or preview at once. Integration contracts from the step 1 review:
    - Each streaming message holds one uniquely referenced `MarkdownSegmentation` and mutates it with
      `extend`; an edit or replacement starts a new one. The copying `resegment` API and
      materialising the whole `segments` array are not the hot path. Release builds do not check

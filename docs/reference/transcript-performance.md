@@ -47,7 +47,11 @@ incoming output. Latest or a new user turn restores following.
 Responses through 2 MiB render as rich Markdown segments split at valid block
 boundaries ([ADR-0091](../adrs/0091-content-bounded-transcript-layout.md)).
 While a response streams, settled segments are parsed once and only the tail is
-parsed again, so parse work grows linearly with the response. The
+parsed again, so parse work grows linearly with the response. Settled segments also use their
+final rendering style while the provisional tail streams: completion does not change every
+segment's preview or streaming style at once. Complete HTML/SVG/Mermaid fences can preview when
+their segment settles; oversized fence pieces stay source-only because their closures are
+synthetic. The
 `MarkdownSegmentParse` signpost marks each segment parse. A long response lays
 out a window of at most 32 segments and 16 KiB of rendered bytes: its latest
 segments while following, or those the reader pages to. Loaders at the window's

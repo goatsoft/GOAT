@@ -84,6 +84,35 @@ extension AppTests.Bleet {
     /// #60 A1/A3 step 2 (ADR-0091): replies prepare as segments, settled segments once.
     @Suite struct MarkdownSegmentCacheTests {
 
+        @Test @MainActor func completionChangesOnlyTheProvisionalSegmentPresentation() async throws {
+            let cache = MarkdownSegmentCache(targetBytes: 1, maximumBytes: 1_024)
+            let id = UUID()
+            let source = "```html\n<main>Settled</main>\n```\n\nA committed paragraph.\n\nA growing tail"
+            let streaming = try #require(await cache.prepare(id: id, source: source, isComplete: false))
+            let complete = try #require(await cache.prepare(id: id, source: source, isComplete: true))
+            #expect(streaming.segments.count > 1)
+            let hasSettledSegment = streaming.segments.contains { $0.isSettled }
+            #expect(hasSettledSegment, "Exercise a genuinely committed segment")
+            for segment in streaming.segments where segment.isSettled {
+                let before = MarkdownSegmentView(
+                    segment: segment, fontSize: 14, isStreaming: true, isTail: false, codeSegment: segment.index)
+                let after = MarkdownSegmentView(
+                    segment: complete.segments[segment.index], fontSize: 14, isStreaming: false,
+                    isTail: false, codeSegment: segment.index)
+                #expect(!before.isStreaming)
+                #expect(before == after, "Completion must not invalidate settled segment \(segment.index)")
+            }
+            let tail = try #require(streaming.segments.last)
+            let before = MarkdownSegmentView(
+                segment: tail, fontSize: 14, isStreaming: true, isTail: true, codeSegment: tail.index)
+            let after = MarkdownSegmentView(
+                segment: complete.segments[tail.index], fontSize: 14, isStreaming: false,
+                isTail: false, codeSegment: tail.index)
+            #expect(before.isStreaming && before.isTail)
+            #expect(!after.isStreaming && !after.isTail)
+            #expect(before != after)
+        }
+
         @Test func settledSegmentsArePreparedOnceWhileTheReplyStreams() async throws {
             let cache = MarkdownSegmentCache(targetBytes: 256, maximumBytes: 1_024)
             let reply = mixedBlocks.joined(separator: "\n\n") + "\n\n" + longReply(bytes: 6_000)

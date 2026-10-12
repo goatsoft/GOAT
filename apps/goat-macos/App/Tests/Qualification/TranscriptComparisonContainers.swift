@@ -56,35 +56,86 @@ struct TranscriptComparisonSurface: View {
 private struct ComparisonLazyList: View {
     let fixture: TranscriptComparisonFixture
     @State private var position = ScrollPosition(idType: String.self)
-    @State private var placed = false
+    @State private var viewportSize = CGSize.zero
+    @State private var visibleIDs: [String] = []
+    @State private var reader: (id: String, offset: CGFloat, height: CGFloat)?
+    @State private var reflowRevision = 0
+    @State private var restoring = false
+    @State private var recordedWidth: CGFloat = 0
+    @State private var recordedFont: CGFloat = 0
+    @Environment(AppModel.self) private var model
 
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(fixture.rows) { row in
-                    ComparisonRowView(row: row, fixture: fixture)
+                    ComparisonRowView(row: row, fixture: fixture, recordsAppearance: false)
                         .id(row.id)
                 }
             }
             .scrollTargetLayout()
         }
         .scrollPosition($position)
-        .defaultScrollAnchor(placed ? nil : .bottom, for: .initialOffset)
+        .defaultScrollAnchor(.bottom, for: .initialOffset)
         .defaultScrollAnchor(.bottom, for: .alignment)
         .defaultScrollAnchor(fixture.following ? .bottom : .top, for: .sizeChanges)
-        .onAppear {
+        .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { ids in
+            visibleIDs = ids
+            fixture.updateSwiftUIVisibility(ids, viewportHeight: viewportSize.height)
+        }
+        .onScrollGeometryChange(for: CGSize.self, of: { $0.containerSize }) { old, new in
+            viewportSize = new
+            fixture.updateSwiftUIVisibility(visibleIDs, viewportHeight: new.height)
+            if old == .zero {
+                recordedWidth = new.width
+                recordedFont = model.chatFontSize
+            } else if old.width != new.width {
+                reflowRevision += 1
+            }
+        }
+        .onScrollGeometryChange(for: CGPoint.self, of: { $0.contentOffset }) { _, _ in
+            // A reflow may publish geometry before its onChange action. Do not overwrite the
+            // pre-reflow anchor with the displaced row. Native frames are sampled synchronously.
+            if !fixture.following, !restoring,
+                recordedWidth == viewportSize.width, recordedFont == model.chatFontSize
+            {
+                reader = fixture.readerAnchor()
+            }
+        }
+        .onChange(of: model.chatFontSize) { reflowRevision += 1 }
+        .task(id: reflowRevision) {
+            let saved = reader
+            restoring = true
+            defer {
+                restoring = false
+                recordedWidth = viewportSize.width
+                recordedFont = model.chatFontSize
+            }
+            guard !fixture.following, let saved else { return }
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            fixture.sampleFrames()
+            guard let frame = fixture.frames[saved.id] else { return }
+            let available = viewportSize.height - frame.height
+            // Align the same point of the row and viewport to preserve the row's pixel offset.
+            // A tall partially visible row naturally has an anchor within its own bounds.
+            guard abs(available) > 1 else { return }
+            position.scrollTo(id: saved.id, anchor: UnitPoint(x: 0, y: saved.offset / available))
+        }
+        .onChange(of: fixture.latestRequest) {
+            reader = nil
             position.scrollTo(edge: .bottom)
-            placed = true
         }
-        .onChange(of: fixture.generation) {
-            if fixture.following { position.scrollTo(edge: .bottom) }
-        }
-        .onChange(of: fixture.latestRequest) { position.scrollTo(edge: .bottom) }
         .onScrollPhaseChange { _, phase, context in
             if phase == .tracking || phase == .interacting { fixture.following = false }
             if phase == .idle {
                 let geometry = context.geometry
                 fixture.following = geometry.contentSize.height - geometry.visibleRect.maxY < 24
+                if !fixture.following {
+                    reader = fixture.readerAnchor()
+                    recordedWidth = viewportSize.width
+                    recordedFont = model.chatFontSize
+                }
             }
         }
     }

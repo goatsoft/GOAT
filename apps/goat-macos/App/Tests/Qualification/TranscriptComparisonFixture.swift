@@ -60,6 +60,21 @@ import SwiftUI
         }
         frames = sampled
     }
+
+    func readerAnchor() -> (id: String, offset: CGFloat, height: CGFloat)? {
+        sampleFrames()
+        guard let marker = frameViews.values.compactMap(\.view).first,
+            let root = marker.window?.contentView
+        else { return nil }
+        var parent: NSView? = marker
+        while let view = parent, !(view is NSScrollView) { parent = view.superview }
+        guard let scroll = parent as? NSScrollView else { return nil }
+        let viewport = scroll.contentView.convert(scroll.contentView.bounds, to: root)
+        let top = root.isFlipped ? viewport.minY : root.bounds.height - viewport.maxY
+        return frames.filter { $0.value.maxY > top + 1 && $0.value.minY < top + viewport.height }
+            .min(by: { $0.value.minY < $1.value.minY })
+            .map { ($0.key, $0.value.minY - top, viewport.height) }
+    }
     var peakVisible = 0
     var heightUpdates = 0
     var status = "Ready"
@@ -72,6 +87,56 @@ import SwiftUI
     @ObservationIgnored private var preparationTask: Task<Void, Never>?
     @ObservationIgnored private var preparationPending = false
     @ObservationIgnored private var preparations: [UUID: ComparisonMessagePreparation] = [:]
+    @ObservationIgnored private var rowIndices: [String: Int] = [:]
+    @ObservationIgnored private var indexedStructure = -1
+    @ObservationIgnored private var indexedCount = 0
+
+    /// SwiftUI's target visibility is distinct from lazy-view creation. Prepare one estimated
+    /// viewport ahead on each side, without scanning the whole reply on every scroll update.
+    func updateSwiftUIVisibility(_ ids: [String], viewportHeight: CGFloat) {
+        if indexedStructure != structureRevision || rows.count < indexedCount {
+            rowIndices.removeAll(keepingCapacity: true)
+            indexedCount = 0
+            indexedStructure = structureRevision
+        }
+        for index in indexedCount..<rows.count { rowIndices[rows[index].id] = index }
+        indexedCount = rows.count
+        visible = Set(ids)
+        peakVisible = max(peakVisible, visible.count)
+        let indices = ids.compactMap { rowIndices[$0] }
+        guard let first = indices.min(), let last = indices.max() else {
+            setPreparationOverscan([])
+            schedulePreparation()
+            return
+        }
+        var requested = Set(ids)
+        for direction in [-1, 1] {
+            var index = direction < 0 ? first - 1 : last + 1
+            var height: CGFloat = 0
+            // A count guard also bounds an exceptionally dense viewport's preparation request.
+            var count = 0
+            while rows.indices.contains(index), height < viewportHeight, count < 64 {
+                let row = rows[index]
+                requested.insert(row.id)
+                height += frames[row.id]?.height ?? estimatedHeight(of: row)
+                index += direction
+                count += 1
+            }
+        }
+        setPreparationOverscan(requested.subtracting(visible))
+        schedulePreparation()
+    }
+
+    private func estimatedHeight(of row: ComparisonRow) -> CGFloat {
+        switch row.content {
+        case .markdown(_, let segment, _):
+            // An estimate only controls prefetch. It never sets rendered row height.
+            return CGFloat(max(1, segment.bodyBytes / 80)) * 20 + 12
+        case .reasoning(let segment): return CGFloat(max(1, segment.text.utf8.count / 80)) * 20 + 12
+        case .label: return 30
+        case .message, .tools: return 160
+        }
+    }
 
     func preparation(for id: UUID) -> ComparisonMessagePreparation {
         if let existing = preparations[id] { return existing }
@@ -400,6 +465,7 @@ struct ComparisonRowView: View {
     var measured: (CGSize) -> Void = { _ in }
     @Environment(AppModel.self) private var model
     var recordsVisibility = true
+    var recordsAppearance = true
 
     var body: some View {
         content
@@ -411,9 +477,9 @@ struct ComparisonRowView: View {
             .background {
                 if recordsVisibility { ComparisonFrameMarker(id: row.id, fixture: fixture) }
             }
-            .onAppear { if recordsVisibility { fixture.appeared(row.id) } }
+            .onAppear { if recordsVisibility && recordsAppearance { fixture.appeared(row.id) } }
             .onDisappear {
-                if recordsVisibility {
+                if recordsVisibility && recordsAppearance {
                     fixture.disappeared(row.id)
                 }
             }
@@ -434,6 +500,7 @@ struct ComparisonRowView: View {
                     segment: prepared, fontSize: model.chatFontSize, isStreaming: !message.complete,
                     isTail: !message.complete && !segment.isSettled, codeSegment: codeSegment
                 )
+                .equatable()
                 .environment(\.codeBlockMessageID, message.id)
             } else {
                 // ADR-0099: cold rows retain their text and approximate height, never a spinner.

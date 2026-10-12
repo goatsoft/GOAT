@@ -430,7 +430,10 @@ struct CodeBlockView: View {
     }
 
     private var isInlinePreviewable: Bool {
-        switch kind {
+        // Oversized fence pieces have synthetic closures, not complete artifact documents.
+        // Keep their source presentation even after the piece or message settles.
+        guard scope?.isFencePiece != true else { return false }
+        return switch kind {
         case .html, .svg, .mermaid: true
         case .markdown, .code: false
         }

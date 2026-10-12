@@ -76,7 +76,31 @@ height variants across reflow and inherits one window presentation environment. 
 concurrent-input and direct-move regressions for both candidates. The reference separates the
 historical measurements from review follow-up results; acceptance and full qualification remain open.
 
-## Proposed decision
+## Candidate direction after review
+
+Prioritise the flat SwiftUI segment list for the next qualification pass. Its corrected probes
+retain substantially less resident memory than the native prototype, but growth and reflow still
+fail the anchor tolerance. This is a direction for the experiment, not an accepted production
+container decision. The SwiftUI follow-up prepares one estimated viewport ahead in either direction
+(up to 64 neighbouring rows per side), uses actual scroll-target visibility rather than lazy-row
+creation, and uses one bottom size-change anchor while following. Explicit Latest and reflow
+restoration use the same SwiftUI scroll-position binding; there is no per-publication bottom command.
+Reader reflow restoration captures the visible row and its pixel offset, then aligns that row once
+through the binding. Input and geometry ordering still require qualification, especially during
+hardware momentum.
+
+Preparation stays on its existing actor. A cold miss still retains plain text as an exceptional
+fallback; prefetch aims to avoid showing it during ordinary scrolling. Do not add synchronous
+main-actor parsing merely because a row meets the work score: that score is not a time guarantee.
+Prepared settled segments use their final presentation while only provisional segments stream.
+Oversized fence pieces stay source-only because their synthetic closures do not make complete
+preview documents. Full-app completion, artifact lifecycle and accessibility still need validation.
+
+Keep the native prototype as a fallback investigation. Its offscreen-streaming memory defect is
+unresolved; the native design below is conditional on qualification and acceptance. No existing
+production window, loader, navigation owner or executor is retired by this experiment.
+
+## Native fallback design, pending comparison
 
 ### One list of block rows, all in the document
 

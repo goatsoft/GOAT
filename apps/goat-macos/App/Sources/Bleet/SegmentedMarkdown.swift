@@ -1060,6 +1060,16 @@ struct MarkdownSegmentView: View, Equatable {
     @Environment(AppModel.self) private var model
     @Environment(\.codeBlockMessageID) private var messageID
 
+    init(segment: PreparedMarkdownSegment, fontSize: CGFloat, isStreaming: Bool, isTail: Bool, codeSegment: Int) {
+        self.segment = segment
+        self.fontSize = fontSize
+        // Completion changes only the provisional tail. Settled segments already have their
+        // final presentation, including previews of complete fences within that segment.
+        self.isStreaming = isStreaming && !segment.isSettled
+        self.isTail = isTail && !segment.isSettled
+        self.codeSegment = codeSegment
+    }
+
     nonisolated static func == (lhs: MarkdownSegmentView, rhs: MarkdownSegmentView) -> Bool {
         lhs.segment.preparationID == rhs.segment.preparationID
             && lhs.segment.endsInParagraph == rhs.segment.endsInParagraph && lhs.fontSize == rhs.fontSize

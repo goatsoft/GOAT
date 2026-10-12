@@ -285,6 +285,33 @@ extension AppTests.Bleet {
 }
 
 final class TranscriptComparisonPreparationTests: XCTestCase {
+    @MainActor func testSwiftUIOverscanPreparesColdNeighboursBeforeTheyAppear() async throws {
+        let fixture = TranscriptComparisonFixture()
+        defer { fixture.stopPreparation() }
+        try await fixture.seed(rounds: 3)
+        fixture.documents.removeAll()
+        await fixture.markdown.removeAll()
+        let index = try XCTUnwrap(fixture.rows.firstIndex { $0.id == "header-1" })
+        let visible = fixture.rows[index]
+        fixture.updateSwiftUIVisibility([visible.id], viewportHeight: 780)
+        await fixture.prepareRequestedRows()
+        let neighbour = try XCTUnwrap(
+            fixture.rows[(index + 1)...].first {
+                if case .markdown = $0.content { return true }
+                return false
+            })
+        XCTAssertFalse(fixture.visible.contains(neighbour.id), "The neighbour has not appeared")
+        XCTAssertNotNil(fixture.preparedSegment(for: neighbour), "Cold upcoming content is prepared in advance")
+        let identity = fixture.preparedSegment(for: neighbour)?.preparationID
+        fixture.updateSwiftUIVisibility([neighbour.id], viewportHeight: 780)
+        await fixture.prepareRequestedRows()
+        XCTAssertEqual(fixture.preparedSegment(for: neighbour)?.preparationID, identity)
+        fixture.updateSwiftUIVisibility([], viewportHeight: 780)
+        await fixture.prepareRequestedRows()
+        if case .markdown(let message, _, _) = neighbour.content {
+            XCTAssertNil(fixture.preparation(for: message.id).document)
+        }
+    }
     @MainActor func testComparisonPreparesNeighbouringRowsTogetherAndReusesScrollBack() async throws {
         let fixture = TranscriptComparisonFixture()
         defer { fixture.stopPreparation() }

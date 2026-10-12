@@ -18,6 +18,20 @@ exercise the dense-content regression exposed by the earlier qualification. Both
 blocks; the historical rounds vary their code/preview identifiers. This tests mixed presentation
 and scale, not the cache-miss distribution of a unique 2 MiB model response.
 
+## Current follow-up scope
+
+The latest implementation adds SwiftUI preparation overscan driven by scroll-target visibility,
+removes its per-publication bottom commands, and adds one row-and-offset restoration on width/font
+reflow. Both candidates render settled segments with final styling; only provisional segments retain
+streaming styling. Oversized artifact pieces remain source-only. The native prototype remains an
+experimental fallback with its memory defect open. The tables below identify the implementation
+measured in each run; historical measurements do not qualify this follow-up.
+
+The ordinary test plan covers neighbour prefetch/reuse, per-segment completion identity, settled
+artifact previews and source-only oversized pieces. Cold misses retain plain text; preparation
+continues off-main. The estimate controlling prefetch is not a rendered-height constraint or a
+main-thread latency guarantee.
+
 ## Reproduce
 
 Run each candidate in a fresh Release process. Use the same machine, window dimensions, settings,
@@ -89,10 +103,12 @@ unchanged origin. SwiftUI height callbacks collect updates for the pre-display t
 bounds notifications never re-enter table data-source/layout work. Native overscan contributes
 to the fixture owner's combined per-message preparation request.
 
-The SwiftUI candidate deliberately tests stock `LazyVStack` with its position/anchor APIs. It
-has no explicit preparation overscan, reader-anchor capture or corrective restore policy. The
-native candidate implements ADR-0099's proposed policy. This compares stock SwiftUI with a
-policy-implementing prototype, not two equivalent implementations of that policy.
+The historical runs through `c155ea5` deliberately tested stock SwiftUI `LazyVStack` with its
+position/anchor APIs, without explicit preparation overscan, reader-anchor capture or corrective
+restore policy. The native candidate implemented ADR-0099's proposed policy. Those runs compare
+stock SwiftUI with a policy-implementing prototype, not equivalent policies. The current follow-up
+adds SwiftUI prefetch and a reflow restore; the fresh runs below identify that implementation
+separately.
 
 Cells use a concrete SwiftUI root and inherit the window's resolved environment. The window alone
 installs presentation styling. Reuse identifiers distinguish row kinds; changing the row identity
