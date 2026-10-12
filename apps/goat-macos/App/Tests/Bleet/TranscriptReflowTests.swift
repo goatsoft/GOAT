@@ -345,6 +345,7 @@ final class TranscriptComparisonPreparationTests: XCTestCase {
 
     @MainActor func testFrameSamplingUsesTheCurrentClipOrigin() throws {
         let fixture = TranscriptComparisonFixture()
+        defer { fixture.stopPreparation() }
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 800, height: 600), styleMask: [], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -359,12 +360,27 @@ final class TranscriptComparisonPreparationTests: XCTestCase {
             window.close()
         }
         fixture.registerFrameView(row, id: "row")
+        fixture.following = false
+        fixture.recordReaderGeometry(width: scroll.contentView.bounds.width, font: AppModel.shared.chatFontSize)
+        fixture.observeSwiftUIReader()
         fixture.sampleFrames()
         let before = try XCTUnwrap(fixture.frames["row"])
         scroll.contentView.scroll(to: NSPoint(x: 0, y: 60))
         fixture.sampleFrames()
         let after = try XCTUnwrap(fixture.frames["row"])
         XCTAssertEqual(after.minY - before.minY, -60, accuracy: 0.01)
+        XCTAssertEqual(fixture.capturedReader?.id, "row")
+        XCTAssertEqual(try XCTUnwrap(fixture.capturedReader?.offset), after.minY, accuracy: 0.01)
+        XCTAssertEqual(try XCTUnwrap(fixture.readerRestoreOffset(id: "row", offset: before.minY)), 0, accuracy: 0.01)
+        row.frame.origin.y += 100
+        XCTAssertEqual(try XCTUnwrap(fixture.readerRestoreOffset(id: "row", offset: after.minY)), 160, accuracy: 0.01)
+        let font = AppModel.shared.chatFontSize
+        defer { AppModel.shared.chatFontSize = font }
+        AppModel.shared.chatFontSize = font + 1
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: 100))
+        XCTAssertEqual(
+            try XCTUnwrap(fixture.capturedReader?.offset), after.minY, accuracy: 0.01,
+            "A reflow notification must not replace the pre-reflow reader anchor")
         fixture.unregisterFrameView(row, id: "row")
         fixture.sampleFrames()
         XCTAssertNil(fixture.frames["row"])

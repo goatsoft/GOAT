@@ -21,8 +21,11 @@ and scale, not the cache-miss distribution of a unique 2 MiB model response.
 ## Current follow-up scope
 
 The latest implementation adds SwiftUI preparation overscan driven by scroll-target visibility,
-removes its per-publication bottom commands, and adds one row-and-offset restoration on width/font
-reflow. Both candidates render settled segments with final styling; only provisional segments retain
+removes its per-publication bottom commands, and adds one row-and-offset restoration on width/font-size
+reflow. Reader anchors are captured from native clip-bounds notifications, while the SwiftUI
+position binding remains the sole writer. A bounds notification under a new width/font key cannot
+replace the pre-reflow snapshot. Initial placement is disabled after appearance; transferring
+ownership to the reader clears the prior command. Both candidates render settled segments with final styling; only provisional segments retain
 streaming styling. Oversized artifact pieces remain source-only. The native prototype remains an
 experimental fallback with its memory defect open. The tables below identify the implementation
 measured in each run; historical measurements do not qualify this follow-up.

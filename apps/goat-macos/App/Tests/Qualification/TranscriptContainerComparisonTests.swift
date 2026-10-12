@@ -279,6 +279,7 @@ extension TranscriptPerformanceTests {
     }
     defer { growth.cancel() }
     var residuals: [CGFloat] = []
+    var failedTicks: [String] = []
     var missing = 0
     for tick in 0..<192 {
         host.layoutSubtreeIfNeeded()
@@ -314,6 +315,7 @@ extension TranscriptPerformanceTests {
             // candidates. Clip movement used to preserve content is not itself reader drift.
             let residual = abs(frame.minY - anchor.1 + applied)
             residuals.append(residual)
+            if residual > 1 { failedTicks.append("\(tick):\(residual)") }
 
         } else {
             missing += 1
@@ -323,7 +325,7 @@ extension TranscriptPerformanceTests {
     print("COMPARISON_NAVIGATION backend=\(backend) phase=growth_complete resident_bytes=\(comparisonUsage().resident)")
     let worst = residuals.max() ?? .infinity
     print(
-        "COMPARISON_NAVIGATION backend=\(backend) wheel_growth_max_residual_pt=\(worst) samples=\(residuals.count) missing=\(missing)"
+        "COMPARISON_NAVIGATION backend=\(backend) wheel_growth_max_residual_pt=\(worst) samples=\(residuals.count) missing=\(missing) failed_ticks=\(failedTicks.joined(separator: ","))"
     )
     XCTAssertGreaterThan(residuals.count, 96, "At least half the events must retain a measurable anchor")
     XCTAssertEqual(fixture.active.text.utf8.count, 2 * 1_024 * 1_024)
@@ -372,6 +374,26 @@ extension TranscriptPerformanceTests {
         print("COMPARISON_NAVIGATION backend=\(backend) reflow_width=\(width) font=\(font) drift_pt=\(drift)")
         XCTAssertLessThanOrEqual(drift, 1)
     }
+    let beforeInput = comparisonAnchor(fixture, host: host)
+    let before = scroll.contentView.bounds.minY
+    let requested = comparisonWheel(scroll, direction: 1, tick: 0)
+    let maximum = max(0, (scroll.documentView?.bounds.height ?? 0) - scroll.contentSize.height)
+    let applied = max(0, min(maximum, before + requested)) - before
+    try await Task.sleep(for: .milliseconds(100))
+    fixture.sampleFrames()
+    let inputResidual =
+        beforeInput.flatMap { saved in
+            fixture.frames[saved.0].map { abs($0.minY - saved.1 + applied) }
+        } ?? .infinity
+    print("COMPARISON_NAVIGATION backend=\(backend) post_reflow_input_residual_pt=\(inputResidual)")
+    XCTAssertLessThanOrEqual(inputResidual, 1, "Reflow must not leave a target that fights subsequent input")
+    let afterInput = comparisonAnchor(fixture, host: host)
+    try await fixture.append("\nOffscreen publication after reader input.\n", reasoning: false)
+    try await Task.sleep(for: .milliseconds(500))
+    fixture.sampleFrames()
+    let replay = afterInput.flatMap { saved in fixture.frames[saved.0].map { abs($0.minY - saved.1) } } ?? .infinity
+    print("COMPARISON_NAVIGATION backend=\(backend) post_reflow_publication_drift_pt=\(replay)")
+    XCTAssertLessThanOrEqual(replay, 1, "Later output must not replay the reflow command")
 }
 
 /// Same events, no SwiftUI, preparation, height changes or anchor correction.

@@ -41,6 +41,42 @@ import SwiftUI
     // Measurement state must not invalidate either candidate during scrolling.
     @ObservationIgnored var frames: [String: CGRect] = [:]
     @ObservationIgnored private var frameViews: [String: WeakComparisonFrameView] = [:]
+    @ObservationIgnored private var readerObserver: NSObjectProtocol?
+    @ObservationIgnored private weak var readerClip: NSClipView?
+    @ObservationIgnored fileprivate var observesReader = false
+    @ObservationIgnored private var readerWidth: CGFloat = 0
+    @ObservationIgnored private var readerFont: CGFloat = 0
+    @ObservationIgnored var capturedReader: (id: String, offset: CGFloat)?
+
+    func recordReaderGeometry(width: CGFloat, font: CGFloat) {
+        readerWidth = readerClip?.bounds.width ?? width
+        readerFont = font
+    }
+
+    func observeSwiftUIReader() {
+        observesReader = true
+        guard readerObserver == nil,
+            let marker = frameViews.values.compactMap(\.view).first(where: { $0.window != nil })
+        else { return }
+        var parent: NSView? = marker
+        while let view = parent, !(view is NSScrollView) { parent = view.superview }
+        guard let scroll = parent as? NSScrollView else { return }
+        readerClip = scroll.contentView
+        readerWidth = scroll.contentView.bounds.width
+        readerFont = AppModel.shared.chatFontSize
+        scroll.contentView.postsBoundsChangedNotifications = true
+        readerObserver = NotificationCenter.default.addObserver(
+            forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, !self.following, let clip = self.readerClip,
+                    abs(clip.bounds.width - self.readerWidth) <= 1,
+                    AppModel.shared.chatFontSize == self.readerFont
+                else { return }
+                self.capturedReader = self.readerAnchor()
+            }
+        }
+    }
 
     func registerFrameView(_ view: NSView, id: String) { frameViews[id] = WeakComparisonFrameView(view) }
     func unregisterFrameView(_ view: NSView, id: String) {
@@ -61,7 +97,7 @@ import SwiftUI
         frames = sampled
     }
 
-    func readerAnchor() -> (id: String, offset: CGFloat, height: CGFloat)? {
+    func readerAnchor() -> (id: String, offset: CGFloat)? {
         sampleFrames()
         guard let marker = frameViews.values.compactMap(\.view).first,
             let root = marker.window?.contentView
@@ -73,7 +109,23 @@ import SwiftUI
         let top = root.isFlipped ? viewport.minY : root.bounds.height - viewport.maxY
         return frames.filter { $0.value.maxY > top + 1 && $0.value.minY < top + viewport.height }
             .min(by: { $0.value.minY < $1.value.minY })
-            .map { ($0.key, $0.value.minY - top, viewport.height) }
+            .map { ($0.key, $0.value.minY - top) }
+    }
+
+    /// Native geometry supplies a measurement only. SwiftUI's position binding remains the writer.
+    /// Absolute offsets avoid extrapolating a UnitPoint when row and viewport heights nearly match.
+    func readerRestoreOffset(id: String, offset: CGFloat) -> CGFloat? {
+        sampleFrames()
+        guard let marker = frameViews[id]?.view, let root = marker.window?.contentView,
+            let frame = frames[id]
+        else { return nil }
+        var parent: NSView? = marker
+        while let view = parent, !(view is NSScrollView) { parent = view.superview }
+        guard let scroll = parent as? NSScrollView, let document = scroll.documentView else { return nil }
+        let viewport = scroll.contentView.convert(scroll.contentView.bounds, to: root)
+        let top = root.isFlipped ? viewport.minY : root.bounds.height - viewport.maxY
+        let target = scroll.contentView.bounds.minY + frame.minY - top - offset
+        return max(0, min(document.bounds.height - scroll.contentView.bounds.height, target))
     }
     var peakVisible = 0
     var heightUpdates = 0
@@ -163,6 +215,11 @@ import SwiftUI
     }
 
     func stopPreparation() {
+        if let readerObserver { NotificationCenter.default.removeObserver(readerObserver) }
+        readerObserver = nil
+        readerClip = nil
+        observesReader = false
+        capturedReader = nil
         preparationTask?.cancel()
         preparationTask = nil
         for state in preparations.values { state.document = nil }
@@ -533,6 +590,10 @@ private struct ComparisonFrameMarker: NSViewRepresentable {
     @MainActor final class Marker: NSView {
         var id = ""
         weak var fixture: TranscriptComparisonFixture?
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if fixture?.observesReader == true { fixture?.observeSwiftUIReader() }
+        }
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
     }
 }

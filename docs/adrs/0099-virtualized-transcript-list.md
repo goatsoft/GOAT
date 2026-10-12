@@ -85,8 +85,12 @@ container decision. The SwiftUI follow-up prepares one estimated viewport ahead 
 (up to 64 neighbouring rows per side), uses actual scroll-target visibility rather than lazy-row
 creation, and uses one bottom size-change anchor while following. Explicit Latest and reflow
 restoration use the same SwiftUI scroll-position binding; there is no per-publication bottom command.
-Reader reflow restoration captures the visible row and its pixel offset, then aligns that row once
-through the binding. Input and geometry ordering still require qualification, especially during
+Reader reflow restoration captures the visible row and its pixel offset from synchronous native
+clip-bounds notifications, then restores its measured document offset once
+through the binding. The initial bottom anchor is disabled after placement, and a reader ownership
+transfer clears the previous command from the binding. Native observation only reads geometry;
+it does not scroll or add an executor. Width/font guards retain the pre-reflow snapshot until the
+restoration transaction finishes. Input and geometry ordering still require qualification, especially during
 hardware momentum.
 
 Preparation stays on its existing actor. A cold miss still retains plain text as an exceptional
