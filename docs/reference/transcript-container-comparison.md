@@ -449,3 +449,83 @@ Validation for the review implementation: full local `make verify CONFIG=Release
 including the quarter-cache accounting and direct-host regressions. The explicit shared-window
 reuse and historical-invalidation/offscreen-release tests passed. The opt-in navigation runs
 above failed as recorded; their assertions are not suppressed by the normal test-plan skips.
+
+## Corrected comparison and ablations (2026-10-12)
+
+All cells below were measured on **`c155ea5b7339180c11cebcb4e19529a84a64b1f3`**, one fresh Release process per run,
+macOS 27.0 (26A428), Xcode 27, M1 Max / 32 GiB, 48 mixed history rounds (434 initial rows),
+and a requested 2 MiB live answer. The two SwiftUI repetitions are both preserved. AppKit has
+one baseline and one run per ablation, not repeated qualification. No Instruments capture or
+other local build ran concurrently. The external runner sampled host RSS and stopped a host
+above 3 GiB or after 240 seconds from READY. These are runaway protection guards, not accepted
+product limits. Row bounds use the same synchronous native-marker sampler in both candidates,
+with 50 ms wheel settling; all displacement tolerances remain 1 pt.
+
+The implementation is independently committed: `13ab053` fixes shipping cache admission and
+accounting, while `c155ea5` changes the comparison sampler and regression coverage. The
+preparation regressions now belong to the Bleet default-plan suite, not the skipped qualification
+class. Full local Release verification passed: 556 hosted tests passed, zero failures, three
+opt-in skips and the existing known ScrollPosition issue, plus package tests, lint and app build.
+
+**Unmeasured is not a pass.** Every result column below has run count 1 and the SHA above.
+
+| Check | swiftui-1 | swiftui-2 | appkit-base | appkit-no-height-cache | appkit-no-previews |
+| --- | --- | --- | --- | --- | --- |
+| Static control error (pt) | 0 pass | 0 pass | 0 pass | 0 pass | 0 pass |
+| Candidate input error (pt) | 0 pass | 0 pass | 0.5 pass | Unmeasured: aborted | 0 pass |
+| Direct-move anchor drift (pt) | 0 pass | 0 pass | 0 pass | Unmeasured: aborted | 79.621 **fail** |
+| Initial-offset growth drift (pt) | 0 pass | 0 pass | 0 pass | Unmeasured: aborted | 0 pass |
+| Wheel/growth anchor residual (pt) | 22 **fail** | 22 **fail** | Unmeasured: aborted | Unmeasured: aborted | Unmeasured: aborted |
+| Following gap (pt) | 0 pass | 0 pass | Unmeasured: aborted | Unmeasured: aborted | Unmeasured: aborted |
+| Reflow 820 pt / 20 pt font | 38 **fail** | 39 **fail** | Unmeasured: aborted | Unmeasured: aborted | Unmeasured: aborted |
+| Reflow 1180 pt / 14 pt font | 38 **fail** | 38.5 **fail** | Unmeasured: aborted | Unmeasured: aborted | Unmeasured: aborted |
+| Wheel samples / missing | 192 / 0 | 192 / 0 | Unmeasured | Unmeasured | Unmeasured |
+| Peak sampled host RSS (GiB) | 0.328 | 0.325 | 3.002 | 2.069 | 3.027 |
+| Outcome | Failed | Failed | RSS abort during growth | Timeout before direct-move result | RSS abort during growth |
+
+Both SwiftUI runs reproduce a 22 pt wheel/growth residual, with 192 samples and no missing
+anchors. Direct move and initial offset report 0 pt in both runs; reflow still fails by 38–39 pt.
+The earlier 60 pt residual and 677/83 pt samples are withdrawn as decision evidence, rather than
+mixed with this sampler. AppKit's baseline cannot supply a completed wheel/growth residual under
+the guard. The preview-disabled variant also exposes 79.621 pt direct-move anchor drift. Neither
+candidate is qualified, and neither AppKit ablation is a production configuration recommendation.
+
+### Q1: memory growth during offscreen streaming
+
+The following are in-test resident-memory checkpoints, not lifetime peak RSS. A dash means the
+run did not reach that checkpoint; it must not be interpolated into a successful result.
+
+| Streamed answer (MiB) | SwiftUI 1 (GiB) | SwiftUI 2 (GiB) | AppKit baseline (GiB) | AppKit previews disabled (GiB) |
+| --- | --- | --- | --- | --- |
+| 0.25 | 0.195 | 0.196 | 1.482 | 1.582 |
+| 0.5 | 0.198 | 0.198 | 1.893 | 1.976 |
+| 0.75 | 0.203 | 0.203 | 2.193 | 2.280 |
+| 1 | 0.206 | 0.205 | 2.515 | 2.510 |
+| 1.25 | 0.214 | 0.212 | 2.792 | 2.810 |
+| 1.5 | 0.227 | 0.225 | 2.882 | - |
+| 1.75 | 0.246 | 0.241 | - | - |
+| 2 | 0.270 | 0.267 | - | - |
+
+Q1 begins during growth. Baseline AppKit's last completed quarter-MiB checkpoint before the RSS
+guard was 1.5 MiB; previews-disabled reached 1.25 MiB. These are checkpoint observations, not
+exact byte counts at termination. Both aborted before growth completion, Latest, bottom alignment
+and reflow. The normal cache budgets are not a bound on this prototype's process memory.
+
+Disabling the keyed height-cache reads/writes caused a different failure: the run timed out after
+240 seconds, after the static control and before the direct-move result or streaming. Sampled host
+RSS reached 2.069 GiB. A three-second native process sample showed main-thread execution through
+`Coordinator.update`, `measureNearbyRows` and sizing-host `layoutSubtreeIfNeeded`, rather than an
+idle event wait. This ablation is **inconclusive about the streaming memory cause** because it never
+reached growth. It demonstrates an expensive sizing/layout path when cached heights are absent.
+
+Disabling HTML/SVG previews substituted same-length text fence languages, preserving the input
+byte count and other content. Memory still exceeded 3 GiB during streaming. Those previews are
+therefore not necessary to reproduce Q1 in this fixture. The substitution changes rendered heights
+and renderer kind, so it does not establish the sole cause or support a timing comparison. No
+claim about total memory across WebKit subprocesses is made.
+
+The unresolved work in #60 is to diagnose the native hosting/measurement resource lifecycle,
+repeat both completed navigation and allocation/retention captures after a fix, and requalify the
+supported macOS 26 target plus hardware momentum and accessibility. The SwiftUI anchor/reflow
+failures also remain open. ADR-0099 stays Proposed; Delivery 3 stays open. These fresh probes
+explicitly failed or aborted despite the normal verification suite passing.
