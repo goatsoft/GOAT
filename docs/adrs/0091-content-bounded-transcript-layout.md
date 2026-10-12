@@ -1,6 +1,6 @@
 # ADR-0091: Content-bounded transcript layout
 
-Status: Accepted · 2026-09-20 · Amended 2026-09-22 · Segmented rendering amendment proposed 2026-09-26
+Status: Accepted · 2026-09-20 · Amended 2026-09-22 · Segmented rendering amendment implemented
 
 Refines [ADR-0056](0056-bounded-rendering-and-responsive-io.md) and
 [ADR-0074](0074-grouped-transcript-tool-activity.md). Qualification is tracked in
@@ -69,10 +69,13 @@ Golden Gate qualification must be recorded separately before acceptance.
 
 Manual "Earlier messages", "Later messages", and "Latest" buttons are replaced with native SwiftUI scroll-visibility observations (`.onScrollVisibilityChange`) at the transcript boundaries. Approaching the top boundary automatically engages an inline loading indicator (`GoatLoadingIndicator`) and advances the window backward while preserving the user's visible anchor position. Approaching the bottom boundary automatically loads later messages, smoothly transitioning back to bottom following at the conversation floor. The underlying 40-message / 16 KiB display budget from ADR-0091 remains enforced.
 
-## Amendment (proposed): Segmented rich rendering and segment-level windowing (2026-09-26)
+## Amendment: Segmented rich rendering and segment-level windowing (2026-09-26)
 
-Status: Proposed. Tracked by [#60](https://github.com/goatsoft/GOAT/issues/60) (A1, A3, B1, C1).
-The 8 KiB plain-text parts fallback above stays in force until every step's acceptance tests pass.
+Status: Implemented through #68/#69/#78/#80, with preparation refinements in #83.
+Tracked by [#60](https://github.com/goatsoft/GOAT/issues/60) (A1, A3, B1, C1).
+The old 8 KiB fallback is removed for answers and expanded reasoning through 2 MiB; larger sources
+retain bounded parts. Integrated live/manual qualification and the remaining C1 history work stay
+open in #60. Implementation is not Delivery 3 acceptance, and ADR-0099 remains Proposed.
 
 **Problem.** Replies over 8 KiB lose rich rendering, and streaming re-parses the whole reply on
 every refresh, so parse work grows quadratically with reply length.
@@ -83,7 +86,8 @@ segment rather than per message. Deliver it in three reviewable steps:
 1. **Segmentation** (`MarkdownSegmenter` in Bleet, pure). Segments break only at valid top-level
    block boundaries: a column-0 line after a blank line, a column-0 fence opener, or the line after a
    container closes, never inside fenced code, multi-line HTML or display math. A column-0 item of
-   the same list continues it, so loose lists stay whole. Whole blocks pack to about 6 KiB.
+   the same list continues it, so loose lists stay whole. Whole blocks pack to about 6 KiB,
+   additionally bounded by the work budget below.
    - **Bounds.** A segment's Markdown body never exceeds 16 KiB. Two things sit outside that bound
      and are stated separately: an HTML or SVG artifact document stays one whole segment, and the
      reply's reference definitions (at most 4 KiB, none once they exceed it) are appended to the
@@ -101,7 +105,8 @@ segment rather than per message. Deliver it in three reviewable steps:
      the budget becomes verbatim pieces, which render as plain monospaced text. Known limits of
      pieces: a split paragraph or list item ends early, inline markup across a cut is not kept, and
      a one-item piece of a loose list renders tight. Consumers join pieces marked
-     `continuesPrevious` without a block gap.
+     `continuesPrevious` without a block gap. Fenced HTML/SVG/Mermaid pieces remain source-only;
+     synthetic closures are not complete preview documents.
    - **Validation.** App tests render segments with MarkdownUI: whole-block segments produce exactly
      the whole reply's HTML (loose and tight lists, quotes, alerts, HTML comments, math, reference
      links), and fence, table and paragraph pieces keep every code line, row and word.
@@ -116,7 +121,9 @@ segment rather than per message. Deliver it in three reviewable steps:
 2. **Stable-prefix rendering** inside the existing message window. Settled segments are prepared
    once; only provisional segments are re-prepared as the reply streams. Rendered segments and
    prepared-content cache bytes are bounded independently of total reply length. The streaming caret
-   (B1) marks only the tail. Integration contracts from the step 1 review:
+   (B1) marks only the provisional tail. Each settled segment already uses its final presentation,
+   including previews of complete fences; message completion does not flip every settled segment's
+   streaming style or preview at once. Integration contracts from the step 1 review:
    - Each streaming message holds one uniquely referenced `MarkdownSegmentation` and mutates it with
      `extend`; an edit or replacement starts a new one. The copying `resegment` API and
      materialising the whole `segments` array are not the hot path. Release builds do not check
@@ -199,7 +206,8 @@ segment rather than per message. Deliver it in three reviewable steps:
      the window, not the reply. Prepared-cache retention is bounded separately and charges what is
      retained: the source, every segment body (parsed or not), the shared definition suffixes (segments
      keep one shared string rather than a copy each) and the parsed segments. An entry may hold a
-     streaming reply at the rich limit, with its scanner's copy, and each cache at most 16 MiB. The message window charges a prepared reply the bytes of its shown
+     streaming reply at the rich limit, with its scanner's copy. The complexity amendment below
+     accounts for segment metadata and defines the cache budgets. The message window charges a prepared reply the bytes of its shown
      segments.
    - **Navigation.** `TranscriptViewport` owns each paged reply window. Loaders at a window's edges
      page it when they come into view, like the message loaders; the kept segment (the old window's
@@ -243,3 +251,74 @@ that grows linearly with the reply. The fallback is retired only when step 3 pas
 parsed prefix is permanently stable (definitions and container openers can change it). A second
 scroll owner inside long messages (it would compete with #54's navigation model).
 
+
+## Amendment: complexity-aware packing and background identity preparation
+
+The #60 container comparison found that a 6 KiB segment can contain roughly 120 short code
+fences. A source-byte bound alone does not bound SwiftUI view construction and layout.
+
+Packing now ends at 16 work units, as well as the existing byte target.
+A fence opener costs four units; each nonblank prose or table line costs one. Fence,
+multiline HTML and display-math interiors and their closing delimiters add no work. Every
+whole block still costs at least one, so a separate 16-block limit would be redundant. The score
+saturates after the threshold. Nested fence openers also cost four. This is a conservative packing
+heuristic, not an exact count of MarkdownUI nodes or a time guarantee. An indivisible list, table
+or quote can exceed the work threshold and is isolated in its own segment. Existing 16 KiB body
+splitting and artifact exceptions remain in force. Preserve list/table semantics rather than
+arbitrarily cutting them to satisfy the score. Incremental and full segmentation must agree, and
+settled boundaries must remain unchanged as input grows.
+
+Dense content creates many more small segments. Cache admission now includes reserved prepared
+segment capacity (chunks grow on demand, with no 64-slot floor for short replies), scanner
+segment slots and a per-live-segment string-allocation allowance, alongside source/body,
+shared definitions and parsed text. Prepared code literals are charged separately. These are
+bounded admission proxies, not exact heap measurements. The actor retains at most 32 MiB total
+and 24 MiB per reply, with completed replies capped at 16 MiB inside that total; the synchronous
+front cache retains at most 16 MiB total and 4 MiB per reply. Both release under the existing memory-pressure policy. The larger actor entry budget keeps a
+2 MiB dense-fence reply's incremental scanner retained; declining it every publication would
+reintroduce repeated full scanning. Rich-limit tests cover that pathological metadata density.
+
+Code-block identity literals are extracted from the same HTML already produced by the preparation
+actor for spacing and caret structure. View identity resolution consumes those prepared literals;
+it no longer renders Markdown to HTML on MainActor or keeps a separate literal cache. Whole-document
+views do not prepare unused identity data. UI construction, layout and scrolling remain on
+MainActor. An actor-local thread counter cannot detect work outside the actor and is not used
+as qualification evidence. Scoped content explicitly distinguishes prepared identities from an
+opt-out; accidentally installing a code scope over opted-out content asserts in debug builds.
+
+The combined actor/front-cache admission ceiling is 48 MiB while streaming and 32 MiB when
+only completed replies remain. These are lazy retention ceilings, not allocations per chat; shared
+parsed storage is conservatively charged by both owners. Completed entries are evicted before
+active streams, preserving incremental scanners during history-cache churn. If active streams
+alone exceed the global byte/count limits, they are evicted by recency too. Completion releases
+the scanner and applies the smaller completed budget immediately. Nothing is pinned outside the
+accounted lifecycle. Completed admission checks the smaller of the per-entry and completed
+budgets before evicting anything. A completed reply too large for that budget is returned for
+rendering without evicting unrelated completed history. Scanner source and body Strings share
+storage with the document, so only the scanner's separate metadata is additionally charged; the per-body string allocation allowance is also counted
+only by the prepared document, not again by the scanner.
+Rich-limit regressions cover empty fences, denser alternating nested-list fences, table candidates
+and mixed code/prose, including non-power-of-two segment counts, linear scanning, warm-history
+preservation at completion and clearing. These are stress cases, not a proof of maximum density.
+
+
+
+### Front-cache admission and visible working documents
+
+A single front-cache entry is capped at one quarter of its 16 MiB total, preserving room for
+unrelated prepared history. Requesting a parsed segment window alone is not enough to make
+an entry small: `PreparedMarkdownDocument` still carries the complete source and segment
+metadata. A dense 2 MiB document can therefore exceed 4 MiB even with a small parsed window.
+
+Such documents are returned for rendering but their rich content is declined by the synchronous
+front cache. Only revision and rendered/shown byte counts remain in a small record charged
+inside the same byte/count limits, preserving exact transcript admission without holding source
+or segment storage. The
+production `StreamingMarkdownView` keeps its current document in view state; cache admission
+never controls whether an already-prepared visible reply can render. The actor can still retain
+the document and incremental scanner under its separate budgets. A cold remount may await
+that actor again, which is the explicit tradeoff for preserving unrelated front-cache history.
+Visible working documents are rendering state, not additional cache capacity; cache ceilings
+must not be presented as total process-memory bounds. The comparison mirrors this ownership
+with per-message working documents released when neither visible nor in overscan (apart from
+the actively followed reply), and per-message observation rather than a global refresh counter.

@@ -154,16 +154,26 @@ final class TranscriptPerformanceTests: XCTestCase {
 }
 
 /// Opt-in, engine-free production-view surface for interactive and Instruments qualification.
-@MainActor @Observable private final class Delivery3Qualification {
+@MainActor @Observable final class Delivery3Qualification {
     let session = ChatSession(effort: .trot, modelID: nil)
     var finished = false
     var running = false
     var status = "Ready"
+    private let startDelay: Duration
+    private(set) var stopped = false
 
-    init() { reset() }
+    init(startDelay: Duration = .seconds(5)) {
+        self.startDelay = startDelay
+        reset()
+    }
+
+    func stop() {
+        stopped = true
+        session.isStreaming = false
+    }
 
     func reset() {
-        guard !running else { return }
+        guard !running, !stopped else { return }
         session.messagesLoaded = true
         session.isStreaming = false
         let reply = ChatMessage(role: .assistant)
@@ -179,51 +189,64 @@ final class TranscriptPerformanceTests: XCTestCase {
     }
 
     func stream(reasoning: Bool) async {
-        guard !running else { return }
+        guard !running, !stopped, !Task.isCancelled else { return }
         running = true
-        status = "Starting in 5 seconds"
-        try? await Task.sleep(for: .seconds(5))
-        let reply = ChatMessage(role: .assistant)
-        session.messages = [reply]
-        session.isStreaming = true
-        ReasoningDisclosureStore.shared.set(.init(isOpen: true, showsAll: true), for: reply.id)
-        let block =
-            "A synthetic paragraph to inspect **layout** and input responsiveness.\n\n```swift\nlet value = 42\n```\n\n"
-        let source = String(String(repeating: block, count: 30_000).prefix(2 * 1_024 * 1_024))
-        let clock = ContinuousClock()
-        let start = clock.now
-        var usage = rusage()
-        getrusage(RUSAGE_SELF, &usage)
-        let cpuBefore = Self.cpu(usage)
-        var delays: [Double] = []
-        var offset = source.startIndex
-        let phase = reasoning ? "reasoning" : "answer"
-        status = "Streaming \(phase)"
-        print("DELIVERY3_PROFILE_START phase=\(phase) pid=\(getpid())")
-        RenderSignposts.event("TranscriptWorkloadPhase")
-        while offset < source.endIndex {
-            let end = source.index(offset, offsetBy: 16_384, limitedBy: source.endIndex) ?? source.endIndex
-            let text = String(source[offset..<end])
-            reply.appendStream(text: reasoning ? "" : text, thinking: reasoning ? text : "")
-            offset = end
-            let scheduled = clock.now
-            try? await Task.sleep(for: .milliseconds(120))
-            let elapsed = scheduled.duration(to: clock.now).components
-            delays.append(max(0, Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18 - 0.120))
+        defer {
+            running = false
+            session.isStreaming = false
         }
-        reply.complete = true
-        session.isStreaming = false
-        try? await Task.sleep(for: .seconds(3))
-        getrusage(RUSAGE_SELF, &usage)
-        let elapsed = start.duration(to: clock.now).components
-        let wall = Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18
-        delays.sort()
-        let p95 = delays[min(delays.count - 1, Int(Double(delays.count) * 0.95))] * 1_000
-        print(
-            "DELIVERY3_PROFILE phase=\(phase) bytes=\(source.utf8.count) wall_s=\(wall) cpu_s=\(Self.cpu(usage) - cpuBefore) delay_p95_ms=\(p95) peak_rss_bytes=\(usage.ru_maxrss)"
-        )
-        status = "Completed \(phase): 2 MiB"
-        running = false
+        do {
+            status = "Starting in 5 seconds"
+            try await Task.sleep(for: startDelay)
+            guard !stopped else { throw CancellationError() }
+            let reply = ChatMessage(role: .assistant)
+            session.messages = [reply]
+            session.isStreaming = true
+            ReasoningDisclosureStore.shared.set(.init(isOpen: true, showsAll: true), for: reply.id)
+            let block =
+                "A synthetic paragraph to inspect **layout** and input responsiveness.\n\n```swift\nlet value = 42\n```\n\n"
+            let source = String(String(repeating: block, count: 30_000).prefix(2 * 1_024 * 1_024))
+            let clock = ContinuousClock()
+            let start = clock.now
+            var usage = rusage()
+            getrusage(RUSAGE_SELF, &usage)
+            let cpuBefore = Self.cpu(usage)
+            var delays: [Double] = []
+            var offset = source.startIndex
+            let phase = reasoning ? "reasoning" : "answer"
+            status = "Streaming \(phase)"
+            print("DELIVERY3_PROFILE_START phase=\(phase) pid=\(getpid())")
+            RenderSignposts.event("TranscriptWorkloadPhase")
+            while offset < source.endIndex {
+                try Task.checkCancellation()
+                guard !stopped else { throw CancellationError() }
+                let end = source.index(offset, offsetBy: 16_384, limitedBy: source.endIndex) ?? source.endIndex
+                let text = String(source[offset..<end])
+                reply.appendStream(text: reasoning ? "" : text, thinking: reasoning ? text : "")
+                offset = end
+                let scheduled = clock.now
+                try await Task.sleep(for: .milliseconds(120))
+                let elapsed = scheduled.duration(to: clock.now).components
+                delays.append(max(0, Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18 - 0.120))
+            }
+            try Task.checkCancellation()
+            guard !stopped else { throw CancellationError() }
+            reply.complete = true
+            session.isStreaming = false
+            try await Task.sleep(for: .seconds(3))
+            guard !stopped else { throw CancellationError() }
+            getrusage(RUSAGE_SELF, &usage)
+            let elapsed = start.duration(to: clock.now).components
+            let wall = Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18
+            delays.sort()
+            let p95 = delays[min(delays.count - 1, Int(Double(delays.count) * 0.95))] * 1_000
+            print(
+                "DELIVERY3_PROFILE phase=\(phase) bytes=\(source.utf8.count) wall_s=\(wall) cpu_s=\(Self.cpu(usage) - cpuBefore) delay_p95_ms=\(p95) peak_rss_bytes=\(usage.ru_maxrss)"
+            )
+            status = "Completed \(phase): 2 MiB"
+        } catch {
+            status = "Cancelled"
+        }
     }
 
     private static func cpu(_ usage: rusage) -> Double {
@@ -236,6 +259,7 @@ private struct Delivery3QualificationView: View {
     @Bindable var fixture: Delivery3Qualification
     @Environment(AppModel.self) private var model
     @State private var inspector = false
+    @State private var requestedStream: Bool?
 
     var body: some View {
         @Bindable var model = model
@@ -251,10 +275,8 @@ private struct Delivery3QualificationView: View {
             }.padding(8)
             HStack {
                 Button("Short fixture") { fixture.reset() }.disabled(fixture.running)
-                Button("Stream answer 2 MiB") { Task { await fixture.stream(reasoning: false) } }.disabled(
-                    fixture.running)
-                Button("Stream reasoning 2 MiB") { Task { await fixture.stream(reasoning: true) } }.disabled(
-                    fixture.running)
+                Button("Stream answer 2 MiB") { requestedStream = false }.disabled(fixture.running)
+                Button("Stream reasoning 2 MiB") { requestedStream = true }.disabled(fixture.running)
                 Text(fixture.status)
             }.padding(8)
             ChatView(session: fixture.session)
@@ -268,6 +290,12 @@ private struct Delivery3QualificationView: View {
         }
         .background(model.theme.tokens.bg)
         .goatPresentation()
+        .task(id: requestedStream) {
+            guard let reasoning = requestedStream else { return }
+            await fixture.stream(reasoning: reasoning)
+            if !Task.isCancelled { requestedStream = nil }
+        }
+        .onDisappear { fixture.stop() }
     }
 }
 
@@ -293,9 +321,15 @@ extension TranscriptPerformanceTests {
             styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = "GOAT Delivery 3 qualification"
         window.isReleasedWhenClosed = false
-        window.contentView = host
+        // The surrounding layout owns the viewport, as in the app and comparison fixture.
+        let viewport = NSView(frame: NSRect(origin: .zero, size: window.contentLayoutRect.size))
+        host.frame = viewport.bounds
+        host.autoresizingMask = [.width, .height]
+        viewport.addSubview(host)
+        window.contentView = viewport
         window.makeKeyAndOrderFront(nil)
         defer {
+            fixture.stop()
             window.contentView = nil
             window.close()
         }
@@ -303,11 +337,13 @@ extension TranscriptPerformanceTests {
         if ProcessInfo.processInfo.environment["GOAT_DELIVERY3_AUTORUN"] == "1" {
             try await Task.sleep(for: .seconds(15))
             await fixture.stream(reasoning: false)
+            guard !fixture.stopped, !Task.isCancelled else { throw CancellationError() }
             await fixture.stream(reasoning: true)
+            guard !fixture.stopped, !Task.isCancelled else { throw CancellationError() }
             fixture.finished = true
         }
         let deadline = ContinuousClock.now.advanced(by: .seconds(1_800))
-        while !fixture.finished, ContinuousClock.now < deadline {
+        while !fixture.finished, !fixture.stopped, ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(100))
         }
         XCTAssertTrue(fixture.finished, "Interactive qualification must be explicitly finished")

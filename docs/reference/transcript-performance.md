@@ -47,7 +47,11 @@ incoming output. Latest or a new user turn restores following.
 Responses through 2 MiB render as rich Markdown segments split at valid block
 boundaries ([ADR-0091](../adrs/0091-content-bounded-transcript-layout.md)).
 While a response streams, settled segments are parsed once and only the tail is
-parsed again, so parse work grows linearly with the response. The
+parsed again, so parse work grows linearly with the response. Settled segments also use their
+final rendering style while the provisional tail streams: completion does not change every
+segment's preview or streaming style at once. Complete HTML/SVG/Mermaid fences can preview when
+their segment settles; oversized fence pieces stay source-only because their closures are
+synthetic. The
 `MarkdownSegmentParse` signpost marks each segment parse. A long response lays
 out a window of at most 32 segments and 16 KiB of rendered bytes: its latest
 segments while following, or those the reader pages to. Loaders at the window's
@@ -100,6 +104,22 @@ A disposable native window on Golden Gate exercised earlier-part navigation, tex
 
 Compaction-specific keyboard expansion/collapse and restoration passed with the actual macOS Reduce Motion setting enabled. A fresh process restored compaction preferences, summary text and file metadata; deleting the summary retained both original messages in SQLite. These checks used disposable synthetic data.
 
+## Dense-block bounds
+
+Markdown packing also stops at 16 work units, with a fence costing four.
+The score counts nonblank prose and table lines; it isolates an indivisible complex
+block without changing its internal Markdown semantics. It is a packing heuristic, not a hard
+bound on every nested view. The existing byte limits still apply. See the complexity amendment in
+[ADR-0091](../adrs/0091-content-bounded-transcript-layout.md).
+
+Cache admission includes prepared/scanner metadata and prepared code literals, so tiny segments
+cannot bypass a byte-only budget. Actor limits are 32 MiB total / 24 MiB per reply, with completed replies capped at 16 MiB
+inside that total and evicted before active streams. Front-cache limits are 16 MiB total / 4 MiB per reply; larger replies render from view-owned working documents without displacing unrelated cached history. These charged costs are not measurements of process RSS.
+Code identity HTML extraction runs in preparation, using the existing parse's HTML, rather than
+in main-thread view evaluation. Dense 2 MiB tests verify scanner retention, bounded admission,
+linear scanning and cache lifecycle. Container responsiveness is measured separately in the
+[container comparison](transcript-container-comparison.md).
+
 
 ## Delivery 3 integrated qualification (2026-09-27)
 
@@ -121,6 +141,9 @@ It provides theme, font, animation and synthetic inspector controls, a short cod
 runs. For automatic answer then reasoning streams, also set `TEST_RUNNER_GOAT_DELIVERY3_AUTORUN=1`.
 The host prints its PID, waits 15 seconds before automatic work, and waits 5 seconds after each
 stream action so Instruments can attach and UI inspection can finish before measurement starts.
+Interactive streams are view-owned tasks and respect cancellation. Closing the fixture stops
+publication and never labels partial output as a completed 2 MiB result. The host uses a plain
+native viewport around the autoresizing SwiftUI host, matching app/comparison layout ownership.
 
 The stress source repeats a short paragraph and one-line Swift fence to exactly 2 MiB, published
 in 16 KiB batches separated by a nominal 120 ms sleep. This deliberately tests high block density;
@@ -167,3 +190,31 @@ wrap, save and open buttons as the same generic artifact name. Copy retained its
 This needs correction and a complete keyboard/VoiceOver retest. Light/Pasture also showed a
 low-contrast model-selector label in the synthetic host; reproduce in the regular window before
 classifying it as a product defect. Delivery 3 remains open in issue #60.
+
+### Follow-up foundation and harness correction (2026-10-12)
+
+The September measurements above are historical production-window diagnostics on `90f4037`.
+They are not results for the preparation changes or flat-row experiment in
+[PR #83](https://github.com/goatsoft/GOAT/pull/83). The
+[latest comparison](transcript-container-comparison.md#swiftui-preparation-and-reader-capture-follow-up-2026-10-12)
+records exact-SHA repeated navigation failures, improved reflow capture and separate 2 MiB
+answer/reasoning/dense observations. Neither candidate is qualified; ADR-0099 remains Proposed.
+These preparation and test-only experiment changes do not replace the shipping scroll container.
+
+The old #82 CI reflow failure was a harness-sizing defect: a requested 980 pt viewport measured
+65 pt because the direct `NSHostingView` exported its content sizing to the window. The normal
+reflow fixture now wraps its autoresizing host in a plain `NSView` viewport. The separate direct-root
+minimum-size regression remains, rather than suppressing production window constraints. The
+interactive qualification host uses the same wrapper. No assertion tolerance was relaxed and no
+retry was added to mask the failure. Default-plan tests also cover cancellation before startup and
+teardown during both answer and reasoning streams, preserving incomplete state and stopping output.
+An additional full-suite run exposed a pending initial restore in the older navigation reflow test
+(37 pt residual). That fixture also used a bare hosting root. It now receives the same surrounding
+viewport and asserts the requested width and height at initial placement and every reflow. The
+existing anchor identity, fulfilled-request and zero-abandonment checks remain unchanged. This is
+harness hardening, not evidence that the experiment's 22 pt wheel/growth defect is fixed.
+
+Documentation describes delivered contracts, not proof of the remaining manual or live acceptance
+checks. Supported macOS 26, hardware momentum, keyboard/VoiceOver code actions, integrated themes,
+Reduce Motion, narrow inspectors, font changes, expanded-reasoning paging, answer retention and
+frame-time/allocation qualification remain explicit gates in #60. Delivery 3 stays open.
