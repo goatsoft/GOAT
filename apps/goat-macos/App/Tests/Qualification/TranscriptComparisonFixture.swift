@@ -79,6 +79,7 @@ import SwiftUI
     }
 
     func registerFrameView(_ view: NSView, id: String) { frameViews[id] = WeakComparisonFrameView(view) }
+
     func unregisterFrameView(_ view: NSView, id: String) {
         if frameViews[id]?.view === view { frameViews[id] = nil }
     }
@@ -135,6 +136,7 @@ import SwiftUI
     let markdown = MarkdownSegmentCache()
     @ObservationIgnored let documents = PreparedMarkdownDocumentCache()
     @ObservationIgnored private var markdownRows: [String: ComparisonRow] = [:]
+    @ObservationIgnored private var messageRows: [String: ComparisonRow] = [:]
     @ObservationIgnored private var overscan: Set<String> = []
     @ObservationIgnored private var preparationTask: Task<Void, Never>?
     @ObservationIgnored private var preparationPending = false
@@ -253,12 +255,34 @@ import SwiftUI
         return requests
     }
 
-    func prepareRequestedRows() async {
+    func prepareRequestedRows(
+        prepareUser: @MainActor (UUID, String) async -> MarkdownPreparation = { id, source in
+            await MarkdownRenderCache.shared.prepare(id: id, source: source)
+        }
+    ) async {
+        for id in visible.union(overscan) {
+            guard !Task.isCancelled else { return }
+            guard let row = messageRows[id], case .message(let message) = row.content,
+                message.text.utf8.count <= TranscriptTextParts.maximumBytes,
+                MarkdownContentCache.shared.peek(id: message.id, source: message.text) == nil
+            else { continue }
+            let source = message.text
+            let result = await prepareUser(message.id, source)
+            guard !Task.isCancelled else { return }
+            guard case .message(let current) = row.content, current.id == message.id,
+                current.text == source, visible.contains(id) || overscan.contains(id)
+            else { continue }
+            if case .parsed(let content) = result {
+                MarkdownContentCache.shared.set(id: message.id, source: source, content: content)
+            }
+        }
+        guard !Task.isCancelled else { return }
         let requests = requestedWindows()
         for (id, state) in preparations where requests[id] == nil && !(id == active.id && following) {
             state.document = nil
         }
         for (_, request) in requests {
+            guard !Task.isCancelled else { return }
             let (message, window) = request
             let revision = message.textRevision
             let complete = message.complete
@@ -272,11 +296,13 @@ import SwiftUI
                 if state.document == nil { state.document = cached }
                 continue
             }
-            guard
-                let document = await markdown.prepare(
-                    id: message.id, source: message.text, revision: revision, isComplete: complete,
-                    window: .segments(window)), !Task.isCancelled, message.textRevision == revision,
-                message.complete == complete
+            let document = await markdown.prepare(
+                id: message.id, source: message.text, revision: revision, isComplete: complete,
+                window: .segments(window))
+            guard !Task.isCancelled else { return }
+            guard let document,
+                let current = requestedWindows()[message.id],
+                current.0.textRevision == revision, current.0.complete == complete, current.1 == window
             else { continue }
             documents.store(document, for: message.id)
             state.document = document
@@ -337,6 +363,11 @@ import SwiftUI
                 return (row.id, row)
             })
         rows.append(ComparisonRow("live-header", .label("GOAT · live replay")))
+        messageRows = Dictionary(
+            uniqueKeysWithValues: rows.compactMap { row in
+                guard case .message = row.content else { return nil }
+                return (row.id, row)
+            })
         rows.append(ComparisonRow("live-tools", .tools(liveTools)))
         reasoningStart = rows.count
         answerStart = rows.count

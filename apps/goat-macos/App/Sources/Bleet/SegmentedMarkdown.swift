@@ -810,6 +810,20 @@ final class PreparedMarkdownDocumentCache {
 /// as paragraphs) and tables 0 above and 1 below, headings 1.5 above and 1 below, thematic breaks 2
 /// on both sides, and nothing for code blocks, quotes and lists themselves.
 enum MarkdownSegmentSpacing {
+    /// Match the shared reader theme before the first layout, including inherited list/quote
+    /// margins. Synchronous margins prevent delayed preference updates from changing row heights.
+    @MainActor static let blockSpacing: MarkdownBlockSpacing = {
+        let paragraph = MarkdownBlockSpacing.Margins(top: .zero, bottom: .em(1))
+        var margins: [MarkdownBlockSpacing.Kind: MarkdownBlockSpacing.Margins] = [
+            .paragraph: paragraph, .htmlBlock: paragraph, .table: paragraph,
+            .thematicBreak: .init(top: .em(2), bottom: .em(2)),
+        ]
+        for level in 1...6 { margins[.heading(level)] = .init(top: .rem(1.5), bottom: .rem(1)) }
+        // Code chrome, quotes and lists do not specify margins of their own. Containers
+        // inherit every descendant's maximum margin, as the existing segment boundary scanner does.
+        return MarkdownBlockSpacing(margins)
+    }()
+
     /// A parsed segment's first and last top-level margins, and whether its last leaf is a paragraph.
     struct Structure: Equatable {
         var leadingMargin: Double?

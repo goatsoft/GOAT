@@ -108,5 +108,6 @@ Older records retain the package and type names used when accepted. [ADR-0054](0
 
 | [0098](0098-shared-oklab-colour-picker.md) | Shared OKLab colour picker | Accepted · refines 0022 |
 | [0099](0099-virtualized-transcript-list.md) | Virtualized transcript list | Proposed · would supersede 0091 windowing, 0094 §4 and 0097; refines 0002 and 0028 |
+| [0100](0100-synchronous-markdown-block-spacing.md) | Synchronous Markdown block spacing | Proposed |
 
 New session? Start with **[../../AGENT.md](../../AGENT.md)**, then [the roadmap](../ROADMAP.md).

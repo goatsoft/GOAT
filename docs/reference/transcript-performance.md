@@ -200,6 +200,8 @@ They are not results for the preparation changes or flat-row experiment in
 records exact-SHA repeated navigation failures, improved reflow capture and separate 2 MiB
 answer/reasoning/dense observations. Neither candidate is qualified; ADR-0099 remains Proposed.
 These preparation and test-only experiment changes do not replace the shipping scroll container.
+The failed navigation observations are historical; see the synchronous-spacing follow-up below
+for the subsequent fix and its remaining qualification limits.
 
 The old #82 CI reflow failure was a harness-sizing defect: a requested 980 pt viewport measured
 65 pt because the direct `NSHostingView` exported its content sizing to the window. The normal
@@ -218,3 +220,28 @@ Documentation describes delivered contracts, not proof of the remaining manual o
 checks. Supported macOS 26, hardware momentum, keyboard/VoiceOver code actions, integrated themes,
 Reduce Motion, narrow inspectors, font changes, expanded-reasoning paging, answer retention and
 frame-time/allocation qualification remain explicit gates in #60. Delivery 3 stays open.
+
+### Synchronous-spacing follow-up
+
+[PR #84](https://github.com/goatsoft/GOAT/pull/84) fixes settled rich rows changing height after
+mounting. [ADR-0100](../adrs/0100-synchronous-markdown-block-spacing.md) records the opt-in
+MarkdownUI policy, exact maintained dependency and first-layout regression coverage. Nearby user
+messages are also prepared through the production caches before entering the comparison viewport.
+
+The earlier `3f62ebc` replay with renderer `2.4.2-goat.1` passed all 192 growth samples
+without a missing anchor, with zero wheel/growth residual and zero reflow drift. This is
+historical evidence, not qualification of the reviewed dependency. On `cea0538` with the merged
+`2.4.2-goat.2` renderer, the full replay fails startup anchor capture and records one missing
+growth sample. An input-only diagnostic passes, but does not resolve the full replay failure.
+A first-paint flush experiment also fails startup and is discarded. Container qualification
+remains open; later zero-drift phases do not validate failed startup preconditions.
+Separate earlier mixed and dense replays complete
+2 MiB of reasoning and 2 MiB of answers. Publication wall time includes awaited preparation;
+neither it nor sleep-overrun measurements establish frame rate. Process memory excludes preview
+subprocesses. CPU sampling and allocation recording require separate interpretation because
+allocation instrumentation materially slows the workload.
+
+Recommend the flat SwiftUI list for the next production migration, retaining the current shipping
+container until that migration is reviewed and qualified. Delivery 3 remains open for supported-OS,
+hardware input, manual/accessibility, full-app frame-time and retention checks. Those gates remain
+distinct from the Kid maintenance release.
