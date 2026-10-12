@@ -10,6 +10,10 @@ the segment-level windowing of its segmented rendering amendment), section 4 of
 Proposed under [#60](https://github.com/goatsoft/GOAT/issues/60) with
 [#54](https://github.com/goatsoft/GOAT/issues/54) section 2, subject to comparison and qualification.
 
+Current comparison and migration qualification is tracked in
+[#86](https://github.com/goatsoft/GOAT/issues/86), transferred from #60. Production qualification
+remains in [#85](https://github.com/goatsoft/GOAT/issues/85). This transfer does not accept the ADR.
+
 ## Context
 
 The transcript is a SwiftUI `ScrollView` over a non-lazy stack of fully measured rows. ADR-0091
@@ -244,7 +248,7 @@ within a row, as it is within a view today; copying a whole reply or chat is #60
   sees no movement while output arrives; completion and reasoning folding move nothing the reader is
   reading.
 - **Width and fonts.** Resizing, inspectors and font changes keep the anchor row in place.
-- **Qualification (manual and Instruments), recorded on #60.** Trackpad and mouse scrolling through
+- **Qualification (manual and Instruments), tracked in #85 and #86 with historical evidence on #60.** Trackpad and mouse scrolling through
   long chats and 2 MiB replies, momentum included; keyboard and VoiceOver; themes and Reduce Motion;
   frame time, main-actor time and memory while scrolling and while a 27B model streams.
 
