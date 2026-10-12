@@ -97,6 +97,11 @@ it does not scroll or add an executor. Width/font guards retain the pre-reflow s
 restoration transaction finishes. Input and geometry ordering still require qualification, especially during
 hardware momentum.
 
+The production migration must also prepare nearby user Markdown through the same bounded
+whole-document caches before those rows enter the viewport. The comparison already does this;
+omitting it would reintroduce cold placeholder-to-rich height changes and invalidate comparison
+parity. The overscan regression covers both assistant segments and user messages.
+
 Preparation stays on its existing actor. A cold miss still retains plain text as an exceptional
 fallback; prefetch aims to avoid showing it during ordinary scrolling. Do not add synchronous
 main-actor parsing merely because a row meets the work score: that score is not a time guarantee.

@@ -740,37 +740,102 @@ extension AppTests.Bleet {
     return bitmap
 }
 
+@MainActor @Observable private final class MountedMarkdownState {
+    var inserted = false
+}
+
+@MainActor private final class MarkdownHeightRecorder {
+    var heights: [CGFloat] = []
+}
+
+@MainActor private struct MountedMarkdownInsertionView: View {
+    let state: MountedMarkdownState
+    let recorder: MarkdownHeightRecorder
+    let source: String
+    let fontSize: CGFloat
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Ready")
+            if state.inserted {
+                wholeReply(source, fontSize: fontSize)
+                    .onGeometryChange(for: CGFloat.self) {
+                        $0.size.height
+                    } action: {
+                        recorder.heights.append($0)
+                    }
+            }
+        }
+    }
+}
+
 extension AppTests.Bleet {
     /// Segmented rendering lays out as the whole reply does, before and after completion (#60 A1, A2).
     @Suite(.serialized) struct SegmentedMarkdownRenderingTests {
 
-        /// A cold mounted row must use its final margins on its first layout, rather than
-        /// changing height when nested-block preferences arrive on the next refresh.
+        /// Insert into an already displayed window and observe every layout, without asking
+        /// fittingSize to settle the view before the first sample.
         @Test(arguments: [CGFloat(14), CGFloat(20)])
         @MainActor func settledMarkdownHasFinalHeightOnItsFirstLayout(fontSize: CGFloat) async throws {
             let source = mixedBlocks.joined(separator: "\n\n")
             for width: CGFloat in [280, 600] {
+                let state = MountedMarkdownState()
+                let recorder = MarkdownHeightRecorder()
                 let host = NSHostingView(
-                    rootView: wholeReply(source, fontSize: fontSize)
-                        .frame(width: width, alignment: .leading)
-                        .environment(AppModel.shared).environment(\.colorScheme, .light))
+                    rootView: MountedMarkdownInsertionView(
+                        state: state, recorder: recorder, source: source, fontSize: fontSize
+                    )
+                    .frame(width: width, alignment: .leading)
+                    .environment(AppModel.shared).environment(\.colorScheme, .light))
                 let window = NSWindow(
-                    contentRect: NSRect(x: 0, y: 0, width: width, height: 400),
+                    contentRect: NSRect(x: 0, y: 0, width: width, height: 800),
                     styleMask: [.titled], backing: .buffered, defer: false)
                 window.isReleasedWhenClosed = false
                 window.contentView = host
+                window.orderFront(nil)
                 defer {
                     window.contentView = nil
                     window.close()
                 }
-                host.layoutSubtreeIfNeeded()
-                let firstHeight = host.fittingSize.height
+                try await Task.sleep(for: .milliseconds(100))
+                state.inserted = true
                 for _ in 0..<6 {
-                    try await Task.sleep(for: .milliseconds(50))
                     host.layoutSubtreeIfNeeded()
-                    #expect(
-                        abs(host.fittingSize.height - firstHeight) < 1,
-                        "A settled row changed height after its first layout at width \(width)")
+                    try await Task.sleep(for: .milliseconds(50))
+                }
+                #expect(
+                    recorder.heights.count == 1,
+                    "All mounted heights at \(width) pt / \(fontSize) pt: \(recorder.heights)")
+                #expect((recorder.heights.first ?? 0) > 0)
+            }
+        }
+
+        /// The stock margin-preference renderer independently checks the policy against the
+        /// actual shared styles, including nested margin reduction and all heading levels.
+        @Test(arguments: [CGFloat(14), CGFloat(20)])
+        @MainActor func synchronousSpacingMatchesSettledSharedStyle(fontSize: CGFloat) async throws {
+            let sources = [
+                mixedBlocks.joined(separator: "\n\n"),
+                "> quoted\n>\n> > nested\n> >\n> > - item\n> > - next",
+                "- tight\n- list\n  - nested\n  - next",
+                "- loose\n\n  continuation\n\n- next",
+                "- [ ] task\n- [x] finished\n  - nested",
+                "> \(fence)swift\n> let x = 1\n> \(fence)",
+                "| A | B |\n| --- | --- |\n| a | b |\n\nAfter table",
+                "<div>HTML block</div>\n\nAfter HTML",
+                "---\n\nParagraph\n\n---",
+                (1...6).map { String(repeating: "#", count: $0) + " Heading" }.joined(separator: "\n\n"),
+            ]
+            for width: CGFloat in [240, 600] {
+                for source in sources {
+                    let synchronous = try await height(wholeReply(source, fontSize: fontSize), width: width)
+                    let stock = try await height(
+                        Markdown(MarkdownContent(GOATMarkdownSyntax.normalized(source)))
+                            .markdownImageProvider(BlockedMarkdownImageProvider())
+                            .markdownInlineImageProvider(BlockedMarkdownInlineImageProvider())
+                            .goatMarkdownStyle(fontSize: fontSize, synchronousSpacing: false)
+                            .textSelection(.enabled), width: width)
+                    #expect(synchronous == stock, "Policy/style drift at \(width) pt: \(source)")
                 }
             }
         }

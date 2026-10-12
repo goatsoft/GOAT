@@ -87,8 +87,8 @@
       "kind": "remoteSourceControl",
       "location": "https://github.com/goatsoft/swift-markdown-ui",
       "state": {
-        "revision": "005e1bbe81c4ee721bda416fd32ab2d0b4fa8252",
-        "version": "2.4.2-goat.1"
+        "revision": "117d47541d19ca3dff036f8af782983aa9beb720",
+        "version": "2.4.2-goat.2"
       }
     },
     {
@@ -1916,7 +1916,7 @@
     },
     {
       "path": "apps/goat-macos/GOAT.xcodeproj/project.pbxproj",
-      "sha256": "580be3f28edab6499b5df834eb8225cc630bf5bb510771439cdbee1abfc9ed1c"
+      "sha256": "cd75d685ffa8aef1f658ab2189c0ce421491039e9c1cf2f2b106e6443c1f0230"
     },
     {
       "path": "scripts/distribution-notices.py",
@@ -1958,7 +1958,7 @@
   "outputs": [
     {
       "path": "apps/goat-macos/App/Resources/Licenses/THIRD-PARTY-NOTICES.txt",
-      "sha256": "23952e2eed1f5646f62e853e84030896aec61b95b0fadc262412ab18ff07ee9e"
+      "sha256": "cc40ad2c63a9e607fe864697f32a9d56b8ccfce256653cd2e69ee80089b0cc6b"
     },
     {
       "path": "apps/goat-macos/App/Resources/Licenses/LICENSE.txt",

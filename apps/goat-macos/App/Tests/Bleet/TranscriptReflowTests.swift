@@ -1,5 +1,6 @@
 import AppKit
 import Bleet
+import MarkdownUI
 import Observation
 import Persistence
 import SwiftUI
@@ -341,6 +342,14 @@ final class TranscriptComparisonPreparationTests: XCTestCase {
                 return false
             })
         XCTAssertFalse(fixture.visible.contains(neighbour.id), "The neighbour has not appeared")
+        let userRow = try XCTUnwrap(
+            fixture.rows[(index + 1)...].first {
+                if case .message = $0.content { return true }
+                return false
+            })
+        guard case .message(let user) = userRow.content else { return XCTFail("Expected user row") }
+        XCTAssertFalse(fixture.visible.contains(userRow.id))
+        XCTAssertNotNil(MarkdownContentCache.shared.peek(id: user.id, source: user.text))
         XCTAssertNotNil(fixture.preparedSegment(for: neighbour), "Cold upcoming content is prepared in advance")
         let identity = fixture.preparedSegment(for: neighbour)?.preparationID
         fixture.updateSwiftUIVisibility([neighbour.id], viewportHeight: 780)
@@ -381,6 +390,56 @@ final class TranscriptComparisonPreparationTests: XCTestCase {
         await fixture.prepareRequestedRows()
         let after = await fixture.markdown.snapshot().parseCount
         XCTAssertEqual(after, count)
+    }
+
+    @MainActor func testUserPreparationDiscardsAReplacedMessageAfterAwaiting() async throws {
+        let fixture = TranscriptComparisonFixture()
+        defer { fixture.stopPreparation() }
+        try await fixture.seed(rounds: 1)
+        let row = try XCTUnwrap(
+            fixture.rows.first {
+                if case .message = $0.content { return true }
+                return false
+            })
+        guard case .message(let message) = row.content else { return XCTFail("Expected user row") }
+        fixture.visible = [row.id]
+        let originalSource = message.text
+        XCTAssertNil(MarkdownContentCache.shared.peek(id: message.id, source: originalSource))
+        await fixture.prepareRequestedRows { _, source in
+            await Task.yield()
+            let replacement = ChatMessage(role: message.role, id: message.id)
+            replacement.text = "Replaced while preparation awaited"
+            row.content = .message(replacement)
+            return .parsed(PreparedMarkdownContent(value: MarkdownContent(source)))
+        }
+        XCTAssertNil(MarkdownContentCache.shared.peek(id: message.id, source: originalSource))
+    }
+
+    @MainActor func testUserPreparationCancellationStopsBeforeTheNextRow() async throws {
+        let fixture = TranscriptComparisonFixture()
+        defer { fixture.stopPreparation() }
+        try await fixture.seed(rounds: 3)
+        let users = fixture.rows.filter {
+            if case .message = $0.content { return true }
+            return false
+        }
+        XCTAssertEqual(users.count, 3)
+        fixture.visible = Set(users.map(\.id))
+        var calls = 0
+        let task = Task { @MainActor in
+            await fixture.prepareRequestedRows { _, source in
+                calls += 1
+                await Task.yield()
+                withUnsafeCurrentTask { $0?.cancel() }
+                return .parsed(PreparedMarkdownContent(value: MarkdownContent(source)))
+            }
+        }
+        await task.value
+        XCTAssertEqual(calls, 1, "Cancelled preparation must not await more rows")
+        for row in users {
+            guard case .message(let message) = row.content else { continue }
+            XCTAssertNil(MarkdownContentCache.shared.peek(id: message.id, source: message.text))
+        }
     }
 
     @MainActor func testFrameSamplingUsesTheCurrentClipOrigin() throws {

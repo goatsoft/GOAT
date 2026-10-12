@@ -1616,7 +1616,7 @@
 			repositoryURL = "https://github.com/goatsoft/swift-markdown-ui";
 			requirement = {
 				kind = exactVersion;
-				version = "2.4.2-goat.1";
+				version = "2.4.2-goat.2";
 			};
 		};
 		EABE25C511B14761B229FF02 /* XCRemoteSwiftPackageReference "OKLabColorPicker" */ = {

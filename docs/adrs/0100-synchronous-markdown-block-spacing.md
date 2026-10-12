@@ -35,6 +35,13 @@ The policy must match the actual styles. Arbitrary styles that add content or ch
 font sizes retain the preference-based renderer unless they provide a matching policy. No
 Markdown parsing moves onto the main actor; the layout operates on the prepared block tree.
 
+The renderer dependency is reviewed and merged before tagging the exact source GOAT adopts.
+Layout regressions cover intrinsic width under finite and unlimited offers, collapsed and tight
+spacing, measured default padding, and placement/alignment. Hosted GOAT tests insert content into
+an already displayed window and observe every height; disabling the policy makes that regression
+fail. Stock-renderer comparisons across block shapes, widths and fonts guard the explicit policy
+against changes to the shared styles and complement segment-boundary spacing coverage.
+
 Pin the fork to an exact release and commit, retain upstream licences, regenerate distribution
 notices, and qualify that resolved source before merging. Local edits to package checkouts are
 experiments and cannot support a release verification claim.

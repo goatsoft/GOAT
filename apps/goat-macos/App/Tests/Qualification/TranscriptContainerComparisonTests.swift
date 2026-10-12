@@ -220,15 +220,9 @@ extension TranscriptPerformanceTests {
     scroll.reflectScrolledClipView(scroll.contentView)
     host.layoutSubtreeIfNeeded()
     let directAnchor = comparisonAnchor(fixture, host: host)
-    print(
-        "COMPARISON_DIRECT backend=\(backend) target=\(target) clip=\(scroll.contentView.bounds.minY) frames=\(fixture.frames.count) anchor=\(directAnchor?.0 ?? "none")"
-    )
     try await Task.sleep(for: .milliseconds(500))
     host.layoutSubtreeIfNeeded()
     fixture.sampleFrames()
-    print(
-        "COMPARISON_DIRECT backend=\(backend) settled_clip=\(scroll.contentView.bounds.minY) frames=\(fixture.frames.count) first_anchor=\(directAnchor?.0 ?? "none") first_anchor_mounted=\(directAnchor.map { fixture.frames[$0.0] != nil } ?? false)"
-    )
     let replayDrift =
         directAnchor.flatMap { anchor in fixture.frames[anchor.0].map { abs($0.minY - anchor.1) } } ?? .infinity
     print("COMPARISON_NAVIGATION backend=\(backend) direct_move_drift_pt=\(replayDrift)")
@@ -304,9 +298,6 @@ extension TranscriptPerformanceTests {
             continue
         }
         let before = scroll.contentView.bounds.minY
-        let beforeHeight = scroll.documentView?.bounds.height ?? 0
-        let beforeFrame = fixture.frames[anchor.0]
-        let beforeFrames = fixture.frames
         let requestedDelta = comparisonWheel(scroll, direction: 1, tick: tick % 24)
         let maximumOrigin = max(0, (scroll.documentView?.bounds.height ?? 0) - scroll.contentSize.height)
         let applied = max(0, min(maximumOrigin, before + requestedDelta)) - before
@@ -335,16 +326,6 @@ extension TranscriptPerformanceTests {
             residuals.append(residual)
             if residual > 1 {
                 failedTicks.append("\(tick):\(residual)")
-                print(
-                    "COMPARISON_DRIFT tick=\(tick) id=\(anchor.0) requested=\(applied) clip_delta=\(scroll.contentView.bounds.minY - before) document_delta=\((scroll.documentView?.bounds.height ?? 0) - beforeHeight) row_height_before=\(beforeFrame?.height ?? 0) row_height_after=\(frame.height) row_y_delta=\(frame.minY - anchor.1)"
-                )
-                for (id, old) in beforeFrames.sorted(by: { $0.value.minY < $1.value.minY }) {
-                    if let new = fixture.frames[id], abs(new.height - old.height) > 1 {
-                        print(
-                            "COMPARISON_HEIGHT tick=\(tick) id=\(id) before=\(old.height) after=\(new.height) width_before=\(old.width) width_after=\(new.width)"
-                        )
-                    }
-                }
             }
 
         } else {

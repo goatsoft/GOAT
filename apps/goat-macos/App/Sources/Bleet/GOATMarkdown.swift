@@ -37,14 +37,19 @@ enum GOATMarkdownSyntax {
 extension View {
     /// Shared reader treatment for chat, Paddock, and memory documents: GFM plus a clear
     /// callout treatment for GitHub Alert syntax and ordinary quotes.
-    func goatMarkdownStyle(fontSize: CGFloat, isStreaming: Bool = false) -> some View {
-        modifier(GoatMarkdownStyle(fontSize: fontSize, isStreaming: isStreaming))
+    func goatMarkdownStyle(
+        fontSize: CGFloat, isStreaming: Bool = false, synchronousSpacing: Bool = true
+    ) -> some View {
+        modifier(
+            GoatMarkdownStyle(
+                fontSize: fontSize, isStreaming: isStreaming, synchronousSpacing: synchronousSpacing))
     }
 }
 
 private struct GoatMarkdownStyle: ViewModifier {
     let fontSize: CGFloat
     let isStreaming: Bool
+    let synchronousSpacing: Bool
     @Environment(AppModel.self) private var model
 
     func body(content: Content) -> some View {
@@ -89,7 +94,7 @@ private struct GoatMarkdownStyle: ViewModifier {
             }
             .markdownTextStyle { ForegroundColor(.primary) }
         }
-        .markdownBlockSpacing(MarkdownSegmentSpacing.blockSpacing)
+        .modifier(GoatMarkdownBlockSpacing(synchronous: synchronousSpacing))
     }
 }
 
@@ -139,5 +144,18 @@ private struct MarkdownListLayout: Layout {
         subviews[1].place(
             at: CGPoint(x: bounds.minX + marker.width + spacing, y: bounds.minY), anchor: .topLeading,
             proposal: ProposedViewSize(width: max(0, bounds.width - marker.width - spacing), height: nil))
+    }
+}
+
+/// The stock path provides an independent reference for theme/policy consistency checks.
+private struct GoatMarkdownBlockSpacing: ViewModifier {
+    let synchronous: Bool
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if synchronous {
+            content.markdownBlockSpacing(MarkdownSegmentSpacing.blockSpacing)
+        } else {
+            content
+        }
     }
 }
