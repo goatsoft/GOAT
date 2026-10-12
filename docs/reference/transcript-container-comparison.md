@@ -546,5 +546,93 @@ claim about total memory across WebKit subprocesses is made.
 The unresolved work in #60 is to diagnose the native hosting/measurement resource lifecycle,
 repeat both completed navigation and allocation/retention captures after a fix, and requalify the
 supported macOS 26 target plus hardware momentum and accessibility. The SwiftUI anchor/reflow
-failures also remain open. ADR-0099 stays Proposed; Delivery 3 stays open. These fresh probes
+failures at this measured revision also remain open. ADR-0099 stays Proposed; Delivery 3 stays open. These fresh probes
 explicitly failed or aborted despite the normal verification suite passing.
+
+## SwiftUI preparation and reader capture follow-up (2026-10-12)
+
+The next comparison direction is flat SwiftUI segment rows with shared actor preparation,
+bounded preparation overscan and one position binding. This is an experiment, not acceptance of
+ADR-0099 or replacement of the production transcript. The native prototype remains a fallback
+whose resource lifecycle must be fixed before qualification.
+
+`86939f0` makes settled segments use final presentation even while the message streams. Complete
+HTML/SVG/Mermaid fences can preview when their segment settles; synthetic pieces of an oversized
+fence remain source text. Default-plan tests cover these transitions and completion identity.
+The SwiftUI fixture prepares approximately one viewport ahead and behind the reported visible
+targets, with a maximum of 64 neighbours per side, through the shared preparation owner. Cold
+content still has a bounded plain-text fallback. It does not synchronously parse Markdown on
+MainActor: bounded bytes and work units alone do not prove a safe frame-time bound. Cold-layout
+refinement is a hypothesis, not an established explanation for the navigation residual.
+
+The first committed capture attempt on `86939f0` failed: direct movement and initial placement
+were 0 pt, wheel/growth residual was 22 pt, and reflow drift was 366,951 pt at 820/20 and 699.5 pt
+at 1180/14. Its custom anchor calculation was unsafe. It is retained as a failed attempt, not
+decision evidence for the final policy.
+
+`10198ed44372c7ab149f918f1e4ad1e6c7fb070e` replaces that calculation. A native clip notification
+captures the current reader row and pixel offset synchronously before width/font reflow. It is
+read-only; after reflow the SwiftUI position binding applies the restored absolute offset. The
+capture keys prevent intermediate reflow notifications and cancelled tasks from replacing the
+saved geometry. Leaving follow mode clears the old Latest target. The bottom size-change anchor
+owns following, without a bottom command on every generation. The default-plan native-marker
+regression covers current clip origin, offset calculation and pre-reflow capture retention.
+
+### Two fresh navigation repetitions on the final implementation
+
+Each column is one fresh Release process on the exact `10198ed` SHA above, macOS 27.0 (26A428),
+Xcode 27 (27A266), Apple Silicon / 10 cores / 32 GiB, 48 history rounds and a 2 MiB live answer.
+There were no simultaneous local builds or other qualification runs. Both use calibrated
+discrete pixel-wheel input, native marker measurement, 50 ms settling and the unchanged 1 pt
+assertion. Hardware momentum and macOS 26 are not measured by these runs.
+
+| Check | swiftui-final-1 | swiftui-final-2 |
+| --- | --- | --- |
+| Static control / candidate input error (pt) | 0 / 0 | 0 / 0 |
+| Direct move / initial-offset growth drift (pt) | 0 / 0 | 0 / 0 |
+| Wheel/growth residual (pt) | 22 **fail** | 22 **fail** |
+| Wheel samples / missing anchors | 192 / 0 | 192 / 0 |
+| Following gap (pt) | 0 | 0 |
+| Reflow 820 pt / 20 pt font drift (pt) | 0 | 0 |
+| Reflow 1180 pt / 14 pt font drift (pt) | 0 | 0 |
+| Post-reflow input residual (pt) | 15 **fail** | 0 |
+| Post-reflow publication drift (pt) | 0 | 0 |
+| Host resident memory at growth completion (bytes) | 296,173,568 | 295,010,304 |
+| Outcome | **Failed** | **Failed** |
+
+Both growth runs fail at the same ticks: `13:19, 16:18, 32:22, 79:22, 94:19, 112:22, 127:19,
+145:22, 160:19, 190:22` (tick: residual pt). These are not the explicit insertion tick 24 or
+height-mutation tick 48. The cause remains unproved; do not attribute the result to those
+mutations or cold parsing. Reflow capture improved in both repetitions, but the repeatable growth
+failure and one post-reflow input failure prevent qualification. A passing second input sample
+does not supersede the failing first one.
+
+### Following workload on the same final SHA
+
+One additional fresh process (`swiftui-final-mixed`) streamed **2 MiB reasoning then 2 MiB answer**
+while following. These are workload observations, not navigation or responsiveness certification.
+The test completed successfully. No allocation/retention or frame-time Instruments capture was
+made. Host RSS excludes WebKit subprocesses; it is not a bounded-heap guarantee.
+
+| Phase | Wall (s) | Host CPU (s) | Publication p95 (ms) | Sleep overrun p95 (ms) | Host resident / lifetime peak RSS (bytes) |
+| --- | --- | --- | --- | --- | --- |
+| Reasoning | 20.379 | 4.642 | 15.078 | 9.481 | 232,210,432 / 247,545,856 |
+| Answer | 19.911 | 11.367 | 5.651 | 25.745 | 322,338,816 / 340,148,224 |
+
+A separate fresh process (`swiftui-final-dense`) on the same SHA streamed a 2 MiB dense-fence
+answer: 20.989 s wall, 17.388 s host CPU, 28.092 ms publication p95, 32.523 ms sleep-overrun p95,
+299,581,440 bytes resident and 301,268,992 bytes lifetime peak host RSS. It completed, with 0 pt
+completion-anchor drift and 0 pt final width-only drift. It created 14,141 model rows, with seven
+peak reported appeared rows. Row appearance is not a count of retained views. Dense CPU and delay
+remain qualification concerns, not evidence of 60 fps or a passing frame-time budget.
+
+The completion anchor was available with 0 pt drift for reasoning; it was unavailable for the
+answer and must not be treated as a pass. The final width-only check measured 0 pt. A following
+run cannot certify reader-owned anchors, reachability of every row, hardware scrolling, VoiceOver,
+or input latency from these publication and sleep-overrun proxies.
+
+Full normal Release verification on this implementation passed: lint, package tests, 560 hosted
+tests with zero failures and three opt-in skips, the existing known ScrollPosition issue, and the
+app build. The navigation experiment explicitly fails independently of this normal gate. Keep
+Delivery 3 open and ADR-0099 Proposed until growth/input, native resource lifecycle, supported-OS,
+manual/accessibility and allocation/retention qualification are completed.
