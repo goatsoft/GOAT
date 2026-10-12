@@ -1,10 +1,10 @@
 # ADR-0098: Shared OKLab colour picker
 
-**Status:** Proposed · 2026-09-26 · refines [0022](0022-theme-format-and-community-themes.md)
+**Status:** Accepted · 2026-09-26 · refines [0022](0022-theme-format-and-community-themes.md)
 
 ## Context
 
-GOAT owns the SwiftUI OKLabColorPicker package, while its Pen sheet maintains a separate picker. Theme colours currently require JSON editing. Reusing the shared package avoids maintaining a second set of colour-selection controls.
+Before this change, GOAT owned the SwiftUI OKLabColorPicker package while its Pen sheet maintained a separate picker and theme colours required JSON editing. Reusing the shared package avoids maintaining a second set of colour-selection controls.
 
 ## Decision
 

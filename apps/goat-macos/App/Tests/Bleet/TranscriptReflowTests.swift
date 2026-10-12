@@ -285,6 +285,46 @@ extension AppTests.Bleet {
 }
 
 final class TranscriptComparisonPreparationTests: XCTestCase {
+    @MainActor func testQualificationCancellationDuringStartupKeepsTheOriginalFixture() async {
+        let fixture = Delivery3Qualification()
+        let original = fixture.session.messages.map(\.id)
+        let task = Task { await fixture.stream(reasoning: false) }
+        for _ in 0..<100 where !fixture.running { await Task.yield() }
+        XCTAssertTrue(fixture.running)
+        task.cancel()
+        await task.value
+        XCTAssertEqual(fixture.session.messages.map(\.id), original)
+        XCTAssertFalse(fixture.running)
+        XCTAssertFalse(fixture.session.isStreaming)
+        XCTAssertEqual(fixture.status, "Cancelled")
+    }
+
+    @MainActor func testQualificationTeardownDoesNotCompleteAPartialStream() async throws {
+        for reasoning in [false, true] {
+            let fixture = Delivery3Qualification(startDelay: .zero)
+            let task = Task { await fixture.stream(reasoning: reasoning) }
+            defer { task.cancel() }
+            for _ in 0..<100 where !fixture.session.isStreaming {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            XCTAssertTrue(fixture.session.isStreaming)
+            let reply = try XCTUnwrap(fixture.session.messages.first)
+            let text = reasoning ? reply.thinking : reply.text
+            XCTAssertFalse(text.isEmpty)
+            XCTAssertLessThan(text.utf8.count, 2 * 1_024 * 1_024)
+            fixture.stop()
+            // Even without view-task cancellation, the teardown guard stops publication.
+            await task.value
+            XCTAssertEqual(reasoning ? reply.thinking : reply.text, text)
+            XCTAssertFalse(reply.complete)
+            XCTAssertFalse(fixture.running)
+            XCTAssertFalse(fixture.session.isStreaming)
+            XCTAssertEqual(fixture.status, "Cancelled")
+            await fixture.stream(reasoning: reasoning)
+            XCTAssertEqual(reasoning ? reply.thinking : reply.text, text)
+        }
+    }
+
     @MainActor func testSwiftUIOverscanPreparesColdNeighboursBeforeTheyAppear() async throws {
         let fixture = TranscriptComparisonFixture()
         defer { fixture.stopPreparation() }

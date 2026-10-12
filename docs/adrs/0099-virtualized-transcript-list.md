@@ -7,8 +7,8 @@ the segment-level windowing of its segmented rendering amendment), section 4 of
 [ADR-0094](0094-pure-swift-syntax-highlighting-and-tool-diffs.md), and
 [ADR-0097](0097-appkit-transcript-scroll-executor.md). Refines
 [ADR-0002](0002-ui-architecture.md) and [ADR-0028](0028-measured-bounded-rendering-and-fullscreen-backing.md).
-Delivered under [#60](https://github.com/goatsoft/GOAT/issues/60) with
-[#54](https://github.com/goatsoft/GOAT/issues/54) section 2, in the next release.
+Proposed under [#60](https://github.com/goatsoft/GOAT/issues/60) with
+[#54](https://github.com/goatsoft/GOAT/issues/54) section 2, subject to comparison and qualification.
 
 ## Context
 

@@ -73,7 +73,9 @@ no telemetry) and must be licensed under the MIT license. An alternative highlig
 
 ### 4. Transcript Endless Paging and Reader Viewport Ownership (Refines ADR-0091)
 - Bounded paging budgets: Transcript paging via `TranscriptWindow` strictly enforces both
-  message capacity (40 items) and source content budgets (16KB). Paging earlier or later evicts
+  message capacity (40 items) and display-source budgets (approximately 16 KiB). ADR-0091
+  now also bounds the segments shown within answers and expanded reasoning through 2 MiB.
+  Paging earlier or later evicts
   the opposite edge while preserving the reader visible anchor.
 - Reader viewport ownership: Viewport ownership remains with the reader when scrolled up or
   paging earlier/later messages. Paging into the final page preserves reader position and does

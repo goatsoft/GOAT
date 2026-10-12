@@ -1,6 +1,6 @@
 # ADR-0091: Content-bounded transcript layout
 
-Status: Accepted · 2026-09-20 · Amended 2026-09-22 · Segmented rendering amendment proposed 2026-09-26
+Status: Accepted · 2026-09-20 · Amended 2026-09-22 · Segmented rendering amendment implemented
 
 Refines [ADR-0056](0056-bounded-rendering-and-responsive-io.md) and
 [ADR-0074](0074-grouped-transcript-tool-activity.md). Qualification is tracked in
@@ -69,10 +69,13 @@ Golden Gate qualification must be recorded separately before acceptance.
 
 Manual "Earlier messages", "Later messages", and "Latest" buttons are replaced with native SwiftUI scroll-visibility observations (`.onScrollVisibilityChange`) at the transcript boundaries. Approaching the top boundary automatically engages an inline loading indicator (`GoatLoadingIndicator`) and advances the window backward while preserving the user's visible anchor position. Approaching the bottom boundary automatically loads later messages, smoothly transitioning back to bottom following at the conversation floor. The underlying 40-message / 16 KiB display budget from ADR-0091 remains enforced.
 
-## Amendment (proposed): Segmented rich rendering and segment-level windowing (2026-09-26)
+## Amendment: Segmented rich rendering and segment-level windowing (2026-09-26)
 
-Status: Proposed. Tracked by [#60](https://github.com/goatsoft/GOAT/issues/60) (A1, A3, B1, C1).
-The 8 KiB plain-text parts fallback above stays in force until every step's acceptance tests pass.
+Status: Implemented through #68/#69/#78/#80, with preparation refinements in #83.
+Tracked by [#60](https://github.com/goatsoft/GOAT/issues/60) (A1, A3, B1, C1).
+The old 8 KiB fallback is removed for answers and expanded reasoning through 2 MiB; larger sources
+retain bounded parts. Integrated live/manual qualification and the remaining C1 history work stay
+open in #60. Implementation is not Delivery 3 acceptance, and ADR-0099 remains Proposed.
 
 **Problem.** Replies over 8 KiB lose rich rendering, and streaming re-parses the whole reply on
 every refresh, so parse work grows quadratically with reply length.
@@ -84,7 +87,7 @@ segment rather than per message. Deliver it in three reviewable steps:
    block boundaries: a column-0 line after a blank line, a column-0 fence opener, or the line after a
    container closes, never inside fenced code, multi-line HTML or display math. A column-0 item of
    the same list continues it, so loose lists stay whole. Whole blocks pack to about 6 KiB,
-   additionally bounded by the block-count and work budgets below.
+   additionally bounded by the work budget below.
    - **Bounds.** A segment's Markdown body never exceeds 16 KiB. Two things sit outside that bound
      and are stated separately: an HTML or SVG artifact document stays one whole segment, and the
      reply's reference definitions (at most 4 KiB, none once they exceed it) are appended to the

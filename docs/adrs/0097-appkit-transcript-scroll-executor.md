@@ -1,10 +1,11 @@
 # ADR-0097: AppKit transcript scroll executor
 
-Status: Proposed · 2026-09-26
+Status: Accepted · 2026-09-26
 
 Refines [ADR-0002](0002-ui-architecture.md) and [ADR-0091](0091-content-bounded-transcript-layout.md).
 Implements the scroll executor of [issue #54](https://github.com/goatsoft/GOAT/issues/54) section 2
-([PR #71](https://github.com/goatsoft/GOAT/pull/71)).
+(developed in [PR #71](https://github.com/goatsoft/GOAT/pull/71), shipped in
+[PR #78](https://github.com/goatsoft/GOAT/pull/78)).
 
 ## Context
 

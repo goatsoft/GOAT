@@ -1161,7 +1161,14 @@ extension AppTests.Bleet {
                 contentRect: NSRect(x: 0, y: 0, width: 700, height: 450), styleMask: [.titled, .resizable],
                 backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
-            window.contentView = host
+            // Reflow receives a viewport from app chrome. A bare hosting root can instead
+            // impose content-derived window constraints while the anchor is being placed.
+            host.sizingOptions = []
+            let container = NSView(frame: NSRect(origin: .zero, size: window.contentLayoutRect.size))
+            host.frame = container.bounds
+            host.autoresizingMask = [.width, .height]
+            container.addSubview(host)
+            window.contentView = container
             window.orderFront(nil)
             defer {
                 window.contentView = nil
@@ -1171,10 +1178,14 @@ extension AppTests.Bleet {
             #expect(
                 viewport.anchor?.messageID == anchorID && viewport.request == nil,
                 "Initial reflow restoration: \(viewport.diagnostics.suffix(20))")
+            #expect(abs(host.bounds.width - 700) <= 1 && abs(host.bounds.height - 450) <= 1)
             for (width, font) in [(500.0, 24.0), (900, 11), (700, 14)] {
                 model.chatFontSize = font
                 window.setContentSize(NSSize(width: width, height: 450))
                 try await settle(viewport, host: host)
+                #expect(
+                    abs(host.bounds.width - width) <= 1 && abs(host.bounds.height - 450) <= 1,
+                    "Requested viewport \(width) × 450, actual \(host.bounds)")
                 #expect(viewport.readerOwnsViewport, "Reflow never hands the viewport to following")
                 #expect(viewport.anchor?.messageID == anchorID, "Width \(width), font \(font)")
                 #expect(viewport.request == nil && viewport.abandonedRequests == 0, "Width \(width), font \(font)")

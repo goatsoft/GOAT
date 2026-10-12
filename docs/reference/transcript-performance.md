@@ -119,3 +119,102 @@ Code identity HTML extraction runs in preparation, using the existing parse's HT
 in main-thread view evaluation. Dense 2 MiB tests verify scanner retention, bounded admission,
 linear scanning and cache lifecycle. Container responsiveness is measured separately in the
 [container comparison](transcript-container-comparison.md).
+
+
+## Delivery 3 integrated qualification (2026-09-27)
+
+Delivery 3 is **not qualified complete**. A Release production-view workload on main
+`90f4037` found an integrated live-follow performance problem despite the linear preparation
+measurements above. The opt-in `TranscriptPerformanceTests.testInteractiveDelivery3Qualification`
+hosts `ChatView` with synthetic messages and an isolated test home. It never sends to an engine.
+
+Run the interactive surface with:
+
+```sh
+TEST_RUNNER_GOAT_DELIVERY3_QUALIFY=1 make test-app CONFIG=Release TEST_PLAN=Qualification \
+  XCODE_FLAGS='GOAT_APP_BUNDLE_IDENTIFIER=dev.leet.goat.qualification -only-testing:GOATTests/TranscriptPerformanceTests/testInteractiveDelivery3Qualification'
+```
+
+The separate qualification bundle identifier also isolates its UserDefaults from normal app tests.
+It provides theme, font, animation and synthetic inspector controls, a short code fixture, and
+2 MiB answer/reasoning streams. Finish closes the fixture; the opt-in test is skipped in normal
+runs. For automatic answer then reasoning streams, also set `TEST_RUNNER_GOAT_DELIVERY3_AUTORUN=1`.
+The host prints its PID, waits 15 seconds before automatic work, and waits 5 seconds after each
+stream action so Instruments can attach and UI inspection can finish before measurement starts.
+Interactive streams are view-owned tasks and respect cancellation. Closing the fixture stops
+publication and never labels partial output as a completed 2 MiB result. The host uses a plain
+native viewport around the autoresizing SwiftUI host, matching app/comparison layout ownership.
+
+The stress source repeats a short paragraph and one-line Swift fence to exactly 2 MiB, published
+in 16 KiB batches separated by a nominal 120 ms sleep. This deliberately tests high block density;
+it is not a claim about a typical model response. The timer includes a 3-second completion settle.
+The scheduling-delay metric is main-actor sleep overrun, not measured key-to-pixel input latency.
+
+On M1 Max (10 CPU cores, 32 GiB), macOS 27.0 (26A428), Xcode 27, Release, initial 1180 × 780
+content size and 14 pt reading font:
+
+| Scenario | Wall time | Process CPU | Scheduling delay p95 | Process lifetime peak RSS |
+| --- | ---: | ---: | ---: | ---: |
+| Answer, reader held, Time Profiler plus AX polling | 49.36 s | 47.95 s | 239.52 ms | 719.48 MiB |
+| Expanded reasoning, reader held, Time Profiler plus interaction | 19.33 s | 8.90 s | 11.09 ms | 719.48 MiB |
+| Answer, fresh host following live, no AX polling | 173.20 s | 171.75 s | 2018.28 ms | 537.88 MiB |
+
+A 120-second Time Profiler recording began before the fresh-host stream; the final counters cover
+the whole answer, including the period after recording ended. Its subsequent reasoning phase was
+interrupted and is not a result. Other desktop applications and the XCTest host were running.
+These are diagnostic single-host samples, not portable performance thresholds.
+
+The polled trace was dominated by main-thread AttributeGraph and SwiftUI work, including
+accessibility-tree construction. The unpolled run and a stack sample also show sustained
+main-thread SwiftUI/AttributeGraph work. This identifies the integrated view/following path for
+investigation; it does not prove one app function is the cause. Geometry and onChange
+multiple-updates-per-frame warnings reproduced. Do not attribute all delay to parsing, or all
+delay to the accessibility observer.
+
+Separate Allocations captures were collected. The full reader-held reasoning capture recorded
+229.61 MiB cumulative `Swift.__StringStorage` allocations with 5.36 MiB persistent at the end of
+the 90-second recording, and 280 KiB persistent `ThinkingSegment` array storage. These are allocation
+categories, not total process memory or cache-only retention. The answer allocation capture ended
+before that instrumented stream completed, so final answer retention remains unqualified. Raw
+traces stay private; they include machine paths and process environment information.
+
+Manual checks observed live code recolouring in System/dark, Light, Pasture and Midnight, reading
+font changes from 14 to 16 pt, and reflow with a synthetic 260 pt inspector. Reader-held expanded
+reasoning accepted composer input and Earlier/Later paging and preserved position on completion.
+These observations do not complete the entire manual matrix. The locked 1337 experience, actual
+inspector at narrow widths, Reduce Motion/animations-off streaming, full keyboard/VoiceOver
+navigation, font-family changes and macOS 26 still require qualification.
+
+With VoiceOver enabled, the code block's outer accessibility label was exposed on its expansion,
+wrap, save and open buttons as the same generic artifact name. Copy retained its own label.
+This needs correction and a complete keyboard/VoiceOver retest. Light/Pasture also showed a
+low-contrast model-selector label in the synthetic host; reproduce in the regular window before
+classifying it as a product defect. Delivery 3 remains open in issue #60.
+
+### Follow-up foundation and harness correction (2026-10-12)
+
+The September measurements above are historical production-window diagnostics on `90f4037`.
+They are not results for the preparation changes or flat-row experiment in
+[PR #83](https://github.com/goatsoft/GOAT/pull/83). The
+[latest comparison](transcript-container-comparison.md#swiftui-preparation-and-reader-capture-follow-up-2026-10-12)
+records exact-SHA repeated navigation failures, improved reflow capture and separate 2 MiB
+answer/reasoning/dense observations. Neither candidate is qualified; ADR-0099 remains Proposed.
+These preparation and test-only experiment changes do not replace the shipping scroll container.
+
+The old #82 CI reflow failure was a harness-sizing defect: a requested 980 pt viewport measured
+65 pt because the direct `NSHostingView` exported its content sizing to the window. The normal
+reflow fixture now wraps its autoresizing host in a plain `NSView` viewport. The separate direct-root
+minimum-size regression remains, rather than suppressing production window constraints. The
+interactive qualification host uses the same wrapper. No assertion tolerance was relaxed and no
+retry was added to mask the failure. Default-plan tests also cover cancellation before startup and
+teardown during both answer and reasoning streams, preserving incomplete state and stopping output.
+An additional full-suite run exposed a pending initial restore in the older navigation reflow test
+(37 pt residual). That fixture also used a bare hosting root. It now receives the same surrounding
+viewport and asserts the requested width and height at initial placement and every reflow. The
+existing anchor identity, fulfilled-request and zero-abandonment checks remain unchanged. This is
+harness hardening, not evidence that the experiment's 22 pt wheel/growth defect is fixed.
+
+Documentation describes delivered contracts, not proof of the remaining manual or live acceptance
+checks. Supported macOS 26, hardware momentum, keyboard/VoiceOver code actions, integrated themes,
+Reduce Motion, narrow inspectors, font changes, expanded-reasoning paging, answer retention and
+frame-time/allocation qualification remain explicit gates in #60. Delivery 3 stays open.
