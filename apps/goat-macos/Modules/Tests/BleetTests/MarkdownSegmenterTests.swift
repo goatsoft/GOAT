@@ -76,12 +76,12 @@ private func stream(
 
 @Suite struct MarkdownSegmenterTests {
 
-    @Test func tinyParagraphsAreBoundedByBlockCount() {
+    @Test func tinyParagraphsAreBoundedByWork() {
         let source = String(repeating: "x\n\n", count: 160)
         let segments = MarkdownSegmenter.segment(source, isComplete: true)
         #expect(segments.map(\.body).joined() == source)
         #expect(segments.count == 10)
-        #expect(segments.allSatisfy { $0.body.filter { $0 == "x" }.count <= MarkdownSegmenter.maximumGroupBlocks })
+        #expect(segments.allSatisfy { $0.body.filter { $0 == "x" }.count <= MarkdownSegmenter.maximumGroupWork })
     }
 
     @Test func fenceInteriorAndCloserDoNotConsumePackingWork() {
@@ -97,7 +97,8 @@ private func stream(
         let segments = MarkdownSegmenter.segment(source, isComplete: true)
         #expect(segments.map(\.body).joined() == source)
         // A table's plain cells have no fence controls. Packing them must not create more
-        // metadata per byte than the worst-case four empty fences in a 32-byte group.
+        // metadata per byte than four empty fences in a 32-byte group. Nested list fences
+        // can be denser and are covered by the default-budget app regression.
         #expect(segments.count <= source.utf8.count / 32 + 1)
     }
 

@@ -251,8 +251,10 @@ scroll owner inside long messages (it would compete with #54's navigation model)
 The #60 container comparison found that a 6 KiB segment can contain roughly 120 short code
 fences. A source-byte bound alone does not bound SwiftUI view construction and layout.
 
-Packing now ends at 16 top-level blocks or 16 work units, as well as the existing byte target.
-A fence costs four units; each nonblank prose or table line costs one. The score
+Packing now ends at 16 work units, as well as the existing byte target.
+A fence opener costs four units; each nonblank prose or table line costs one. Fence,
+multiline HTML and display-math interiors and their closing delimiters add no work. Every
+whole block still costs at least one, so a separate 16-block limit would be redundant. The score
 saturates after the threshold. Nested fence openers also cost four. This is a conservative packing
 heuristic, not an exact count of MarkdownUI nodes or a time guarantee. An indivisible list, table
 or quote can exceed the work threshold and is isolated in its own segment. Existing 16 KiB body
@@ -267,7 +269,7 @@ shared definitions and parsed text. Prepared code literals are charged separatel
 bounded admission proxies, not exact heap measurements. The actor retains at most 32 MiB total
 and 24 MiB per reply, with completed replies capped at 16 MiB inside that total; the synchronous
 front cache retains at most 16 MiB total and 4 MiB per reply. Both release under the existing memory-pressure policy. The larger actor entry budget keeps a
-2 MiB tiny-fence reply's incremental scanner retained; declining it every publication would
+2 MiB dense-fence reply's incremental scanner retained; declining it every publication would
 reintroduce repeated full scanning. Rich-limit tests cover that pathological metadata density.
 
 Code-block identity literals are extracted from the same HTML already produced by the preparation
@@ -284,9 +286,15 @@ parsed storage is conservatively charged by both owners. Completed entries are e
 active streams, preserving incremental scanners during history-cache churn. If active streams
 alone exceed the global byte/count limits, they are evicted by recency too. Completion releases
 the scanner and applies the smaller completed budget immediately. Nothing is pinned outside the
-accounted lifecycle. The dense 2 MiB empty-fence test charges 14,654,464 bytes for the document
-and 22,708,824 bytes including its scanner on the qualification host; these measurements support
-the entry limits without raising steady-state retention. Tests cover churn, completion and clearing.
+accounted lifecycle. Completed admission checks the smaller of the per-entry and completed
+budgets before evicting anything. A completed reply too large for that budget is returned for
+rendering without evicting unrelated completed history. Scanner source and body Strings share
+storage with the document, so only the scanner's separate metadata is additionally charged; the per-body string allocation allowance is also counted
+only by the prepared document, not again by the scanner.
+Rich-limit regressions cover empty fences, denser alternating nested-list fences, table candidates
+and mixed code/prose, including non-power-of-two segment counts, linear scanning, warm-history
+preservation at completion and clearing. These are stress cases, not a proof of maximum density.
+
 
 
 ### Front-cache admission and visible working documents

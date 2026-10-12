@@ -564,11 +564,16 @@ extension AppTests.Bleet {
             #expect(empty.cost == 0 && empty.completedCost == 0)
         }
 
-        /// Tiny fences maximize row metadata per source byte. Default budgets must retain the
+        /// Dense top-level and nested-list fences stress metadata and non-power-of-two capacity.
+        /// Default budgets must retain the
         /// incremental scanner, otherwise every publication silently starts a full scan again.
-        @Test(arguments: ["```\n```\n", "Text.\n\n```swift\nlet x = 1\n```\n\n", "|\n|-\n\n"])
+        @Test(arguments: ["```\n```\n", "- ```\n* ```\n", "Text.\n\n```swift\nlet x = 1\n```\n\n", "|\n|-\n\n"])
         @MainActor func denseRichLimitRetainsScannerAndChargesMetadata(unit: String) async throws {
             let cache = MarkdownSegmentCache()
+            let historyIDs = (0..<3).map { _ in UUID() }
+            for id in historyIDs {
+                _ = await cache.prepare(id: id, source: "Keep completed history warm.", isComplete: true)
+            }
             let message = ChatMessage(role: .assistant)
             let source = String(
                 ("Intro.\n\n" + String(repeating: unit, count: ReplyWindow.richLimit / unit.utf8.count + 1))
@@ -586,13 +591,13 @@ extension AppTests.Bleet {
                 if message.textRevision.utf8Count == ReplyWindow.richLimit / 2 {
                     halfwayScanned = snapshot.work.scannedBytes
                 }
-                #expect(snapshot.streamCount == 1 && snapshot.entryCount == 1)
+                #expect(snapshot.streamCount == 1 && snapshot.entryCount == historyIDs.count + 1)
                 #expect(snapshot.cost <= (await cache.maximumCost))
             }
             let document = try #require(last)
             let snapshot = await cache.snapshot()
             #expect(document.metadataBytes >= document.segments.count * MemoryLayout<PreparedMarkdownSegment>.stride)
-            #expect(snapshot.cost > document.cost + source.utf8.count, "Scanner metadata is also charged")
+            #expect(snapshot.cost > document.cost, "Separate scanner metadata is charged, shared strings only once")
             // Table lookahead does more byte visits than a fence. Compare growth, not a universal
             // visits-per-byte constant: doubling input should double scanning, not quadruple it.
             #expect(
@@ -600,15 +605,24 @@ extension AppTests.Bleet {
                 "No repeated full scan: \(snapshot.work)")
             #expect(document.segments.filter(\.isParsed).count <= 32 + 2 * MarkdownSegmentCache.retentionMargin)
             let front = PreparedMarkdownDocumentCache()
-            let historyID = UUID()
-            let history = try #require(
-                await cache.prepare(id: historyID, source: "Keep this reply warm.", isComplete: true))
-            #expect(front.store(history, for: historyID))
             #expect(front.store(document, for: message.id) == (document.cost <= front.maximumEntryCost))
-            #expect(front.latest(for: historyID) != nil, "A large reply cannot displace unrelated history")
+            #expect((front.latest(for: message.id) != nil) == (document.cost <= front.maximumEntryCost))
             #expect(
                 document.segments[document.shownSegments.lowerBound].isParsed,
                 "The working document remains renderable even when front-cache admission declines")
+            let completed = try #require(
+                await cache.prepare(
+                    id: message.id, source: message.text, revision: message.textRevision,
+                    isComplete: true, window: .latest))
+            let afterCompletion = await cache.snapshot()
+            let admitted = completed.cost <= min(await cache.maximumEntryCost, await cache.maximumCompletedCost)
+            #expect(afterCompletion.entryCount == historyIDs.count + (admitted ? 1 : 0))
+            #expect(afterCompletion.streamCount == 0)
+            for id in historyIDs {
+                let beforeReuse = await cache.snapshot().parseCount
+                _ = await cache.prepare(id: id, source: "Keep completed history warm.", isComplete: true)
+                #expect(await cache.snapshot().parseCount == beforeReuse, "Oversized completion must preserve history")
+            }
             await cache.removeAll()
             #expect(await cache.snapshot().cost == 0)
             #expect(await cache.snapshot().streamCount == 0)

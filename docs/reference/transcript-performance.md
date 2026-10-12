@@ -102,7 +102,7 @@ Compaction-specific keyboard expansion/collapse and restoration passed with the 
 
 ## Dense-block bounds
 
-Markdown packing also stops at 16 top-level blocks or 16 work units, with a fence costing four.
+Markdown packing also stops at 16 work units, with a fence costing four.
 The score counts nonblank prose and table lines; it isolates an indivisible complex
 block without changing its internal Markdown semantics. It is a packing heuristic, not a hard
 bound on every nested view. The existing byte limits still apply. See the complexity amendment in

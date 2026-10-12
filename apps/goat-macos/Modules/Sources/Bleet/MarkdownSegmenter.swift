@@ -85,7 +85,6 @@ public enum MarkdownSegmenter {
     public static let definitionLimit = 4 * 1_024
     /// Packing budgets are independent of source bytes. An indivisible block stays intact and
     /// occupies its own group when it exceeds the work budget; the existing byte cap still applies.
-    public static let maximumGroupBlocks = 16
     public static let maximumGroupWork = 16
     public static let codeBlockWork = 4
 
@@ -144,9 +143,10 @@ public struct MarkdownSegmentation: Sendable {
     /// The segments, settled ones first. Accessing one is O(1); `text` concatenates on access.
     public var segments: [MarkdownSegment] { Array(self) }
 
-    /// Conservative storage charge, including reserved array slots and a string allocation allowance.
+    /// Reserved scanner segment slots. Body Strings share storage with prepared segments; their
+    /// bytes and allocation allowance are charged by the prepared-document owner.
     public var metadataBytes: Int {
-        (settled.capacity + provisional.capacity) * (MemoryLayout<StoredSegment>.stride + 32)
+        (settled.capacity + provisional.capacity) * MemoryLayout<StoredSegment>.stride
     }
 
     /// Segments below this index are settled: their range, kind and body never change again within
@@ -536,7 +536,6 @@ private struct Engine: Sendable {
     var previousDefinition = false
     var block: Block?
     var group: Range<Int>?
-    var groupBlocks = 0
     var groupWork = 0
     var lastSpaceEnd = -1
 
@@ -810,18 +809,14 @@ private struct Engine: Sendable {
     private mutating func pack(_ range: Range<Int>, work: Int, _ input: inout Input, _ out: inout Output) {
         if let current = group,
             current.count + range.count > input.limits.maximum
-                || groupBlocks + 1 > MarkdownSegmenter.maximumGroupBlocks
                 || groupWork + work > MarkdownSegmenter.maximumGroupWork
         {
             emitGroup(current, &input, &out)
             group = nil
         }
         let merged = group.map { $0.lowerBound..<range.upperBound } ?? range
-        groupBlocks += 1
         groupWork += work
-        if merged.count >= input.limits.target || groupBlocks >= MarkdownSegmenter.maximumGroupBlocks
-            || groupWork >= MarkdownSegmenter.maximumGroupWork
-        {
+        if merged.count >= input.limits.target || groupWork >= MarkdownSegmenter.maximumGroupWork {
             emitGroup(merged, &input, &out)
             group = nil
         } else {
@@ -830,7 +825,6 @@ private struct Engine: Sendable {
     }
 
     private mutating func emitGroup(_ range: Range<Int>, _ input: inout Input, _ out: inout Output) {
-        groupBlocks = 0
         groupWork = 0
         let body = String(decoding: input.copy(range), as: UTF8.self)
         out.segments.append(

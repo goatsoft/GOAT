@@ -138,8 +138,8 @@ struct PreparedMarkdownDocument: Sendable {
     /// UTF-8 bytes the segments render: bodies with any rebuilt syntax, whole artifacts and the
     /// definition suffix of every segment that carries it. The window budget charges this.
     let renderedBytes: Int
-    /// The rendered bytes of the segments currently parsed, the proxy for their parsed content. Equal
-    /// to `renderedBytes` unless the document was prepared for a window.
+    /// The rendered bytes of parsed segments plus their prepared code literals, used as a
+    /// conservative proxy for retained parsed content.
     let retainedBytes: Int
     /// UTF-8 bytes of every segment's body, parsed or not.
     let bodyBytes: Int
@@ -208,8 +208,8 @@ enum SegmentWindow: Hashable, Sendable {
 /// happens here, never while SwiftUI evaluates a transcript row.
 ///
 /// Entries are retained under a deterministic budget (`PreparedMarkdownDocument.cost`): the source,
-/// every segment's body, the shared definition suffixes and the parsed segments, plus the source bytes
-/// again for the segment bodies a streaming reply's scanner holds. A reply whose cost
+/// every segment's body, the shared definition suffixes and the parsed segments, plus scanner
+/// metadata. The scanner shares its source and segment-body strings with the document. A reply whose cost
 /// exceeds `maximumEntryCost` is prepared and returned but not retained, and keeps no scanner state.
 /// Completed entries are evicted before active streams, then least recently used streams if needed.
 /// Completed retention has its own cap inside the total budget. Memory pressure clears it
@@ -301,7 +301,7 @@ actor MarkdownSegmentCache {
     private var work = Work()
 
     /// Defaults retain a streaming reply through `ReplyWindow.richLimit` (its source, its segment
-    /// bodies, its scanner's copy, shared definitions, metadata and its window's parses),
+    /// bodies, shared scanner strings, shared definitions, metadata and its window's parses),
     /// and at most 32 MiB in all, of which completed replies retain at most 16 MiB.
     init(
         maximumEntries: Int = 32,
@@ -426,8 +426,9 @@ actor MarkdownSegmentCache {
             source: source, revision: revision, isComplete: isComplete, segments: stream.prepared,
             renderedBytes: stream.renderedBytes, retainedBytes: stream.retainedBytes, bodyBytes: stream.bodyBytes,
             definitionBytes: stream.definitionBytes, window: window)
-        // A streaming reply's scanner also holds its segment bodies, about the source again.
-        let streamCost = isComplete ? 0 : source.utf8.count + stream.segmentation.metadataBytes
+        // Source and segment-body Strings share storage with the document. Charge the scanner's
+        // separate segment slots, without charging those same strings a second time.
+        let streamCost = isComplete ? 0 : stream.segmentation.metadataBytes
         if !isComplete { streams[id] = stream }
         if !insert(document, cost: document.cost + streamCost, for: id, window: window) { streams[id] = nil }
         return document
@@ -633,7 +634,8 @@ actor MarkdownSegmentCache {
         _ document: PreparedMarkdownDocument, cost entryCost: Int, for id: UUID, window: Range<Int>?
     ) -> Bool {
         _ = takeEntry(id)
-        guard entryCost <= maximumEntryCost else { return false }
+        let admissionLimit = document.isComplete ? min(maximumEntryCost, maximumCompletedCost) : maximumEntryCost
+        guard entryCost <= admissionLimit else { return false }
         entries[id] = Entry(document: document, cost: entryCost, access: access, window: window)
         cost += entryCost
         if document.isComplete { completedCost += entryCost }
