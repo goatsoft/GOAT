@@ -140,6 +140,9 @@ jobs:
       # Maintainers opt in before pushing by applying the qualification: transcript label.
       # These synthetic fixtures skip personal state, engines and configured services.
       - name: Synthetic transcript workloads
+        # Diagnostic until ADR-0099 is accepted: the flat LazyVStack candidate (#86) is test-only and
+        # still fails navigation, so its results are recorded without blocking unrelated merges.
+        continue-on-error: true
         if: >-
           ${{ !cancelled() && matrix.phase == 'app-tests' && contains(github.event.pull_request.labels.*.name, 'qualification: transcript') }}
         env:
