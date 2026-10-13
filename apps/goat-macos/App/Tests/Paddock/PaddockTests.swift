@@ -465,13 +465,20 @@ final class ChatArtifactSyntaxTests: XCTestCase {
             for fenced in [false, true] {
                 let message = ChatMessage(role: .assistant)
                 let host = NSHostingView(
-                    rootView: MessageView(message: message, isLast: true, projectID: nil)
-                        .environment(AppModel.shared))
+                    rootView: ScrollView {
+                        MessageView(message: message, isLast: true, projectID: nil)
+                    }.environment(AppModel.shared))
+                host.sizingOptions = []
                 let window = NSWindow(
                     contentRect: NSRect(x: 0, y: 0, width: 640, height: 480),
                     styleMask: [.titled], backing: .buffered, defer: false)
                 window.isReleasedWhenClosed = false
-                window.contentView = host
+                let viewport = NSView(frame: NSRect(x: 0, y: 0, width: 640, height: 480))
+                host.frame = viewport.bounds
+                host.autoresizingMask = [.width, .height]
+                viewport.addSubview(host)
+                window.contentView = viewport
+                window.orderFront(nil)
                 defer {
                     window.contentView = nil
                     window.close()
@@ -510,7 +517,10 @@ final class ChatArtifactSyntaxTests: XCTestCase {
                     }
                     try await Task.sleep(for: .milliseconds(20))
                 }
-                XCTAssertTrue(rendered, "Completed \(language), fenced=\(fenced), must render its preview")
+                XCTAssertTrue(
+                    rendered,
+                    "Completed \(language), fenced=\(fenced), must render its preview; requested slots: \(InlinePreviewBudget.shared.requested)"
+                )
             }
         }
     }

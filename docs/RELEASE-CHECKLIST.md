@@ -48,6 +48,20 @@ no production code or dependency checkout was modified. Raw logs remain private.
 describe the merged change and the comparison's unresolved startup failure. Container migration
 and broader Delivery 3 qualification remain separate work, with ADR-0099 still Proposed.
 
+### Transcript implementation verification, 2026-10-13
+
+The implementation checkpoint on `feat/transcript-followups-85-89` passes
+`make verify CONFIG=Release` on macOS 27 with Xcode 27: package tests, 66 build-tool tests,
+574 hosted app tests passed (3 skipped), and the Release app build. This verifies the
+modified reader, not the untouched merged-source receipt above. The checks include real
+accessibility action names, preview admission and snapshot limits, streamed preview completion,
+day boundaries, search offsets, edit transactions and database page ordering.
+
+Database pages are not yet integrated into chat loading. Performance, retention, actual
+keyboard/VoiceOver interaction, the experimental container comparison and macOS 26 acceptance
+remain open. [ADR-0101](adrs/0101-bounded-inline-artifacts.md) records the preview policy.
+This checkpoint does not qualify a release artifact.
+
 ### Transcript follow-up ownership
 
 The remaining scope of [#60](https://github.com/goatsoft/GOAT/issues/60) is explicitly transferred

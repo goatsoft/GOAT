@@ -170,6 +170,44 @@ extension AppModel {
         session.messages.removeAll { ids.contains($0.id) }
     }
 
+    /// Persist the edit before changing the in-memory history or starting inference. Compaction
+    /// boundaries cannot be edited away because they may replace context no longer in the prompt.
+    func editAndResend(_ message: ChatMessage, text: String, previousText: String, in session: ChatSession) async
+        -> String?
+    {
+        guard message.text == previousText else { return "The message changed. Reopen the editor and try again." }
+        guard message.role == .user, message.kind == .regular,
+            let index = session.messages.firstIndex(where: { $0.id == message.id }),
+            session.messages[index...].allSatisfy({ $0.kind == .regular })
+        else { return "Messages before a compaction cannot be edited." }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return "Enter a message before resending."
+        }
+        guard startupPhase.hasLocalState, let databaseWriter,
+            chats.contains(where: { $0.id == session.id }), session.messagesLoaded,
+            activeTurnSessionID == nil, !engineTransitioning, !modelCapabilitiesLoading, health.isOK,
+            canGenerateWithSelectedModel(for: session), permitGenerationAfterInvestigation(),
+            let turnID = shepherd.reserve(in: session)
+        else { return "The engine is not ready to resend. Your edit is preserved." }
+        let removed = Array(session.messages.dropFirst(index + 1))
+        do {
+            try await databaseWriter.editUserMessage(
+                id: message.id.uuidString, chatId: session.id.uuidString, previousText: previousText,
+                text: text, followingIDs: removed.map { $0.id.uuidString })
+        } catch {
+            shepherd.stop(sessionID: session.id, turnID: turnID)
+            return "The message was not changed: \(error.localizedDescription)"
+        }
+        message.text = text
+        message.error = nil
+        let removedIDs = Set(removed.map(\.id))
+        session.messages.removeAll { removedIDs.contains($0.id) }
+        sessionTouched(session)
+        guard shepherd.activeTurnID == turnID, shepherd.activeSessionID == session.id else { return nil }
+        shepherd.startReserved(in: session, turnID: turnID)
+        return nil
+    }
+
     func regenerate() async {
         guard startupPhase.hasLocalState,
             let session = currentSession, let databaseWriter,

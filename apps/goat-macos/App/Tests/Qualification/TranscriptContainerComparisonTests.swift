@@ -219,7 +219,24 @@ extension TranscriptPerformanceTests {
     scroll.contentView.scroll(to: NSPoint(x: 0, y: target))
     scroll.reflectScrolledClipView(scroll.contentView)
     host.layoutSubtreeIfNeeded()
-    let directAnchor = comparisonAnchor(fixture, host: host)
+    // A lazy list has no native marker at the new offset until it mounts the first frame.
+    // Bound that readiness wait and measure clip movement throughout it: waiting must not
+    // conceal a startup jump or turn a missing anchor into a successful sample.
+    let captureStarted = ContinuousClock.now
+    let captureDeadline = captureStarted.advanced(by: .milliseconds(200))
+    var directAnchor = comparisonAnchor(fixture, host: host)
+    var uncapturedMovement: CGFloat = abs(scroll.contentView.bounds.minY - target)
+    while directAnchor == nil, ContinuousClock.now < captureDeadline {
+        try await Task.sleep(for: .milliseconds(10))
+        host.layoutSubtreeIfNeeded()
+        uncapturedMovement = max(uncapturedMovement, abs(scroll.contentView.bounds.minY - target))
+        directAnchor = comparisonAnchor(fixture, host: host)
+    }
+    print(
+        "COMPARISON_NAVIGATION backend=\(backend) startup_capture_wait=\(captureStarted.duration(to: ContinuousClock.now)) uncaptured_movement_pt=\(uncapturedMovement) anchor_available=\(directAnchor != nil)"
+    )
+    XCTAssertLessThanOrEqual(uncapturedMovement, 1, "Startup must not move while waiting for the first visible marker")
+    XCTAssertNotNil(directAnchor, "Startup must produce a visible anchor within the bounded readiness interval")
     try await Task.sleep(for: .milliseconds(500))
     host.layoutSubtreeIfNeeded()
     fixture.sampleFrames()
@@ -338,7 +355,8 @@ extension TranscriptPerformanceTests {
     print(
         "COMPARISON_NAVIGATION backend=\(backend) wheel_growth_max_residual_pt=\(worst) samples=\(residuals.count) missing=\(missing) failed_ticks=\(failedTicks.joined(separator: ","))"
     )
-    XCTAssertGreaterThan(residuals.count, 96, "At least half the events must retain a measurable anchor")
+    XCTAssertEqual(missing, 0, "A missing growth anchor is a failed sample")
+    XCTAssertEqual(residuals.count, 192, "Every growth/input event must retain a measurable anchor")
     XCTAssertEqual(fixture.active.text.utf8.count, 2 * 1_024 * 1_024)
     let finalIDs = Set(fixture.rows.map(\.id))
     XCTAssertEqual(finalIDs.count, fixture.rows.count)

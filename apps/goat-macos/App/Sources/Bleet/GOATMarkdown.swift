@@ -1,3 +1,4 @@
+import Caprine
 import MarkdownUI
 import SwiftUI
 
@@ -27,10 +28,58 @@ enum GOATMarkdownSyntax {
             let fence = String(repeating: "`", count: max(3, longestRun + 1))
             return "\(fence)\(language)\n\(source)\n\(fence)"
         }
-        return source.replacingOccurrences(
+        return mathSourceFallback(source).replacingOccurrences(
             of: #"(?m)^>\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*"#,
             with: "> **$1**  ",
             options: .regularExpression)
+    }
+
+    /// Display math is selectable source until a typesetter is adopted. Keep its delimiters and
+    /// backslashes intact, and never reinterpret math-looking lines inside existing code fences.
+    static func mathSourceFallback(_ source: String) -> String {
+        guard source.contains("$$") || source.contains("\\[") else { return source }
+        var output: [String] = []
+        var codeFence: (Character, Int)?
+        var math: [String] = []
+        var closing: String?
+        func flushMath() {
+            let body = math.joined(separator: "\n")
+            let longest = body.split(whereSeparator: { $0 != "`" }).map(\.count).max() ?? 0
+            let fence = String(repeating: "`", count: max(3, longest + 1))
+            output.append("\(fence)math\n\(body)\n\(fence)")
+            math.removeAll(keepingCapacity: true)
+            closing = nil
+        }
+        for line in source.split(separator: "\n", omittingEmptySubsequences: false) {
+            let raw = String(line)
+            let trimmed = raw.trimmingCharacters(in: .whitespaces)
+            if let end = closing {
+                math.append(raw)
+                if trimmed == end { flushMath() }
+                continue
+            }
+            let indentation = line.prefix { $0 == " " }.count
+            if indentation <= 3, line.first != "\t", let marker = trimmed.first,
+                marker == "`" || marker == "~"
+            {
+                let count = trimmed.prefix { $0 == marker }.count
+                if let existing = codeFence {
+                    if marker == existing.0, count >= existing.1, trimmed.dropFirst(count).allSatisfy(\.isWhitespace) {
+                        codeFence = nil
+                    }
+                } else if count >= 3 {
+                    codeFence = (marker, count)
+                }
+                output.append(raw)
+            } else if codeFence == nil, indentation <= 3, line.first != "\t", trimmed == "$$" || trimmed == "\\[" {
+                math = [raw]
+                closing = trimmed == "$$" ? "$$" : "\\]"
+            } else {
+                output.append(raw)
+            }
+        }
+        if closing != nil { flushMath() }
+        return output.joined(separator: "\n")
     }
 }
 
@@ -70,6 +119,26 @@ private struct GoatMarkdownStyle: ViewModifier {
             configuration.label.labelStyle(MarkdownListLabelStyle())
         }
         .markdownTextStyle(\.link) { ForegroundColor(model.theme.tokens.tint) }
+        .markdownBlockStyle(\.table) { configuration in
+            ScrollView(.horizontal) {
+                configuration.label
+                    .fixedSize(horizontal: true, vertical: true)
+                    .markdownTableBorderStyle(.init(color: model.theme.tokens.muted.opacity(0.35)))
+                    .markdownTableBackgroundStyle(
+                        .alternatingRows(model.theme.tokens.surface, model.theme.tokens.tint.opacity(0.05)))
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Table")
+            .markdownMargin(top: .zero, bottom: .em(1))
+        }
+        .markdownBlockStyle(\.tableCell) { configuration in
+            configuration.label
+                .markdownTextStyle {
+                    if configuration.row == 0 { FontWeight(.semibold) }
+                }
+                .padding(Caprine.Activity.spacing)
+                .accessibilityAddTraits(configuration.row == 0 ? .isHeader : [])
+        }
         // MarkdownUI's basic paragraph, capped at the reading measure; code and tables may run wider
         // (#60 D3, DESIGN.md §4).
         .markdownBlockStyle(\.paragraph) { configuration in

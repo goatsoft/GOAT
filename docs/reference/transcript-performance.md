@@ -20,6 +20,40 @@ ADR-0099 remains Proposed and the shipping container is unchanged.
 
 ## Workload and measurements
 
+### Reader follow-up implementation
+
+The reader adds day boundaries that remain stable across admitted windows, an empty
+conversation state, explicit Earlier/Later controls, and a Latest shortcut that respects Reduce
+Motion and the animation setting. Find searches message text off the main actor, returns at most
+200 highlighted message excerpts, and sends selection through the existing viewport owner. Rich
+replies are paged to the segment containing the match. Oversized plain-text replies currently
+open at their message boundary.
+
+Edit and resend preserves attachments and atomically updates the user message while deleting
+subsequent messages. A changed message or database history rejects the edit without partial
+deletion. Compaction boundaries cannot be edited away. Markdown export preserves message source;
+plain-text copy uses the renderer's plain-text conversion. Code actions retain individual
+accessibility names and remain available to accessibility clients when visual controls are hidden.
+
+Inline previews admit at most three live artifacts. Offscreen and source-mode artifacts release
+their web views; memory-only snapshots are capped at eight entries and 16 MiB of charged bitmap
+cost. Admitted previews retain independent ephemeral website data stores and the existing JUDAS
+policy. Initial document geometry is bounded between 80 pt and the existing preview-height cap;
+Expand opens the artifact in Paddock. These limits are not a claim about WebKit subprocess RSS.
+Tables scroll horizontally and expose header cells. Display math delimited by standalone `$$`
+or `\\[` / `\\]` lines is explicitly shown as selectable source, with delimiters preserved.
+No math-rendering dependency has been adopted.
+
+Persistence now has bounded keyset page reads and transactional edit guards. **Chat loading still
+uses the complete history.** Wiring paging into the reader and generation/compaction lifecycle,
+lazy provenance loading, and the long-chat measurements remain part of #88. No page of displayed
+history is substituted for the full generation context.
+
+These implementation changes do not close the qualification gates in #85–#89. The experimental
+startup probe now bounds first-marker readiness while checking that the clip moves no more than
+1 pt during that interval; it also requires all 192 growth/input samples and zero missing anchors.
+Those stricter assertions must pass on an exact committed source before a comparison is accepted.
+
 Issue [#29](https://github.com/goatsoft/GOAT/issues/29) requires runtime evidence,
 including histories with fewer than 40 very large messages. The engine-free
 `TranscriptPerformanceTests` workload creates 24 messages containing repeated

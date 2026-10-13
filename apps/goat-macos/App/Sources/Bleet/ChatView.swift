@@ -48,6 +48,11 @@ struct ChatView: View {
         model.presentation.isEnabled && model.animationsEnabled && !reduceMotion && scenePhase == .active
     }
     @State private var composerFocused = false
+    @State private var exportingTranscript = false
+    @State private var transcriptDocument = TranscriptMarkdownDocument(text: "")
+    @State private var exportFailure: String?
+    @State private var showingFind = false
+    @State private var revealRequest: TranscriptRevealRequest?
 
     static func permitsSend(
         localStateReady: Bool, engineIsHealthy: Bool, messagesLoaded: Bool,
@@ -86,7 +91,7 @@ struct ChatView: View {
                 .background(.bar)
                 .accessibilityElement(children: .contain)
             }
-            ChatTranscriptView(session: session).id(session.id)
+            ChatTranscriptView(session: session, revealRequest: revealRequest).id(session.id)
             Composer(
                 session: session,
                 draft: $draft,
@@ -170,7 +175,49 @@ struct ChatView: View {
         .background(.clear)
         .navigationTitle(session.title)
         .navigationSubtitle(projectName ?? "")
+        .sheet(isPresented: $showingFind) {
+            TranscriptFindSheet(session: session) { match in
+                revealRequest = TranscriptRevealRequest(messageID: match.id, byteOffset: match.byteOffset)
+            }
+        }
+        .fileExporter(
+            isPresented: $exportingTranscript, document: transcriptDocument,
+            contentType: TranscriptMarkdownDocument.contentType, defaultFilename: "Conversation.md"
+        ) { result in
+            if case .failure(let error) = result { exportFailure = error.localizedDescription }
+        }
+        .alert(
+            "Could not export conversation",
+            isPresented: Binding(
+                get: { exportFailure != nil }, set: { if !$0 { exportFailure = nil } }
+            )
+        ) {
+            Button("OK") { exportFailure = nil }
+        } message: {
+            Text(exportFailure ?? "")
+        }
         .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Menu("Conversation", systemImage: "ellipsis.circle") {
+                    Button("Find in conversation…", systemImage: "magnifyingglass") { showingFind = true }
+                        .keyboardShortcut("f", modifiers: [.command])
+                        .disabled(!session.messagesLoaded)
+                    Button("Copy last reply", systemImage: "doc.on.doc") {
+                        if let reply = session.messages.last(where: { $0.role == .assistant && !$0.text.isEmpty }) {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(reply.text, forType: .string)
+                        }
+                    }
+                    .keyboardShortcut("c", modifiers: [.command, .shift])
+                    .disabled(!session.messages.contains { $0.role == .assistant && !$0.text.isEmpty })
+                    Button("Export Markdown…", systemImage: "square.and.arrow.up") {
+                        transcriptDocument = TranscriptMarkdownDocument(
+                            text: TranscriptText.markdownExport(title: session.title, messages: session.messages))
+                        exportingTranscript = true
+                    }
+                    .disabled(!session.messagesLoaded || session.messages.isEmpty)
+                }
+            }
             ToolbarSpacer(.flexible)
             ToolbarItem(placement: .primaryAction) {
                 Button {
@@ -213,6 +260,8 @@ struct ChatView: View {
             model.mcp.cancelPendingPermission()
         }
         .onChange(of: session.id) {
+            revealRequest = nil
+            showingFind = false
             cancelAttachmentJobs()
             pending = []
         }
@@ -308,6 +357,91 @@ struct ChatView: View {
         attachmentImportGeneration = UUID()
         for job in attachmentJobs.values { job.cancel() }
         attachmentJobs.removeAll()
+    }
+}
+
+private struct TranscriptFindSheet: View {
+    let session: ChatSession
+    let select: (TranscriptText.SearchMatch) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+    @State private var matches: [TranscriptText.SearchMatch] = []
+    @State private var searching = false
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Caprine.Activity.inset) {
+            Text("Find in conversation").font(.headline)
+            TextField("Search message text", text: $query).textFieldStyle(.roundedBorder).focused($focused)
+            if searching { ProgressView().controlSize(.small) }
+            Text(matches.count == 200 ? "First 200 matching messages" : "\(matches.count) matching messages")
+                .font(.caption).foregroundStyle(.secondary)
+            List(matches) { match in
+                Button {
+                    select(match)
+                    dismiss()
+                } label: {
+                    (Text(match.prefix) + Text(match.match).bold() + Text(match.suffix))
+                        .lineLimit(4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Show this message in the conversation")
+            }
+            .frame(minHeight: Caprine.Reading.editorHeight)
+            HStack {
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(Caprine.Activity.messageSpacing)
+        .frame(width: Caprine.Reading.editorWidth)
+        .onAppear { focused = true }
+        .task(id: query) {
+            matches = []
+            guard !query.isEmpty else {
+                searching = false
+                return
+            }
+            searching = true
+            do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
+            let entries = session.messages.filter { $0.role == .user || $0.role == .assistant }.map {
+                TranscriptText.SearchEntry(id: $0.id, source: $0.text)
+            }
+            let query = query
+            let worker = Task.detached(priority: .userInitiated) { try TranscriptText.find(query, in: entries) }
+            do {
+                let result = try await withTaskCancellationHandler {
+                    try await worker.value
+                } onCancel: {
+                    worker.cancel()
+                }
+                guard !Task.isCancelled else { return }
+                matches = result
+                searching = false
+            } catch {
+                if !Task.isCancelled { searching = false }
+            }
+        }
+    }
+}
+
+private struct TranscriptMarkdownDocument: FileDocument {
+    static let contentType = UTType(filenameExtension: "md") ?? .plainText
+    static var readableContentTypes: [UTType] { [contentType, .plainText] }
+    var text: String
+
+    init(text: String) { self.text = text }
+
+    init(configuration: ReadConfiguration) throws {
+        guard let data = configuration.file.regularFileContents,
+            let text = String(data: data, encoding: .utf8)
+        else { throw CocoaError(.fileReadInapplicableStringEncoding) }
+        self.text = text
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: Data(text.utf8))
     }
 }
 

@@ -17,14 +17,22 @@ struct MessageView: View {
     var joinsNextTools = false
     var activeToolID: String? = nil
     var deleteCompaction: (() -> Void)? = nil
+    var editMessage: (@MainActor (String, String) async -> String?)? = nil
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
+    @FocusState private var keyboardFocused: Bool
     @State private var hovering = false
     @State private var showingResponseDetails = false
+    @State private var showingEditor = false
+    private var controlsVisible: Bool { hovering || keyboardFocused || voiceOverEnabled }
 
     var body: some View {
         content
+            .focusable(interactions: .activate)
+            .focused($keyboardFocused)
+            .accessibilityElement(children: .contain)
             .contentShape(Rectangle())  // whole row (incl. the area below the text) is hoverable
             .onHover { h in
                 // Reduce Motion, the animations setting and inactive scenes all skip the fade (#60 D9).
@@ -33,7 +41,30 @@ struct MessageView: View {
             .sheet(isPresented: $showingResponseDetails) {
                 ResponseDetailsView(message: message)
             }
+            .sheet(isPresented: $showingEditor) {
+                if let editMessage { TranscriptMessageEditor(source: message.text, resend: editMessage) }
+            }
             .contextMenu {
+                Button("Copy Markdown", systemImage: "doc.on.doc") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(message.text, forType: .string)
+                }
+                Button("Copy plain text", systemImage: "text.alignleft") {
+                    let source = message.text
+                    let pasteboardVersion = NSPasteboard.general.changeCount
+                    Task { @MainActor in
+                        let text = await Task.detached(priority: .userInitiated) {
+                            MarkdownContent(source).renderPlainText()
+                        }.value
+                        // Do not overwrite something copied while a long reply was being prepared.
+                        guard NSPasteboard.general.changeCount == pasteboardVersion else { return }
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(text, forType: .string)
+                    }
+                }
+                if editMessage != nil {
+                    Button("Edit and resend…", systemImage: "pencil") { showingEditor = true }
+                }
                 if message.role == .assistant && ResponseDetailsView.hasUsefulDetails(message) {
                     Button("Response Details…", systemImage: "info.circle") {
                         showingResponseDetails = true
@@ -114,6 +145,10 @@ struct MessageView: View {
                     .multilineTextAlignment(.trailing)
             }
             HStack(spacing: 8) {
+                if editMessage != nil {
+                    Button("Edit and resend…", systemImage: "pencil") { showingEditor = true }
+                        .labelStyle(.iconOnly)
+                }
                 CopyButton(text: message.text)
                     .labelStyle(.iconOnly)
                     .font(.caption2)
@@ -125,8 +160,8 @@ struct MessageView: View {
                 .help(message.createdAt.formatted(date: .abbreviated, time: .standard))
             }
             .padding(.trailing, 2)
-            .opacity(hovering ? 1 : 0)
-            .allowsHitTesting(hovering)
+            .opacity(controlsVisible ? 1 : 0)
+            .allowsHitTesting(controlsVisible)
         }
     }
 
@@ -213,8 +248,8 @@ struct MessageView: View {
                     HStack(spacing: 10) {
                         if canContinue { continueButton }
                         footer
-                            .opacity(message.complete && (hovering || memorySaveState == .saving) ? 1 : 0)
-                            .allowsHitTesting(message.complete && hovering)
+                            .opacity(message.complete && (controlsVisible || memorySaveState == .saving) ? 1 : 0)
+                            .allowsHitTesting(message.complete && controlsVisible)
                             .accessibilityHidden(!message.complete)
                     }
                 } else if canContinue {
@@ -273,7 +308,7 @@ struct MessageView: View {
             }
             Spacer().frame(width: 2)
             if isLast {
-                Button("Regenerate", systemImage: "arrow.counterclockwise") {
+                Button(message.error == nil ? "Regenerate" : "Retry reply", systemImage: "arrow.counterclockwise") {
                     Task { await model.regenerate() }
                 }
                 .buttonStyle(.plain)
@@ -1058,6 +1093,52 @@ struct ThinkingDisclosure: View {
             else { return }
             choice = ReasoningDisclosureStore.Choice(isOpen: true, showsAll: showsAll)
         }
+    }
+}
+
+private struct TranscriptMessageEditor: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var draft: String
+    @State private var original: String
+    @State private var sending = false
+    @State private var failure: String?
+    let resend: @MainActor (String, String) async -> String?
+
+    init(source: String, resend: @escaping @MainActor (String, String) async -> String?) {
+        _draft = State(initialValue: source)
+        _original = State(initialValue: source)
+        self.resend = resend
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Caprine.Activity.inset) {
+            Text("Edit and resend").font(.headline)
+            Text("Resending replaces all messages after this one. Existing attachments are kept.")
+                .foregroundStyle(.secondary)
+            TextEditor(text: $draft)
+                .accessibilityLabel("Revised message")
+                .frame(minHeight: Caprine.Reading.editorHeight)
+                .disabled(sending)
+            if let failure { Text(failure).foregroundStyle(Caprine.Semantic.warning) }
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                    .disabled(sending)
+                Button(sending ? "Saving…" : "Resend") {
+                    sending = true
+                    Task { @MainActor in
+                        failure = await resend(draft, original)
+                        sending = false
+                        if failure == nil { dismiss() }
+                    }
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(sending || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(Caprine.Activity.messageSpacing)
+        .frame(width: Caprine.Reading.editorWidth)
+        .interactiveDismissDisabled(sending)
     }
 }
 

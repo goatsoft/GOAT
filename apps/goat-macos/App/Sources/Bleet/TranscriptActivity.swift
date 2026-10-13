@@ -13,6 +13,7 @@ enum TranscriptActivity {
         let isContinuation: Bool
         var joinsPreviousTools = false
         var joinsNextTools = false
+        var startsDay = false
     }
 
     /// The id of the last row the transcript actually shows. Trailing tool rows and empty assistant
@@ -22,18 +23,27 @@ enum TranscriptActivity {
         messages.last(where: { $0.role != .tool && !isEmpty($0) })?.id
     }
 
-    static func rows(_ messages: ArraySlice<ChatMessage>) -> [Row] {
+    static func rows(
+        _ messages: ArraySlice<ChatMessage>, precedingDate: Date? = nil, calendar: Calendar = .current
+    ) -> [Row] {
         var rows: [Row] = []
         for message in messages {
             if message.role == .tool || isEmpty(message) { continue }  // Results are already attached to their calls.
             // Message identity and view ancestry never depend on arriving tool events.
             // Adjacent assistant rounds share visual alignment, not a disclosure container.
             let continuation = message.role == .assistant && rows.last?.messages.last?.role == .assistant
-            rows.append(Row(id: message.id, messages: [message], isContinuation: continuation))
+            let startsDay =
+                (rows.last?.messages.last?.createdAt ?? precedingDate).map {
+                    !calendar.isDate($0, inSameDayAs: message.createdAt)
+                } ?? true
+            rows.append(
+                Row(
+                    id: message.id, messages: [message], isContinuation: continuation && !startsDay,
+                    startsDay: startsDay))
         }
         for index in rows.indices where index > 0 {
             if let current = rows[index].messages.first, let previous = rows[index - 1].messages.last,
-                isToolOnly(current), isToolOnly(previous)
+                !rows[index].startsDay, isToolOnly(current), isToolOnly(previous)
             {
                 rows[index].joinsPreviousTools = true
                 rows[index - 1].joinsNextTools = true
@@ -91,6 +101,56 @@ enum TranscriptActivity {
 }
 
 enum TranscriptText {
+    struct SearchEntry: Sendable {
+        let id: UUID
+        let source: String
+    }
+
+    struct SearchMatch: Identifiable, Sendable {
+        let id: UUID
+        let prefix: String
+        let match: String
+        let suffix: String
+        let byteOffset: Int
+    }
+
+    /// One highlighted excerpt per matching message. Run on a worker; bounded results never
+    /// duplicate an entire long reply in the search UI.
+    nonisolated static func find(_ query: String, in entries: [SearchEntry], limit: Int = 200) throws -> [SearchMatch] {
+        guard !query.isEmpty, limit > 0 else { return [] }
+        var matches: [SearchMatch] = []
+        for entry in entries {
+            try Task.checkCancellation()
+            guard let range = entry.source.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) else {
+                continue
+            }
+            matches.append(
+                SearchMatch(
+                    id: entry.id, prefix: String(entry.source[..<range.lowerBound].suffix(80)),
+                    match: String(entry.source[range]), suffix: String(entry.source[range.upperBound...].prefix(120)),
+                    byteOffset: entry.source[..<range.lowerBound].utf8.count))
+            if matches.count == limit { break }
+        }
+        return matches
+    }
+
+    /// Export source verbatim. Separators belong outside message bodies, so indentation, Unicode,
+    /// fenced code and significant boundary whitespace survive a Markdown round trip.
+    @MainActor static func markdownExport(title: String, messages: [ChatMessage]) -> String {
+        let heading = title.components(separatedBy: .newlines).joined(separator: " ")
+        var sections = ["# " + heading]
+        for message in messages where message.role != .tool {
+            let label = message.kind == .compaction ? "Compaction" : message.role.rawValue.capitalized
+            var section = "## " + label + "\n\n" + message.text
+            if !message.thinking.isEmpty {
+                section += "\n\n### Reasoning\n\n" + message.thinking
+            }
+            if let error = message.error { section += "\n\n### Error\n\n" + error }
+            sections.append(section)
+        }
+        return sections.joined(separator: "\n\n") + "\n"
+    }
+
     static func hasContent(_ text: String) -> Bool { text.contains { !$0.isWhitespace } }
 
     /// Remove empty boundary lines for display while preserving code indentation and stored text.

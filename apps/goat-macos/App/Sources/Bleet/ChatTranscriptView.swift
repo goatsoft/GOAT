@@ -72,6 +72,12 @@ private enum TranscriptPagingPhase: Equatable, Sendable {
     case pagingSegments
 }
 
+struct TranscriptRevealRequest: Equatable, Sendable {
+    let token = UUID()
+    let messageID: UUID
+    let byteOffset: Int
+}
+
 /// The transcript's single navigation owner (#54 section 2, #60 A1).
 ///
 /// It holds the admitted message window, who owns the viewport, the reader's anchor and at most one
@@ -239,6 +245,17 @@ private enum TranscriptPagingPhase: Equatable, Sendable {
         issue(.anchor(anchor))
     }
 
+    func reveal(_ anchor: Anchor, messageWindow: Range<Int>, segment: Int?, segmentCount: Int) {
+        heldRange = messageWindow
+        segmentWindows.removeAll()
+        if let segment {
+            segmentWindows[anchor.messageID] = segment..<min(segmentCount, segment + 1)
+            segmentCounts[anchor.messageID] = segmentCount
+        }
+        isScrolledToBottom = false
+        restore(anchor)
+    }
+
     /// Messages were removed (compaction, deletion). The held window keeps the anchor's message
     /// when it survives; otherwise the reader continues at the first surviving message.
     func messagesRemoved(count: Int, anchorIndex: Int?, messageID: (Int) -> UUID, cost: (Int) -> Int) {
@@ -297,7 +314,9 @@ private enum TranscriptPagingPhase: Equatable, Sendable {
 /// measured row layout and follow tasks instead of inheriting another transcript's viewport.
 struct ChatTranscriptView: View {
     @Bindable var session: ChatSession
+    var revealRequest: TranscriptRevealRequest?
     @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State var viewport: TranscriptViewport
     @State private var reader = TranscriptReaderState()
     /// False until the first placement: at the latest output when following, else once the restored
@@ -321,9 +340,11 @@ struct ChatTranscriptView: View {
         session: ChatSession,
         initiallyFollowing: Bool = true,
         initialVisibleMessageID: UUID? = nil,
-        viewport: TranscriptViewport? = nil
+        viewport: TranscriptViewport? = nil,
+        revealRequest: TranscriptRevealRequest? = nil
     ) {
         self.session = session
+        self.revealRequest = revealRequest
         let initialHeld: Range<Int>?
         let start =
             initiallyFollowing
@@ -378,15 +399,19 @@ struct ChatTranscriptView: View {
             }
             .padding(24)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if session.messages.isEmpty {
+            ContentUnavailableView(
+                "Start a conversation", systemImage: "bubble.left.and.bubble.right",
+                description: Text("Ask a question or attach a file below."))
         } else {
             ScrollView {
                 // One centred reading column shared with the composer (#60 D3).
                 BoundedWidthLayout(maximumWidth: readingColumn) {
                     VStack(alignment: .leading, spacing: 0) {
                         if messageRange.lowerBound > 0 {
-                            HStack {
-                                GoatLoadingIndicator().controlSize(.mini)
-                                Spacer()
+                            Button("Earlier messages", systemImage: "arrow.up") {
+                                viewport.claimViewport(currentRange: messageRange)
+                                loadEarlierMessages()
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.vertical, 8)
@@ -401,7 +426,10 @@ struct ChatTranscriptView: View {
                                 }
                             }
                         }
-                        let rows = TranscriptActivity.rows(session.messages[messageRange])
+                        let precedingDate = session.messages[..<messageRange.lowerBound].last {
+                            $0.role != .tool && !TranscriptActivity.isEmpty($0)
+                        }?.createdAt
+                        let rows = TranscriptActivity.rows(session.messages[messageRange], precedingDate: precedingDate)
                         let lastMessageID = TranscriptActivity.lastVisibleID(in: session.messages)
                         let activeAssistant =
                             session.isStreaming
@@ -417,6 +445,14 @@ struct ChatTranscriptView: View {
                             // Keep projection inside the existing bounded, fully measured window.
                             VStack(alignment: .leading, spacing: 0) {
                                 if let message = row.messages.first {
+                                    if row.startsDay {
+                                        Text(message.createdAt, format: .dateTime.year().month(.wide).day())
+                                            .font(Caprine.Activity.font)
+                                            .foregroundStyle(.secondary)
+                                            .frame(maxWidth: .infinity)
+                                            .padding(.vertical, Caprine.Activity.inset)
+                                            .accessibilityAddTraits(.isHeader)
+                                    }
                                     MessageView(
                                         message: message, isLast: message.id == lastMessageID,
                                         projectID: session.projectID, compactActivity: row.isContinuation,
@@ -426,6 +462,12 @@ struct ChatTranscriptView: View {
                                         deleteCompaction: CompactionDeletion.canRestore(
                                             message, in: session.messages)
                                             ? { Task { await model.deleteCompaction(message, in: session) } }
+                                            : nil,
+                                        editMessage: message.role == .user && !session.isStreaming
+                                            ? { text, original in
+                                                await model.editAndResend(
+                                                    message, text: text, previousText: original, in: session)
+                                            }
                                             : nil)
                                 }
                             }
@@ -444,22 +486,19 @@ struct ChatTranscriptView: View {
                             .id(row.id)
                         }
                         if messageRange.upperBound < session.messages.count {
-                            HStack {
-                                GoatLoadingIndicator().controlSize(.mini)
-                                Spacer()
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.vertical, 8)
-                            .id("later-messages-loader")
-                            .onScrollVisibilityChange(threshold: 0.01) { visible in
-                                // Never inside the layout pass that revealed the loader: the scroll that
-                                // revealed it is attributed first.
-                                guard visible else { return }
-                                Task { @MainActor in
-                                    await Task.yield()
-                                    loadLaterMessages()
+                            Button("Later messages", systemImage: "arrow.down") { loadLaterMessages() }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.vertical, 8)
+                                .id("later-messages-loader")
+                                .onScrollVisibilityChange(threshold: 0.01) { visible in
+                                    // Never inside the layout pass that revealed the loader: the scroll that
+                                    // revealed it is attributed first.
+                                    guard visible else { return }
+                                    Task { @MainActor in
+                                        await Task.yield()
+                                        loadLaterMessages()
+                                    }
                                 }
-                            }
                         }
                         if session.isStreaming && messageRange.upperBound == session.messages.count {
                             AgentProgressView(session: session)
@@ -502,8 +541,9 @@ struct ChatTranscriptView: View {
                             .contentShape(Circle())
                     }
                     .buttonStyle(.plain)
-                    .help("Scroll to bottom")
-                    .accessibilityLabel("Scroll to bottom")
+                    .help(session.isStreaming ? "New output, jump to latest" : "Jump to latest")
+                    .accessibilityLabel(session.isStreaming ? "New output, jump to latest" : "Jump to latest")
+                    .keyboardShortcut(.end, modifiers: [.command])
                     .accessibilityIdentifier("chat-transcript-scroll-bottom-button")
                     .padding(.bottom, Caprine.Activity.inset)
                     .onHover { isHoveringScrollButton = $0 }
@@ -577,6 +617,37 @@ struct ChatTranscriptView: View {
             // Streaming growth (text, thinking, new messages): following chases it; a reader keeps
             // their anchor.
             .onChange(of: streamRevision) { viewport.contentChanged() }
+            .task(id: revealRequest) {
+                guard let revealRequest,
+                    let message = session.messages.first(where: { $0.id == revealRequest.messageID })
+                else { return }
+                let source = message.text
+                let complete = message.complete
+                let isAssistant = message.role == .assistant && message.kind == .regular
+                let richLimit = ReplyWindow.richLimit
+                let worker = Task.detached(priority: .userInitiated) { () -> (Int?, Int) in
+                    guard isAssistant, source.utf8.count <= richLimit else { return (nil, 0) }
+                    let segments = MarkdownSegmenter.segment(source, isComplete: complete).segments
+                    let index = segments.firstIndex { $0.sourceRange.contains(revealRequest.byteOffset) }
+                    return (index, segments.count)
+                }
+                let (segment, count) = await withTaskCancellationHandler {
+                    await worker.value
+                } onCancel: {
+                    worker.cancel()
+                }
+                guard !Task.isCancelled,
+                    let index = session.messages.firstIndex(where: { $0.id == revealRequest.messageID })
+                else { return }
+                pagingPhase = .idle
+                reader.isScrolling = false
+                followThrottle.reset()
+                viewport.reveal(
+                    .init(messageID: message.id, offset: 0, segment: segment),
+                    messageWindow: TranscriptWindow.range(
+                        count: session.messages.count, startingAt: index, cost: displayCost),
+                    segment: segment, segmentCount: count)
+            }
             .onChange(of: session.isStreaming) { viewport.contentChanged() }
             // A newly sent turn always re-arms following and jumps to the bottom.
             .onChange(of: session.messages.count) { previousCount, count in
@@ -631,7 +702,7 @@ struct ChatTranscriptView: View {
         pagingPhase = .idle
         followThrottle.reset()
         reader.isScrolling = false
-        withAnimation(.easeInOut(duration: 0.2)) {
+        withAnimation(model.animationsEnabled && !reduceMotion ? .easeInOut(duration: 0.2) : nil) {
             viewport.jumpToLatest()
         }
     }

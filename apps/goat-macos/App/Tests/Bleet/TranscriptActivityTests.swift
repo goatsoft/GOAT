@@ -308,6 +308,65 @@ import XCTest
 }
 extension AppTests.Bleet {
     @Suite struct TranscriptActivityTests {
+        @Test func searchKeepsUTF8OffsetsAndBoundsExcerpts() throws {
+            let id = UUID()
+            let source = String(repeating: "🐐 ", count: 100) + "Café" + String(repeating: " tail", count: 100)
+            let results = try TranscriptText.find("cafe", in: [.init(id: id, source: source)])
+            let result = try #require(results.first)
+            #expect(result.id == id)
+            #expect(result.match == "Café")
+            #expect(result.byteOffset == String(repeating: "🐐 ", count: 100).utf8.count)
+            #expect(result.prefix.count <= 80 && result.suffix.count <= 120)
+            #expect(try TranscriptText.find("", in: [.init(id: id, source: source)]).isEmpty)
+            #expect(
+                try TranscriptText.find(
+                    "cafe", in: Array(repeating: .init(id: id, source: source), count: 10), limit: 2
+                ).count == 2)
+        }
+
+        @Test @MainActor func searchNavigationUsesTheViewportOwnerAndCanReturnToLatest() {
+            let viewport = TranscriptViewport()
+            let id = UUID()
+            viewport.reveal(
+                .init(messageID: id, offset: 0, segment: 12), messageWindow: 40..<41, segment: 12, segmentCount: 90)
+            #expect(viewport.readerOwnsViewport)
+            #expect(viewport.heldRange == 40..<41)
+            #expect(viewport.segmentWindow(for: id) == 12..<13)
+            #expect(viewport.request?.target == .anchor(.init(messageID: id, offset: 0, segment: 12)))
+            viewport.jumpToLatest()
+            #expect(viewport.autoFollow)
+            #expect(viewport.heldRange == nil)
+            #expect(viewport.segmentWindow(for: id) == nil)
+            #expect(viewport.request?.target == .bottom)
+        }
+        @Test @MainActor func dayBoundariesBreakAssistantContinuations() throws {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
+            let first = ChatMessage(role: .assistant, createdAt: Date(timeIntervalSince1970: 86_399))
+            first.text = "Before midnight"
+            let second = ChatMessage(role: .assistant, createdAt: Date(timeIntervalSince1970: 86_400))
+            second.text = "After midnight"
+            let third = ChatMessage(role: .assistant, createdAt: Date(timeIntervalSince1970: 86_401))
+            third.text = "Same day"
+            let rows = TranscriptActivity.rows([first, second, third][...], calendar: calendar)
+            #expect(rows.map(\.startsDay) == [true, true, false])
+            #expect(rows.map(\.isContinuation) == [false, false, true])
+            // A page starting halfway through a day still identifies that day.
+            #expect(TranscriptActivity.rows([third][...], calendar: calendar).first?.startsDay == true)
+            #expect(
+                TranscriptActivity.rows([third][...], precedingDate: second.createdAt, calendar: calendar)
+                    .first?.startsDay == false)
+        }
+
+        @Test @MainActor func markdownExportPreservesSourceWhitespaceAndUnicode() {
+            let message = ChatMessage(role: .assistant)
+            message.text = "\n  🐐 café e\u{301}\n\n````markdown\n```swift\n  let x = 1\n```\n````\n  "
+            message.thinking = "  Reasoning\n\n"
+            let exported = TranscriptText.markdownExport(title: "A\nconversation", messages: [message])
+            #expect(exported.hasPrefix("# A conversation\n\n## Assistant\n\n"))
+            #expect(exported.contains(message.text + "\n\n### Reasoning\n\n" + message.thinking))
+            #expect(String(data: Data(exported.utf8), encoding: .utf8) == exported)
+        }
 
         @Test @MainActor func lastVisibleIDSkipsTrailingToolAndEmptyRows() {
             let user = ChatMessage(role: .user)

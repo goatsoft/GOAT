@@ -271,7 +271,45 @@ public final class ChatDatabase: Sendable {
 
     public func messages(chatId: String) async throws -> [MessageRecord] {
         try await pool.read { db in
-            try MessageRecord.filter(Column("chatId") == chatId).order(Column("position")).fetchAll(db)
+            try MessageRecord.filter(Column("chatId") == chatId).order(Column("position"), Column("id")).fetchAll(db)
+        }
+    }
+
+    /// A stable keyset cursor, including the ID because imported histories may share positions.
+    public struct MessageCursor: Sendable, Equatable {
+        public let position: Int
+        public let id: String
+
+        public init(position: Int, id: String) {
+            self.position = position
+            self.id = id
+        }
+    }
+
+    public struct MessagePage: Sendable {
+        public let messages: [MessageRecord]
+        public let hasEarlier: Bool
+        public var earlierCursor: MessageCursor? {
+            messages.first.map { MessageCursor(position: $0.position, id: $0.id) }
+        }
+    }
+
+    /// Fetch the latest bounded page, or the page before a previously returned cursor. Reading
+    /// history never changes the complete-history API used to construct a generation prompt.
+    public func messagePage(chatId: String, before cursor: MessageCursor? = nil, limit: Int = 40) async throws
+        -> MessagePage
+    {
+        let count = min(256, max(1, limit))
+        return try await pool.read { db in
+            var request = MessageRecord.filter(Column("chatId") == chatId)
+            if let cursor {
+                request = request.filter(
+                    Column("position") < cursor.position
+                        || (Column("position") == cursor.position && Column("id") < cursor.id))
+            }
+            let records = try request.order(Column("position").desc, Column("id").desc)
+                .limit(count + 1).fetchAll(db)
+            return MessagePage(messages: Array(records.prefix(count).reversed()), hasEarlier: records.count > count)
         }
     }
 
@@ -332,6 +370,31 @@ public final class ChatDatabase: Sendable {
     public func deleteMessages(ids: [String]) async throws {
         guard !ids.isEmpty else { return }
         try await pool.write { db in _ = try MessageRecord.deleteAll(db, keys: ids) }
+    }
+
+    /// Edit and discard subsequent history atomically. A stale editor must not remove new output.
+    public func editUserMessage(
+        id: String, chatId: String, previousText: String, text: String, followingIDs: [String]
+    ) async throws {
+        try await pool.write { db in
+            guard var message = try MessageRecord.fetchOne(db, key: id), message.chatId == chatId,
+                message.role == "user", message.kind == "regular", message.text == previousText
+            else { throw HistoryEditError.changed }
+            let ids = try String.fetchAll(
+                db, sql: "SELECT id FROM message WHERE chatId = ? ORDER BY position, id", arguments: [chatId])
+            guard let index = ids.firstIndex(of: id), Array(ids.dropFirst(index + 1)) == followingIDs else {
+                throw HistoryEditError.changed
+            }
+            message.text = text
+            message.error = nil
+            try message.update(db)
+            _ = try MessageRecord.deleteAll(db, keys: followingIDs)
+        }
+    }
+
+    public enum HistoryEditError: LocalizedError {
+        case changed
+        public var errorDescription: String? { "The conversation changed. Reopen the message and try again." }
     }
 
     /// Pens are file-backed, so deleting one clears every soft chat link in one DB transaction.
