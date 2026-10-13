@@ -49,8 +49,8 @@ struct TranscriptComparisonSurface: View {
 }
 
 private struct ComparisonLazyList: View {
-    /// Bounds a reflow restore to about 200 ms, before later reader input can be fought.
-    static let restoreAttempts = 12
+    /// Bounds a reflow restore before later reader input can be fought.
+    static let restoreBudget = Duration.milliseconds(400)
     let fixture: TranscriptComparisonFixture
     @State private var viewportSize = CGSize.zero
     @State private var visibleIDs: [String] = []
@@ -81,6 +81,7 @@ private struct ComparisonLazyList: View {
         .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { ids in
             visibleIDs = ids
             fixture.updateSwiftUIVisibility(ids, viewportHeight: viewportSize.height)
+            fixture.refreshReaderCapture()
         }
         // Lazy rows replace estimated heights as they mount near the end, so a single jump to the
         // estimated end falls short. While following, every content height change keeps the end in view.
@@ -106,23 +107,41 @@ private struct ComparisonLazyList: View {
                     fixture.recordReaderGeometry(width: viewportSize.width, font: model.chatFontSize)
                 }
             }
-            guard !fixture.following, let saved else { return }
+            guard !fixture.following, let saved else {
+                print("COMPARISON_REFLOW_RESTORE skipped following=\(fixture.following) saved=false")
+                return
+            }
             // Reflow changes every height above the reader, so the saved row may no longer be mounted
             // at the old clip origin. Bring it into the lazy stack by identity, then correct its pixel
-            // offset from native geometry until rows mounted above it stop changing. Each step is one
-            // one-shot write; nothing is retained to replay against later input.
-            for _ in 0..<Self.restoreAttempts {
+            // offset from native geometry until it holds still for two consecutive frames. Each step is
+            // a one-shot write; nothing is retained to replay against later input. The deadline keeps
+            // the whole restore inside the reflow transaction on slow supported-OS runners.
+            let deadline = ContinuousClock.now.advanced(by: Self.restoreBudget)
+            var scrolledTo = 0
+            var corrections = 0
+            var settled = 0
+            while ContinuousClock.now < deadline, settled < 2 {
                 await Task.yield()
                 guard !Task.isCancelled else { return }
                 guard let target = fixture.readerRestoreOffset(id: saved.id, offset: saved.offset) else {
+                    settled = 0
+                    scrolledTo += 1
                     proxy.scrollTo(saved.id, anchor: .top)
                     try? await Task.sleep(for: .milliseconds(16))
                     continue
                 }
-                guard abs(target - fixture.readerOrigin) > 0.5 else { return }
-                fixture.scrollReader(to: target)
+                if abs(target - fixture.readerOrigin) > 0.5 {
+                    settled = 0
+                    corrections += 1
+                    fixture.scrollReader(to: target)
+                } else {
+                    settled += 1
+                }
                 try? await Task.sleep(for: .milliseconds(16))
             }
+            print(
+                "COMPARISON_REFLOW_RESTORE scroll_to=\(scrolledTo) corrections=\(corrections) settled=\(settled >= 2)"
+            )
         }
         .onChange(of: fixture.latestRequest) {
             fixture.capturedReader = nil

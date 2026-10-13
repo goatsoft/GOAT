@@ -77,14 +77,18 @@ import SwiftUI
         readerObserver = NotificationCenter.default.addObserver(
             forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self, !self.following, let clip = self.readerClip,
-                    abs(clip.bounds.width - self.readerWidth) <= 1,
-                    AppModel.shared.chatFontSize == self.readerFont
-                else { return }
-                self.capturedReader = self.readerAnchor()
-            }
+            MainActor.assumeIsolated { self?.refreshReaderCapture() }
         }
+    }
+
+    /// Records the reader's row and offset at the current width and font. A direct move fires the
+    /// bounds notification before the lazy stack mounts rows at the new origin, so visibility changes
+    /// refresh it too; an empty sample never replaces the last measured anchor.
+    func refreshReaderCapture() {
+        guard !following, let clip = readerClip, abs(clip.bounds.width - readerWidth) <= 1,
+            AppModel.shared.chatFontSize == readerFont, let anchor = readerAnchor()
+        else { return }
+        capturedReader = anchor
     }
 
     /// The candidate uses the same one-shot native scroll ownership as the shipping reader.
