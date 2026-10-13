@@ -67,6 +67,31 @@ keyboard/VoiceOver interaction, the experimental container comparison and macOS 
 remain open. [ADR-0101](adrs/0101-bounded-inline-artifacts.md) records the preview policy.
 This checkpoint does not qualify a release artifact.
 
+### Reader follow-up qualification checkpoint
+
+The follow-up work adds strict 40-row evaluation and database-prepend anchor regressions,
+short-reasoning button navigation, and bounded rich-layout admission under
+[ADR-0103](adrs/0103-dense-reply-layout-admission.md). The 32-group dense answer baseline took
+188.04 seconds. Reducing admission to two groups produced a 19.12-second development run;
+these timings and scheduling-delay proxies do not establish actual input or frame-time acceptance.
+The separate CPU trace attributes substantial work to Markdown/native layout. Raw traces remain
+private. The corrected source passes full `make verify CONFIG=Release` on macOS 27 / Xcode 27:
+578 app tests passed, none failed, 3 skipped, package/tooling checks passed, and the Release app
+built successfully. The 40-row measurement records zero settled evaluations across 20 publications;
+its fixture isolates pointer and scene changes without relaxing that target. Earlier failed runs
+exposed short-window reverse paging and incidental measurement-window invalidations; retain them.
+One unchanged-source run also failed a scheduling-dependent subagent buffer-overflow assertion;
+subsequent runs passed that test. This is not a release-artifact acceptance receipt.
+
+Actual isolated-reader observations cover distinct code-action names, source copy with Unicode
+and leading whitespace, search navigation with a visible selected excerpt, table headings,
+calendar separators, the literal-math notice, Mermaid rendering, Light-theme selector contrast,
+and the empty-state layout. They do not establish spoken VoiceOver, hardware momentum, all
+fonts/themes, WebKit subprocess retention, or supported macOS 26 acceptance. In a separate real SwiftUI scene, Command-F opened Find from the composer and Shift-Command-C
+copied the complete reply, including collapsed code. The earlier raw AppKit hosting fixture
+exposes scene commands as disabled, so it is not a shortcut acceptance harness. Experimental
+navigation and final-source CI remain separate gates.
+
 ### Transcript follow-up ownership
 
 The remaining scope of [#60](https://github.com/goatsoft/GOAT/issues/60) is explicitly transferred

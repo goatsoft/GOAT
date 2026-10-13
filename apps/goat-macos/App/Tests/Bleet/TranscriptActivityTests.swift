@@ -657,6 +657,11 @@ extension AppTests.Bleet {
         let previousSelection = model.selectedChatID
         let path = FileManager.default.temporaryDirectory.appendingPathComponent("goat-history-\(UUID()).sqlite")
         let db = try ChatDatabase(path: path.path)
+        addTeardownBlock { [weak db] in
+            // Never unlink a SQLite vnode while the actor still owns its connection pool.
+            guard db == nil else { return }
+            try? FileManager.default.removeItem(at: path)
+        }
         let session = ChatSession(effort: .trot, modelID: nil)
         session.messagesLoaded = true
         model.db = db
@@ -666,7 +671,6 @@ extension AppTests.Bleet {
             model.db = previousDB
             model.chats = previousChats
             model.selectedChatID = previousSelection
-            try? FileManager.default.removeItem(at: path)
         }
         try await db.save(model.record(for: session))
         var ids: [UUID] = []
@@ -743,5 +747,211 @@ extension AppTests.Bleet {
         session.messages.first?.decodeStoredProvenance()
         XCTAssertTrue(session.messages.first?.generationProvenanceUnavailable ?? false)
         XCTAssertEqual(session.messages.first?.storedGenerationProvenance, "invalid saved details")
+    }
+}
+
+extension TranscriptHistoryPagingTests {
+    func testStreamingPublicationDoesNotReevaluateFortySettledRows() async throws {
+        let session = ChatSession(effort: .trot, modelID: nil)
+        session.messagesLoaded = true
+        session.isStreaming = true
+        session.messages = (0..<40).map { index in
+            let message = ChatMessage(role: .assistant)
+            message.text = "Settled row \(index), with **styled text**."
+            message.complete = index != 39
+            return message
+        }
+        let active = try XCTUnwrap(session.messages.last)
+        let settledIDs = Set(session.messages.dropLast().map(\.id))
+        let host = NSHostingView(
+            rootView: ChatTranscriptView(session: session).environment(AppModel.shared)
+                .environment(\.scenePhase, .active).allowsHitTesting(false))
+        host.sizingOptions = []
+        let window = NSWindow(
+            contentRect: NSRect(x: 80, y: 80, width: 760, height: 520),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        // This measures publication invalidation, not hover changes as rows move under the mouse.
+        window.ignoresMouseEvents = true
+        TranscriptRenderMetrics.enabled = true
+        TranscriptRenderMetrics.evaluations = [:]
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 760, height: 520))
+        host.frame = container.bounds
+        host.autoresizingMask = [.width, .height]
+        container.addSubview(host)
+        window.contentView = container
+        // No pointer can cross a row during this publication-only measurement. Keep native
+        // layout and all 40 admitted rows, but isolate user focus and scene activation changes.
+        window.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
+        window.orderFront(nil)
+        defer {
+            TranscriptRenderMetrics.enabled = false
+            TranscriptRenderMetrics.evaluations = [:]
+            window.contentView = nil
+            window.close()
+        }
+        try await Task.sleep(for: .seconds(1))
+        XCTAssertTrue(
+            Set(TranscriptRenderMetrics.evaluations.keys).isSuperset(of: Set(session.messages.map(\.id))),
+            "The instrumentation must include all 40 admitted rows")
+        TranscriptRenderMetrics.evaluations = [:]
+        for index in 0..<20 {
+            active.appendStream(text: " Publication \(index).", thinking: "")
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        let settled = TranscriptRenderMetrics.evaluations.filter { settledIDs.contains($0.key) }.values.reduce(0, +)
+        let live = TranscriptRenderMetrics.evaluations[active.id, default: 0]
+        print("TRANSCRIPT_EVALUATIONS admitted=40 publications=20 settled=\(settled) live=\(live)")
+        XCTAssertEqual(settled, 0, "Streaming a tail must not reevaluate settled MessageView bodies")
+        XCTAssertGreaterThan(live, 0, "The live row must still observe publication changes")
+        XCTAssertLessThanOrEqual(live, 40)
+    }
+}
+
+extension TranscriptHistoryPagingTests {
+    func testDatabasePageRestoresTheHeldReaderThroughTheExistingExecutor() async throws {
+        let model = AppModel.shared
+        let previousDB = model.db
+        let previousChats = model.chats
+        let previousSelection = model.selectedChatID
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("goat-anchor-\(UUID()).sqlite")
+        let db = try ChatDatabase(path: path.path)
+        addTeardownBlock { [weak db] in
+            // Never unlink a SQLite vnode while the actor still owns its connection pool.
+            guard db == nil else { return }
+            try? FileManager.default.removeItem(at: path)
+        }
+        let session = ChatSession(effort: .trot, modelID: nil)
+        session.messagesLoaded = true
+        model.db = db
+        model.chats = [session]
+        model.selectedChatID = session.id
+        defer {
+            model.db = previousDB
+            model.chats = previousChats
+            model.selectedChatID = previousSelection
+        }
+        try await db.save(model.record(for: session))
+        for index in 0..<200 {
+            try await db.save(
+                MessageRecord(
+                    id: UUID().uuidString, chatId: session.id.uuidString, role: "assistant",
+                    text: "Reader row \(index). A stable paragraph with **emphasis**.\n\nSecond paragraph.",
+                    thinking: "",
+                    error: nil, statsTtft: nil, statsTokens: nil, statsDuration: nil,
+                    complete: true, position: index, createdAt: .now))
+        }
+        session.messagesLoaded = false
+        await model.loadMessages(for: session)
+        let anchor = TranscriptViewport.Anchor(messageID: session.messages[5].id, offset: 13)
+        let navigation = TranscriptViewport(initiallyFollowing: false, initialHeldRange: 0..<40, initialAnchor: anchor)
+        let host = NSHostingView(
+            rootView: ChatTranscriptView(session: session, viewport: navigation).environment(model))
+        host.sizingOptions = []
+        let window = NSWindow(
+            contentRect: NSRect(x: 80, y: 80, width: 760, height: 520),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let viewport = NSView(frame: NSRect(origin: .zero, size: window.contentLayoutRect.size))
+        host.frame = viewport.bounds
+        host.autoresizingMask = [.width, .height]
+        viewport.addSubview(host)
+        window.contentView = viewport
+        window.orderFront(nil)
+        defer {
+            window.contentView = nil
+            window.close()
+        }
+        try await Task.sleep(for: .milliseconds(700))
+        XCTAssertNil(navigation.request, "Initial placement must finish: \(navigation.diagnostics)")
+        XCTAssertEqual(navigation.abandonedRequests, 0)
+        let fulfilled = navigation.diagnostics.filter { $0.hasPrefix("fulfilled ") }.count
+        let loaded = await model.pageHistory(for: session, earlier: true)
+        XCTAssertTrue(loaded)
+        try await Task.sleep(for: .milliseconds(700))
+        XCTAssertEqual(navigation.anchor, anchor)
+        XCTAssertTrue(navigation.readerOwnsViewport)
+        // SwiftUI can already preserve the row during reconciliation. Require the executor
+        // to verify the new request, not to issue a redundant scroll when it is within 1 pt.
+        XCTAssertGreaterThan(navigation.diagnostics.filter { $0.hasPrefix("fulfilled ") }.count, fulfilled)
+        XCTAssertNil(
+            navigation.request, "Page restore must satisfy the executor's 1 pt tolerance: \(navigation.diagnostics)")
+        XCTAssertEqual(navigation.abandonedRequests, 0, navigation.diagnostics.joined(separator: "\n"))
+        XCTAssertLessThanOrEqual(session.messages.count, 120)
+    }
+}
+
+extension TranscriptHistoryPagingTests {
+    func testShortReasoningCanBePagedWithoutScrollingFirst() async throws {
+        let session = ChatSession(effort: .trot, modelID: nil)
+        session.messagesLoaded = true
+        let message = ChatMessage(role: .assistant)
+        message.thinking = "First paragraph.\n\n```swift\nlet choice = 42\n```\n\nLast paragraph."
+        message.complete = true
+        session.messages = [message]
+        ReasoningDisclosureStore.shared.set(.init(isOpen: true, showsAll: true), for: message.id)
+        let owner = TranscriptViewport()
+        let enhancedUI = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previousEnhancedUI = NSApp.accessibilityAttributeValue(enhancedUI)
+        NSApp.accessibilitySetValue(true, forAttribute: enhancedUI)
+        let host = NSHostingView(
+            rootView: ChatTranscriptView(session: session, viewport: owner).environment(AppModel.shared))
+        host.sizingOptions = []
+        let window = NSWindow(
+            contentRect: NSRect(x: 80, y: 80, width: 760, height: 900),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.ignoresMouseEvents = true
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 760, height: 900))
+        host.frame = container.bounds
+        host.autoresizingMask = [.width, .height]
+        container.addSubview(host)
+        window.contentView = container
+        window.makeKeyAndOrderFront(nil)
+        defer {
+            window.contentView = nil
+            window.close()
+            NSApp.accessibilitySetValue(previousEnhancedUI ?? false, forAttribute: enhancedUI)
+        }
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertTrue(owner.autoFollow, "The fixture must not require a preceding scroll gesture")
+        var visited: Set<ObjectIdentifier> = []
+        func value(_ object: NSObject, _ selectorName: String) -> Any? {
+            let selector = NSSelectorFromString(selectorName)
+            guard object.responds(to: selector) else { return nil }
+            return object.perform(selector)?.takeUnretainedValue()
+        }
+        func find(_ object: Any) -> NSObject? {
+            guard let object = object as? NSObject,
+                visited.insert(ObjectIdentifier(object)).inserted
+            else { return nil }
+            let name =
+                value(object, "accessibilityLabel") as? String
+                ?? object.accessibilityAttributeValue(.description) as? String
+            let role =
+                value(object, "accessibilityRole") as? String
+                ?? object.accessibilityAttributeValue(.role) as? String
+            if name == "Earlier reasoning", role == NSAccessibility.Role.button.rawValue { return object }
+            let children =
+                value(object, "accessibilityChildren") as? [Any]
+                ?? object.accessibilityAttributeValue(.children) as? [Any] ?? []
+            for child in children {
+                if let found = find(child) { return found }
+            }
+            return nil
+        }
+        let earlier = try XCTUnwrap(find(host), "Earlier reasoning must be an actionable control")
+        // SwiftUI's AX node exposes the modern Objective-C action without declaring the
+        // NSAccessibilityButton protocol. Call that BOOL-returning method with its correct ABI;
+        // NSObject's deprecated accessibilityPerformAction implementation is a no-op here.
+        let press = NSSelectorFromString("accessibilityPerformPress")
+        XCTAssertTrue(earlier.responds(to: press))
+        let implementation = try XCTUnwrap(earlier.method(for: press))
+        let performPress = unsafeBitCast(implementation, to: (@convention(c) (AnyObject, Selector) -> Bool).self)
+        XCTAssertTrue(performPress(earlier, press))
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertTrue(owner.readerOwnsViewport)
+        let key = TranscriptSegmentOwner.reasoning(of: message.id)
+        XCTAssertEqual(owner.segmentWindow(for: key)?.lowerBound, 0, "The first paragraph must remain reachable")
     }
 }

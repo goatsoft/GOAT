@@ -26,14 +26,19 @@ The reader adds day boundaries that remain stable across admitted windows, an em
 conversation state, explicit Earlier/Later controls, and a Latest shortcut that respects Reduce
 Motion and the animation setting. Find searches message text off the main actor, returns at most
 200 highlighted message excerpts, and sends selection through the existing viewport owner. Rich
-replies are paged to the segment containing the match. Oversized plain-text replies currently
-open at their message boundary.
+replies are paged to the segment containing the match. The selected source excerpt remains
+visible above the reader, including matches inside collapsed code. Oversized plain-text replies
+currently open at their message boundary. Find (Command-F) and copy-last-reply (Shift-Command-C)
+route through the focused chat window. Segment paging controls are real buttons, so a short
+window can reach earlier text without requiring a preceding scroll gesture.
 
 Edit and resend preserves attachments and atomically updates the user message while deleting
 subsequent messages. A changed message or database history rejects the edit without partial
 deletion. Compaction boundaries cannot be edited away. Markdown export preserves message source;
 plain-text copy uses the renderer's plain-text conversion. Code actions retain individual
 accessibility names and remain available to accessibility clients when visual controls are hidden.
+The model/effort selector uses the theme's text color on its transparent background, including
+Light and Pasture, instead of the color intended for text on a solid accent.
 
 Inline previews admit at most three live artifacts. Offscreen and source-mode artifacts release
 their web views; memory-only snapshots are capped at eight entries and 16 MiB of charged bitmap
@@ -41,7 +46,7 @@ cost. Admitted previews retain independent ephemeral website data stores and the
 policy. Initial document geometry is bounded between 80 pt and the existing preview-height cap;
 Expand opens the artifact in Paddock. These limits are not a claim about WebKit subprocess RSS.
 Tables scroll horizontally and expose header cells. Display math delimited by standalone `$$`
-or `\\[` / `\\]` lines is explicitly shown as selectable source, with delimiters preserved.
+or `\[` / `\]` lines is explicitly shown as selectable source, with delimiters preserved.
 No math-rendering dependency has been adopted.
 
 Stored chats open with the latest 40 records, page by `(position, id)`, and retain at most 120
@@ -60,7 +65,8 @@ startup probe now bounds first-marker readiness while checking that the clip mov
 At `d138d2f` on macOS 27 / Xcode 27, the SwiftUI candidate still fails: 46,033 pt startup clip
 movement, no startup anchor within the 200 ms bound, 191 of 192 growth samples, and 120 pt maximum
 input residual. Later width/font reflow probes measured zero drift, but do not override the startup
-and growth failures. The candidate is not accepted and the shipping container is unchanged.
+and growth failures. The candidate is not accepted and the shipping container is unchanged. The subsequent one-shot
+scroll experiment and native fallback retirement are recorded in the [comparison reference](transcript-container-comparison.md).
 
 Issue [#29](https://github.com/goatsoft/GOAT/issues/29) requires runtime evidence,
 including histories with fewer than 40 very large messages. The engine-free
@@ -115,7 +121,7 @@ segment's preview or streaming style at once. Complete HTML/SVG/Mermaid fences c
 their segment settles; oversized fence pieces stay source-only because their closures are
 synthetic. The
 `MarkdownSegmentParse` signpost marks each segment parse. A long response lays
-out a window of at most 32 segments and 16 KiB of rendered bytes: its latest
+out a window of at most two segments and 16 KiB of rendered bytes: its latest
 segments while following, or those the reader pages to. Loaders at the window's
 edges page it as they come into view, keeping the reader's segment in place. Only
 the window's segments (and two on each side) keep their parses. The message
@@ -124,7 +130,7 @@ repeated reference definitions.
 
 Reasoning shown in full is windowed the same way through 2 MiB: its fence-aware
 blocks are split at line boundaries into segments of at most 6 KiB, and a window
-of at most 32 segments and 16 KiB is laid out, paged under its own key. It is
+of at most two segments and 16 KiB is laid out, paged under its own key. It is
 prepared off the main actor from a 120 ms sample of its text revision. While the
 revision only appends, the held segmentation lexes each appended character once,
 including within one long unfinished line, and a refresh copies at most one open
@@ -199,7 +205,8 @@ TEST_RUNNER_GOAT_DELIVERY3_QUALIFY=1 make test-app CONFIG=Release TEST_PLAN=Qual
 
 The separate qualification bundle identifier also isolates its UserDefaults from normal app tests.
 It provides theme, font, animation and synthetic inspector controls, a short code fixture, and
-2 MiB answer/reasoning streams. Finish closes the fixture; the opt-in test is skipped in normal
+2 MiB answer/reasoning streams. Content fixture adds disposable tables, HTML/SVG/Mermaid previews,
+literal display math and calendar-day boundaries; Empty fixture exercises the initial state. Finish closes the fixture; the opt-in test is skipped in normal
 runs. For automatic answer then reasoning streams, also set `TEST_RUNNER_GOAT_DELIVERY3_AUTORUN=1`.
 The host prints its PID, waits 15 seconds before automatic work, and waits 5 seconds after each
 stream action so Instruments can attach and UI inspection can finish before measurement starts.
@@ -307,3 +314,17 @@ Recommend the flat SwiftUI list for the next production migration, retaining the
 container until that migration is reviewed and qualified. Delivery 3 remains open for supported-OS,
 hardware input, manual/accessibility, full-app frame-time and retention checks. Those gates remain
 distinct from the Kid maintenance release.
+
+
+### Dense reply admission follow-up
+
+[ADR-0103](../adrs/0103-dense-reply-layout-admission.md) reduces the reply layout window to two
+rich segments while retaining the existing byte limit and overlapping paging. This addresses
+native layout cost from many tiny code fences; the 40-message transcript window is unchanged.
+With mouse events excluded, the 40-row publication regression observes no settled-row body
+evaluations during 20 updates to the live row. Database-prepend coverage verifies the owner's held anchor through
+page replacement using the existing 1 pt executor tolerance.
+
+Development measurements show a substantial dense-answer improvement, but do not establish
+input latency, frame time or retention acceptance. Request/geometry update warnings remain.
+The five tracked follow-ups and the release checklist still own the remaining qualification.

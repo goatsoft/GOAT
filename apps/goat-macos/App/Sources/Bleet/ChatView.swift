@@ -54,6 +54,26 @@ struct ChatView: View {
     @State private var showingFind = false
     @State private var revealRequest: TranscriptRevealRequest?
 
+    private var canCopyLastReply: Bool {
+        session.messagesLoaded
+            && (session.historyHasLater
+                || session.messages.contains { $0.role == .assistant && !$0.text.isEmpty })
+    }
+
+    private func copyLastReply() {
+        let pasteboardRevision = NSPasteboard.general.changeCount
+        Task {
+            do {
+                let messages = try await model.inspectHistory(for: session)
+                guard let reply = messages.last(where: { $0.role == .assistant && !$0.text.isEmpty }),
+                    NSPasteboard.general.changeCount == pasteboardRevision
+                else { return }
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(reply.text, forType: .string)
+            } catch { exportFailure = error.localizedDescription }
+        }
+    }
+
     static func permitsSend(
         localStateReady: Bool, engineIsHealthy: Bool, messagesLoaded: Bool,
         modelCanGenerate: Bool = true, isBusy: Bool
@@ -90,6 +110,9 @@ struct ChatView: View {
                 .padding(Caprine.Activity.inset)
                 .background(.bar)
                 .accessibilityElement(children: .contain)
+            }
+            if let match = revealRequest?.match {
+                TranscriptSearchResultBanner(match: match) { revealRequest = nil }
             }
             ChatTranscriptView(session: session, revealRequest: revealRequest).id(session.id)
             Composer(
@@ -177,7 +200,7 @@ struct ChatView: View {
         .navigationSubtitle(projectName ?? "")
         .sheet(isPresented: $showingFind) {
             TranscriptFindSheet(session: session) { match in
-                revealRequest = TranscriptRevealRequest(messageID: match.id, byteOffset: match.byteOffset)
+                revealRequest = TranscriptRevealRequest(messageID: match.id, byteOffset: match.byteOffset, match: match)
             }
         }
         .fileExporter(
@@ -196,29 +219,19 @@ struct ChatView: View {
         } message: {
             Text(exportFailure ?? "")
         }
+        .focusedSceneValue(
+            \.transcriptCommands,
+            TranscriptCommandActions(
+                canFind: session.messagesLoaded, canCopy: canCopyLastReply,
+                find: { showingFind = true }, copy: copyLastReply)
+        )
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Menu("Conversation", systemImage: "ellipsis.circle") {
                     Button("Find in conversation…", systemImage: "magnifyingglass") { showingFind = true }
-                        .keyboardShortcut("f", modifiers: [.command])
                         .disabled(!session.messagesLoaded)
-                    Button("Copy last reply", systemImage: "doc.on.doc") {
-                        let pasteboardRevision = NSPasteboard.general.changeCount
-                        Task {
-                            do {
-                                let messages = try await model.inspectHistory(for: session)
-                                guard let reply = messages.last(where: { $0.role == .assistant && !$0.text.isEmpty }),
-                                    NSPasteboard.general.changeCount == pasteboardRevision
-                                else { return }
-                                NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString(reply.text, forType: .string)
-                            } catch { exportFailure = error.localizedDescription }
-                        }
-                    }
-                    .keyboardShortcut("c", modifiers: [.command, .shift])
-                    .disabled(
-                        !session.historyHasLater
-                            && !session.messages.contains { $0.role == .assistant && !$0.text.isEmpty })
+                    Button("Copy last reply", systemImage: "doc.on.doc", action: copyLastReply)
+                        .disabled(!canCopyLastReply)
                     Button("Export Markdown…", systemImage: "square.and.arrow.up") {
                         Task {
                             do {
@@ -1079,3 +1092,66 @@ private struct SkillCatalogContext: Hashable {
 }
 
 // MARK: - The capsule: "Qwen3-8B-4bit · Trot ⌄"
+
+/// Commands follow the focused window, including when its AppKit composer owns keyboard input.
+struct TranscriptCommandActions {
+    let canFind: Bool
+    let canCopy: Bool
+    let find: @MainActor () -> Void
+    let copy: @MainActor () -> Void
+}
+
+private struct TranscriptCommandsKey: FocusedValueKey {
+    typealias Value = TranscriptCommandActions
+}
+
+extension FocusedValues {
+    var transcriptCommands: TranscriptCommandActions? {
+        get { self[TranscriptCommandsKey.self] }
+        set { self[TranscriptCommandsKey.self] = newValue }
+    }
+}
+
+struct TranscriptCommands: Commands {
+    @FocusedValue(\.transcriptCommands) private var actions
+
+    var body: some Commands {
+        CommandGroup(after: .textEditing) {
+            Button("Find in conversation…") { actions?.find() }
+                .keyboardShortcut("f", modifiers: [.command])
+                .disabled(actions?.canFind != true)
+            Button("Copy last reply") { actions?.copy() }
+                .keyboardShortcut("c", modifiers: [.command, .shift])
+                .disabled(actions?.canCopy != true)
+        }
+    }
+}
+
+/// Keep the selected match readable even inside a collapsed code block or a source-only part.
+private struct TranscriptSearchResultBanner: View {
+    let match: TranscriptText.SearchMatch
+    let dismiss: () -> Void
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        HStack(alignment: .top, spacing: Caprine.Activity.spacing) {
+            VStack(alignment: .leading, spacing: Caprine.Activity.spacing) {
+                Text("Search match").font(.caption.weight(.semibold))
+                (Text(singleLine(match.prefix)) + Text(singleLine(match.match)).bold()
+                    + Text(singleLine(match.suffix)))
+                    .font(.caption).lineLimit(3).textSelection(.enabled)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Button("Dismiss search match", systemImage: "xmark.circle.fill", action: dismiss)
+                .labelStyle(.iconOnly).buttonStyle(.plain)
+        }
+        .padding(Caprine.Activity.inset)
+        .foregroundStyle(model.theme.tokens.ink)
+        .background(model.theme.tokens.surface)
+        .accessibilityElement(children: .contain)
+    }
+
+    private func singleLine(_ text: String) -> String {
+        text.components(separatedBy: .newlines).joined(separator: " ")
+    }
+}

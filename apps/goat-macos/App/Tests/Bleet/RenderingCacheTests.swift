@@ -382,8 +382,8 @@ extension AppTests.Bleet {
             #expect(names.contains("Copy source"), "Buttons: \(names)")
             #expect(names.contains("Save artifact"), "Buttons: \(names)")
             #expect(names.contains("Open in Paddock"), "Buttons: \(names)")
-            #expect(
-                names.contains(where: { $0 == "Enable word wrap" || $0 == "Disable word wrap" }), "Buttons: \(names)")
+            let hasWrapAction = names.contains("Enable word wrap") || names.contains("Disable word wrap")
+            #expect(hasWrapAction, "Buttons: \(names)")
             #expect(
                 names.contains(where: { $0.hasPrefix("Show ") && $0.hasSuffix(" more lines") }), "Buttons: \(names)")
         }

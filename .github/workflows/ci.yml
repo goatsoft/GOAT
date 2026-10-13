@@ -137,6 +137,26 @@ jobs:
             release-build) make build CONFIG=Release CAS_PATH="$CAS_PATH" "$timing" 2>&1 | tee "$log" ;;
             *) exit 1 ;;
           esac
+      # Maintainers opt in before pushing by applying the qualification: transcript label.
+      # These synthetic fixtures skip personal state, engines and configured services.
+      - name: Synthetic transcript workloads
+        if: >-
+          ${{ matrix.phase == 'app-tests' && contains(github.event.pull_request.labels.*.name, 'qualification: transcript') }}
+        env:
+          CAS_PATH: ${{ steps.cas.outputs.enabled == 'true' && steps.cas.outputs.path || '' }}
+          TEST_RUNNER_GOAT_COMPARE: swiftui
+          TEST_RUNNER_GOAT_COMPARE_NAVIGATION: '1'
+          TEST_RUNNER_GOAT_COMPARE_COMMIT: ${{ github.sha }}
+          TEST_RUNNER_GOAT_COMPARE_RUN_ID: macos-26-ci
+          TEST_RUNNER_GOAT_DELIVERY3_QUALIFY: '1'
+          TEST_RUNNER_GOAT_DELIVERY3_AUTORUN: '1'
+        run: |
+          status=0
+          make test-app CONFIG=Release TEST_PLAN=Qualification CAS_PATH="$CAS_PATH" \
+            XCODE_FLAGS='-only-testing:GOATTests/TranscriptPerformanceTests/testContainerComparison' || status=$?
+          make test-app CONFIG=Release TEST_PLAN=Qualification CAS_PATH="$CAS_PATH" \
+            XCODE_FLAGS='-only-testing:GOATTests/TranscriptPerformanceTests/testInteractiveDelivery3Qualification' || status=$?
+          exit "$status"
       # Only successful runs save. Pushes to main warm the trusted cache; pull requests save
       # to their own PR-scoped cache, which GitHub never exposes to main or other PRs.
       - name: Save compilation cache

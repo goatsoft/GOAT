@@ -1042,25 +1042,35 @@ struct SegmentedMarkdownView: View {
 struct SegmentLoader: View {
     let label: String
     let action: () -> Void
+    @Environment(\.transcriptInspection) private var inspection
+    @Environment(\.transcriptSegments) private var navigation
 
     var body: some View {
-        HStack {
-            GoatLoadingIndicator().controlSize(.mini)
-            Spacer()
+        Button {
+            // A short window may fit without any scroll range. Explicit paging must still
+            // take reader ownership before requesting earlier or later segments.
+            inspection.perform()
+            action()
+        } label: {
+            HStack {
+                Text(label)
+                Spacer()
+            }
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .font(.caption)
+        .foregroundStyle(.secondary)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, Caprine.Activity.spacing)
         .onScrollVisibilityChange(threshold: 0.01) { visible in
             guard visible else { return }
             Task { @MainActor in
                 await Task.yield()
+                guard navigation.canAutomaticallyPage() else { return }
                 action()
             }
         }
-        .accessibilityElement()
-        .accessibilityLabel(label)
-        .accessibilityAddTraits(.isButton)
-        .accessibilityAction { action() }
     }
 }
 

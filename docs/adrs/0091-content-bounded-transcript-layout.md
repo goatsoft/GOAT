@@ -322,3 +322,10 @@ Visible working documents are rendering state, not additional cache capacity; ca
 must not be presented as total process-memory bounds. The comparison mirrors this ownership
 with per-message working documents released when neither visible nor in overscan (apart from
 the actively followed reply), and per-message observation rather than a global refresh counter.
+
+
+## Proposed admission refinement (2026-10-13)
+
+[ADR-0103](0103-dense-reply-layout-admission.md) lowers the per-reply rich segment count from
+32 to two after profiling dense native code-block layout. It retains the byte budget,
+overlapping paging, full source and single navigation owner. Qualification remains in #85.

@@ -4,8 +4,8 @@ Status: Proposed · 2026-09-27
 If accepted, supersedes the admission window and endless paging of
 [ADR-0091](0091-content-bounded-transcript-layout.md) (its decision, its 2026-09-22 amendment and
 the segment-level windowing of its segmented rendering amendment), section 4 of
-[ADR-0094](0094-pure-swift-syntax-highlighting-and-tool-diffs.md), and
-[ADR-0097](0097-appkit-transcript-scroll-executor.md). Refines
+[ADR-0094](0094-pure-swift-syntax-highlighting-and-tool-diffs.md). Retains the single-owner native
+scroll contract of [ADR-0097](0097-appkit-transcript-scroll-executor.md). Refines
 [ADR-0002](0002-ui-architecture.md) and [ADR-0028](0028-measured-bounded-rendering-and-fullscreen-backing.md).
 Proposed under [#60](https://github.com/goatsoft/GOAT/issues/60) with
 [#54](https://github.com/goatsoft/GOAT/issues/54) section 2, subject to comparison and qualification.
@@ -13,6 +13,17 @@ Proposed under [#60](https://github.com/goatsoft/GOAT/issues/60) with
 Current comparison and migration qualification is tracked in
 [#86](https://github.com/goatsoft/GOAT/issues/86), transferred from #60. Production qualification
 remains in [#85](https://github.com/goatsoft/GOAT/issues/85). This transfer does not accept the ADR.
+
+## Current proposal refinement, 2026-10-13
+
+The test-only native table fallback is retired under #86 after its unresolved Q1 memory growth
+beyond 3 GiB. Historical comparison evidence remains in the reference. The flat SwiftUI candidate
+now retains one-shot native scroll ownership from ADR-0097: a persistent SwiftUI position target
+replayed after direct reader movement. Therefore any future acceptance would refine ADR-0097's
+executor instead of superseding its ownership principle. The candidate has passed one local
+startup/growth/reflow probe, but committed-source repetition, supported-OS and manual qualification
+and owner acceptance remain required. The original proposal and historical reasoning below remain
+as context; this refinement does not migrate the shipping container.
 
 ## Context
 

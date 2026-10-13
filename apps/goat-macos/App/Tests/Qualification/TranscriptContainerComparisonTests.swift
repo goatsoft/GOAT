@@ -12,8 +12,10 @@ extension TranscriptPerformanceTests {
     /// Run each backend in a fresh Release process. Defaults exercise 2 MiB per live channel.
     @MainActor func testContainerComparison() async throws {
         let environment = ProcessInfo.processInfo.environment
-        guard let backend = environment["GOAT_COMPARE"], ["swiftui", "appkit"].contains(backend) else {
-            throw XCTSkip("Set TEST_RUNNER_GOAT_COMPARE=swiftui or appkit")
+        guard let backend = environment["GOAT_COMPARE"], backend == "swiftui" else {
+            throw XCTSkip(
+                "Set TEST_RUNNER_GOAT_COMPARE=swiftui. The AppKit fallback is retired; use its historical revision to reproduce it."
+            )
         }
         let bytes = Int(environment["GOAT_COMPARE_BYTES"] ?? "") ?? 2 * 1_024 * 1_024
         let rounds = Int(environment["GOAT_COMPARE_ROUNDS"] ?? "") ?? 48
@@ -33,7 +35,7 @@ extension TranscriptPerformanceTests {
             model.animationsEnabled = oldAnimations
         }
         print(
-            "COMPARISON_RUN run_id=\(environment["GOAT_COMPARE_RUN_ID"] ?? "unlabelled") commit=\(environment["GOAT_COMPARE_COMMIT"] ?? "unrecorded") height_cache=\(environment["GOAT_COMPARE_NO_HEIGHT_CACHE"] != "1") previews=\(environment["GOAT_COMPARE_NO_PREVIEWS"] != "1")"
+            "COMPARISON_RUN run_id=\(environment["GOAT_COMPARE_RUN_ID"] ?? "unlabelled") commit=\(environment["GOAT_COMPARE_COMMIT"] ?? "unrecorded") scroll_writer=native_one_shot previews=\(environment["GOAT_COMPARE_NO_PREVIEWS"] != "1")"
         )
         print(
             "COMPARISON_HOST os=\(ProcessInfo.processInfo.operatingSystemVersionString) cores=\(ProcessInfo.processInfo.processorCount) memory_bytes=\(ProcessInfo.processInfo.physicalMemory)"

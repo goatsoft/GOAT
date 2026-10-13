@@ -632,7 +632,9 @@ extension AppTests.Bleet {
             #expect(
                 halfwayScanned > 0 && snapshot.work.scannedBytes < halfwayScanned * 21 / 10,
                 "No repeated full scan: \(snapshot.work)")
-            #expect(document.segments.filter(\.isParsed).count <= 32 + 2 * MarkdownSegmentCache.retentionMargin)
+            #expect(
+                document.segments.filter(\.isParsed).count <= ReplyWindow.capacity + 2
+                    * MarkdownSegmentCache.retentionMargin)
             let front = PreparedMarkdownDocumentCache()
             #expect(front.store(document, for: message.id) == (document.cost <= front.maximumEntryCost))
             #expect((front.latest(for: message.id) != nil) == (document.cost <= front.maximumEntryCost))

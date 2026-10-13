@@ -28,6 +28,8 @@ struct TranscriptSegmentNavigation: Equatable, Sendable {
     /// reply has `segmentCount` segments now.
     var page: @MainActor @Sendable (_ messageID: UUID, _ window: Range<Int>, _ kept: Int, _ segmentCount: Int) -> Void =
         { _, _, _, _ in }
+    /// Short windows use explicit buttons; mounting the opposite boundary must not reverse a page.
+    var canAutomaticallyPage: @MainActor @Sendable () -> Bool = { true }
     /// A reply's segment count changed as it streamed.
     var recordSegmentCount: @MainActor @Sendable (_ messageID: UUID, _ segmentCount: Int) -> Void = { _, _ in }
     /// The reader took the viewport while a reply showed `window` of its `segmentCount` segments,
@@ -76,6 +78,7 @@ struct TranscriptRevealRequest: Equatable, Sendable {
     let token = UUID()
     let messageID: UUID
     let byteOffset: Int
+    var match: TranscriptText.SearchMatch? = nil
 }
 
 /// The transcript's single navigation owner (#54 section 2, #60 A1).
@@ -114,7 +117,10 @@ struct TranscriptRevealRequest: Equatable, Sendable {
     var readerOwnsViewport: Bool { !autoFollow }
     /// Presentation only: false shows the jump-to-latest button.
     var isScrolledToBottom: Bool
-    private(set) var anchor: Anchor?
+    @ObservationIgnored weak var historySession: ChatSession?
+    private(set) var anchor: Anchor? {
+        didSet { historySession?.historyAnchorID = anchor?.messageID }
+    }
     private(set) var request: Request?
     /// Segment windows the reader paged long replies to, by message. Following clears them.
     private(set) var segmentWindows: [UUID: Range<Int>] = [:] {
@@ -262,7 +268,7 @@ struct TranscriptRevealRequest: Equatable, Sendable {
             contentChanged()
             return
         }
-        heldRange = TranscriptWindow.range(count: count, startingAt: max(0, anchorIndex - 1), cost: cost)
+        heldRange = TranscriptWindow.range(count: count, startingAt: anchorIndex, cost: cost)
         contentChanged()
     }
 
@@ -416,7 +422,9 @@ struct ChatTranscriptView: View {
         } else if session.messages.isEmpty {
             ContentUnavailableView(
                 "Start a conversation", systemImage: "bubble.left.and.bubble.right",
-                description: Text("Ask a question or attach a file below."))
+                description: Text("Ask a question or attach a file below.")
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ScrollView {
                 // One centred reading column shared with the composer (#60 D3).
@@ -473,22 +481,16 @@ struct ChatTranscriptView: View {
                                             .padding(.vertical, Caprine.Activity.inset)
                                             .accessibilityAddTraits(.isHeader)
                                     }
-                                    MessageView(
-                                        message: message, isLast: message.id == lastMessageID,
-                                        projectID: session.projectID, compactActivity: row.isContinuation,
-                                        joinsPreviousTools: row.joinsPreviousTools,
-                                        joinsNextTools: row.joinsNextTools,
+                                    TranscriptMessageRow(
+                                        message: message, session: session, isLast: message.id == lastMessageID,
+                                        compactActivity: row.isContinuation,
+                                        joinsPreviousTools: row.joinsPreviousTools, joinsNextTools: row.joinsNextTools,
                                         activeToolID: message.id == activeAssistantID ? activeToolID : nil,
-                                        deleteCompaction: CompactionDeletion.canRestore(
-                                            message, in: session.messages)
-                                            ? { Task { await model.deleteCompaction(message, in: session) } }
-                                            : nil,
-                                        editMessage: message.role == .user && !session.isStreaming
-                                            ? { text, original in
-                                                await model.editAndResend(
-                                                    message, text: text, previousText: original, in: session)
-                                            }
-                                            : nil)
+                                        canDeleteCompaction: CompactionDeletion.canRestore(
+                                            message, in: session.messages),
+                                        canEdit: message.role == .user && !session.isStreaming
+                                    )
+                                    .equatable()
                                 }
                             }
                             // Align the row boundary without traversing completed Markdown.
@@ -585,6 +587,9 @@ struct ChatTranscriptView: View {
                     page: { id, window, kept, segmentCount in
                         pageSegments(of: id, to: window, keeping: kept, segmentCount: segmentCount)
                     },
+                    canAutomaticallyPage: {
+                        reader.metrics.contentHeight > reader.metrics.layout.container.height + 1
+                    },
                     recordSegmentCount: { id, segmentCount in viewport.recordSegmentCount(segmentCount, of: id) },
                     hold: { id, window, segmentCount in
                         viewport.holdSegments(of: id, at: window, segmentCount: segmentCount)
@@ -639,7 +644,8 @@ struct ChatTranscriptView: View {
             // Streaming growth (text, thinking, new messages): following chases it; a reader keeps
             // their anchor.
             .onChange(of: streamRevision) { viewport.contentChanged() }
-            .onChange(of: viewport.anchor) {
+            .onAppear {
+                viewport.historySession = session
                 session.historyAnchorID = viewport.anchor?.messageID
             }
             .onChange(of: session.historyRevision) {
@@ -1265,5 +1271,40 @@ let transcriptContentSpace = "transcript-content"
             // The target lies past an end of the scrollable range: the nearest end is fulfilment.
             return (error > 0 && metrics.bottomGap <= 1) || (error < 0 && metrics.topGap <= 1)
         }
+    }
+}
+
+/// Parent publication invalidates layout metadata, but settled messages keep their view inputs.
+/// MessageView still observes its own message, theme, focus and tool state directly.
+private struct TranscriptMessageRow: View, Equatable {
+    let message: ChatMessage
+    let session: ChatSession
+    let isLast: Bool
+    let compactActivity: Bool
+    let joinsPreviousTools: Bool
+    let joinsNextTools: Bool
+    let activeToolID: String?
+    let canDeleteCompaction: Bool
+    let canEdit: Bool
+    @Environment(AppModel.self) private var model
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.message === rhs.message && lhs.session === rhs.session && lhs.isLast == rhs.isLast
+            && lhs.compactActivity == rhs.compactActivity && lhs.joinsPreviousTools == rhs.joinsPreviousTools
+            && lhs.joinsNextTools == rhs.joinsNextTools && lhs.activeToolID == rhs.activeToolID
+            && lhs.canDeleteCompaction == rhs.canDeleteCompaction && lhs.canEdit == rhs.canEdit
+    }
+
+    var body: some View {
+        MessageView(
+            message: message, isLast: isLast, projectID: session.projectID,
+            compactActivity: compactActivity, joinsPreviousTools: joinsPreviousTools, joinsNextTools: joinsNextTools,
+            activeToolID: activeToolID,
+            deleteCompaction: canDeleteCompaction
+                ? { Task { await model.deleteCompaction(message, in: session) } } : nil,
+            editMessage: canEdit
+                ? { text, original in
+                    await model.editAndResend(message, text: text, previousText: original, in: session)
+                } : nil)
     }
 }

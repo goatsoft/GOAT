@@ -36,7 +36,8 @@ pages upward.
 ## Consequences
 
 Initial and idle cache bounds are record counts, not a byte ceiling for arbitrary message bodies.
-One unusually large stored record can still be expensive. Explicit full export and generation remain
+One unusually large stored record can still be expensive. Unsaved messages are retained when
+persistence fails, even if the cache temporarily exceeds its normal record cap. Explicit full export and generation remain
 proportional to the history they process. No database schema or dependency changes are required.
 The 2,000-message fixture checks initial admission, all-message reachability, both paging directions,
 identity-preserving hydration, cache trimming and inspection isolation. It does not establish cold-disk

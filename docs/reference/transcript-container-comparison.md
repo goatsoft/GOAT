@@ -14,10 +14,13 @@ and exact-source qualification; the shipping container remains unchanged. Earlie
 2 MiB answer and reasoning runs retain their timing, preview-subprocess-memory, supported-OS and
 manual/accessibility limits. ADR-0099 remains Proposed.
 
-The candidates are a flat SwiftUI `LazyVStack` with modern scroll APIs and an AppKit `NSTableView`
-with reusable `NSHostingView` cells. Neither replaces the shipping transcript in this experiment.
+The current candidate is a flat SwiftUI `LazyVStack` with one-shot native scroll commands.
+The test-only AppKit `NSTableView` fallback is retired under #86's explicit retirement option,
+following its unresolved Q1 memory growth beyond 3 GiB. Its code remains reproducible at
+`d65eb92`; historical measurements below remain unchanged. Retirement does not turn its failed
+measurements into passes or select a production migration.
 
-Both consume the same test-only row model and use the production Markdown segment, reasoning,
+The historical candidates consumed the same test-only row model and use the production Markdown segment, reasoning,
 user-message and tool activity views. Publication updates existing tail row objects and adds new
 segment rows. The historical messages are deterministic synthetic input, never saved user chats.
 Memory lookups, delegated investigations, file reads, command results and failures are replayed
@@ -39,15 +42,18 @@ native Q1 lifecycle, exact-source comparison and any later migration, transferre
 manual/accessibility qualification. Historical references to #60 below retain their provenance;
 closure of that audit does not resolve either issue.
 
-The latest implementation adds SwiftUI preparation overscan driven by scroll-target visibility,
-removes its per-publication bottom commands, and adds one row-and-offset restoration on width/font-size
-reflow. Reader anchors are captured from native clip-bounds notifications, while the SwiftUI
-position binding remains the sole writer. A bounds notification under a new width/font key cannot
-replace the pre-reflow snapshot. Initial placement is disabled after appearance; transferring
-ownership to the reader clears the prior command. Both candidates render settled segments with final styling; only provisional segments retain
-streaming styling. Oversized artifact pieces remain source-only. The native prototype remains an
-experimental fallback with its memory defect open. The tables below identify the implementation
-measured in each run; historical measurements do not qualify this follow-up.
+The current SwiftUI candidate keeps visibility-driven preparation overscan and row-and-offset
+restoration on width/font changes. Native clip notifications capture the reader. Scroll writes are
+one-shot native commands, matching the ownership approach in ADR-0097; no persistent
+`ScrollPosition` target can replay after a direct reader move. A bounds notification under a new
+width/font key cannot replace the pre-reflow snapshot. Settled segments render with final styling;
+only provisional segments retain streaming styling. Oversized artifact pieces remain source-only.
+
+The first local probe of that change (macOS 27, Xcode 27, source tree
+`6400112e97ee3ad66ebd3041d9bd7995d27aa10925dcd8ae4c9d2ec3b6c53fb7`, based on `d65eb92`)
+had a startup anchor immediately available with zero clip movement, all 192 growth samples,
+zero missing anchors, zero input residual and zero width/font reflow drift. This working-tree
+result precedes committed-source repetition and supported-OS/manual acceptance.
 
 The ordinary test plan covers neighbour prefetch/reuse, per-segment completion identity, settled
 artifact previews and source-only oversized pieces. Cold misses retain plain text; preparation
@@ -64,8 +70,9 @@ TEST_RUNNER_GOAT_COMPARE=swiftui make test-app CONFIG=Release TEST_PLAN=Qualific
   XCODE_FLAGS='GOAT_APP_BUNDLE_IDENTIFIER=dev.leet.goat.comparison -only-testing:GOATTests/TranscriptPerformanceTests/testContainerComparison'
 ```
 
-Use `TEST_RUNNER_GOAT_COMPARE=appkit` for the other candidate. The separate bundle identifier
-isolates test preferences from normal app use; the test plan supplies an isolated app home.
+The `appkit` mode is retired on current source; check out its historical revision for old
+comparisons. The separate bundle identifier isolates test preferences from normal app use;
+the test plan supplies an isolated app home.
 
 Optional environment variables (all prefixed `TEST_RUNNER_` when invoking Make):
 
@@ -80,7 +87,6 @@ Optional environment variables (all prefixed `TEST_RUNNER_` when invoking Make):
 | `GOAT_COMPARE_INPUT_ONLY` | 0 | With navigation mode, stop after static candidate input calibration |
 | `GOAT_COMPARE_RUN_ID` | unlabelled | Label each fresh-process repetition |
 | `GOAT_COMPARE_COMMIT` | unrecorded | Exact measured implementation SHA, supplied by the runner |
-| `GOAT_COMPARE_NO_HEIGHT_CACHE` | 0 | Native ablation: disable keyed height-cache reads/writes |
 | `GOAT_COMPARE_NO_PREVIEWS` | 0 | Ablation: replace HTML/SVG fence languages with same-length text languages |
 | `GOAT_COMPARE_INSTRUMENTS` | 0 | Set 1 for a 15-second attach interval after READY |
 | `GOAT_COMPARE_INTERACTIVE` | 0 | Set 1 to leave the window open for manual checks |

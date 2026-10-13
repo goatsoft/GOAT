@@ -106,7 +106,7 @@ enum TranscriptText {
         let source: String
     }
 
-    struct SearchMatch: Identifiable, Sendable {
+    struct SearchMatch: Identifiable, Equatable, Sendable {
         let id: UUID
         let prefix: String
         let match: String

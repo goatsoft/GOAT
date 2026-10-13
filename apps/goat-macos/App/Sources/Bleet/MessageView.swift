@@ -8,6 +8,17 @@ import MarkdownUI
 import Persistence
 import SwiftUI
 
+/// Opt-in test instrumentation. Disabled in ordinary app use; never persisted or transmitted.
+@MainActor enum TranscriptRenderMetrics {
+    static var enabled = false
+    static var evaluations: [UUID: Int] = [:]
+    static func record(_ id: UUID) {
+        guard enabled else { return }
+        if evaluations.count >= 120, evaluations[id] == nil { return }
+        evaluations[id, default: 0] += 1
+    }
+}
+
 struct MessageView: View {
     let message: ChatMessage
     let isLast: Bool
@@ -29,6 +40,7 @@ struct MessageView: View {
     private var controlsVisible: Bool { hovering || keyboardFocused || voiceOverEnabled }
 
     var body: some View {
+        let _ = TranscriptRenderMetrics.record(message.id)
         content
             .focusable(interactions: .activate)
             .focused($keyboardFocused)
