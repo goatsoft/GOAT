@@ -122,13 +122,20 @@ private struct ComparisonLazyList: View {
             var scrolledTo = 0
             var corrections = 0
             var settled = 0
+            // The origin this restore last wrote. Any other movement is the reader's, and wins.
+            var written: CGFloat?
             while ContinuousClock.now < deadline, settled < 2 {
                 await Task.yield()
                 guard !Task.isCancelled else { return }
+                if let written, abs(fixture.readerOrigin - written) > 0.5 {
+                    print("COMPARISON_REFLOW_RESTORE yielded_to_reader corrections=\(corrections)")
+                    return
+                }
                 guard let target = fixture.readerRestoreOffset(id: saved.id, offset: saved.offset) else {
                     settled = 0
                     scrolledTo += 1
                     proxy.scrollTo(saved.id, anchor: .top)
+                    written = nil
                     try? await Task.sleep(for: .milliseconds(16))
                     continue
                 }
@@ -136,6 +143,7 @@ private struct ComparisonLazyList: View {
                     settled = 0
                     corrections += 1
                     fixture.scrollReader(to: target)
+                    written = fixture.readerOrigin
                 } else {
                     settled += 1
                 }
@@ -152,8 +160,12 @@ private struct ComparisonLazyList: View {
         .onScrollPhaseChange { _, phase, context in
             if phase == .tracking || phase == .interacting { fixture.following = false }
             if phase == .idle {
+                // Programmatic writes also settle through idle, sometimes with geometry from before the
+                // write; the native clip is current, so it alone decides whether the reader is at the end.
                 let geometry = context.geometry
-                fixture.following = geometry.contentSize.height - geometry.visibleRect.maxY < 24
+                fixture.following =
+                    fixture.readerDistanceFromEnd.map { $0 < 24 }
+                    ?? (geometry.contentSize.height - geometry.visibleRect.maxY < 24)
             }
         }
     }

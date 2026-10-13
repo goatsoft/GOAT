@@ -128,6 +128,12 @@ import SwiftUI
     /// The native clip origin the single scroll writer last left, or zero before attachment.
     var readerOrigin: CGFloat { readerClip?.bounds.minY ?? 0 }
 
+    /// Native distance from the clip's bottom edge to the document end, or nil before attachment.
+    var readerDistanceFromEnd: CGFloat? {
+        guard let clip = readerClip, let document = (clip.superview as? NSScrollView)?.documentView else { return nil }
+        return document.bounds.height - clip.bounds.maxY
+    }
+
     func scrollReaderToLatest() {
         guard let clip = readerClip, let scroll = clip.superview as? NSScrollView,
             let document = scroll.documentView
