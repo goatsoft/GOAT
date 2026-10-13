@@ -1,16 +1,19 @@
 # Transcript container comparison
 
-The historical runs below are retained for context. The synchronous-spacing follow-up in
-[PR #84](https://github.com/goatsoft/GOAT/pull/84) supersedes the earlier SwiftUI wheel/growth
-failure: the strict navigation replay passes all 192 growth samples with no missing anchor and
-zero residual, and passes following, input and both width/font reflows. Mixed and dense replays
-complete 2 MiB each of reasoning and answers. [ADR-0100](../adrs/0100-synchronous-markdown-block-spacing.md)
-records the renderer fix. The recommendation is a flat SwiftUI production migration, subject to
-owner acceptance and the remaining qualification gates in issue 60; no shipping container changes
-in that fix. Timing, preview subprocess memory, supported-OS and manual/accessibility limits still
-apply. Exact run evidence belongs to the linked PR rather than a product performance guarantee.
+The historical runs below are retained for context. [PR #84](https://github.com/goatsoft/GOAT/pull/84)
+fixes delayed settled-row Markdown spacing, but does not qualify a replacement container.
+Historical `3f62ebc` with renderer `2.4.2-goat.1` passed all 192 growth samples with no missing
+anchor, zero residual and zero reflow drift. The reviewed `cea0538` with `2.4.2-goat.2` fails
+startup anchor capture and records one missing growth sample. Input-only diagnostics pass;
+a first-paint flush experiment still fails and was discarded. Later zero-drift phases do not
+validate failed startup preconditions. These are not fresh results for squash merge `d88919b`.
 
-Issue #60 owns this qualification. ADR-0099 remains proposed until the owner reviews the comparison.
+[ADR-0100](../adrs/0100-synchronous-markdown-block-spacing.md) records the renderer fix and
+provenance. Flat SwiftUI is the recommended next production migration, subject to owner acceptance
+and exact-source qualification; the shipping container remains unchanged. Earlier mixed/dense
+2 MiB answer and reasoning runs retain their timing, preview-subprocess-memory, supported-OS and
+manual/accessibility limits. ADR-0099 remains Proposed.
+
 The candidates are a flat SwiftUI `LazyVStack` with modern scroll APIs and an AppKit `NSTableView`
 with reusable `NSHostingView` cells. Neither replaces the shipping transcript in this experiment.
 
@@ -29,6 +32,12 @@ blocks; the historical rounds vary their code/preview identifiers. This tests mi
 and scale, not the cache-miss distribution of a unique 2 MiB model response.
 
 ## Current follow-up scope
+
+[#86](https://github.com/goatsoft/GOAT/issues/86) owns the experimental startup-anchor failure,
+native Q1 lifecycle, exact-source comparison and any later migration, transferred from #60.
+[#85](https://github.com/goatsoft/GOAT/issues/85) owns production performance/retention and
+manual/accessibility qualification. Historical references to #60 below retain their provenance;
+closure of that audit does not resolve either issue.
 
 The latest implementation adds SwiftUI preparation overscan driven by scroll-target visibility,
 removes its per-publication bottom commands, and adds one row-and-offset restoration on width/font-size

@@ -1,5 +1,25 @@
 # Transcript performance qualification
 
+## Follow-up ownership (2026-10-13)
+
+The remaining scope from [#60](https://github.com/goatsoft/GOAT/issues/60) is transferred to these
+open issues. Closing the original audit records this transfer; Deliveries 3–6 remain incomplete.
+
+| Remaining scope | Follow-up |
+| --- | --- |
+| Delivery 3 production performance, retention, accessibility and manual checks (Measurements 1c and 6) | [#85](https://github.com/goatsoft/GOAT/issues/85) |
+| Experimental container startup anchors, native Q1, comparison and migration | [#86](https://github.com/goatsoft/GOAT/issues/86) |
+| Delivery 4 bounded previews, tables and math | [#87](https://github.com/goatsoft/GOAT/issues/87) |
+| Delivery 5 growing history, database paging and Measurements 4b–5 | [#88](https://github.com/goatsoft/GOAT/issues/88) |
+| Delivery 6 empty state, editing/retry, search, keyboard, day separators and export | [#89](https://github.com/goatsoft/GOAT/issues/89) |
+
+The dated evidence below remains historical. References there to gates being open in #60 now
+resolve through this ownership table. No unchecked acceptance is certified by the transfer.
+The maintenance release retains its separate [release checklist](../RELEASE-CHECKLIST.md);
+ADR-0099 remains Proposed and the shipping container is unchanged.
+
+## Workload and measurements
+
 Issue [#29](https://github.com/goatsoft/GOAT/issues/29) requires runtime evidence,
 including histories with fewer than 40 very large messages. The engine-free
 `TranscriptPerformanceTests` workload creates 24 messages containing repeated
