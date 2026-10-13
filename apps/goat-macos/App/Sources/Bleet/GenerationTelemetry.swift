@@ -98,7 +98,9 @@ struct GenerationChartValue: Identifiable {
 
     init(session: ChatSession) {
         isCompacting = session.isStreaming && session.activeCompactionID != nil
-        stats = session.messages.last(where: { $0.stats != nil })?.stats
+        stats =
+            session.historyHasLater
+            ? session.latestPersistedStats : session.messages.last(where: { $0.stats != nil })?.stats
         message = session.isStreaming ? session.messages.last(where: { $0.role == .assistant && !$0.complete }) : nil
         if !session.isStreaming {
             phase = .idle

@@ -52,6 +52,13 @@ extension AppModel {
         user.complete = true
         session.messages.append(user)
         Task {
+            defer { trimHistory(for: session) }
+            guard await hydrateHistory(for: session) else {
+                user.error =
+                    "The earlier history could not be loaded. Nothing was sent to the engine. Retry after restoring database access."
+                shepherd.stop(sessionID: session.id, turnID: turnID)
+                return
+            }
             // Attachment writes happen off the main actor; generation waits for the paths.
             let attachmentPaths = await Task.detached {
                 attachments.compactMap { AttachmentStore.save($0) }
@@ -170,6 +177,49 @@ extension AppModel {
         session.messages.removeAll { ids.contains($0.id) }
     }
 
+    /// Persist the edit before changing the in-memory history or starting inference. Compaction
+    /// boundaries cannot be edited away because they may replace context no longer in the prompt.
+    func editAndResend(_ message: ChatMessage, text: String, previousText: String, in session: ChatSession) async
+        -> String?
+    {
+        guard message.text == previousText else { return "The message changed. Reopen the editor and try again." }
+        guard message.role == .user, message.kind == .regular else { return "This message cannot be edited." }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return "Enter a message before resending."
+        }
+        guard startupPhase.hasLocalState, let databaseWriter,
+            chats.contains(where: { $0.id == session.id }), session.messagesLoaded,
+            activeTurnSessionID == nil, !engineTransitioning, !modelCapabilitiesLoading, health.isOK,
+            canGenerateWithSelectedModel(for: session), permitGenerationAfterInvestigation(),
+            let turnID = shepherd.reserve(in: session)
+        else { return "The engine is not ready to resend. Your edit is preserved." }
+        guard await hydrateHistory(for: session),
+            shepherd.activeTurnID == turnID, message.text == previousText,
+            let index = session.messages.firstIndex(where: { $0.id == message.id }),
+            session.messages[index...].allSatisfy({ $0.kind == .regular })
+        else {
+            shepherd.stop(sessionID: session.id, turnID: turnID)
+            return "The complete editable history is unavailable. Your edit is preserved."
+        }
+        let removed = Array(session.messages.dropFirst(index + 1))
+        do {
+            try await databaseWriter.editUserMessage(
+                id: message.id.uuidString, chatId: session.id.uuidString, previousText: previousText,
+                text: text, followingIDs: removed.map { $0.id.uuidString })
+        } catch {
+            shepherd.stop(sessionID: session.id, turnID: turnID)
+            return "The message was not changed: \(error.localizedDescription)"
+        }
+        message.text = text
+        message.error = nil
+        let removedIDs = Set(removed.map(\.id))
+        session.messages.removeAll { removedIDs.contains($0.id) }
+        sessionTouched(session)
+        guard shepherd.activeTurnID == turnID, shepherd.activeSessionID == session.id else { return nil }
+        shepherd.startReserved(in: session, turnID: turnID)
+        return nil
+    }
+
     func regenerate() async {
         guard startupPhase.hasLocalState,
             let session = currentSession, let databaseWriter,
@@ -178,12 +228,18 @@ extension AppModel {
             canGenerateWithSelectedModel(for: session)
         else { return }
 
-        guard let turn = Self.regenerationTurn(in: session.messages), permitGenerationAfterInvestigation(),
+        guard permitGenerationAfterInvestigation(),
             let turnID = shepherd.reserve(in: session)
         else {
             return
         }
 
+        guard await hydrateHistory(for: session), shepherd.activeTurnID == turnID,
+            let turn = Self.regenerationTurn(in: session.messages)
+        else {
+            shepherd.stop(sessionID: session.id, turnID: turnID)
+            return
+        }
         do {
             try await Self.removeRegeneratedTurn(turn, from: session, writer: databaseWriter)
         } catch {
@@ -270,6 +326,13 @@ extension AppModel: ShepherdEnvironment {
         let record = record(for: message, in: session, position: position)
         do {
             try await databaseWriter.saveMessage(record)
+            session.historyCursors[message.id] = .init(position: position, id: message.id.uuidString)
+            if let stats = message.stats {
+                session.latestPersistedStats = stats
+                session.recentPersistedStats.removeAll { $0.id == message.id }
+                session.recentPersistedStats.append((id: message.id, stats: stats))
+                session.recentPersistedStats = Array(session.recentPersistedStats.suffix(12))
+            }
             return true
         } catch {
             dbWarning = "Message was not saved: \(error.localizedDescription)"
@@ -306,6 +369,11 @@ extension AppModel: ShepherdEnvironment {
                         turn: turn, record: record, chat: chat, running: false)
                 }
             }
+        }
+        if activeSessionID == nil, let previous = self.activeTurnSessionID,
+            let session = chats.first(where: { $0.id == previous })
+        {
+            trimHistory(for: session)
         }
         self.activeTurnSessionID = activeSessionID
     }

@@ -48,6 +48,77 @@ no production code or dependency checkout was modified. Raw logs remain private.
 describe the merged change and the comparison's unresolved startup failure. Container migration
 and broader Delivery 3 qualification remain separate work, with ADR-0099 still Proposed.
 
+### Transcript implementation verification, 2026-10-13
+
+The implementation checkpoint on `feat/transcript-followups-85-89` passes
+`make verify CONFIG=Release` on macOS 27 with Xcode 27: package tests, 66 build-tool tests,
+574 hosted app tests passed (3 skipped), and the Release app build. This verifies the
+modified reader, not the untouched merged-source receipt above. The checks include real
+accessibility action names, preview admission and snapshot limits, streamed preview completion,
+day boundaries, search offsets, edit transactions and database page ordering.
+
+The checkpoint above precedes database-backed reader loading added under ADR-0102. Its new
+2,000-message regression passes initial 40-record admission, bidirectional reachability, a
+120-record idle cache and complete-context hydration. Full `make verify CONFIG=Release` of that
+integration passes on macOS 27 / Xcode 27: 575 app tests passed, none failed, 3 skipped; package
+and tooling tests passed and the Release build succeeded. The initial PR CI attempt on macOS 26
+failed to compile a new assertion, before executing app tests. Performance, retention, actual
+keyboard/VoiceOver interaction, the experimental container comparison and macOS 26 acceptance
+remain open. [ADR-0101](adrs/0101-bounded-inline-artifacts.md) records the preview policy.
+This checkpoint does not qualify a release artifact.
+
+### Reader follow-up qualification checkpoint
+
+The follow-up work adds strict 40-row evaluation and database-prepend anchor regressions,
+short-reasoning button navigation, and bounded rich-layout admission under
+[ADR-0103](adrs/0103-dense-reply-layout-admission.md). The 32-group dense answer baseline took
+188.04 seconds. Reducing admission to two groups produced a 19.12-second development run;
+these timings and scheduling-delay proxies do not establish actual input or frame-time acceptance.
+The separate CPU trace attributes substantial work to Markdown/native layout. Raw traces remain
+private. The corrected source passes full `make verify CONFIG=Release` on macOS 27 / Xcode 27:
+578 app tests passed, none failed, 3 skipped, package/tooling checks passed, and the Release app
+built successfully. The 40-row measurement records zero settled evaluations across 20 publications;
+its fixture isolates pointer and scene changes without relaxing that target. Earlier failed runs
+exposed short-window reverse paging and incidental measurement-window invalidations; retain them.
+One unchanged-source run also failed a scheduling-dependent subagent buffer-overflow assertion;
+subsequent runs passed that test. This is not a release-artifact acceptance receipt.
+
+Actual isolated-reader observations cover distinct code-action names, source copy with Unicode
+and leading whitespace, search navigation with a visible selected excerpt, table headings,
+calendar separators, the literal-math notice, Mermaid rendering, Light-theme selector contrast,
+and the empty-state layout. They do not establish spoken VoiceOver, hardware momentum, all
+fonts/themes, WebKit subprocess retention, or supported macOS 26 acceptance. In a separate real SwiftUI scene, Command-F opened Find from the composer and Shift-Command-C
+copied the complete reply, including collapsed code. The earlier raw AppKit hosting fixture
+exposes scene commands as disabled, so it is not a shortcut acceptance harness. Experimental
+navigation and final-source CI remain separate gates. The macOS 26.6 CI Release build at
+`9d421bb` exposed a `ChatView` type-checker timeout not seen with Xcode 27; the follow-up splits
+that view expression into smaller composition properties. Retain the failed CI result and require
+new CI acceptance of the correction. At `2b08d35`, macOS 26 / Xcode 26.6 CI passes the
+Release build and all 578 ordinary app tests (three skips). The opt-in navigation workload
+still fails startup/growth tolerances, bottom following and both reflow anchors. The shipping
+expanded-reasoning workload takes 182.895 seconds with 2,250.138 ms scheduling-overrun p95.
+These block qualification; see the [performance](reference/transcript-performance.md) and
+[container comparison](reference/transcript-container-comparison.md) results. The correction
+fixes compilation, not these runtime failures.
+
+The follow-up at `64bb55d` also passes all 578 ordinary macOS 26 app tests, including
+the bounded missing-target lifecycle and database-anchor readiness checks. Its synthetic
+container and production responsiveness qualification remain unsuccessful. The subsequent
+local theme/focus patch passes full Release verification with 579 app tests, zero failures
+and three skips. An actual SVG-color regression covers Mermaid's initialization race.
+The real-scene focus shortcuts and light/dark diagram rendering subsequently passed at
+`ed4ebf9`. That commit also passes all 579 ordinary macOS 26 CI app tests and the Release
+build. Experimental navigation and macOS 26 reasoning responsiveness still fail qualification.
+A separate uninstrumented local macOS 27 run completes both 2 MiB phases in 18.976 s
+(answer) and 21.643 s (reasoning); these results do not supersede the supported-OS failure.
+
+Additional real-scene checks at `64bb55d` cover a narrow reader with its inspector open,
+14–28 pt text, System/dark, Light, Pasture and Midnight, horizontal table scrolling and
+selected-cell copy, Command-End from the composer, and native Markdown export preserving
+Unicode, code whitespace, artifact fences and literal math. These checks exposed the
+Mermaid startup-theme race addressed by the subsequent patch. They do not certify spoken
+VoiceOver, hardware momentum, all font families or WebKit retention.
+
 ### Transcript follow-up ownership
 
 The remaining scope of [#60](https://github.com/goatsoft/GOAT/issues/60) is explicitly transferred

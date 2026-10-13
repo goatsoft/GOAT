@@ -272,6 +272,16 @@ actor AppDatabaseWriter {
         }
     }
 
+    func editUserMessage(id: String, chatId: String, previousText: String, text: String, followingIDs: [String])
+        async throws
+    {
+        let database = database
+        try await serializeMutation {
+            try await database.editUserMessage(
+                id: id, chatId: chatId, previousText: previousText, text: text, followingIDs: followingIDs)
+        }
+    }
+
     private func accept(_ revision: UInt64, for chatID: String) -> Bool {
         guard revision > (chatRevisions[chatID] ?? 0) else { return false }
         chatRevisions[chatID] = revision

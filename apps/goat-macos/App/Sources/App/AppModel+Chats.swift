@@ -136,6 +136,9 @@ extension AppModel {
             !chat.isStreaming, chats.contains(where: { $0.id == chat.id }),
             CompactionDeletion.canRestore(message, in: chat.messages)
         else { return }
+        guard await hydrateHistory(for: chat), !chat.isStreaming,
+            CompactionDeletion.canRestore(message, in: chat.messages)
+        else { return }
         do {
             try await databaseWriter.deleteMessage(id: message.id.uuidString)
             chat.messages = CompactionDeletion.removing(message, from: chat.messages)
@@ -325,6 +328,7 @@ extension AppModel {
             let lifecycle = message.generationLifecycle,
             let state = GenerationProvenanceRecord.Lifecycle(rawValue: lifecycle)
         else {
+            if let source = message.storedGenerationProvenance { return source }
             guard let existing = message.generationProvenance else { return nil }
             return try? String(data: JSONEncoder().encode(existing), encoding: .utf8)
         }
@@ -381,80 +385,299 @@ extension AppModel {
         session.messageLoadError = nil
         defer { session.isLoadingMessages = false }
         do {
-            let records = try await db.messages(chatId: session.id.uuidString)
+            let page = try await db.messagePage(chatId: session.id.uuidString)
+            let records = page.messages
             guard !session.messagesLoaded else { return }
-            var invalidRecords = 0
-            session.messages = records.compactMap { record in
-                guard let id = Self.canonicalUUID(record.id),
-                    let role = ChatTurn.Role(rawValue: record.role)
-                else {
-                    invalidRecords += 1
-                    return nil
-                }
-                let msg = ChatMessage(
-                    role: role,
-                    id: id,
-                    createdAt: record.createdAt
-                )
-                msg.restoreContent(text: record.text, thinking: record.thinking)
-                msg.error = record.error
-                msg.rating = record.rating
-                msg.complete = record.complete
-                msg.kind = ChatMessageKind(rawValue: record.kind) ?? .regular
-                if let raw = record.compactionJson?.data(using: .utf8),
-                    let info = try? JSONDecoder().decode(CompactionInfo.self, from: raw)
-                {
-                    msg.compaction = info
-                }
-                if let rawText = record.generationProvenanceJson,
-                    rawText.utf8.count <= 256 * 1_024,
-                    let raw = rawText.data(using: .utf8)
-                {
-                    do {
-                        msg.generationProvenance =
-                            try JSONDecoder().decode(GenerationProvenanceRecord.self, from: raw)
-                        msg.generationFailureCategory = msg.generationProvenance?.failureCategory?.rawValue
-                    } catch {
-                        msg.generationProvenanceUnavailable = true
-                        dbWarning = "Some response provenance is unavailable because it could not be decoded."
-                    }
-                } else if record.generationProvenanceJson != nil {
-                    msg.generationProvenanceUnavailable = true
-                    dbWarning = "Some response provenance is unavailable because it exceeded the local limit."
-                }
-                if let raw = record.attachmentsJson?.data(using: .utf8),
-                    let paths = try? JSONDecoder().decode([String].self, from: raw)
-                {
-                    msg.attachmentPaths = paths
-                }
-                if let raw = record.toolsJson?.data(using: .utf8),
-                    let events = try? JSONDecoder().decode([ToolEventSnapshot].self, from: raw)
-                {
-                    msg.toolEvents = events
-                }
-                if let tokens = record.statsTokens, let duration = record.statsDuration {
-                    msg.stats = GenStats(
-                        ttft: record.statsTtft,
-                        tokens: tokens,
-                        duration: duration,
-                        tokensAreExact: record.statsTokensAreExact ?? false,
-                        generationTokensPerSecond: record.statsGenerationTokensPerSecond,
-                        finishReason: record.statsFinishReason,
-                        cachedPromptTokens: record.statsCachedPromptTokens)
-                }
-                return msg
-            }
-            if invalidRecords > 0 {
-                let warning =
-                    "Ignored \(invalidRecords) message record\(invalidRecords == 1 ? "" : "s") with invalid IDs or roles."
-                session.messageLoadError = warning
-                dbWarning = warning
-            }
+            installHistory(
+                decodeMessages(records), records: records, in: session,
+                hasEarlier: page.hasEarlier, hasLater: page.hasLater, precedingDate: page.precedingVisibleDate)
             session.messagesLoaded = true
         } catch {
             let message = "Load failed: \(error.localizedDescription)"
             session.messageLoadError = message
             dbWarning = message
+        }
+    }
+
+    private func decodeMessages(_ records: [MessageRecord], reusing existing: [UUID: ChatMessage] = [:])
+        -> [ChatMessage]
+    {
+        var invalidRecords = 0
+        let messages: [ChatMessage] = records.compactMap { record in
+            guard let id = Self.canonicalUUID(record.id),
+                let role = ChatTurn.Role(rawValue: record.role)
+            else {
+                invalidRecords += 1
+                return nil
+            }
+            if let existing = existing[id] { return existing }
+            let msg = ChatMessage(
+                role: role,
+                id: id,
+                createdAt: record.createdAt
+            )
+            msg.restoreContent(text: record.text, thinking: record.thinking)
+            msg.error = record.error
+            msg.rating = record.rating
+            msg.complete = record.complete
+            msg.kind = ChatMessageKind(rawValue: record.kind) ?? .regular
+            if let raw = record.compactionJson?.data(using: .utf8),
+                let info = try? JSONDecoder().decode(CompactionInfo.self, from: raw)
+            {
+                msg.compaction = info
+            }
+            msg.storedGenerationProvenance = record.generationProvenanceJson
+            if let raw = record.attachmentsJson?.data(using: .utf8),
+                let paths = try? JSONDecoder().decode([String].self, from: raw)
+            {
+                msg.attachmentPaths = paths
+            }
+            if let raw = record.toolsJson?.data(using: .utf8),
+                let events = try? JSONDecoder().decode([ToolEventSnapshot].self, from: raw)
+            {
+                msg.toolEvents = events
+            }
+            if let tokens = record.statsTokens, let duration = record.statsDuration {
+                msg.stats = GenStats(
+                    ttft: record.statsTtft,
+                    tokens: tokens,
+                    duration: duration,
+                    tokensAreExact: record.statsTokensAreExact ?? false,
+                    generationTokensPerSecond: record.statsGenerationTokensPerSecond,
+                    finishReason: record.statsFinishReason,
+                    cachedPromptTokens: record.statsCachedPromptTokens)
+            }
+            return msg
+        }
+        if invalidRecords > 0 { dbWarning = "Some message records have invalid IDs or roles." }
+        return messages
+    }
+
+    private func installHistory(
+        _ messages: [ChatMessage], records: [MessageRecord], in session: ChatSession,
+        hasEarlier: Bool, hasLater: Bool, precedingDate: Date? = nil
+    ) {
+        session.historyCursors = Dictionary(
+            uniqueKeysWithValues: records.compactMap { record in
+                Self.canonicalUUID(record.id).map {
+                    ($0, ChatDatabase.MessageCursor(position: record.position, id: record.id))
+                }
+            })
+        session.historyPrecedingDate = precedingDate
+        session.historyHasEarlier = hasEarlier
+        session.historyHasLater = hasLater
+        session.messages = messages
+        if !hasLater {
+            session.recentPersistedStats = Array(
+                messages.compactMap { message in
+                    message.stats.map { (id: message.id, stats: $0) }
+                }.suffix(12))
+            session.latestPersistedStats = session.recentPersistedStats.last?.stats
+        }
+        session.historyRevision &+= 1
+    }
+
+    /// Complete context is loaded only for generation or an explicit whole-history operation.
+    /// Existing objects and any newly submitted unsaved user row retain their identity.
+    func hydrateHistory(for session: ChatSession) async -> Bool {
+        guard !session.hasCompleteHistory else { return true }
+        guard let db else { return false }
+        session.isHydratingHistory = true
+        defer { session.isHydratingHistory = false }
+        do {
+            let records = try await db.messages(chatId: session.id.uuidString)
+            guard chats.contains(where: { $0.id == session.id }) else { return false }
+            let existing = Dictionary(uniqueKeysWithValues: session.messages.map { ($0.id, $0) })
+            let pending = session.messages.filter { session.historyCursors[$0.id] == nil }
+            let stored = decodeMessages(records, reusing: existing)
+            let storedIDs = Set(stored.map(\.id))
+            installHistory(
+                stored + pending.filter { !storedIDs.contains($0.id) }, records: records,
+                in: session, hasEarlier: false, hasLater: false)
+            return true
+        } catch {
+            dbWarning = "History could not be loaded: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    /// Bound idle reader storage while keeping the message the reader owns. Active turns retain
+    /// complete context until Shepherd has finished persistence and captured its final receipt.
+    func trimHistory(for session: ChatSession) {
+        guard !session.isStreaming, !session.isHydratingHistory, session.messages.count > 120,
+            session.messages.allSatisfy({ session.historyCursors[$0.id] != nil })
+        else { return }
+        let anchor = session.historyAnchorID.flatMap { id in session.messages.firstIndex { $0.id == id } }
+        let start = min(max(0, (anchor ?? session.messages.count) - 40), session.messages.count - 120)
+        let end = start + 120
+        session.historyHasEarlier = session.historyHasEarlier || start > 0
+        session.historyHasLater = session.historyHasLater || end < session.messages.count
+        if let prior = session.messages[..<start].last(where: { $0.role != .tool && !TranscriptActivity.isEmpty($0) }) {
+            session.historyPrecedingDate = prior.createdAt
+        }
+        session.messages = Array(session.messages[start..<end])
+        let retained = Set(session.messages.map(\.id))
+        session.historyCursors = session.historyCursors.filter { retained.contains($0.key) }
+        session.historyRevision &+= 1
+    }
+
+    /// A stale page never replaces a changed history or a newly reserved turn.
+    @discardableResult
+    func pageHistory(for session: ChatSession, earlier: Bool) async -> Bool {
+        guard let db, !session.isPagingHistory, !session.isStreaming,
+            earlier ? session.historyHasEarlier : session.historyHasLater,
+            let boundary = earlier ? session.messages.first : session.messages.last,
+            let cursor = session.historyCursors[boundary.id]
+        else { return false }
+        session.isPagingHistory = true
+        session.historyPageError = nil
+        let revision = session.historyRevision
+        let selected = selectedChatID
+        defer { session.isPagingHistory = false }
+        do {
+            let page = try await db.messagePage(
+                chatId: session.id.uuidString,
+                before: earlier ? cursor : nil, after: earlier ? nil : cursor)
+            guard !Task.isCancelled, selectedChatID == selected, session.historyRevision == revision,
+                !session.isStreaming, chats.contains(where: { $0.id == session.id })
+            else { return false }
+            let incoming = decodeMessages(page.messages)
+            let existingIDs = Set(session.messages.map(\.id))
+            let fresh = incoming.filter { !existingIDs.contains($0.id) }
+            session.messages = earlier ? fresh + session.messages : session.messages + fresh
+            for record in page.messages {
+                if let id = Self.canonicalUUID(record.id) {
+                    session.historyCursors[id] = .init(position: record.position, id: record.id)
+                }
+            }
+            if earlier {
+                session.historyPrecedingDate = page.precedingVisibleDate
+                session.historyHasEarlier = page.hasEarlier
+            } else {
+                session.historyHasLater = page.hasLater
+            }
+            // Keep the newly fetched side plus overlap. At least the previous 40-row display
+            // window survives; the navigation owner restores its stable message/segment anchor.
+            if session.messages.count > 120 {
+                let removed =
+                    earlier
+                    ? Array(session.messages.suffix(session.messages.count - 120))
+                    : Array(session.messages.prefix(session.messages.count - 120))
+                session.messages = earlier ? Array(session.messages.prefix(120)) : Array(session.messages.suffix(120))
+                if !earlier, let prior = removed.last(where: { $0.role != .tool && !TranscriptActivity.isEmpty($0) }) {
+                    session.historyPrecedingDate = prior.createdAt
+                }
+                for message in removed { session.historyCursors[message.id] = nil }
+                if earlier { session.historyHasLater = true } else { session.historyHasEarlier = true }
+            }
+            session.historyRevision &+= 1
+            return true
+        } catch {
+            session.historyPageError = "History could not be loaded: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    func loadLatestHistory(for session: ChatSession) async -> Bool {
+        guard session.historyHasLater, let db, !session.isStreaming else { return !session.historyHasLater }
+        let revision = session.historyRevision
+        do {
+            let page = try await db.messagePage(chatId: session.id.uuidString)
+            guard !Task.isCancelled, revision == session.historyRevision, !session.isStreaming else { return false }
+            installHistory(
+                decodeMessages(page.messages), records: page.messages, in: session,
+                hasEarlier: page.hasEarlier, hasLater: false, precedingDate: page.precedingVisibleDate)
+            return true
+        } catch {
+            session.historyPageError = "History could not be loaded: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    /// Search one storage page at a time. Result and transient page counts stay bounded even
+    /// when a query spans an entire chat; cancellation stops before requesting another page.
+    func findInHistory(_ query: String, for session: ChatSession) async throws -> [TranscriptText.SearchMatch] {
+        func search(_ entries: [TranscriptText.SearchEntry], limit: Int) async throws -> [TranscriptText.SearchMatch] {
+            let worker = Task.detached(priority: .userInitiated) {
+                try TranscriptText.find(query, in: entries, limit: limit)
+            }
+            return try await withTaskCancellationHandler {
+                try await worker.value
+            } onCancel: {
+                worker.cancel()
+            }
+        }
+        guard !query.isEmpty else { return [] }
+        // Newest first on both paths, so the 200-result bound keeps the same, most recent matches
+        // whether or not the reader happens to hold the complete history.
+        guard !session.hasCompleteHistory, let db else {
+            let entries = session.messages.reversed().filter { $0.role == .user || $0.role == .assistant }
+                .map { TranscriptText.SearchEntry(id: $0.id, source: $0.text) }
+            return try await search(entries, limit: 200)
+        }
+        var cursor: ChatDatabase.MessageCursor?
+        var matches: [TranscriptText.SearchMatch] = []
+        repeat {
+            try Task.checkCancellation()
+            let page = try await db.messagePage(chatId: session.id.uuidString, before: cursor)
+            let entries = page.messages.reversed().compactMap { record -> TranscriptText.SearchEntry? in
+                guard record.role == "user" || record.role == "assistant", let id = Self.canonicalUUID(record.id) else {
+                    return nil
+                }
+                return .init(id: id, source: record.text)
+            }
+            matches += try await search(entries, limit: 200 - matches.count)
+            guard page.hasEarlier, let next = page.earlierCursor, next != cursor else { break }
+            cursor = next
+        } while matches.count < 200
+        return matches
+    }
+
+    /// The latest reply with answer text. The loaded latest page answers without reading storage.
+    func lastReplyText(in session: ChatSession) async throws -> String? {
+        func reply(in messages: [ChatMessage]) -> String? {
+            messages.last(where: { $0.role == .assistant && !$0.text.isEmpty })?.text
+        }
+        if !session.historyHasLater, let text = reply(in: session.messages) { return text }
+        return reply(in: try await inspectHistory(for: session))
+    }
+
+    /// The user prompt before `id`. A loaded window is contiguous, so a preceding user row in it is
+    /// the nearest one; complete history is read only when the window starts after that prompt.
+    func precedingUserText(before id: UUID, in session: ChatSession) async throws -> String? {
+        func prompt(in messages: [ChatMessage]) -> String? {
+            messages.prefix { $0.id != id }.last(where: { $0.role == .user })?.text
+        }
+        if session.messages.contains(where: { $0.id == id }), let text = prompt(in: session.messages) { return text }
+        return prompt(in: try await inspectHistory(for: session))
+    }
+
+    func inspectHistory(for session: ChatSession) async throws -> [ChatMessage] {
+        guard !session.hasCompleteHistory, let db else { return session.messages }
+        let records = try await db.messages(chatId: session.id.uuidString)
+        return decodeMessages(records, reusing: Dictionary(uniqueKeysWithValues: session.messages.map { ($0.id, $0) }))
+    }
+
+    func loadHistory(around id: UUID, for session: ChatSession) async -> Bool {
+        if session.messages.contains(where: { $0.id == id }) { return true }
+        guard let db, !session.isStreaming else { return false }
+        let revision = session.historyRevision
+        do {
+            guard let record = try await db.message(chatId: session.id.uuidString, id: id.uuidString) else {
+                return false
+            }
+            let cursor = ChatDatabase.MessageCursor(position: record.position, id: record.id)
+            let before = try await db.messagePage(chatId: session.id.uuidString, before: cursor, limit: 20)
+            let after = try await db.messagePage(chatId: session.id.uuidString, after: cursor, limit: 20)
+            guard !Task.isCancelled, revision == session.historyRevision, !session.isStreaming else { return false }
+            let records = before.messages + [record] + after.messages
+            installHistory(
+                decodeMessages(records), records: records, in: session,
+                hasEarlier: before.hasEarlier, hasLater: after.hasLater, precedingDate: before.precedingVisibleDate)
+            return true
+        } catch {
+            session.historyPageError = "History could not be loaded: \(error.localizedDescription)"
+            return false
         }
     }
 

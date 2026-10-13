@@ -264,6 +264,8 @@ struct CodeBlockView: View {
     @Environment(AppModel.self) private var model
     @State private var showingSource = false
     @State private var artifactID = UUID()
+    @State private var previewVisible = false
+    @State private var measuredPreviewHeight: CGFloat?
     @State private var hovering = false
     @State private var blockState: CodeBlockStateStore.State?
     @FocusState private var keyboardFocused: Bool
@@ -282,6 +284,7 @@ struct CodeBlockView: View {
         blockState ?? identity.map(CodeBlockStateStore.shared.state(for:)) ?? CodeBlockStateStore.State()
     }
     private var wordWrap: Bool { state.wordWrap ?? model.codeWordWrap }
+    private var wantsPreview: Bool { previewVisible && isInlinePreviewable && !isStreaming && !showingSource }
 
     private func update(_ change: (inout CodeBlockStateStore.State) -> Void) {
         var next = state
@@ -297,18 +300,16 @@ struct CodeBlockView: View {
         let shownCode = collapses && !state.isExpanded ? Self.prefix(of: code, lines: limit) : code
         VStack(alignment: .leading, spacing: 0) {
             header(lineCount: lineCount)
+            if info.language == "math" {
+                Text("Math is shown as source. Typesetting is unavailable.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .padding(Caprine.Activity.spacing)
+            }
 
             if isInlinePreviewable && !isStreaming {
-                let height = kind == .mermaid ? Caprine.Code.diagramPreviewHeight : Caprine.Code.previewHeight
+                let maximumHeight = kind == .mermaid ? Caprine.Code.diagramPreviewHeight : Caprine.Code.previewHeight
+                let height = measuredPreviewHeight ?? maximumHeight
                 ZStack(alignment: .topLeading) {
-                    PreparedWebArtifactView(
-                        artifact: PaddockArtifact(id: artifactID, kind: kind, content: code),
-                        isActive: !showingSource
-                    )
-                    .frame(height: height)
-                    .opacity(showingSource ? 0 : 1)
-                    .allowsHitTesting(!showingSource)
-                    .accessibilityHidden(showingSource)
                     if showingSource {
                         ScrollView(.vertical, showsIndicators: false) {
                             HighlightedCodeView(
@@ -318,6 +319,28 @@ struct CodeBlockView: View {
                             )
                         }
                         .scrollIndicators(.hidden)
+                        .frame(height: height)
+                    } else if wantsPreview && InlinePreviewBudget.shared.admits(artifactID) {
+                        PreparedWebArtifactView(
+                            artifact: PaddockArtifact(id: artifactID, kind: kind, content: code),
+                            onContentHeight: { measured in
+                                measuredPreviewHeight = min(
+                                    maximumHeight, max(Caprine.Code.minimumPreviewHeight, measured))
+                            },
+                            onSnapshot: { InlinePreviewSnapshots.shared.store($0, for: artifactID) }
+                        )
+                        .frame(height: height)
+                    } else {
+                        ZStack {
+                            if let image = InlinePreviewSnapshots.shared.image(for: artifactID) {
+                                Image(nsImage: image).resizable().scaledToFit().accessibilityHidden(true)
+                            }
+                            Button("Expand preview", systemImage: "arrow.up.left.and.arrow.down.right") {
+                                model.paddockArtifact = PaddockArtifact(id: artifactID, kind: kind, content: code)
+                                model.showInspector = true
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
                         .frame(height: height)
                     }
                 }
@@ -340,7 +363,11 @@ struct CodeBlockView: View {
             }
         }
         .overlay(alignment: .bottomTrailing) {
-            if controlsVisible { actions }
+            // Keep named actions in the accessibility tree even when the visual chrome is quiet.
+            actions
+                .opacity(controlsVisible ? 1 : 0)
+                .allowsHitTesting(controlsVisible)
+                .accessibilityHidden(false)
         }
         .frame(maxWidth: Caprine.Code.maxWidth, alignment: .leading)
         .background(
@@ -348,6 +375,11 @@ struct CodeBlockView: View {
             in: RoundedRectangle(cornerRadius: Caprine.Activity.radius)
         )
         .contentShape(Rectangle())
+        .modifier(InlinePreviewVisibility(enabled: isInlinePreviewable, visible: $previewVisible))
+        .onChange(of: wantsPreview, initial: true) { _, visible in
+            InlinePreviewBudget.shared.update(artifactID, visible: visible)
+        }
+        .onDisappear { InlinePreviewBudget.shared.update(artifactID, visible: false) }
         .onHover {
             hovering = $0
             if !$0 { keyboardNavigation = false }
@@ -357,7 +389,9 @@ struct CodeBlockView: View {
         .onChange(of: keyboardFocused) {
             if keyboardFocused { keyboardNavigation = true }
         }
-        .focusEffectDisabled()
+        // Give the artifact its own group so its label does not replace the labels of
+        // expansion, wrap, save and open controls when SwiftUI builds the AX tree (#85).
+        .accessibilityElement(children: .contain)
         .accessibilityLabel("\(kind.label) artifact")
     }
 
@@ -451,6 +485,20 @@ struct CodeBlockView: View {
             index = code.index(after: index)
         }
         return code
+    }
+}
+
+/// Ordinary code fences do not register scroll visibility observers in dense replies.
+private struct InlinePreviewVisibility: ViewModifier {
+    let enabled: Bool
+    @Binding var visible: Bool
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if enabled {
+            content.onScrollVisibilityChange(threshold: 0.01) { visible = $0 }
+        } else {
+            content
+        }
     }
 }
 

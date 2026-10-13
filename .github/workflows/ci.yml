@@ -137,6 +137,32 @@ jobs:
             release-build) make build CONFIG=Release CAS_PATH="$CAS_PATH" "$timing" 2>&1 | tee "$log" ;;
             *) exit 1 ;;
           esac
+      # Maintainers opt in before pushing by applying the qualification: transcript label.
+      # These synthetic fixtures skip personal state, engines and configured services.
+      - name: Synthetic transcript workloads
+        # Diagnostic until ADR-0099 is accepted: the flat LazyVStack candidate (#86) is test-only and
+        # still fails navigation, so its results are recorded without blocking unrelated merges.
+        continue-on-error: true
+        if: >-
+          ${{ !cancelled() && matrix.phase == 'app-tests' && contains(github.event.pull_request.labels.*.name, 'qualification: transcript') }}
+        env:
+          CAS_PATH: ${{ steps.cas.outputs.enabled == 'true' && steps.cas.outputs.path || '' }}
+          TEST_RUNNER_GOAT_COMPARE: swiftui
+          TEST_RUNNER_GOAT_COMPARE_NAVIGATION: '1'
+          TEST_RUNNER_GOAT_COMPARE_COMMIT: ${{ github.sha }}
+          TEST_RUNNER_GOAT_COMPARE_RUN_ID: macos-26-ci
+          TEST_RUNNER_GOAT_DELIVERY3_QUALIFY: '1'
+          TEST_RUNNER_GOAT_DELIVERY3_AUTORUN: '1'
+        run: |
+          status=0
+          make test-app CONFIG=Release TEST_PLAN=Qualification CAS_PATH="$CAS_PATH" \
+            XCODE_FLAGS='-only-testing:GOATTests/TranscriptPerformanceTests/testContainerComparison' || status=$?
+          python3 scripts/profile-transcript.py \
+            --log "$RUNNER_TEMP/transcript-production.log" \
+            --sample "$RUNNER_TEMP/transcript-reasoning.sample.txt" -- \
+            make test-app CONFIG=Release TEST_PLAN=Qualification CAS_PATH="$CAS_PATH" \
+            XCODE_FLAGS='-only-testing:GOATTests/TranscriptPerformanceTests/testInteractiveDelivery3Qualification' || status=$?
+          exit "$status"
       # Only successful runs save. Pushes to main warm the trusted cache; pull requests save
       # to their own PR-scoped cache, which GitHub never exposes to main or other PRs.
       - name: Save compilation cache
@@ -150,7 +176,9 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: app-test-results
-          path: apps/goat-macos/.build/TestResults/
+          path: |
+            apps/goat-macos/.build/TestResults/
+            ${{ runner.temp }}/transcript-*
           include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 7

@@ -319,12 +319,93 @@ private let fenceInfoCases: [(String?, String?, String?)] = [
 extension AppTests.Bleet {
     /// #60 A6: persistent code block chrome, info strings, collapse and remembered choices.
     @Suite(.serialized) struct CodeBlockChromeTests {
+        @Test @MainActor func codeActionsRetainTheirOwnAccessibilityNames() async throws {
+            // SwiftUI lazily builds its AX tree when an accessibility client asks for it.
+            // Enable that mode only in the isolated test host and restore its previous value.
+            let enhancedUI = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+            let previousEnhancedUI = NSApp.accessibilityAttributeValue(enhancedUI)
+            NSApp.accessibilitySetValue(true, forAttribute: enhancedUI)
+            defer { NSApp.accessibilitySetValue(previousEnhancedUI ?? false, forAttribute: enhancedUI) }
+            let source = "```swift\n" + (0..<60).map { "let value\($0) = \($0)" }.joined(separator: "\n") + "\n```"
+            let host = NSHostingView(
+                rootView: Markdown(MarkdownContent(source)).goatMarkdownStyle(fontSize: 14)
+                    .environment(AppModel.shared))
+            host.sizingOptions = []
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 700, height: 900),
+                styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            let viewport = NSView(frame: NSRect(x: 0, y: 0, width: 700, height: 900))
+            host.frame = viewport.bounds
+            host.autoresizingMask = [.width, .height]
+            viewport.addSubview(host)
+            window.contentView = viewport
+            window.makeKeyAndOrderFront(nil)
+            defer {
+                window.contentView = nil
+                window.close()
+            }
+            try await Task.sleep(for: .milliseconds(400))
+            host.layoutSubtreeIfNeeded()
+            var visited: Set<ObjectIdentifier> = []
+            func value(_ element: NSObject, _ selectorName: String) -> Any? {
+                let selector = NSSelectorFromString(selectorName)
+                guard element.responds(to: selector) else { return nil }
+                return element.perform(selector)?.takeUnretainedValue()
+            }
+            func descendants(_ object: Any) -> [NSObject] {
+                // SwiftUI's AccessibilityNode implements the attribute interface without
+                // declaring NSAccessibilityProtocol conformance.
+                guard let element = object as? NSObject,
+                    visited.insert(ObjectIdentifier(element)).inserted
+                else { return [] }
+                let children =
+                    value(element, "accessibilityChildren") as? [Any]
+                    ?? element.accessibilityAttributeValue(.children) as? [Any] ?? []
+                return [element] + children.flatMap(descendants)
+            }
+            func name(_ element: NSObject) -> String {
+                [
+                    value(element, "accessibilityLabel"), value(element, "accessibilityTitle"),
+                    element.accessibilityAttributeValue(.description), element.accessibilityAttributeValue(.title),
+                ]
+                .compactMap { $0 as? String }.first { !$0.isEmpty } ?? ""
+            }
+            let elements = descendants(host)
+            _ = try #require(
+                elements.first { name($0) == "swift artifact" }, "AX names: \(elements.map(name))")
+            visited.removeAll()
+            let names = descendants(host).filter {
+                (value($0, "accessibilityRole") as? String ?? $0.accessibilityAttributeValue(.role) as? String)
+                    == NSAccessibility.Role.button.rawValue
+            }.map(name)
+            #expect(names.contains("Copy source"), "Buttons: \(names)")
+            #expect(names.contains("Save artifact"), "Buttons: \(names)")
+            #expect(names.contains("Open in Paddock"), "Buttons: \(names)")
+            let hasWrapAction = names.contains("Enable word wrap") || names.contains("Disable word wrap")
+            #expect(hasWrapAction, "Buttons: \(names)")
+            #expect(
+                names.contains(where: { $0.hasPrefix("Show ") && $0.hasSuffix(" more lines") }), "Buttons: \(names)")
+        }
+
         @Test func preparedIdentityDistinguishesOptOutFromNoCode() {
             let optedOut = PreparedMarkdownContent(value: MarkdownContent("Plain text"), preparesCodeIdentity: false)
             let prepared = PreparedMarkdownContent(value: MarkdownContent("Plain text"))
             #expect(optedOut.codeLiterals == nil)
             #expect(optedOut.codeLiteralBytes == 0)
             #expect(prepared.codeLiterals == [])
+        }
+
+        @Test func displayMathFallbackKeepsSourceAndDoesNotRewriteCode() {
+            let math = "$$\n\\frac{α}{β} + x_1\n$$"
+            let normalized = GOATMarkdownSyntax.normalized("Before\n\n" + math + "\n\nAfter")
+            #expect(normalized.contains("```math\n" + math + "\n```"))
+            let code = "````text\n" + math + "\n````"
+            #expect(GOATMarkdownSyntax.normalized(code) == code)
+            let collision = "$$\n```literal\n$$"
+            #expect(GOATMarkdownSyntax.normalized(collision) == "````math\n" + collision + "\n````")
+            let unfinished = "\\[\nx^2"
+            #expect(GOATMarkdownSyntax.normalized(unfinished) == "```math\n" + unfinished + "\n```")
         }
 
         @Test(arguments: fenceInfoCases)

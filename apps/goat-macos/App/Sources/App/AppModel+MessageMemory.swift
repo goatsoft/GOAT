@@ -14,11 +14,6 @@ extension AppModel {
             return
         }
         let projectID = session.projectID
-        let prompt =
-            session.messages
-            .prefix { $0.id != message.id }
-            .last(where: { $0.role == .user })?
-            .text ?? ""
         let response = message.text
         let revision = (messageRatingRevisions[message.id] ?? 0) &+ 1
         messageRatingRevisions[message.id] = revision
@@ -38,6 +33,7 @@ extension AppModel {
                     rating: persistedRating,
                     revision: revision)
                 guard persisted, messageRatingRevisions[message.id] == revision else { return }
+                let prompt = try await precedingUserText(before: message.id, in: session) ?? ""
                 try await memory.recordFeedback(
                     messageID: message.id,
                     rating: persistedRating,

@@ -18,7 +18,9 @@ struct ContextStatus {
     init?(session: ChatSession, models: [ModelRef], defaultModelID: String?) {
         let active = session.isStreaming ? session.messages.last(where: { $0.role == .assistant && !$0.complete }) : nil
         let generated = active?.liveMetrics.estimatedTokens ?? 0
-        let savedStats = session.messages.last(where: { $0.role == .assistant })?.stats
+        let savedStats =
+            session.historyHasLater
+            ? session.latestPersistedStats : session.messages.last(where: { $0.role == .assistant })?.stats
         let savedUsage: Int? = savedStats.flatMap { stats in
             guard let prompt = stats.promptTokens, prompt >= 0, stats.tokens >= 0 else { return nil }
             let sum = prompt.addingReportingOverflow(stats.tokens)

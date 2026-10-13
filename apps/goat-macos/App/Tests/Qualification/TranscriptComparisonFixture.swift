@@ -46,6 +46,7 @@ import SwiftUI
     @ObservationIgnored fileprivate var observesReader = false
     @ObservationIgnored private var readerWidth: CGFloat = 0
     @ObservationIgnored private var readerFont: CGFloat = 0
+    @ObservationIgnored private var initialPlacementPending = true
     @ObservationIgnored var capturedReader: (id: String, offset: CGFloat)?
 
     func recordReaderGeometry(width: CGFloat, font: CGFloat) {
@@ -62,6 +63,14 @@ import SwiftUI
         while let view = parent, !(view is NSScrollView) { parent = view.superview }
         guard let scroll = parent as? NSScrollView else { return }
         readerClip = scroll.contentView
+        if initialPlacementPending {
+            initialPlacementPending = false
+            Task { @MainActor [weak self] in
+                await Task.yield()
+                guard let self, self.following else { return }
+                self.scrollReaderToLatest()
+            }
+        }
         readerWidth = scroll.contentView.bounds.width
         readerFont = AppModel.shared.chatFontSize
         scroll.contentView.postsBoundsChangedNotifications = true
@@ -76,6 +85,25 @@ import SwiftUI
                 self.capturedReader = self.readerAnchor()
             }
         }
+    }
+
+    /// The candidate uses the same one-shot native scroll ownership as the shipping reader.
+    /// A persistent ScrollPosition target can replay after a direct reader move; no binding
+    /// target is retained here. Lazy row admission and rendering remain SwiftUI-owned.
+    func scrollReader(to offset: CGFloat) {
+        guard let clip = readerClip, let scroll = clip.superview as? NSScrollView,
+            let document = scroll.documentView
+        else { return }
+        clip.scroll(
+            to: NSPoint(x: clip.bounds.minX, y: max(0, min(offset, document.bounds.height - clip.bounds.height))))
+        scroll.reflectScrolledClipView(clip)
+    }
+
+    func scrollReaderToLatest() {
+        guard let clip = readerClip, let scroll = clip.superview as? NSScrollView,
+            let document = scroll.documentView
+        else { return }
+        scrollReader(to: document.bounds.height - clip.bounds.height)
     }
 
     func registerFrameView(_ view: NSView, id: String) { frameViews[id] = WeakComparisonFrameView(view) }
@@ -113,7 +141,7 @@ import SwiftUI
             .map { ($0.key, $0.value.minY - top) }
     }
 
-    /// Native geometry supplies a measurement only. SwiftUI's position binding remains the writer.
+    /// Native geometry supplies the target for the single, one-shot scroll writer.
     /// Absolute offsets avoid extrapolating a UnitPoint when row and viewport heights nearly match.
     func readerRestoreOffset(id: String, offset: CGFloat) -> CGFloat? {
         sampleFrames()

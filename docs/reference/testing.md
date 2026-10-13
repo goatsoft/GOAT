@@ -101,3 +101,24 @@ Use the exact model IDs returned by the engine. Omitting the engine name selects
 The test is skipped by default and in CI. Passing deterministic tests alone does not qualify a live pair.
 
 Hosted app tests use the `dev.leet.goat.test-host` app identity, separate from the normal app. This isolates `UserDefaults` writes, including the large reading-font sizes exercised by layout tests. The final build in `make verify` restores the normal app identity.
+
+## Opt-in transcript workloads on CI
+
+Apply the `qualification: transcript` PR label before pushing to run the synthetic transcript
+workloads after ordinary app tests on the macOS 26 runner. The label alone does not start a run.
+Each workload starts a fresh test host using the isolated test home and no configured services:
+the experimental SwiftUI startup/navigation probe, then the production reader's 2 MiB answer and
+expanded-reasoning workload. Both execute even if one fails; results remain in the app-test
+artifact. Logs identify the exact checked-out SHA and host for the container run.
+
+This opt-in collects automated compatibility and diagnostic observations. Passing fixtures do
+not establish hardware momentum, actual VoiceOver use, frame-time/allocation traces, cold-disk
+behavior or release-artifact acceptance. Those gates remain in the release checklist and #85–#89.
+
+For manual transcript command qualification in a real SwiftUI scene (the raw AppKit host does
+not supply scene-focused commands), run this separate isolated test and choose **Finish** when done:
+
+```sh
+TEST_RUNNER_GOAT_DELIVERY3_SCENE=1 make test-app CONFIG=Release TEST_PLAN=Qualification \
+  XCODE_FLAGS='-only-testing:GOATTests/TranscriptPerformanceTests/testInteractiveDelivery3SceneQualification'
+```

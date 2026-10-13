@@ -149,7 +149,8 @@ extension AppTests.Bleet {
         @Test func segmentWindowsResolveAgainstTheReply() {
             let small = { (_: Int) in 1_000 }
             #expect(
-                SegmentWindow.latest.resolve(count: 10, cost: small) == nil, "A reply that fits shows every segment")
+                SegmentWindow.latest.resolve(count: 2, cost: small) == nil, "A reply that fits shows every segment")
+            #expect(SegmentWindow.latest.resolve(count: 10, cost: small) == 8..<10)
             #expect(SegmentWindow.all.resolve(count: 100, cost: small) == nil)
             let large = { (_: Int) in 6_000 }
             #expect(SegmentWindow.latest.resolve(count: 10, cost: large) == 8..<10)

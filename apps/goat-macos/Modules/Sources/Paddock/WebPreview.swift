@@ -18,21 +18,30 @@ public struct WebPreview: View {
     public var mode: JudasMode = .configured
     public var bundledScripts = false
     public var isActive = true
+    public var onContentHeight: (@MainActor (CGFloat) -> Void)?
+    public var onSnapshot: (@MainActor (NSImage) -> Void)?
 
     public init(
         html: String, offGrid: Bool = false, mode: JudasMode = .configured,
-        bundledScripts: Bool = false, isActive: Bool = true
+        bundledScripts: Bool = false, isActive: Bool = true,
+        onContentHeight: (@MainActor (CGFloat) -> Void)? = nil,
+        onSnapshot: (@MainActor (NSImage) -> Void)? = nil
     ) {
         self.html = html
         self.offGrid = offGrid
         self.mode = mode
         self.bundledScripts = bundledScripts
         self.isActive = isActive
+        self.onContentHeight = onContentHeight
+        self.onSnapshot = onSnapshot
     }
 
     public var body: some View {
-        WebPreviewContent(html: html, offGrid: offGrid, mode: mode, bundledScripts: bundledScripts, isActive: isActive)
-            .id("\(offGrid)-\(mode.rawValue)-\(bundledScripts)")
+        WebPreviewContent(
+            html: html, offGrid: offGrid, mode: mode, bundledScripts: bundledScripts, isActive: isActive,
+            onContentHeight: onContentHeight, onSnapshot: onSnapshot
+        )
+        .id("\(offGrid)-\(mode.rawValue)-\(bundledScripts)")
     }
 }
 
@@ -42,13 +51,20 @@ private struct WebPreviewContent: NSViewRepresentable {
     let html: String
     let isActive: Bool
     var offGrid = false
+    let onContentHeight: (@MainActor (CGFloat) -> Void)?
+    let onSnapshot: (@MainActor (NSImage) -> Void)?
 
-    init(html: String, offGrid: Bool, mode: JudasMode, bundledScripts: Bool, isActive: Bool) {
+    init(
+        html: String, offGrid: Bool, mode: JudasMode, bundledScripts: Bool, isActive: Bool,
+        onContentHeight: (@MainActor (CGFloat) -> Void)?, onSnapshot: (@MainActor (NSImage) -> Void)?
+    ) {
         self.html = html
         self.offGrid = offGrid
         self.mode = mode
         self.bundledScripts = bundledScripts
         self.isActive = isActive
+        self.onContentHeight = onContentHeight
+        self.onSnapshot = onSnapshot
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -64,6 +80,9 @@ private struct WebPreviewContent: NSViewRepresentable {
         var policyTask: Task<Void, Never>?
         var offGridRule: WKContentRuleList?
         var cancellation: JudasRegistration?
+        var documentNavigation: WKNavigation?
+        var onContentHeight: (@MainActor (CGFloat) -> Void)?
+        var onSnapshot: (@MainActor (NSImage) -> Void)?
 
         func webView(
             _ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
@@ -91,6 +110,7 @@ private struct WebPreviewContent: NSViewRepresentable {
 
         func revoke(_ view: WKWebView) {
             revoked = true
+            documentNavigation = nil
             generation &+= 1
             policyTask?.cancel()
             policyTask = nil
@@ -100,6 +120,36 @@ private struct WebPreviewContent: NSViewRepresentable {
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             os_signpost(.event, log: Self.log, name: "PreviewNavigationFinished")
+            guard active, !revoked, let documentNavigation, navigation === documentNavigation else { return }
+            let currentGeneration = generation
+            if onContentHeight != nil {
+                // Only read geometry. Preview content cannot supply code to this expression.
+                webView.evaluateJavaScript(
+                    """
+                    (() => {
+                      const body = document.body;
+                      if (!body) return 0;
+                      const top = body.getBoundingClientRect().top;
+                      return Math.max(1, ...Array.from(body.children)
+                        .filter(e => !['SCRIPT', 'STYLE'].includes(e.tagName))
+                        .map(e => e.getBoundingClientRect().bottom - top));
+                    })()
+                    """
+                ) { [weak self] value, _ in
+                    guard let self, self.active, !self.revoked, self.generation == currentGeneration,
+                        let number = value as? NSNumber, number.doubleValue.isFinite, number.doubleValue > 0
+                    else { return }
+                    self.onContentHeight?(CGFloat(number.doubleValue))
+                }
+            }
+            if onSnapshot != nil {
+                webView.takeSnapshot(with: nil) { [weak self] image, _ in
+                    guard let self, self.active, !self.revoked, self.generation == currentGeneration,
+                        let image
+                    else { return }
+                    self.onSnapshot?(image)
+                }
+            }
         }
 
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
@@ -144,6 +194,8 @@ private struct WebPreviewContent: NSViewRepresentable {
     }
 
     func updateNSView(_ view: WKWebView, context: Context) {
+        context.coordinator.onContentHeight = onContentHeight
+        context.coordinator.onSnapshot = onSnapshot
         guard !context.coordinator.revoked else { return }
         guard isActive else {
             if context.coordinator.active {
@@ -176,7 +228,7 @@ private struct WebPreviewContent: NSViewRepresentable {
             view.loadHTMLString(Self.blankPage, baseURL: nil)
             if let list = context.coordinator.offGridRule {
                 view.configuration.userContentController.add(list)
-                view.loadHTMLString(html, baseURL: Bundle.main.resourceURL)
+                context.coordinator.documentNavigation = view.loadHTMLString(html, baseURL: Bundle.main.resourceURL)
                 return
             }
 
@@ -195,7 +247,7 @@ private struct WebPreviewContent: NSViewRepresentable {
                     coordinator.offGridRule = list
                     view.configuration.userContentController.removeAllContentRuleLists()
                     view.configuration.userContentController.add(list)
-                    view.loadHTMLString(html, baseURL: Bundle.main.resourceURL)
+                    coordinator.documentNavigation = view.loadHTMLString(html, baseURL: Bundle.main.resourceURL)
                 } else {
                     // If the policy can't compile, fail closed: show nothing rather than leak.
                     view.loadHTMLString(
@@ -206,7 +258,7 @@ private struct WebPreviewContent: NSViewRepresentable {
         } else {
             view.stopLoading()
             view.configuration.userContentController.removeAllContentRuleLists()
-            view.loadHTMLString(html, baseURL: Bundle.main.resourceURL)
+            context.coordinator.documentNavigation = view.loadHTMLString(html, baseURL: Bundle.main.resourceURL)
         }
     }
 

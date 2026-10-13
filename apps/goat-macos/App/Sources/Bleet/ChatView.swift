@@ -48,6 +48,31 @@ struct ChatView: View {
         model.presentation.isEnabled && model.animationsEnabled && !reduceMotion && scenePhase == .active
     }
     @State private var composerFocused = false
+    @State private var exportingTranscript = false
+    @State private var transcriptDocument = TranscriptMarkdownDocument(text: "")
+    @State private var exportFailure: String?
+    @State private var showingFind = false
+    @State private var revealRequest: TranscriptRevealRequest?
+    @State private var transcriptFocusRequest: UUID?
+
+    private var canCopyLastReply: Bool {
+        session.messagesLoaded
+            && (session.historyHasLater
+                || session.messages.contains { $0.role == .assistant && !$0.text.isEmpty })
+    }
+
+    private func copyLastReply() {
+        let pasteboardRevision = NSPasteboard.general.changeCount
+        Task {
+            do {
+                guard let reply = try await model.lastReplyText(in: session),
+                    NSPasteboard.general.changeCount == pasteboardRevision
+                else { return }
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(reply, forType: .string)
+            } catch { exportFailure = error.localizedDescription }
+        }
+    }
 
     static func permitsSend(
         localStateReady: Bool, engineIsHealthy: Bool, messagesLoaded: Bool,
@@ -58,6 +83,35 @@ struct ChatView: View {
 
     var body: some View {
         @Bindable var model = model
+        transcriptControls
+            .inspector(isPresented: $model.showInspector) {
+                Group {
+                    if let artifact = model.paddockArtifact {
+                        PaddockView(artifact: artifact)
+                    } else {
+                        InspectorView(session: session)
+                    }
+                }
+                .inspectorColumnWidth(min: 280, ideal: 380, max: 820)
+            }
+            .onAppear { composerFocused = true }
+            .onChange(of: session.id) { _, _ in composerFocused = true }
+            .onDisappear {
+                cancelAttachmentJobs()
+                model.mcp.cancelPendingPermission()
+            }
+            .onChange(of: session.id) {
+                revealRequest = nil
+                transcriptFocusRequest = nil
+                showingFind = false
+                cancelAttachmentJobs()
+                pending = []
+            }
+            .onChange(of: session.effort) { _, _ in model.persistMeta(session) }
+    }
+
+    // Keep native composition below the Xcode 26 type-checker expression budget.
+    private var conversationContent: some View {
         VStack(spacing: 0) {
             if model.engineTransitioning {
                 EngineConnectingBanner()
@@ -86,7 +140,12 @@ struct ChatView: View {
                 .background(.bar)
                 .accessibilityElement(children: .contain)
             }
-            ChatTranscriptView(session: session).id(session.id)
+            if let match = revealRequest?.match {
+                TranscriptSearchResultBanner(match: match) { revealRequest = nil }
+            }
+            ChatTranscriptView(
+                session: session, revealRequest: revealRequest, focusRequest: transcriptFocusRequest
+            ).id(session.id)
             Composer(
                 session: session,
                 draft: $draft,
@@ -139,84 +198,123 @@ struct ChatView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .overlay {
-            // 🏔️ Summit ("send it") blasts a rocket-goat diagonally across the whole chat, from
-            // any effort source (capsule, model menu, ⌘4). Flies over everything, hit-transparent.
-            if playfulMotion, let rocketID {
-                GoatRocket { self.rocketID = nil }
-                    .id(rocketID)
-            }
-        }
-        .onChange(of: model.goatWalkToken) { _, v in if playfulMotion { walkID = v } }
-        .onChange(of: model.goatCheerToken) { _, v in if playfulMotion { cheerID = v } }
-        .onChange(of: session.effort) { _, effort in
-            if playfulMotion && effort == .summit { rocketID = UUID() }
-        }
-        .onChange(of: playfulMotion) { _, enabled in
-            if !enabled {
-                walkID = nil
-                cheerID = nil
-                rocketID = nil
-            }
-        }
-        .onPasteCommand(of: [UTType.image]) { providers in
-            loadImages(from: providers)
-        }
-        .sheet(item: Binding(get: { model.mcp.pendingPermission }, set: { _ in })) { request in
-            PermissionSheet(request: request)
-                .interactiveDismissDisabled()
-        }
-        .background(.clear)
-        .navigationTitle(session.title)
-        .navigationSubtitle(projectName ?? "")
-        .toolbar {
-            ToolbarSpacer(.flexible)
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    withAnimation(.easeOut(duration: 0.18)) { model.showActivityLog.toggle() }
-                } label: {
-                    ChromeToggleIcon(systemImage: "terminal")
-                }
-                .buttonStyle(.plain)
-                .help("Toggle Log (⌃`)")
-                .accessibilityLabel(model.showActivityLog ? "Hide Log" : "Show Log")
-            }
-            .sharedBackgroundVisibility(.hidden)
-            ToolbarSpacer(.fixed, placement: .primaryAction)
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    model.showInspector.toggle()
-                } label: {
-                    ChromeToggleIcon(systemImage: "sidebar.trailing")
-                }
-                .buttonStyle(.plain)
-                .help("Toggle inspector (⌥⌘I)")
-                .keyboardShortcut("i", modifiers: [.option, .command])
-            }
-            .sharedBackgroundVisibility(.hidden)
-        }
-        .inspector(isPresented: $model.showInspector) {
-            Group {
-                if let artifact = model.paddockArtifact {
-                    PaddockView(artifact: artifact)
-                } else {
-                    InspectorView(session: session)
+    }
+
+    private var transcriptPresentation: some View {
+        conversationContent
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay {
+                // 🏔️ Summit ("send it") blasts a rocket-goat diagonally across the whole chat, from
+                // any effort source (capsule, model menu, ⌘4). Flies over everything, hit-transparent.
+                if playfulMotion, let rocketID {
+                    GoatRocket { self.rocketID = nil }
+                        .id(rocketID)
                 }
             }
-            .inspectorColumnWidth(min: 280, ideal: 380, max: 820)
-        }
-        .onAppear { composerFocused = true }
-        .onChange(of: session.id) { _, _ in composerFocused = true }
-        .onDisappear {
-            cancelAttachmentJobs()
-            model.mcp.cancelPendingPermission()
-        }
-        .onChange(of: session.id) {
-            cancelAttachmentJobs()
-            pending = []
-        }
-        .onChange(of: session.effort) { _, _ in model.persistMeta(session) }
+            .onChange(of: model.goatWalkToken) { _, v in if playfulMotion { walkID = v } }
+            .onChange(of: model.goatCheerToken) { _, v in if playfulMotion { cheerID = v } }
+            .onChange(of: session.effort) { _, effort in
+                if playfulMotion && effort == .summit { rocketID = UUID() }
+            }
+            .onChange(of: playfulMotion) { _, enabled in
+                if !enabled {
+                    walkID = nil
+                    cheerID = nil
+                    rocketID = nil
+                }
+            }
+            .onPasteCommand(of: [UTType.image]) { providers in
+                loadImages(from: providers)
+            }
+            .sheet(item: Binding(get: { model.mcp.pendingPermission }, set: { _ in })) { request in
+                PermissionSheet(request: request)
+                    .interactiveDismissDisabled()
+            }
+            .background(.clear)
+            .navigationTitle(session.title)
+            .navigationSubtitle(projectName ?? "")
+    }
+
+    private var transcriptControls: some View {
+        transcriptPresentation
+            .sheet(isPresented: $showingFind) {
+                TranscriptFindSheet(session: session) { match in
+                    revealRequest = TranscriptRevealRequest(
+                        messageID: match.id, byteOffset: match.byteOffset, match: match)
+                }
+            }
+            .fileExporter(
+                isPresented: $exportingTranscript, document: transcriptDocument,
+                contentType: TranscriptMarkdownDocument.contentType, defaultFilename: "Conversation.md"
+            ) { result in
+                if case .failure(let error) = result { exportFailure = error.localizedDescription }
+            }
+            .alert(
+                "Could not export conversation",
+                isPresented: Binding(
+                    get: { exportFailure != nil }, set: { if !$0 { exportFailure = nil } }
+                )
+            ) {
+                Button("OK") { exportFailure = nil }
+            } message: {
+                Text(exportFailure ?? "")
+            }
+            .focusedSceneValue(
+                \.transcriptCommands,
+                TranscriptCommandActions(
+                    canFind: session.messagesLoaded, canCopy: canCopyLastReply,
+                    canFocusConversation: session.messagesLoaded && !session.messages.isEmpty,
+                    find: { showingFind = true }, copy: copyLastReply,
+                    focusConversation: {
+                        composerFocused = false
+                        transcriptFocusRequest = UUID()
+                    }, focusComposer: { composerFocused = true })
+            )
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Menu("Conversation", systemImage: "ellipsis.circle") {
+                        Button("Find in conversation…", systemImage: "magnifyingglass") { showingFind = true }
+                            .disabled(!session.messagesLoaded)
+                        Button("Copy last reply", systemImage: "doc.on.doc", action: copyLastReply)
+                            .disabled(!canCopyLastReply)
+                        Button("Export Markdown…", systemImage: "square.and.arrow.up") {
+                            Task {
+                                do {
+                                    let messages = try await model.inspectHistory(for: session)
+                                    transcriptDocument = TranscriptMarkdownDocument(
+                                        text: TranscriptText.markdownExport(title: session.title, messages: messages))
+                                    exportingTranscript = true
+                                } catch { exportFailure = error.localizedDescription }
+                            }
+                        }
+                        .disabled(!session.messagesLoaded || session.messages.isEmpty)
+                    }
+                }
+                ToolbarSpacer(.flexible)
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        withAnimation(.easeOut(duration: 0.18)) { model.showActivityLog.toggle() }
+                    } label: {
+                        ChromeToggleIcon(systemImage: "terminal")
+                    }
+                    .buttonStyle(.plain)
+                    .help("Toggle Log (⌃`)")
+                    .accessibilityLabel(model.showActivityLog ? "Hide Log" : "Show Log")
+                }
+                .sharedBackgroundVisibility(.hidden)
+                ToolbarSpacer(.fixed, placement: .primaryAction)
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        model.showInspector.toggle()
+                    } label: {
+                        ChromeToggleIcon(systemImage: "sidebar.trailing")
+                    }
+                    .buttonStyle(.plain)
+                    .help("Toggle inspector (⌥⌘I)")
+                    .keyboardShortcut("i", modifiers: [.option, .command])
+                }
+                .sharedBackgroundVisibility(.hidden)
+            }
     }
 
     @State private var walkID: Int?
@@ -308,6 +406,89 @@ struct ChatView: View {
         attachmentImportGeneration = UUID()
         for job in attachmentJobs.values { job.cancel() }
         attachmentJobs.removeAll()
+    }
+}
+
+private struct TranscriptFindSheet: View {
+    let session: ChatSession
+    let select: (TranscriptText.SearchMatch) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+    @State private var matches: [TranscriptText.SearchMatch] = []
+    @State private var searching = false
+    @State private var failure: String?
+    @Environment(AppModel.self) private var model
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Caprine.Activity.inset) {
+            Text("Find in conversation").font(.headline)
+            TextField("Search message text", text: $query).textFieldStyle(.roundedBorder).focused($focused)
+            if searching { ProgressView().controlSize(.small) }
+            if let failure { Text(failure).font(.caption).foregroundStyle(Caprine.Semantic.warning) }
+            Text(matches.count == 200 ? "First 200 matching messages" : "\(matches.count) matching messages")
+                .font(.caption).foregroundStyle(.secondary)
+            List(matches) { match in
+                Button {
+                    select(match)
+                    dismiss()
+                } label: {
+                    (Text(match.prefix) + Text(match.match).bold() + Text(match.suffix))
+                        .lineLimit(4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Show this message in the conversation")
+            }
+            .frame(minHeight: Caprine.Reading.editorHeight)
+            HStack {
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(Caprine.Activity.messageSpacing)
+        .frame(width: Caprine.Reading.editorWidth)
+        .onAppear { focused = true }
+        .task(id: query) {
+            matches = []
+            guard !query.isEmpty else {
+                searching = false
+                return
+            }
+            searching = true
+            do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
+            do {
+                let result = try await model.findInHistory(query, for: session)
+                guard !Task.isCancelled else { return }
+                failure = nil
+                matches = result
+                searching = false
+            } catch {
+                if !Task.isCancelled {
+                    searching = false
+                    failure = error.localizedDescription
+                }
+            }
+        }
+    }
+}
+
+private struct TranscriptMarkdownDocument: FileDocument {
+    static let contentType = UTType(filenameExtension: "md") ?? .plainText
+    static var readableContentTypes: [UTType] { [contentType, .plainText] }
+    var text: String
+
+    init(text: String) { self.text = text }
+
+    init(configuration: ReadConfiguration) throws {
+        guard let data = configuration.file.regularFileContents,
+            let text = String(data: data, encoding: .utf8)
+        else { throw CocoaError(.fileReadInapplicableStringEncoding) }
+        self.text = text
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: Data(text.utf8))
     }
 }
 
@@ -933,3 +1114,76 @@ private struct SkillCatalogContext: Hashable {
 }
 
 // MARK: - The capsule: "Qwen3-8B-4bit · Trot ⌄"
+
+/// Commands follow the focused window, including when its AppKit composer owns keyboard input.
+struct TranscriptCommandActions {
+    let canFind: Bool
+    let canCopy: Bool
+    let canFocusConversation: Bool
+    let find: @MainActor () -> Void
+    let copy: @MainActor () -> Void
+    let focusConversation: @MainActor () -> Void
+    let focusComposer: @MainActor () -> Void
+}
+
+private struct TranscriptCommandsKey: FocusedValueKey {
+    typealias Value = TranscriptCommandActions
+}
+
+extension FocusedValues {
+    var transcriptCommands: TranscriptCommandActions? {
+        get { self[TranscriptCommandsKey.self] }
+        set { self[TranscriptCommandsKey.self] = newValue }
+    }
+}
+
+struct TranscriptCommands: Commands {
+    @FocusedValue(\.transcriptCommands) private var actions
+
+    var body: some Commands {
+        CommandGroup(after: .textEditing) {
+            Button("Find in conversation…") { actions?.find() }
+                .keyboardShortcut("f", modifiers: [.command])
+                .disabled(actions?.canFind != true)
+            Button("Copy last reply") { actions?.copy() }
+                .keyboardShortcut("c", modifiers: [.command, .shift])
+                .disabled(actions?.canCopy != true)
+            Divider()
+            Button("Focus conversation") { actions?.focusConversation() }
+                .keyboardShortcut(.upArrow, modifiers: [.command, .option])
+                .disabled(actions?.canFocusConversation != true)
+            Button("Focus composer") { actions?.focusComposer() }
+                .keyboardShortcut(.downArrow, modifiers: [.command, .option])
+                .disabled(actions == nil)
+        }
+    }
+}
+
+/// Keep the selected match readable even inside a collapsed code block or a source-only part.
+private struct TranscriptSearchResultBanner: View {
+    let match: TranscriptText.SearchMatch
+    let dismiss: () -> Void
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        HStack(alignment: .top, spacing: Caprine.Activity.spacing) {
+            VStack(alignment: .leading, spacing: Caprine.Activity.spacing) {
+                Text("Search match").font(.caption.weight(.semibold))
+                (Text(singleLine(match.prefix)) + Text(singleLine(match.match)).bold()
+                    + Text(singleLine(match.suffix)))
+                    .font(.caption).lineLimit(3).textSelection(.enabled)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Button("Dismiss search match", systemImage: "xmark.circle.fill", action: dismiss)
+                .labelStyle(.iconOnly).buttonStyle(.plain)
+        }
+        .padding(Caprine.Activity.inset)
+        .foregroundStyle(model.theme.tokens.ink)
+        .background(model.theme.tokens.surface)
+        .accessibilityElement(children: .contain)
+    }
+
+    private func singleLine(_ text: String) -> String {
+        text.components(separatedBy: .newlines).joined(separator: " ")
+    }
+}

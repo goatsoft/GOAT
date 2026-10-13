@@ -109,7 +109,9 @@ enum ReplyWindow {
     /// Rendered bytes laid out for one reply: the message window's budget, so a long reply fills at
     /// most one window. A single segment is always shown.
     static let budget = TranscriptWindow.sourceBudget
-    static let capacity = 32
+    // Dense groups can contain several native code controls despite tiny source size.
+    // Keep at most two rich groups mounted; paging retains one group as its anchor.
+    static let capacity = 2
 
     static func latest(count: Int, cost: (Int) -> Int) -> Range<Int> {
         TranscriptWindow.range(count: count, end: nil, capacity: capacity, budget: budget, cost: cost)

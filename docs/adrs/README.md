@@ -107,7 +107,13 @@ Older records retain the package and type names used when accepted. [ADR-0054](0
 | [0095](0095-parallel-verification-and-preview-diagnostics.md) | Parallel verification and preview diagnostics | Accepted, amended |
 
 | [0098](0098-shared-oklab-colour-picker.md) | Shared OKLab colour picker | Accepted · refines 0022 |
-| [0099](0099-virtualized-transcript-list.md) | Virtualized transcript list | Proposed · would supersede 0091 windowing, 0094 §4 and 0097; refines 0002 and 0028 |
+| [0099](0099-virtualized-transcript-list.md) | Virtualized transcript list | Proposed · would supersede 0091 windowing and 0094 §4; retains 0097 ownership; refines 0002 and 0028 |
 | [0100](0100-synchronous-markdown-block-spacing.md) | Synchronous Markdown block spacing | Proposed |
+
+| [0101](0101-bounded-inline-artifacts.md) | Bounded inline artifact lifetimes and literal math | Proposed · refines 0010, 0015 and 0091 |
+
+| [0102](0102-paged-reader-history.md) | Paged reader history and complete turn context | Proposed · refines 0003, 0056 and 0091 |
+
+| [0103](0103-dense-reply-layout-admission.md) | Dense reply layout admission | Proposed · refines 0091 |
 
 New session? Start with **[../../AGENT.md](../../AGENT.md)**, then [the roadmap](../ROADMAP.md).

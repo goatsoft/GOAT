@@ -87,7 +87,21 @@ public final class ChatMessage: Identifiable {
     public var generationSelectedEffort: String?
     public var generationFailureCategory: String?
     public var generationProvenance: GenerationProvenanceRecord?
+    /// Original storage bytes remain available for lossless re-persistence without decoding details.
+    public var storedGenerationProvenance: String?
     public var generationProvenanceUnavailable = false
+
+    public func decodeStoredProvenance() {
+        guard generationProvenance == nil, let source = storedGenerationProvenance else { return }
+        guard source.utf8.count <= 256 * 1_024, let data = source.data(using: .utf8),
+            let value = try? JSONDecoder().decode(GenerationProvenanceRecord.self, from: data)
+        else {
+            generationProvenanceUnavailable = true
+            return
+        }
+        generationProvenance = value
+        generationFailureCategory = value.failureCategory?.rawValue
+    }
     /// Session-local prompt-budget notice. It is UI metadata, never model-visible content.
     public var contextNotice: String?
     public let createdAt: Date
@@ -199,6 +213,19 @@ public final class ChatSession: Identifiable {
     public var activeCompactionID: UUID?
     public var isLoadingMessages = false
     public var messagesLoaded = false
+    /// Reader storage is a bounded page. Generation explicitly hydrates the complete history.
+    public var historyHasEarlier = false
+    public var historyHasLater = false
+    public var historyRevision: UInt64 = 0
+    public var historyPrecedingDate: Date?
+    public var latestPersistedStats: GenStats?
+    public var recentPersistedStats: [(id: UUID, stats: GenStats)] = []
+    public var isPagingHistory = false
+    public var isHydratingHistory = false
+    public var historyPageError: String?
+    @ObservationIgnored public var historyCursors: [UUID: ChatDatabase.MessageCursor] = [:]
+    @ObservationIgnored public var historyAnchorID: UUID?
+    public var hasCompleteHistory: Bool { !historyHasEarlier && !historyHasLater }
     public var messageLoadError: String?
     /// Context tokens in the last planned request or completed request+reply.
     public var lastContextTokens: Int?

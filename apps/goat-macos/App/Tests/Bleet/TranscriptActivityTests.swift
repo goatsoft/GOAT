@@ -308,6 +308,65 @@ import XCTest
 }
 extension AppTests.Bleet {
     @Suite struct TranscriptActivityTests {
+        @Test func searchKeepsUTF8OffsetsAndBoundsExcerpts() throws {
+            let id = UUID()
+            let source = String(repeating: "🐐 ", count: 100) + "Café" + String(repeating: " tail", count: 100)
+            let results = try TranscriptText.find("cafe", in: [.init(id: id, source: source)])
+            let result = try #require(results.first)
+            #expect(result.id == id)
+            #expect(result.match == "Café")
+            #expect(result.byteOffset == String(repeating: "🐐 ", count: 100).utf8.count)
+            #expect(result.prefix.count <= 80 && result.suffix.count <= 120)
+            #expect(try TranscriptText.find("", in: [.init(id: id, source: source)]).isEmpty)
+            #expect(
+                try TranscriptText.find(
+                    "cafe", in: Array(repeating: .init(id: id, source: source), count: 10), limit: 2
+                ).count == 2)
+        }
+
+        @Test @MainActor func searchNavigationUsesTheViewportOwnerAndCanReturnToLatest() {
+            let viewport = TranscriptViewport()
+            let id = UUID()
+            viewport.reveal(
+                .init(messageID: id, offset: 0, segment: 12), messageWindow: 40..<41, segment: 12, segmentCount: 90)
+            #expect(viewport.readerOwnsViewport)
+            #expect(viewport.heldRange == 40..<41)
+            #expect(viewport.segmentWindow(for: id) == 12..<13)
+            #expect(viewport.request?.target == .anchor(.init(messageID: id, offset: 0, segment: 12)))
+            viewport.jumpToLatest()
+            #expect(viewport.autoFollow)
+            #expect(viewport.heldRange == nil)
+            #expect(viewport.segmentWindow(for: id) == nil)
+            #expect(viewport.request?.target == .bottom)
+        }
+        @Test @MainActor func dayBoundariesBreakAssistantContinuations() throws {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
+            let first = ChatMessage(role: .assistant, createdAt: Date(timeIntervalSince1970: 86_399))
+            first.text = "Before midnight"
+            let second = ChatMessage(role: .assistant, createdAt: Date(timeIntervalSince1970: 86_400))
+            second.text = "After midnight"
+            let third = ChatMessage(role: .assistant, createdAt: Date(timeIntervalSince1970: 86_401))
+            third.text = "Same day"
+            let rows = TranscriptActivity.rows([first, second, third][...], calendar: calendar)
+            #expect(rows.map(\.startsDay) == [true, true, false])
+            #expect(rows.map(\.isContinuation) == [false, false, true])
+            // A page starting halfway through a day still identifies that day.
+            #expect(TranscriptActivity.rows([third][...], calendar: calendar).first?.startsDay == true)
+            #expect(
+                TranscriptActivity.rows([third][...], precedingDate: second.createdAt, calendar: calendar)
+                    .first?.startsDay == false)
+        }
+
+        @Test @MainActor func markdownExportPreservesSourceWhitespaceAndUnicode() {
+            let message = ChatMessage(role: .assistant)
+            message.text = "\n  🐐 café e\u{301}\n\n````markdown\n```swift\n  let x = 1\n```\n````\n  "
+            message.thinking = "  Reasoning\n\n"
+            let exported = TranscriptText.markdownExport(title: "A\nconversation", messages: [message])
+            #expect(exported.hasPrefix("# A conversation\n\n## Assistant\n\n"))
+            #expect(exported.contains(message.text + "\n\n### Reasoning\n\n" + message.thinking))
+            #expect(String(data: Data(exported.utf8), encoding: .utf8) == exported)
+        }
 
         @Test @MainActor func lastVisibleIDSkipsTrailingToolAndEmptyRows() {
             let user = ChatMessage(role: .user)
@@ -587,5 +646,346 @@ extension AppTests.Bleet {
             #expect(AssistantStatusRow<EmptyView>.elapsedLabel(125) == "2m 5s")
             #expect(AssistantStatusRow<EmptyView>.elapsedLabel(3_665) == "1h 1m 5s")
         }
+    }
+}
+
+@MainActor final class TranscriptHistoryPagingTests: XCTestCase {
+    func testTwoThousandMessagesRemainReachableWithoutLoadingThemAll() async throws {
+        let model = AppModel.shared
+        let previousDB = model.db
+        let previousChats = model.chats
+        let previousSelection = model.selectedChatID
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("goat-history-\(UUID()).sqlite")
+        let db = try ChatDatabase(path: path.path)
+        addTeardownBlock { [weak db] in
+            // Never unlink a SQLite vnode while the actor still owns its connection pool.
+            guard db == nil else { return }
+            try? FileManager.default.removeItem(at: path)
+        }
+        let session = ChatSession(effort: .trot, modelID: nil)
+        session.messagesLoaded = true
+        model.db = db
+        model.chats = [session]
+        model.selectedChatID = session.id
+        defer {
+            model.db = previousDB
+            model.chats = previousChats
+            model.selectedChatID = previousSelection
+        }
+        try await db.save(model.record(for: session))
+        var ids: [UUID] = []
+        for index in 0..<2_000 {
+            let id = UUID()
+            ids.append(id)
+            try await db.save(
+                MessageRecord(
+                    id: id.uuidString, chatId: session.id.uuidString,
+                    role: index.isMultiple(of: 2) ? "user" : "assistant",
+                    text: "Message \(index) 🐐", thinking: "", error: nil,
+                    statsTtft: nil, statsTokens: nil, statsDuration: nil, complete: true,
+                    position: index, createdAt: .now, generationProvenanceJson: "invalid saved details"))
+        }
+        session.messagesLoaded = false
+        let started = ContinuousClock.now
+        await model.loadMessages(for: session)
+        print("HISTORY_OPEN rows=2000 admitted=\(session.messages.count) elapsed=\(started.duration(to: .now))")
+        XCTAssertEqual(session.messages.map(\.id), Array(ids.suffix(40)))
+        XCTAssertTrue(session.historyHasEarlier)
+        XCTAssertNil(session.messages.first?.generationProvenance)
+        XCTAssertFalse(session.messages.first?.generationProvenanceUnavailable ?? true)
+        var visited = Set(session.messages.map(\.id))
+        var pages = 0
+        while session.historyHasEarlier && pages < 60 {
+            let loaded = await model.pageHistory(for: session, earlier: true)
+            XCTAssertTrue(loaded)
+            XCTAssertLessThanOrEqual(session.messages.count, 120)
+            visited.formUnion(session.messages.map(\.id))
+            pages += 1
+        }
+        XCTAssertEqual(visited, Set(ids))
+        XCTAssertFalse(session.historyHasEarlier)
+        XCTAssertTrue(session.historyHasLater)
+        pages = 0
+        while session.historyHasLater && pages < 60 {
+            let loaded = await model.pageHistory(for: session, earlier: false)
+            XCTAssertTrue(loaded)
+            XCTAssertLessThanOrEqual(session.messages.count, 120)
+            pages += 1
+        }
+        XCTAssertEqual(session.messages.last?.id, ids.last)
+        let held = try XCTUnwrap(session.messages.first)
+        session.historyAnchorID = held.id
+        let pending = ChatMessage(role: .user)
+        pending.text = "New turn"
+        session.messages.append(pending)
+        let hydrated = await model.hydrateHistory(for: session)
+        XCTAssertTrue(hydrated)
+        XCTAssertEqual(session.messages.count, 2_001)
+        XCTAssertTrue(session.messages.first(where: { $0.id == held.id }) === held)
+        XCTAssertTrue(session.messages.last === pending)
+        let receipt = model.controlSnapshot(
+            turn: UUID(), record: .init(chatID: session.id, firstMessageID: pending.id), chat: session, running: false)
+        XCTAssertEqual(receipt["text"], "", "Older assistant output must never become the new turn's receipt")
+        XCTAssertTrue(session.hasCompleteHistory)
+        session.messages.removeLast()
+        model.trimHistory(for: session)
+        XCTAssertLessThanOrEqual(session.messages.count, 120)
+        XCTAssertTrue(session.messages.contains { $0.id == held.id })
+        let around = await model.loadHistory(around: ids[500], for: session)
+        XCTAssertTrue(around)
+        XCTAssertLessThanOrEqual(session.messages.count, 41)
+        XCTAssertTrue(session.messages.contains { $0.id == ids[500] })
+        let matches = try await model.findInHistory("Message 5 🐐", for: session)
+        XCTAssertEqual(matches.map(\.id), [ids[5]])
+        XCTAssertLessThanOrEqual(session.messages.count, 41)
+        let newest = try await model.findInHistory("Message 19", for: session)
+        XCTAssertEqual(newest.first?.id, ids[1_999], "Paged search lists the newest matches first")
+        let lastReply = try await model.lastReplyText(in: session)
+        XCTAssertEqual(lastReply, "Message 1999 🐐")
+        let prompt = try await model.precedingUserText(before: ids[501], in: session)
+        XCTAssertEqual(prompt, "Message 500 🐐")
+        XCTAssertLessThanOrEqual(session.messages.count, 41, "Reply and prompt lookups keep the reader cache")
+        let local = ChatSession(effort: .trot, modelID: nil)
+        let older = ChatMessage(role: .user)
+        older.text = "alpha older"
+        let newer = ChatMessage(role: .assistant)
+        newer.text = "alpha newer"
+        local.messages = [older, newer]
+        let localMatches = try await model.findInHistory("alpha", for: local)
+        XCTAssertEqual(localMatches.map(\.id), [newer.id, older.id], "Loaded search uses the same newest-first order")
+        let all = try await model.inspectHistory(for: session)
+        XCTAssertEqual(all.map(\.id), ids)
+        XCTAssertLessThanOrEqual(session.messages.count, 41, "Inspection must not replace the reader cache")
+        let latest = await model.loadLatestHistory(for: session)
+        XCTAssertTrue(latest)
+        XCTAssertEqual(session.messages.map(\.id), Array(ids.suffix(40)))
+        session.messages.first?.decodeStoredProvenance()
+        XCTAssertTrue(session.messages.first?.generationProvenanceUnavailable ?? false)
+        XCTAssertEqual(session.messages.first?.storedGenerationProvenance, "invalid saved details")
+    }
+}
+
+extension TranscriptHistoryPagingTests {
+    func testStreamingPublicationDoesNotReevaluateFortySettledRows() async throws {
+        let session = ChatSession(effort: .trot, modelID: nil)
+        session.messagesLoaded = true
+        session.isStreaming = true
+        session.messages = (0..<40).map { index in
+            let message = ChatMessage(role: .assistant)
+            message.text = "Settled row \(index), with **styled text**."
+            message.complete = index != 39
+            return message
+        }
+        let active = try XCTUnwrap(session.messages.last)
+        let settledIDs = Set(session.messages.dropLast().map(\.id))
+        let host = NSHostingView(
+            rootView: ChatTranscriptView(session: session).environment(AppModel.shared)
+                .environment(\.scenePhase, .active).allowsHitTesting(false))
+        host.sizingOptions = []
+        let window = NSWindow(
+            contentRect: NSRect(x: 80, y: 80, width: 760, height: 520),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        // This measures publication invalidation, not hover changes as rows move under the mouse.
+        window.ignoresMouseEvents = true
+        TranscriptRenderMetrics.enabled = true
+        TranscriptRenderMetrics.evaluations = [:]
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 760, height: 520))
+        host.frame = container.bounds
+        host.autoresizingMask = [.width, .height]
+        container.addSubview(host)
+        window.contentView = container
+        // No pointer can cross a row during this publication-only measurement. Keep native
+        // layout and all 40 admitted rows, but isolate user focus and scene activation changes.
+        window.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
+        window.orderFront(nil)
+        defer {
+            TranscriptRenderMetrics.enabled = false
+            TranscriptRenderMetrics.evaluations = [:]
+            window.contentView = nil
+            window.close()
+        }
+        try await Task.sleep(for: .seconds(1))
+        XCTAssertTrue(
+            Set(TranscriptRenderMetrics.evaluations.keys).isSuperset(of: Set(session.messages.map(\.id))),
+            "The instrumentation must include all 40 admitted rows")
+        TranscriptRenderMetrics.evaluations = [:]
+        for index in 0..<20 {
+            active.appendStream(text: " Publication \(index).", thinking: "")
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        let settled = TranscriptRenderMetrics.evaluations.filter { settledIDs.contains($0.key) }.values.reduce(0, +)
+        let live = TranscriptRenderMetrics.evaluations[active.id, default: 0]
+        print("TRANSCRIPT_EVALUATIONS admitted=40 publications=20 settled=\(settled) live=\(live)")
+        XCTAssertEqual(settled, 0, "Streaming a tail must not reevaluate settled MessageView bodies")
+        XCTAssertGreaterThan(live, 0, "The live row must still observe publication changes")
+        XCTAssertLessThanOrEqual(live, 40)
+    }
+}
+
+extension TranscriptHistoryPagingTests {
+    func testDatabasePageRestoresTheHeldReaderThroughTheExistingExecutor() async throws {
+        let model = AppModel.shared
+        let previousDB = model.db
+        let previousChats = model.chats
+        let previousSelection = model.selectedChatID
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("goat-anchor-\(UUID()).sqlite")
+        let db = try ChatDatabase(path: path.path)
+        addTeardownBlock { [weak db] in
+            // Never unlink a SQLite vnode while the actor still owns its connection pool.
+            guard db == nil else { return }
+            try? FileManager.default.removeItem(at: path)
+        }
+        let session = ChatSession(effort: .trot, modelID: nil)
+        session.messagesLoaded = true
+        model.db = db
+        model.chats = [session]
+        model.selectedChatID = session.id
+        defer {
+            model.db = previousDB
+            model.chats = previousChats
+            model.selectedChatID = previousSelection
+        }
+        try await db.save(model.record(for: session))
+        for index in 0..<200 {
+            try await db.save(
+                MessageRecord(
+                    id: UUID().uuidString, chatId: session.id.uuidString, role: "assistant",
+                    text: "Reader row \(index). A stable paragraph with **emphasis**.\n\nSecond paragraph.",
+                    thinking: "",
+                    error: nil, statsTtft: nil, statsTokens: nil, statsDuration: nil,
+                    complete: true, position: index, createdAt: .now))
+        }
+        session.messagesLoaded = false
+        await model.loadMessages(for: session)
+        let anchor = TranscriptViewport.Anchor(messageID: session.messages[5].id, offset: 13)
+        let navigation = TranscriptViewport(initiallyFollowing: false, initialHeldRange: 0..<40, initialAnchor: anchor)
+        let host = NSHostingView(
+            rootView: ChatTranscriptView(session: session, viewport: navigation).environment(model)
+                .environment(\.scenePhase, .active).allowsHitTesting(false))
+        host.sizingOptions = []
+        let window = NSWindow(
+            contentRect: NSRect(x: -10_000, y: -10_000, width: 760, height: 520),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.ignoresMouseEvents = true
+        let viewport = NSView(frame: NSRect(origin: .zero, size: window.contentLayoutRect.size))
+        host.frame = viewport.bounds
+        host.autoresizingMask = [.width, .height]
+        viewport.addSubview(host)
+        window.contentView = viewport
+        window.orderFront(nil)
+        defer {
+            window.contentView = nil
+            window.close()
+        }
+        // Readiness, not a fixed sleep: initial Markdown preparation can finish after the
+        // first placement and correctly request another restore. The geometry assertion below
+        // retains the executor's 1 pt tolerance and rejects every abandoned request.
+        func awaitPlacement() async throws {
+            let deadline = ContinuousClock.now + .seconds(5)
+            var quietSince: ContinuousClock.Instant?
+            while ContinuousClock.now < deadline {
+                host.layoutSubtreeIfNeeded()
+                if navigation.request == nil {
+                    if let quietSince, ContinuousClock.now - quietSince >= .milliseconds(300) { return }
+                    if quietSince == nil { quietSince = ContinuousClock.now }
+                } else {
+                    quietSince = nil
+                }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+        }
+        try await awaitPlacement()
+        XCTAssertNil(navigation.request, "Initial placement must finish: \(navigation.diagnostics)")
+        XCTAssertEqual(navigation.abandonedRequests, 0)
+        let fulfilled = navigation.diagnostics.filter { $0.hasPrefix("fulfilled ") }.count
+        let loaded = await model.pageHistory(for: session, earlier: true)
+        XCTAssertTrue(loaded)
+        try await awaitPlacement()
+        XCTAssertEqual(navigation.anchor, anchor)
+        XCTAssertTrue(navigation.readerOwnsViewport)
+        // SwiftUI can already preserve the row during reconciliation. Require the executor
+        // to verify the new request, not to issue a redundant scroll when it is within 1 pt.
+        XCTAssertGreaterThan(navigation.diagnostics.filter { $0.hasPrefix("fulfilled ") }.count, fulfilled)
+        XCTAssertNil(
+            navigation.request, "Page restore must satisfy the executor's 1 pt tolerance: \(navigation.diagnostics)")
+        XCTAssertEqual(navigation.abandonedRequests, 0, navigation.diagnostics.joined(separator: "\n"))
+        XCTAssertLessThanOrEqual(session.messages.count, 120)
+    }
+}
+
+extension TranscriptHistoryPagingTests {
+    func testShortReasoningCanBePagedWithoutScrollingFirst() async throws {
+        let session = ChatSession(effort: .trot, modelID: nil)
+        session.messagesLoaded = true
+        let message = ChatMessage(role: .assistant)
+        message.thinking = "First paragraph.\n\n```swift\nlet choice = 42\n```\n\nLast paragraph."
+        message.complete = true
+        session.messages = [message]
+        ReasoningDisclosureStore.shared.set(.init(isOpen: true, showsAll: true), for: message.id)
+        let owner = TranscriptViewport()
+        let enhancedUI = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        let previousEnhancedUI = NSApp.accessibilityAttributeValue(enhancedUI)
+        NSApp.accessibilitySetValue(true, forAttribute: enhancedUI)
+        let host = NSHostingView(
+            rootView: ChatTranscriptView(session: session, viewport: owner).environment(AppModel.shared))
+        host.sizingOptions = []
+        let window = NSWindow(
+            contentRect: NSRect(x: 80, y: 80, width: 760, height: 900),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.ignoresMouseEvents = true
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 760, height: 900))
+        host.frame = container.bounds
+        host.autoresizingMask = [.width, .height]
+        container.addSubview(host)
+        window.contentView = container
+        window.makeKeyAndOrderFront(nil)
+        defer {
+            window.contentView = nil
+            window.close()
+            NSApp.accessibilitySetValue(previousEnhancedUI ?? false, forAttribute: enhancedUI)
+        }
+        try await Task.sleep(for: .milliseconds(600))
+        XCTAssertTrue(owner.autoFollow, "The fixture must not require a preceding scroll gesture")
+        var visited: Set<ObjectIdentifier> = []
+        func value(_ object: NSObject, _ selectorName: String) -> Any? {
+            let selector = NSSelectorFromString(selectorName)
+            guard object.responds(to: selector) else { return nil }
+            return object.perform(selector)?.takeUnretainedValue()
+        }
+        func find(_ object: Any) -> NSObject? {
+            guard let object = object as? NSObject,
+                visited.insert(ObjectIdentifier(object)).inserted
+            else { return nil }
+            let name =
+                value(object, "accessibilityLabel") as? String
+                ?? object.accessibilityAttributeValue(.description) as? String
+            let role =
+                value(object, "accessibilityRole") as? String
+                ?? object.accessibilityAttributeValue(.role) as? String
+            if name == "Earlier reasoning", role == NSAccessibility.Role.button.rawValue { return object }
+            let children =
+                value(object, "accessibilityChildren") as? [Any]
+                ?? object.accessibilityAttributeValue(.children) as? [Any] ?? []
+            for child in children {
+                if let found = find(child) { return found }
+            }
+            return nil
+        }
+        let earlier = try XCTUnwrap(find(host), "Earlier reasoning must be an actionable control")
+        // SwiftUI's AX node exposes the modern Objective-C action without declaring the
+        // NSAccessibilityButton protocol. Call that BOOL-returning method with its correct ABI;
+        // NSObject's deprecated accessibilityPerformAction implementation is a no-op here.
+        let press = NSSelectorFromString("accessibilityPerformPress")
+        XCTAssertTrue(earlier.responds(to: press))
+        let implementation = try XCTUnwrap(earlier.method(for: press))
+        let performPress = unsafeBitCast(implementation, to: (@convention(c) (AnyObject, Selector) -> Bool).self)
+        XCTAssertTrue(performPress(earlier, press))
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertTrue(owner.readerOwnsViewport)
+        let key = TranscriptSegmentOwner.reasoning(of: message.id)
+        XCTAssertEqual(owner.segmentWindow(for: key)?.lowerBound, 0, "The first paragraph must remain reachable")
     }
 }

@@ -20,7 +20,7 @@ struct ModelEffortControl: View {
 
     private var nativeMenuLabel: AttributedString {
         var modelPart = AttributedString(projection.selectedDisplayName)
-        modelPart.foregroundColor = Caprine.Semantic.onAccent
+        modelPart.foregroundColor = model.theme.tokens.ink
 
         var separator = AttributedString(" · ")
         separator.foregroundColor = model.theme.tokens.muted
@@ -57,7 +57,7 @@ struct ModelEffortControl: View {
         .menuStyle(.button)
         .menuIndicator(.hidden)
         .buttonStyle(.plain)
-        .foregroundStyle(Caprine.Semantic.onAccent)
+        .foregroundStyle(model.theme.tokens.ink)
         .accessibilityLabel("Model and effort")
         .accessibilityValue(
             "\(projection.selectedDisplayName), \(projection.selectedAvailability), \(session.effort.label)"

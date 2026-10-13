@@ -22,6 +22,8 @@ public struct Caprine: Sendable {
         public static let characters = 68.0
         /// User bubbles take at most this share of the transcript column.
         public static let userBubbleFraction = 0.75
+        public static let editorWidth: CGFloat = 600
+        public static let editorHeight: CGFloat = 300
     }
 
     /// Fenced code blocks and inline artifacts in the transcript (#60 A6).
@@ -32,6 +34,7 @@ public struct Caprine: Sendable {
         public static let collapsedLineLimit = 40
         public static let previewHeight: CGFloat = 340
         public static let diagramPreviewHeight: CGFloat = 280
+        public static let minimumPreviewHeight: CGFloat = 80
         public static let surfaceOpacity = 0.22
     }
 

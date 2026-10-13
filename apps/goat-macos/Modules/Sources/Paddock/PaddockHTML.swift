@@ -46,7 +46,8 @@ public enum PaddockHTML {
                 \(escape(code))
                 </pre>
                 <script>
-                window.addEventListener('load', async () => {
+                // Disable the bundle's default load handler before it can render with its own theme.
+                (async () => {
                   try {
                     mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', maxTextSize: 100000, maxEdges: 1000, suppressErrorRendering: true, theme: 'base', themeVariables: \(configuration) });
                     await mermaid.run({ nodes: document.querySelectorAll('.mermaid') });
@@ -56,7 +57,7 @@ public enum PaddockHTML {
                     failure.textContent = 'Could not render this diagram. Open Source to inspect the Mermaid syntax.';
                     document.body.append(failure);
                   }
-                });
+                })();
                 </script>
                 </body></html>
             """

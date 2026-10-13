@@ -16,6 +16,67 @@ private func makeChat(id: String = UUID().uuidString, projectId: String? = nil) 
         effort: "trot", createdAt: .now, updatedAt: .now)
 }
 
+@Test func historyPagesKeepDuplicatePositionsAndIgnoreNewerInserts() async throws {
+    let (db, _) = try tempDB()
+    let chat = makeChat()
+    try await db.save(chat)
+    for index in 0..<9 {
+        try await db.save(
+            MessageRecord(
+                id: "m\(index)", chatId: chat.id, role: "user", text: "🐐 \(index)", thinking: "",
+                error: nil, statsTtft: nil, statsTokens: nil, statsDuration: nil,
+                complete: true, position: index / 2, createdAt: .now))
+    }
+    let latest = try await db.messagePage(chatId: chat.id, limit: 3)
+    #expect(latest.messages.map(\.id) == ["m6", "m7", "m8"])
+    #expect(latest.hasEarlier)
+    try await db.save(
+        MessageRecord(
+            id: "new", chatId: chat.id, role: "assistant", text: "New output", thinking: "",
+            error: nil, statsTtft: nil, statsTokens: nil, statsDuration: nil,
+            complete: true, position: 5, createdAt: .now))
+    let middle = try await db.messagePage(chatId: chat.id, before: latest.earlierCursor, limit: 3)
+    let earliest = try await db.messagePage(chatId: chat.id, before: middle.earlierCursor, limit: 3)
+    #expect(middle.messages.map(\.id) == ["m3", "m4", "m5"])
+    #expect(earliest.messages.map(\.id) == ["m0", "m1", "m2"])
+    #expect(!earliest.hasEarlier)
+    let forward = try await db.messagePage(chatId: chat.id, after: earliest.laterCursor, limit: 3)
+    #expect(forward.messages.map(\.id) == ["m3", "m4", "m5"])
+    #expect(forward.hasEarlier && forward.hasLater)
+    let end = try await db.messagePage(chatId: chat.id, after: latest.laterCursor, limit: 3)
+    #expect(end.messages.map(\.id) == ["new"])
+    #expect(!end.hasLater)
+    #expect(try await db.messages(chatId: chat.id).count == 10)
+    #expect(try await db.messagePage(chatId: "missing").messages.isEmpty)
+}
+
+@Test func editingRejectsStaleHistoryAndPreservesAttachments() async throws {
+    let (db, _) = try tempDB()
+    let chat = makeChat()
+    try await db.save(chat)
+    for (index, role) in ["user", "assistant", "tool"].enumerated() {
+        try await db.save(
+            MessageRecord(
+                id: "edit\(index)", chatId: chat.id, role: role, text: "original", thinking: "",
+                error: nil, statsTtft: nil, statsTokens: nil, statsDuration: nil,
+                complete: true, position: index, createdAt: .now, attachmentsJson: "[\"image.png\"]"))
+    }
+    await #expect(throws: ChatDatabase.HistoryEditError.self) {
+        try await db.editUserMessage(
+            id: "edit0", chatId: chat.id, previousText: "original", text: "revised", followingIDs: ["edit1"])
+    }
+    let unchanged = try await db.messages(chatId: chat.id)
+    #expect(unchanged.count == 3)
+    #expect(unchanged.first?.text == "original")
+    try await db.editUserMessage(
+        id: "edit0", chatId: chat.id, previousText: "original", text: "  revised 🐐\n",
+        followingIDs: ["edit1", "edit2"])
+    let edited = try await db.messages(chatId: chat.id)
+    #expect(edited.count == 1)
+    #expect(edited.first?.text == "  revised 🐐\n")
+    #expect(edited.first?.attachmentsJson == "[\"image.png\"]")
+}
+
 @Test func chatAndMessagesRoundTrip() async throws {
     let (db, _) = try tempDB()
     var chat = makeChat()

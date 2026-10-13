@@ -188,6 +188,61 @@ final class TranscriptPerformanceTests: XCTestCase {
         status = "Ready"
     }
 
+    func showContentFixture() {
+        guard !running, !stopped else { return }
+        session.isStreaming = false
+        let samples = [
+            """
+            # Tables and source
+
+            | Name | Value | Notes |
+            | --- | ---: | --- |
+            | Café 🐐 | 42 | A long cell for horizontal scrolling at narrow widths |
+            | Unicode | é | Selection and copy must preserve the source |
+
+            ```swift title=Fixture.swift
+              let value = "café 🐐"
+            ```
+            """,
+            """
+            # Bounded HTML preview
+
+            ```html
+            <!doctype html><html><body><div style="height:240px;background:#21564b;color:white;padding:16px">Local HTML preview 🐐</div></body></html>
+            ```
+            """,
+            """
+            # Bounded SVG preview
+
+            ```svg
+            <svg xmlns="http://www.w3.org/2000/svg" width="480" height="180"><rect width="480" height="180" fill="#21564b"/><text x="20" y="90" fill="white">Local SVG preview</text></svg>
+            ```
+            """,
+            """
+            # Diagram and literal math
+
+            ```mermaid
+            graph LR
+              A[Local source] --> B[Bounded preview]
+            ```
+
+            $$
+            E = mc^2
+            $$
+            """,
+        ]
+        session.messages = samples.enumerated().flatMap { index, source in
+            let date = Calendar.current.date(byAdding: .day, value: index - samples.count, to: .now) ?? .now
+            let user = ChatMessage(role: .user, createdAt: date)
+            user.text = "Show synthetic example \(index + 1)."
+            let reply = ChatMessage(role: .assistant, createdAt: date)
+            reply.text = source
+            reply.complete = true
+            return [user, reply]
+        }
+        status = "Synthetic content ready"
+    }
+
     func stream(reasoning: Bool) async {
         guard !running, !stopped, !Task.isCancelled else { return }
         running = true
@@ -266,7 +321,7 @@ private struct Delivery3QualificationView: View {
         VStack(spacing: 0) {
             HStack {
                 Picker("Theme", selection: $model.themeID) {
-                    ForEach(ThemeCatalog.builtins) { theme in Text(theme.name).tag(theme.id) }
+                    ForEach(model.availableThemes) { theme in Text(theme.name).tag(theme.id) }
                 }.frame(width: 160)
                 Toggle("Inspector", isOn: $inspector)
                 Toggle("Animations", isOn: $model.animationsEnabled)
@@ -275,6 +330,8 @@ private struct Delivery3QualificationView: View {
             }.padding(8)
             HStack {
                 Button("Short fixture") { fixture.reset() }.disabled(fixture.running)
+                Button("Content fixture") { fixture.showContentFixture() }.disabled(fixture.running)
+                Button("Empty fixture") { fixture.session.messages = [] }.disabled(fixture.running)
                 Button("Stream answer 2 MiB") { requestedStream = false }.disabled(fixture.running)
                 Button("Stream reasoning 2 MiB") { requestedStream = true }.disabled(fixture.running)
                 Text(fixture.status)
@@ -316,11 +373,16 @@ extension TranscriptPerformanceTests {
         let fixture = Delivery3Qualification()
         let host = NSHostingView(rootView: Delivery3QualificationView(fixture: fixture).environment(model))
         host.sizingOptions = []
+        // A raw AppKit host does not inherit the app's SwiftUI scene toolbar bridge.
+        host.sceneBridgingOptions = [.toolbars]
         let window = NSWindow(
             contentRect: NSRect(x: 60, y: 60, width: 1180, height: 780),
             styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = "GOAT Delivery 3 qualification"
         window.isReleasedWhenClosed = false
+        window.appearance = model.preferredColorScheme.flatMap {
+            NSAppearance(named: $0 == .dark ? .darkAqua : .aqua)
+        }
         // The surrounding layout owns the viewport, as in the app and comparison fixture.
         let viewport = NSView(frame: NSRect(origin: .zero, size: window.contentLayoutRect.size))
         host.frame = viewport.bounds
@@ -343,9 +405,59 @@ extension TranscriptPerformanceTests {
             fixture.finished = true
         }
         let deadline = ContinuousClock.now.advanced(by: .seconds(1_800))
+        var appliedScheme = model.preferredColorScheme
         while !fixture.finished, !fixture.stopped, ContinuousClock.now < deadline {
+            // preferredColorScheme is a scene preference. Mirror it to this disposable AppKit
+            // window so native controls and the SwiftUI reader agree during theme switching.
+            let scheme = model.preferredColorScheme
+            if scheme != appliedScheme {
+                window.appearance = scheme.flatMap { NSAppearance(named: $0 == .dark ? .darkAqua : .aqua) }
+                appliedScheme = scheme
+            }
             try await Task.sleep(for: .milliseconds(100))
         }
         XCTAssertTrue(fixture.finished, "Interactive qualification must be explicitly finished")
+    }
+}
+
+extension TranscriptPerformanceTests {
+    /// A real scene is required to exercise focused command routing; NSHostingView alone has no scene.
+    @MainActor func testInteractiveDelivery3SceneQualification() async throws {
+        guard ProcessInfo.processInfo.environment["GOAT_DELIVERY3_SCENE"] == "1" else {
+            throw XCTSkip("Opt in with TEST_RUNNER_GOAT_DELIVERY3_SCENE=1 for scene command qualification")
+        }
+        let model = AppModel.shared
+        let theme = model.themeID
+        let font = model.chatFontSize
+        let animations = model.animationsEnabled
+        let fixture = Delivery3Qualification()
+        let sceneID = "transcript-qualification-\(UUID())"
+        let previousWindows = Set(NSApp.windows.map(ObjectIdentifier.init))
+        let representation = NSHostingSceneRepresentation {
+            Window("Reader qualification", id: sceneID) {
+                Delivery3QualificationView(fixture: fixture).environment(model)
+                    .frame(minWidth: 880, minHeight: 560)
+            }
+            .defaultSize(width: 1180, height: 780)
+            .commands { TranscriptCommands() }
+        }
+        NSApp.addSceneRepresentation(representation)
+        representation.environment.openWindow(id: sceneID)
+        defer {
+            fixture.stop()
+            for window in NSApp.windows where !previousWindows.contains(ObjectIdentifier(window)) {
+                window.close()
+            }
+            model.themeID = theme
+            model.chatFontSize = font
+            model.animationsEnabled = animations
+        }
+        print("DELIVERY3_SCENE_READY pid=\(getpid())")
+        let deadline = ContinuousClock.now.advanced(by: .seconds(1_800))
+        while !fixture.finished, !fixture.stopped, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        XCTAssertTrue(fixture.finished, "Scene qualification must be explicitly finished")
+        withExtendedLifetime(representation) {}
     }
 }

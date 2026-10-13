@@ -20,6 +20,130 @@ ADR-0099 remains Proposed and the shipping container is unchanged.
 
 ## Workload and measurements
 
+### Supported-OS follow-up run (2026-10-13)
+
+At `2b08d35`, [CI run 38368374287](https://github.com/goatsoft/GOAT/actions/runs/38368374287)
+on macOS 26 / Xcode 26.6 passed the Release build and all 578 ordinary app tests
+(three opt-in skips). This includes the 40-row publication, short reasoning paging and
+database prepend-anchor regressions. The separate synthetic qualification job failed
+experimental navigation; ordinary test success does not supersede that result.
+
+The shipping reader's sequential dense 2 MiB answer and expanded reasoning workload
+completed with these observations:
+
+| Phase | Wall (s) | Host CPU (s) | Sleep-overrun p95 (ms) | Lifetime peak host RSS (bytes) |
+| --- | --- | --- | --- | --- |
+| Answer | 25.505 | 22.199 | 104.431 | 244,662,272 |
+| Reasoning | 182.895 | 179.107 | 2,250.138 | 257,196,032 |
+
+The reasoning delay blocks responsiveness qualification. The workload's successful test
+result asserts completion, not a performance budget. A bounded CPU sample in the isolated
+macOS 26 CI workload is needed to attribute this platform-specific result; local macOS 27
+measurements do not explain it. RSS remains a process-lifetime high-water mark, not retained
+allocation evidence. Delivery 3 remains open.
+
+The diagnostic retry at `9de321b` failed two ordinary navigation checks before the CPU
+workload ran: database-anchor placement was still pending after a fixed 700 ms fixture
+wait, and a removed target took 1.749 seconds to abandon against its 1.5-second assertion.
+No reasoning CPU sample was collected. The follow-up uses verified placement readiness
+for the database fixture and caps missing-frame retries by their existing nominal elapsed
+budget (12 × 50 ms), as well as attempt count. Neither the 1 pt geometry tolerance nor
+the 1.5-second lifecycle assertion is relaxed. Labelled diagnostic workloads also run
+after ordinary test failures so independent evidence can be collected; the ordinary
+failure still fails CI.
+
+At `64bb55d`, [CI run 38381278255](https://github.com/goatsoft/GOAT/actions/runs/38381278255)
+passes all 578 ordinary app tests (three skips), including both navigation regressions.
+The experimental container still fails, and the CPU-sampled production run observes
+28.453 s answer wall time / 25.262 s CPU / 188.004 ms scheduling-overrun p95, followed
+by 259.830 s reasoning wall time / 243.950 s CPU / 3,517.817 ms p95. Lifetime peak host
+RSS is 248,479,744 and 257,179,648 bytes respectively. Sampling adds overhead; these
+values are diagnostic and do not replace the earlier uninstrumented result.
+
+The 60-second sample contains 30,765 main-thread observations. Of those, 22,487
+(73.1%) are in `StyledTextLayoutEngine.sizeThatFits`, with almost the same set beneath
+`AssistantRowLayout.sizeThatFits`; another substantial path is AttributeGraph updating.
+Reasoning preparation is not the dominant sampled cost. This attributes the sampled
+stall to native text measurement within the row, but does not identify which layout
+proposal or view invalidation triggers it. A targeted layout correction and a new
+uninstrumented run are still required.
+
+The subsequent local theme/focus patch passes full Release verification on macOS 27 /
+Xcode 27 with 579 app tests passing, none failing and three skipped. The new regression
+checks actual bundled Mermaid SVG node and connector colors in both light and dark modes.
+The real SwiftUI scene smoke test passes: Option-Command-Up focuses the current reading
+window and Option-Command-Down returns to the composer. Mermaid node labels and connectors
+are readable in System/dark and Light. Tab from the focused row returns directly to the
+composer under the tested keyboard preferences; complete control traversal and spoken
+VoiceOver remain unqualified.
+
+At `ed4ebf9`, [CI run 38386649063](https://github.com/goatsoft/GOAT/actions/runs/38386649063)
+passes the Release build and all 579 ordinary app tests on macOS 26 / Xcode 26.6, including
+the actual SVG-color regression. The experimental navigation workload still fails. The
+instrumented shipping workload records 23.168 s answer wall time / 19.671 s CPU / 86.464 ms
+scheduling-overrun p95 and 180.976 s reasoning wall time / 168.310 s CPU / 2,145.852 ms p95.
+
+The same commit's uninstrumented local macOS 27 / Xcode 27 run, after closing the UI fixture,
+records 18.976 s answer wall time / 14.806 s CPU / 8.171 ms scheduling-overrun p95 and
+21.643 s reasoning wall time / 15.310 s CPU / 67.118 ms p95. Lifetime peak host RSS is
+287,752,192 and 334,987,264 bytes respectively. Both phases complete; this is not a
+retention or actual input-latency measurement and does not qualify the macOS 26 path.
+
+### Reader follow-up implementation
+
+The reader adds day boundaries that remain stable across admitted windows, an empty
+conversation state, explicit Earlier/Later controls, and a Latest shortcut that respects Reduce
+Motion and the animation setting. Find searches message text off the main actor, returns at most
+200 highlighted message excerpts, and sends selection through the existing viewport owner. Rich
+replies are paged to the segment containing the match. The selected source excerpt remains
+visible above the reader, including matches inside collapsed code. Oversized plain-text replies
+currently open at their message boundary. Find (Command-F) and copy-last-reply (Shift-Command-C)
+route through the focused chat window. Segment paging controls are real buttons, so a short
+window can reach earlier text without requiring a preceding scroll gesture.
+Focus conversation (Option-Command-Up) moves keyboard focus to the current reading window;
+Focus composer (Option-Command-Down) returns to the draft. Focusing the conversation is reader
+input and cancels pending automatic restoration through the existing navigation owner.
+
+Edit and resend preserves attachments and atomically updates the user message while deleting
+subsequent messages. A changed message or database history rejects the edit without partial
+deletion. Compaction boundaries cannot be edited away. Markdown export preserves message source;
+plain-text copy uses the renderer's plain-text conversion. Code actions retain individual
+accessibility names and remain available to accessibility clients when visual controls are hidden.
+The model/effort selector uses the theme's text color on its transparent background, including
+Light and Pasture, instead of the color intended for text on a solid accent.
+
+Inline previews admit at most three live artifacts. Offscreen and source-mode artifacts release
+their web views; memory-only snapshots are capped at eight entries and 16 MiB of charged bitmap
+cost. Admitted previews retain independent ephemeral website data stores and the existing JUDAS
+policy. Initial document geometry is bounded between 80 pt and the existing preview-height cap;
+Expand opens the artifact in Paddock. These limits are not a claim about WebKit subprocess RSS.
+Tables scroll horizontally and expose header cells. Display math delimited by standalone `$$`
+or `\[` / `\]` lines is explicitly shown as selectable source, with delimiters preserved.
+No math-rendering dependency has been adopted.
+Mermaid is configured before the bundled library's automatic load handler can start, so the first
+diagram uses the selected theme's node and connector colors. The regression checks computed SVG
+colors in the actual policy-gated web view, rather than merely checking that the shell contains
+theme configuration.
+
+Stored chats open with the latest 40 records, page by `(position, id)`, and retain at most 120
+idle reader records. The navigation owner preserves stable message/segment anchors when cache
+indices change. Saved provenance is decoded only when details are opened. Generation, retry and
+editing explicitly hydrate complete history before inference or mutation; completed turns trim
+the cache around the reader. Search examines cancellable storage pages with a 200-result cap;
+explicit export reads a complete snapshot without replacing the reader cache. These are record
+bounds, not a byte ceiling for arbitrarily large messages. [ADR-0102](../adrs/0102-paged-reader-history.md)
+records the contract and its limits. Cold/warm performance, retention and supported-OS measurements
+remain part of #88.
+
+These implementation changes do not close the qualification gates in #85–#89. The experimental
+startup probe now bounds first-marker readiness while checking that the clip moves no more than
+1 pt during that interval; it also requires all 192 growth/input samples and zero missing anchors.
+At `d138d2f` on macOS 27 / Xcode 27, the SwiftUI candidate still fails: 46,033 pt startup clip
+movement, no startup anchor within the 200 ms bound, 191 of 192 growth samples, and 120 pt maximum
+input residual. Later width/font reflow probes measured zero drift, but do not override the startup
+and growth failures. The candidate is not accepted and the shipping container is unchanged. The subsequent one-shot
+scroll experiment and native fallback retirement are recorded in the [comparison reference](transcript-container-comparison.md).
+
 Issue [#29](https://github.com/goatsoft/GOAT/issues/29) requires runtime evidence,
 including histories with fewer than 40 very large messages. The engine-free
 `TranscriptPerformanceTests` workload creates 24 messages containing repeated
@@ -73,7 +197,7 @@ segment's preview or streaming style at once. Complete HTML/SVG/Mermaid fences c
 their segment settles; oversized fence pieces stay source-only because their closures are
 synthetic. The
 `MarkdownSegmentParse` signpost marks each segment parse. A long response lays
-out a window of at most 32 segments and 16 KiB of rendered bytes: its latest
+out a window of at most two segments and 16 KiB of rendered bytes: its latest
 segments while following, or those the reader pages to. Loaders at the window's
 edges page it as they come into view, keeping the reader's segment in place. Only
 the window's segments (and two on each side) keep their parses. The message
@@ -82,7 +206,7 @@ repeated reference definitions.
 
 Reasoning shown in full is windowed the same way through 2 MiB: its fence-aware
 blocks are split at line boundaries into segments of at most 6 KiB, and a window
-of at most 32 segments and 16 KiB is laid out, paged under its own key. It is
+of at most two segments and 16 KiB is laid out, paged under its own key. It is
 prepared off the main actor from a 120 ms sample of its text revision. While the
 revision only appends, the held segmentation lexes each appended character once,
 including within one long unfinished line, and a refresh copies at most one open
@@ -157,7 +281,8 @@ TEST_RUNNER_GOAT_DELIVERY3_QUALIFY=1 make test-app CONFIG=Release TEST_PLAN=Qual
 
 The separate qualification bundle identifier also isolates its UserDefaults from normal app tests.
 It provides theme, font, animation and synthetic inspector controls, a short code fixture, and
-2 MiB answer/reasoning streams. Finish closes the fixture; the opt-in test is skipped in normal
+2 MiB answer/reasoning streams. Content fixture adds disposable tables, HTML/SVG/Mermaid previews,
+literal display math and calendar-day boundaries; Empty fixture exercises the initial state. Finish closes the fixture; the opt-in test is skipped in normal
 runs. For automatic answer then reasoning streams, also set `TEST_RUNNER_GOAT_DELIVERY3_AUTORUN=1`.
 The host prints its PID, waits 15 seconds before automatic work, and waits 5 seconds after each
 stream action so Instruments can attach and UI inspection can finish before measurement starts.
@@ -265,3 +390,17 @@ Recommend the flat SwiftUI list for the next production migration, retaining the
 container until that migration is reviewed and qualified. Delivery 3 remains open for supported-OS,
 hardware input, manual/accessibility, full-app frame-time and retention checks. Those gates remain
 distinct from the Kid maintenance release.
+
+
+### Dense reply admission follow-up
+
+[ADR-0103](../adrs/0103-dense-reply-layout-admission.md) reduces the reply layout window to two
+rich segments while retaining the existing byte limit and overlapping paging. This addresses
+native layout cost from many tiny code fences; the 40-message transcript window is unchanged.
+With mouse events excluded, the 40-row publication regression observes no settled-row body
+evaluations during 20 updates to the live row. Database-prepend coverage verifies the owner's held anchor through
+page replacement using the existing 1 pt executor tolerance.
+
+Development measurements show a substantial dense-answer improvement, but do not establish
+input latency, frame time or retention acceptance. Request/geometry update warnings remain.
+The five tracked follow-ups and the release checklist still own the remaining qualification.
