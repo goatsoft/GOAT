@@ -65,12 +65,11 @@ struct ChatView: View {
         let pasteboardRevision = NSPasteboard.general.changeCount
         Task {
             do {
-                let messages = try await model.inspectHistory(for: session)
-                guard let reply = messages.last(where: { $0.role == .assistant && !$0.text.isEmpty }),
+                guard let reply = try await model.lastReplyText(in: session),
                     NSPasteboard.general.changeCount == pasteboardRevision
                 else { return }
                 NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(reply.text, forType: .string)
+                NSPasteboard.general.setString(reply, forType: .string)
             } catch { exportFailure = error.localizedDescription }
         }
     }

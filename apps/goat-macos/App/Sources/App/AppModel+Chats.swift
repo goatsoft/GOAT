@@ -608,8 +608,10 @@ extension AppModel {
             }
         }
         guard !query.isEmpty else { return [] }
+        // Newest first on both paths, so the 200-result bound keeps the same, most recent matches
+        // whether or not the reader happens to hold the complete history.
         guard !session.hasCompleteHistory, let db else {
-            let entries = session.messages.filter { $0.role == .user || $0.role == .assistant }
+            let entries = session.messages.reversed().filter { $0.role == .user || $0.role == .assistant }
                 .map { TranscriptText.SearchEntry(id: $0.id, source: $0.text) }
             return try await search(entries, limit: 200)
         }
@@ -629,6 +631,25 @@ extension AppModel {
             cursor = next
         } while matches.count < 200
         return matches
+    }
+
+    /// The latest reply with answer text. The loaded latest page answers without reading storage.
+    func lastReplyText(in session: ChatSession) async throws -> String? {
+        func reply(in messages: [ChatMessage]) -> String? {
+            messages.last(where: { $0.role == .assistant && !$0.text.isEmpty })?.text
+        }
+        if !session.historyHasLater, let text = reply(in: session.messages) { return text }
+        return reply(in: try await inspectHistory(for: session))
+    }
+
+    /// The user prompt before `id`. A loaded window is contiguous, so a preceding user row in it is
+    /// the nearest one; complete history is read only when the window starts after that prompt.
+    func precedingUserText(before id: UUID, in session: ChatSession) async throws -> String? {
+        func prompt(in messages: [ChatMessage]) -> String? {
+            messages.prefix { $0.id != id }.last(where: { $0.role == .user })?.text
+        }
+        if session.messages.contains(where: { $0.id == id }), let text = prompt(in: session.messages) { return text }
+        return prompt(in: try await inspectHistory(for: session))
     }
 
     func inspectHistory(for session: ChatSession) async throws -> [ChatMessage] {

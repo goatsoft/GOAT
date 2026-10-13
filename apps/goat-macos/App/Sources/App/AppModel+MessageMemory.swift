@@ -33,8 +33,7 @@ extension AppModel {
                     rating: persistedRating,
                     revision: revision)
                 guard persisted, messageRatingRevisions[message.id] == revision else { return }
-                let history = try await inspectHistory(for: session)
-                let prompt = history.prefix { $0.id != message.id }.last(where: { $0.role == .user })?.text ?? ""
+                let prompt = try await precedingUserText(before: message.id, in: session) ?? ""
                 try await memory.recordFeedback(
                     messageID: message.id,
                     rating: persistedRating,

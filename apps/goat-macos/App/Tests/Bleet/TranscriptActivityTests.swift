@@ -738,6 +738,21 @@ extension AppTests.Bleet {
         let matches = try await model.findInHistory("Message 5 🐐", for: session)
         XCTAssertEqual(matches.map(\.id), [ids[5]])
         XCTAssertLessThanOrEqual(session.messages.count, 41)
+        let newest = try await model.findInHistory("Message 19", for: session)
+        XCTAssertEqual(newest.first?.id, ids[1_999], "Paged search lists the newest matches first")
+        let lastReply = try await model.lastReplyText(in: session)
+        XCTAssertEqual(lastReply, "Message 1999 🐐")
+        let prompt = try await model.precedingUserText(before: ids[501], in: session)
+        XCTAssertEqual(prompt, "Message 500 🐐")
+        XCTAssertLessThanOrEqual(session.messages.count, 41, "Reply and prompt lookups keep the reader cache")
+        let local = ChatSession(effort: .trot, modelID: nil)
+        let older = ChatMessage(role: .user)
+        older.text = "alpha older"
+        let newer = ChatMessage(role: .assistant)
+        newer.text = "alpha newer"
+        local.messages = [older, newer]
+        let localMatches = try await model.findInHistory("alpha", for: local)
+        XCTAssertEqual(localMatches.map(\.id), [newer.id, older.id], "Loaded search uses the same newest-first order")
         let all = try await model.inspectHistory(for: session)
         XCTAssertEqual(all.map(\.id), ids)
         XCTAssertLessThanOrEqual(session.messages.count, 41, "Inspection must not replace the reader cache")
