@@ -846,12 +846,14 @@ extension TranscriptHistoryPagingTests {
         let anchor = TranscriptViewport.Anchor(messageID: session.messages[5].id, offset: 13)
         let navigation = TranscriptViewport(initiallyFollowing: false, initialHeldRange: 0..<40, initialAnchor: anchor)
         let host = NSHostingView(
-            rootView: ChatTranscriptView(session: session, viewport: navigation).environment(model))
+            rootView: ChatTranscriptView(session: session, viewport: navigation).environment(model)
+                .environment(\.scenePhase, .active).allowsHitTesting(false))
         host.sizingOptions = []
         let window = NSWindow(
-            contentRect: NSRect(x: 80, y: 80, width: 760, height: 520),
+            contentRect: NSRect(x: -10_000, y: -10_000, width: 760, height: 520),
             styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
+        window.ignoresMouseEvents = true
         let viewport = NSView(frame: NSRect(origin: .zero, size: window.contentLayoutRect.size))
         host.frame = viewport.bounds
         host.autoresizingMask = [.width, .height]
@@ -862,13 +864,30 @@ extension TranscriptHistoryPagingTests {
             window.contentView = nil
             window.close()
         }
-        try await Task.sleep(for: .milliseconds(700))
+        // Readiness, not a fixed sleep: initial Markdown preparation can finish after the
+        // first placement and correctly request another restore. The geometry assertion below
+        // retains the executor's 1 pt tolerance and rejects every abandoned request.
+        func awaitPlacement() async throws {
+            let deadline = ContinuousClock.now + .seconds(5)
+            var quietSince: ContinuousClock.Instant?
+            while ContinuousClock.now < deadline {
+                host.layoutSubtreeIfNeeded()
+                if navigation.request == nil {
+                    if let quietSince, ContinuousClock.now - quietSince >= .milliseconds(300) { return }
+                    if quietSince == nil { quietSince = ContinuousClock.now }
+                } else {
+                    quietSince = nil
+                }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+        }
+        try await awaitPlacement()
         XCTAssertNil(navigation.request, "Initial placement must finish: \(navigation.diagnostics)")
         XCTAssertEqual(navigation.abandonedRequests, 0)
         let fulfilled = navigation.diagnostics.filter { $0.hasPrefix("fulfilled ") }.count
         let loaded = await model.pageHistory(for: session, earlier: true)
         XCTAssertTrue(loaded)
-        try await Task.sleep(for: .milliseconds(700))
+        try await awaitPlacement()
         XCTAssertEqual(navigation.anchor, anchor)
         XCTAssertTrue(navigation.readerOwnsViewport)
         // SwiftUI can already preserve the row during reconciliation. Require the executor

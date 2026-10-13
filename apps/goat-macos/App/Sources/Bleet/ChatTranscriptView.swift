@@ -351,6 +351,8 @@ struct ChatTranscriptView: View {
     /// How long an attempt waits for a target row that has not laid out, so a target that never renders
     /// is abandoned after `maximumScrollAttempts` of them.
     static let frameRetryInterval = Duration.milliseconds(50)
+    /// Scheduler delays must not turn twelve nominal waits into an unbounded pending target.
+    static let maximumFrameWait = frameRetryInterval * maximumScrollAttempts
 
     init(
         session: ChatSession,
@@ -945,6 +947,7 @@ struct ChatTranscriptView: View {
         if reader.attemptGeneration != request.generation {
             reader.attemptGeneration = request.generation
             reader.attempts = 0
+            reader.frameWaitStarted = nil
         }
         let delay =
             request.target == .bottom && session.isStreaming
@@ -968,10 +971,7 @@ struct ChatTranscriptView: View {
                 return
             }
             guard reader.attempts < Self.maximumScrollAttempts else {
-                viewport.note("abandoned \(request.generation)")
-                RenderSignposts.event("TranscriptScrollAbandoned")
-                viewport.abandon(request)
-                pagingPhase = .idle
+                abandonRequest(request)
                 return
             }
             // Not attached to its scroll view yet: its layout runs this again, else a retry does.
@@ -1012,6 +1012,12 @@ struct ChatTranscriptView: View {
     /// Counts an attempt that found its target not laid out, and retries it after a bounded wait, so a
     /// target that never lays out is abandoned. The awaited row's first layout runs it at once.
     private func awaitLayout(_ request: TranscriptViewport.Request, for missing: String) {
+        let now = ContinuousClock.now
+        if let started = reader.frameWaitStarted, now - started >= Self.maximumFrameWait {
+            abandonRequest(request)
+            return
+        }
+        if reader.frameWaitStarted == nil { reader.frameWaitStarted = now }
         reader.attempts += 1
         viewport.note("awaiting \(missing) \(request.generation)")
         reader.awaitingFrame = true
@@ -1021,6 +1027,13 @@ struct ChatTranscriptView: View {
             reader.awaitingFrame = false
             executePendingRequest()
         }
+    }
+
+    private func abandonRequest(_ request: TranscriptViewport.Request) {
+        viewport.note("abandoned \(request.generation)")
+        RenderSignposts.event("TranscriptScrollAbandoned")
+        viewport.abandon(request)
+        pagingPhase = .idle
     }
 
     private func cancelFrameWait() {
@@ -1215,6 +1228,7 @@ let transcriptContentSpace = "transcript-content"
     var awaitingFrame = false
     var attemptGeneration: UInt64 = 0
     var attempts = 0
+    var frameWaitStarted: ContinuousClock.Instant?
 
     /// The distance from `id`'s top edge to the viewport's top edge, when laid out.
     func offset(of id: UUID) -> CGFloat? {

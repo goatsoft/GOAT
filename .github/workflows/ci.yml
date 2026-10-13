@@ -141,7 +141,7 @@ jobs:
       # These synthetic fixtures skip personal state, engines and configured services.
       - name: Synthetic transcript workloads
         if: >-
-          ${{ matrix.phase == 'app-tests' && contains(github.event.pull_request.labels.*.name, 'qualification: transcript') }}
+          ${{ !cancelled() && matrix.phase == 'app-tests' && contains(github.event.pull_request.labels.*.name, 'qualification: transcript') }}
         env:
           CAS_PATH: ${{ steps.cas.outputs.enabled == 'true' && steps.cas.outputs.path || '' }}
           TEST_RUNNER_GOAT_COMPARE: swiftui

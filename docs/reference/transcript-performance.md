@@ -42,6 +42,16 @@ macOS 26 CI workload is needed to attribute this platform-specific result; local
 measurements do not explain it. RSS remains a process-lifetime high-water mark, not retained
 allocation evidence. Delivery 3 remains open.
 
+The diagnostic retry at `9de321b` failed two ordinary navigation checks before the CPU
+workload ran: database-anchor placement was still pending after a fixed 700 ms fixture
+wait, and a removed target took 1.749 seconds to abandon against its 1.5-second assertion.
+No reasoning CPU sample was collected. The follow-up uses verified placement readiness
+for the database fixture and caps missing-frame retries by their existing nominal elapsed
+budget (12 × 50 ms), as well as attempt count. Neither the 1 pt geometry tolerance nor
+the 1.5-second lifecycle assertion is relaxed. Labelled diagnostic workloads also run
+after ordinary test failures so independent evidence can be collected; the ordinary
+failure still fails CI.
+
 ### Reader follow-up implementation
 
 The reader adds day boundaries that remain stable across admitted windows, an empty
