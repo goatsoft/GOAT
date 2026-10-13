@@ -53,6 +53,7 @@ struct ChatView: View {
     @State private var exportFailure: String?
     @State private var showingFind = false
     @State private var revealRequest: TranscriptRevealRequest?
+    @State private var transcriptFocusRequest: UUID?
 
     private var canCopyLastReply: Bool {
         session.messagesLoaded
@@ -102,6 +103,7 @@ struct ChatView: View {
             }
             .onChange(of: session.id) {
                 revealRequest = nil
+                transcriptFocusRequest = nil
                 showingFind = false
                 cancelAttachmentJobs()
                 pending = []
@@ -142,7 +144,9 @@ struct ChatView: View {
             if let match = revealRequest?.match {
                 TranscriptSearchResultBanner(match: match) { revealRequest = nil }
             }
-            ChatTranscriptView(session: session, revealRequest: revealRequest).id(session.id)
+            ChatTranscriptView(
+                session: session, revealRequest: revealRequest, focusRequest: transcriptFocusRequest
+            ).id(session.id)
             Composer(
                 session: session,
                 draft: $draft,
@@ -260,7 +264,12 @@ struct ChatView: View {
                 \.transcriptCommands,
                 TranscriptCommandActions(
                     canFind: session.messagesLoaded, canCopy: canCopyLastReply,
-                    find: { showingFind = true }, copy: copyLastReply)
+                    canFocusConversation: session.messagesLoaded && !session.messages.isEmpty,
+                    find: { showingFind = true }, copy: copyLastReply,
+                    focusConversation: {
+                        composerFocused = false
+                        transcriptFocusRequest = UUID()
+                    }, focusComposer: { composerFocused = true })
             )
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
@@ -1111,8 +1120,11 @@ private struct SkillCatalogContext: Hashable {
 struct TranscriptCommandActions {
     let canFind: Bool
     let canCopy: Bool
+    let canFocusConversation: Bool
     let find: @MainActor () -> Void
     let copy: @MainActor () -> Void
+    let focusConversation: @MainActor () -> Void
+    let focusComposer: @MainActor () -> Void
 }
 
 private struct TranscriptCommandsKey: FocusedValueKey {
@@ -1137,6 +1149,13 @@ struct TranscriptCommands: Commands {
             Button("Copy last reply") { actions?.copy() }
                 .keyboardShortcut("c", modifiers: [.command, .shift])
                 .disabled(actions?.canCopy != true)
+            Divider()
+            Button("Focus conversation") { actions?.focusConversation() }
+                .keyboardShortcut(.upArrow, modifiers: [.command, .option])
+                .disabled(actions?.canFocusConversation != true)
+            Button("Focus composer") { actions?.focusComposer() }
+                .keyboardShortcut(.downArrow, modifiers: [.command, .option])
+                .disabled(actions == nil)
         }
     }
 }

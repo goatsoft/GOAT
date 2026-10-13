@@ -23,6 +23,8 @@ struct MessageView: View {
     let message: ChatMessage
     let isLast: Bool
     let projectID: UUID?
+    var transcriptKeyboardFocus: FocusState<UUID?>.Binding? = nil
+    var isFocusedInTranscript = false
     var compactActivity = false
     var joinsPreviousTools = false
     var joinsNextTools = false
@@ -37,13 +39,19 @@ struct MessageView: View {
     @State private var hovering = false
     @State private var showingResponseDetails = false
     @State private var showingEditor = false
-    private var controlsVisible: Bool { hovering || keyboardFocused || voiceOverEnabled }
+    private var controlsVisible: Bool { hovering || keyboardFocused || isFocusedInTranscript || voiceOverEnabled }
+
+    @ViewBuilder private var focusableContent: some View {
+        if let transcriptKeyboardFocus {
+            content.focusable().focused(transcriptKeyboardFocus, equals: message.id)
+        } else {
+            content.focusable().focused($keyboardFocused)
+        }
+    }
 
     var body: some View {
         let _ = TranscriptRenderMetrics.record(message.id)
-        content
-            .focusable(interactions: .activate)
-            .focused($keyboardFocused)
+        focusableContent
             .accessibilityElement(children: .contain)
             .contentShape(Rectangle())  // whole row (incl. the area below the text) is hoverable
             .onHover { h in

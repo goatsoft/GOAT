@@ -101,6 +101,20 @@ These block qualification; see the [performance](reference/transcript-performanc
 [container comparison](reference/transcript-container-comparison.md) results. The correction
 fixes compilation, not these runtime failures.
 
+The follow-up at `64bb55d` also passes all 578 ordinary macOS 26 app tests, including
+the bounded missing-target lifecycle and database-anchor readiness checks. Its synthetic
+container and production responsiveness qualification remain unsuccessful. The subsequent
+local theme/focus patch passes full Release verification with 579 app tests, zero failures
+and three skips. An actual SVG-color regression covers Mermaid's initialization race.
+The new focus shortcuts still need real-scene interaction verification.
+
+Additional real-scene checks at `64bb55d` cover a narrow reader with its inspector open,
+14–28 pt text, System/dark, Light, Pasture and Midnight, horizontal table scrolling and
+selected-cell copy, Command-End from the composer, and native Markdown export preserving
+Unicode, code whitespace, artifact fences and literal math. These checks exposed the
+Mermaid startup-theme race addressed by the subsequent patch. They do not certify spoken
+VoiceOver, hardware momentum, all font families or WebKit retention.
+
 ### Transcript follow-up ownership
 
 The remaining scope of [#60](https://github.com/goatsoft/GOAT/issues/60) is explicitly transferred

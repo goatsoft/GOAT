@@ -331,6 +331,8 @@ struct TranscriptRevealRequest: Equatable, Sendable {
 struct ChatTranscriptView: View {
     @Bindable var session: ChatSession
     var revealRequest: TranscriptRevealRequest?
+    var focusRequest: UUID?
+    @FocusState private var focusedMessageID: UUID?
     @Environment(AppModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State var viewport: TranscriptViewport
@@ -359,10 +361,12 @@ struct ChatTranscriptView: View {
         initiallyFollowing: Bool = true,
         initialVisibleMessageID: UUID? = nil,
         viewport: TranscriptViewport? = nil,
-        revealRequest: TranscriptRevealRequest? = nil
+        revealRequest: TranscriptRevealRequest? = nil,
+        focusRequest: UUID? = nil
     ) {
         self.session = session
         self.revealRequest = revealRequest
+        self.focusRequest = focusRequest
         let initialHeld: Range<Int>?
         let start =
             initiallyFollowing
@@ -490,7 +494,9 @@ struct ChatTranscriptView: View {
                                         activeToolID: message.id == activeAssistantID ? activeToolID : nil,
                                         canDeleteCompaction: CompactionDeletion.canRestore(
                                             message, in: session.messages),
-                                        canEdit: message.role == .user && !session.isStreaming
+                                        canEdit: message.role == .user && !session.isStreaming,
+                                        keyboardFocus: $focusedMessageID,
+                                        isKeyboardFocused: focusedMessageID == message.id
                                     )
                                     .equatable()
                                 }
@@ -659,6 +665,15 @@ struct ChatTranscriptView: View {
                     await Task.yield()
                     if earlierLoaderVisible { loadEarlierMessages() } else if laterLoaderVisible { loadLaterMessages() }
                 }
+            }
+            .onChange(of: focusRequest) {
+                guard focusRequest != nil else { return }
+                let anchor = reader.measuredAnchor()
+                guard let id = anchor?.messageID ?? renderedMessageID(near: messageRange.lowerBound) else { return }
+                // Keyboard focus is reader input. Keep the current reading window and cancel
+                // any pending automatic restore before native focus moves within that window.
+                viewport.readerMoved(currentRange: messageRange, anchor: anchor)
+                focusedMessageID = id
             }
             .task(id: revealRequest) {
                 guard let revealRequest else { return }
@@ -1300,6 +1315,8 @@ private struct TranscriptMessageRow: View, Equatable {
     let activeToolID: String?
     let canDeleteCompaction: Bool
     let canEdit: Bool
+    let keyboardFocus: FocusState<UUID?>.Binding
+    let isKeyboardFocused: Bool
     @Environment(AppModel.self) private var model
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
@@ -1307,11 +1324,13 @@ private struct TranscriptMessageRow: View, Equatable {
             && lhs.compactActivity == rhs.compactActivity && lhs.joinsPreviousTools == rhs.joinsPreviousTools
             && lhs.joinsNextTools == rhs.joinsNextTools && lhs.activeToolID == rhs.activeToolID
             && lhs.canDeleteCompaction == rhs.canDeleteCompaction && lhs.canEdit == rhs.canEdit
+            && lhs.isKeyboardFocused == rhs.isKeyboardFocused
     }
 
     var body: some View {
         MessageView(
             message: message, isLast: isLast, projectID: session.projectID,
+            transcriptKeyboardFocus: keyboardFocus, isFocusedInTranscript: isKeyboardFocused,
             compactActivity: compactActivity, joinsPreviousTools: joinsPreviousTools, joinsNextTools: joinsNextTools,
             activeToolID: activeToolID,
             deleteCompaction: canDeleteCompaction

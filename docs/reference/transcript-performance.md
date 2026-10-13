@@ -52,6 +52,19 @@ the 1.5-second lifecycle assertion is relaxed. Labelled diagnostic workloads als
 after ordinary test failures so independent evidence can be collected; the ordinary
 failure still fails CI.
 
+At `64bb55d`, [CI run 38381278255](https://github.com/goatsoft/GOAT/actions/runs/38381278255)
+passes all 578 ordinary app tests (three skips), including both navigation regressions.
+The experimental container still fails, and the CPU-sampled production run observes
+28.453 s answer wall time / 25.262 s CPU / 188.004 ms scheduling-overrun p95, followed
+by 259.830 s reasoning wall time / 243.950 s CPU / 3,517.817 ms p95. Lifetime peak host
+RSS is 248,479,744 and 257,179,648 bytes respectively. Sampling adds overhead; these
+values are diagnostic and do not replace the earlier uninstrumented result.
+
+The subsequent local theme/focus patch passes full Release verification on macOS 27 /
+Xcode 27 with 579 app tests passing, none failing and three skipped. The new regression
+checks actual bundled Mermaid SVG node and connector colors in both light and dark modes.
+A real-scene smoke test of the new focus shortcuts remains pending.
+
 ### Reader follow-up implementation
 
 The reader adds day boundaries that remain stable across admitted windows, an empty
@@ -63,6 +76,9 @@ visible above the reader, including matches inside collapsed code. Oversized pla
 currently open at their message boundary. Find (Command-F) and copy-last-reply (Shift-Command-C)
 route through the focused chat window. Segment paging controls are real buttons, so a short
 window can reach earlier text without requiring a preceding scroll gesture.
+Focus conversation (Option-Command-Up) moves keyboard focus to the current reading window;
+Focus composer (Option-Command-Down) returns to the draft. Focusing the conversation is reader
+input and cancels pending automatic restoration through the existing navigation owner.
 
 Edit and resend preserves attachments and atomically updates the user message while deleting
 subsequent messages. A changed message or database history rejects the edit without partial
@@ -80,6 +96,10 @@ Expand opens the artifact in Paddock. These limits are not a claim about WebKit 
 Tables scroll horizontally and expose header cells. Display math delimited by standalone `$$`
 or `\[` / `\]` lines is explicitly shown as selectable source, with delimiters preserved.
 No math-rendering dependency has been adopted.
+Mermaid is configured before the bundled library's automatic load handler can start, so the first
+diagram uses the selected theme's node and connector colors. The regression checks computed SVG
+colors in the actual policy-gated web view, rather than merely checking that the shell contains
+theme configuration.
 
 Stored chats open with the latest 40 records, page by `(position, id)`, and retain at most 120
 idle reader records. The navigation owner preserves stable message/segment anchors when cache

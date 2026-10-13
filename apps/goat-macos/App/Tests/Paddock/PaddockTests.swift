@@ -290,6 +290,48 @@ final class PaddockWebRenderingTests: XCTestCase {
 
     }
 
+    func testBundledMermaidAppliesThemeBeforeAutomaticStartup() async throws {
+        for dark in [false, true] {
+            var theme = dark ? ThemeCatalog.midnight : ThemeCatalog.light
+            theme.surface = "#123456"
+            theme.tint = "#65CA7B"
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 480, height: 320), styleMask: [.titled],
+                backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            let host = NSHostingView(
+                rootView: WebPreview(
+                    html: PaddockHTML.mermaidShell("graph LR; A[Start] --> B[Done]", dark: dark, theme: theme),
+                    offGrid: true, bundledScripts: true
+                ).frame(width: 480, height: 320))
+            window.contentView = host
+            defer {
+                window.contentView = nil
+                window.close()
+            }
+            host.layoutSubtreeIfNeeded()
+            var colors: [String]?
+            for _ in 0..<100 {
+                if let web = findWebView(host) {
+                    colors =
+                        try? await web.evaluateJavaScript(
+                            """
+                            (() => {
+                              const node = document.querySelector('.mermaid svg .node rect');
+                              const edge = document.querySelector('.mermaid svg .flowchart-link');
+                              return node && edge ? [getComputedStyle(node).fill, getComputedStyle(edge).stroke] : null;
+                            })()
+                            """) as? [String]
+                    if colors != nil { break }
+                }
+                try await Task.sleep(for: .milliseconds(100))
+            }
+            XCTAssertEqual(
+                colors, ["rgb(18, 52, 86)", "rgb(101, 202, 123)"],
+                "The first rendered diagram must use the requested node and connector colors (dark=\(dark))")
+        }
+    }
+
     func testPaddockViewInspectorLayoutStability() async throws {
         let session = ChatSession(effort: .trot, modelID: nil)
         let artifact = PaddockArtifact(
