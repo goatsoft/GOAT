@@ -83,6 +83,34 @@ struct ChatView: View {
 
     var body: some View {
         @Bindable var model = model
+        transcriptControls
+            .inspector(isPresented: $model.showInspector) {
+                Group {
+                    if let artifact = model.paddockArtifact {
+                        PaddockView(artifact: artifact)
+                    } else {
+                        InspectorView(session: session)
+                    }
+                }
+                .inspectorColumnWidth(min: 280, ideal: 380, max: 820)
+            }
+            .onAppear { composerFocused = true }
+            .onChange(of: session.id) { _, _ in composerFocused = true }
+            .onDisappear {
+                cancelAttachmentJobs()
+                model.mcp.cancelPendingPermission()
+            }
+            .onChange(of: session.id) {
+                revealRequest = nil
+                showingFind = false
+                cancelAttachmentJobs()
+                pending = []
+            }
+            .onChange(of: session.effort) { _, _ in model.persistMeta(session) }
+    }
+
+    // Keep native composition below the Xcode 26 type-checker expression budget.
+    private var conversationContent: some View {
         VStack(spacing: 0) {
             if model.engineTransitioning {
                 EngineConnectingBanner()
@@ -167,132 +195,118 @@ struct ChatView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .overlay {
-            // 🏔️ Summit ("send it") blasts a rocket-goat diagonally across the whole chat, from
-            // any effort source (capsule, model menu, ⌘4). Flies over everything, hit-transparent.
-            if playfulMotion, let rocketID {
-                GoatRocket { self.rocketID = nil }
-                    .id(rocketID)
+    }
+
+    private var transcriptPresentation: some View {
+        conversationContent
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay {
+                // 🏔️ Summit ("send it") blasts a rocket-goat diagonally across the whole chat, from
+                // any effort source (capsule, model menu, ⌘4). Flies over everything, hit-transparent.
+                if playfulMotion, let rocketID {
+                    GoatRocket { self.rocketID = nil }
+                        .id(rocketID)
+                }
             }
-        }
-        .onChange(of: model.goatWalkToken) { _, v in if playfulMotion { walkID = v } }
-        .onChange(of: model.goatCheerToken) { _, v in if playfulMotion { cheerID = v } }
-        .onChange(of: session.effort) { _, effort in
-            if playfulMotion && effort == .summit { rocketID = UUID() }
-        }
-        .onChange(of: playfulMotion) { _, enabled in
-            if !enabled {
-                walkID = nil
-                cheerID = nil
-                rocketID = nil
+            .onChange(of: model.goatWalkToken) { _, v in if playfulMotion { walkID = v } }
+            .onChange(of: model.goatCheerToken) { _, v in if playfulMotion { cheerID = v } }
+            .onChange(of: session.effort) { _, effort in
+                if playfulMotion && effort == .summit { rocketID = UUID() }
             }
-        }
-        .onPasteCommand(of: [UTType.image]) { providers in
-            loadImages(from: providers)
-        }
-        .sheet(item: Binding(get: { model.mcp.pendingPermission }, set: { _ in })) { request in
-            PermissionSheet(request: request)
-                .interactiveDismissDisabled()
-        }
-        .background(.clear)
-        .navigationTitle(session.title)
-        .navigationSubtitle(projectName ?? "")
-        .sheet(isPresented: $showingFind) {
-            TranscriptFindSheet(session: session) { match in
-                revealRequest = TranscriptRevealRequest(messageID: match.id, byteOffset: match.byteOffset, match: match)
+            .onChange(of: playfulMotion) { _, enabled in
+                if !enabled {
+                    walkID = nil
+                    cheerID = nil
+                    rocketID = nil
+                }
             }
-        }
-        .fileExporter(
-            isPresented: $exportingTranscript, document: transcriptDocument,
-            contentType: TranscriptMarkdownDocument.contentType, defaultFilename: "Conversation.md"
-        ) { result in
-            if case .failure(let error) = result { exportFailure = error.localizedDescription }
-        }
-        .alert(
-            "Could not export conversation",
-            isPresented: Binding(
-                get: { exportFailure != nil }, set: { if !$0 { exportFailure = nil } }
+            .onPasteCommand(of: [UTType.image]) { providers in
+                loadImages(from: providers)
+            }
+            .sheet(item: Binding(get: { model.mcp.pendingPermission }, set: { _ in })) { request in
+                PermissionSheet(request: request)
+                    .interactiveDismissDisabled()
+            }
+            .background(.clear)
+            .navigationTitle(session.title)
+            .navigationSubtitle(projectName ?? "")
+    }
+
+    private var transcriptControls: some View {
+        transcriptPresentation
+            .sheet(isPresented: $showingFind) {
+                TranscriptFindSheet(session: session) { match in
+                    revealRequest = TranscriptRevealRequest(
+                        messageID: match.id, byteOffset: match.byteOffset, match: match)
+                }
+            }
+            .fileExporter(
+                isPresented: $exportingTranscript, document: transcriptDocument,
+                contentType: TranscriptMarkdownDocument.contentType, defaultFilename: "Conversation.md"
+            ) { result in
+                if case .failure(let error) = result { exportFailure = error.localizedDescription }
+            }
+            .alert(
+                "Could not export conversation",
+                isPresented: Binding(
+                    get: { exportFailure != nil }, set: { if !$0 { exportFailure = nil } }
+                )
+            ) {
+                Button("OK") { exportFailure = nil }
+            } message: {
+                Text(exportFailure ?? "")
+            }
+            .focusedSceneValue(
+                \.transcriptCommands,
+                TranscriptCommandActions(
+                    canFind: session.messagesLoaded, canCopy: canCopyLastReply,
+                    find: { showingFind = true }, copy: copyLastReply)
             )
-        ) {
-            Button("OK") { exportFailure = nil }
-        } message: {
-            Text(exportFailure ?? "")
-        }
-        .focusedSceneValue(
-            \.transcriptCommands,
-            TranscriptCommandActions(
-                canFind: session.messagesLoaded, canCopy: canCopyLastReply,
-                find: { showingFind = true }, copy: copyLastReply)
-        )
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Menu("Conversation", systemImage: "ellipsis.circle") {
-                    Button("Find in conversation…", systemImage: "magnifyingglass") { showingFind = true }
-                        .disabled(!session.messagesLoaded)
-                    Button("Copy last reply", systemImage: "doc.on.doc", action: copyLastReply)
-                        .disabled(!canCopyLastReply)
-                    Button("Export Markdown…", systemImage: "square.and.arrow.up") {
-                        Task {
-                            do {
-                                let messages = try await model.inspectHistory(for: session)
-                                transcriptDocument = TranscriptMarkdownDocument(
-                                    text: TranscriptText.markdownExport(title: session.title, messages: messages))
-                                exportingTranscript = true
-                            } catch { exportFailure = error.localizedDescription }
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Menu("Conversation", systemImage: "ellipsis.circle") {
+                        Button("Find in conversation…", systemImage: "magnifyingglass") { showingFind = true }
+                            .disabled(!session.messagesLoaded)
+                        Button("Copy last reply", systemImage: "doc.on.doc", action: copyLastReply)
+                            .disabled(!canCopyLastReply)
+                        Button("Export Markdown…", systemImage: "square.and.arrow.up") {
+                            Task {
+                                do {
+                                    let messages = try await model.inspectHistory(for: session)
+                                    transcriptDocument = TranscriptMarkdownDocument(
+                                        text: TranscriptText.markdownExport(title: session.title, messages: messages))
+                                    exportingTranscript = true
+                                } catch { exportFailure = error.localizedDescription }
+                            }
                         }
+                        .disabled(!session.messagesLoaded || session.messages.isEmpty)
                     }
-                    .disabled(!session.messagesLoaded || session.messages.isEmpty)
                 }
-            }
-            ToolbarSpacer(.flexible)
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    withAnimation(.easeOut(duration: 0.18)) { model.showActivityLog.toggle() }
-                } label: {
-                    ChromeToggleIcon(systemImage: "terminal")
+                ToolbarSpacer(.flexible)
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        withAnimation(.easeOut(duration: 0.18)) { model.showActivityLog.toggle() }
+                    } label: {
+                        ChromeToggleIcon(systemImage: "terminal")
+                    }
+                    .buttonStyle(.plain)
+                    .help("Toggle Log (⌃`)")
+                    .accessibilityLabel(model.showActivityLog ? "Hide Log" : "Show Log")
                 }
-                .buttonStyle(.plain)
-                .help("Toggle Log (⌃`)")
-                .accessibilityLabel(model.showActivityLog ? "Hide Log" : "Show Log")
-            }
-            .sharedBackgroundVisibility(.hidden)
-            ToolbarSpacer(.fixed, placement: .primaryAction)
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    model.showInspector.toggle()
-                } label: {
-                    ChromeToggleIcon(systemImage: "sidebar.trailing")
+                .sharedBackgroundVisibility(.hidden)
+                ToolbarSpacer(.fixed, placement: .primaryAction)
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        model.showInspector.toggle()
+                    } label: {
+                        ChromeToggleIcon(systemImage: "sidebar.trailing")
+                    }
+                    .buttonStyle(.plain)
+                    .help("Toggle inspector (⌥⌘I)")
+                    .keyboardShortcut("i", modifiers: [.option, .command])
                 }
-                .buttonStyle(.plain)
-                .help("Toggle inspector (⌥⌘I)")
-                .keyboardShortcut("i", modifiers: [.option, .command])
+                .sharedBackgroundVisibility(.hidden)
             }
-            .sharedBackgroundVisibility(.hidden)
-        }
-        .inspector(isPresented: $model.showInspector) {
-            Group {
-                if let artifact = model.paddockArtifact {
-                    PaddockView(artifact: artifact)
-                } else {
-                    InspectorView(session: session)
-                }
-            }
-            .inspectorColumnWidth(min: 280, ideal: 380, max: 820)
-        }
-        .onAppear { composerFocused = true }
-        .onChange(of: session.id) { _, _ in composerFocused = true }
-        .onDisappear {
-            cancelAttachmentJobs()
-            model.mcp.cancelPendingPermission()
-        }
-        .onChange(of: session.id) {
-            revealRequest = nil
-            showingFind = false
-            cancelAttachmentJobs()
-            pending = []
-        }
-        .onChange(of: session.effort) { _, _ in model.persistMeta(session) }
     }
 
     @State private var walkID: Int?

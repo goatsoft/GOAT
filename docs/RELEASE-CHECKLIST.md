@@ -90,7 +90,10 @@ and the empty-state layout. They do not establish spoken VoiceOver, hardware mom
 fonts/themes, WebKit subprocess retention, or supported macOS 26 acceptance. In a separate real SwiftUI scene, Command-F opened Find from the composer and Shift-Command-C
 copied the complete reply, including collapsed code. The earlier raw AppKit hosting fixture
 exposes scene commands as disabled, so it is not a shortcut acceptance harness. Experimental
-navigation and final-source CI remain separate gates.
+navigation and final-source CI remain separate gates. The macOS 26.6 CI Release build at
+`9d421bb` exposed a `ChatView` type-checker timeout not seen with Xcode 27; the follow-up splits
+that view expression into smaller composition properties. Retain the failed CI result and require
+new CI acceptance of the correction.
 
 ### Transcript follow-up ownership
 
