@@ -106,7 +106,11 @@ the bounded missing-target lifecycle and database-anchor readiness checks. Its s
 container and production responsiveness qualification remain unsuccessful. The subsequent
 local theme/focus patch passes full Release verification with 579 app tests, zero failures
 and three skips. An actual SVG-color regression covers Mermaid's initialization race.
-The new focus shortcuts still need real-scene interaction verification.
+The real-scene focus shortcuts and light/dark diagram rendering subsequently passed at
+`ed4ebf9`. That commit also passes all 579 ordinary macOS 26 CI app tests and the Release
+build. Experimental navigation and macOS 26 reasoning responsiveness still fail qualification.
+A separate uninstrumented local macOS 27 run completes both 2 MiB phases in 18.976 s
+(answer) and 21.643 s (reasoning); these results do not supersede the supported-OS failure.
 
 Additional real-scene checks at `64bb55d` cover a narrow reader with its inspector open,
 14–28 pt text, System/dark, Light, Pasture and Midnight, horizontal table scrolling and

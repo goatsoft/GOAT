@@ -60,10 +60,34 @@ by 259.830 s reasoning wall time / 243.950 s CPU / 3,517.817 ms p95. Lifetime pe
 RSS is 248,479,744 and 257,179,648 bytes respectively. Sampling adds overhead; these
 values are diagnostic and do not replace the earlier uninstrumented result.
 
+The 60-second sample contains 30,765 main-thread observations. Of those, 22,487
+(73.1%) are in `StyledTextLayoutEngine.sizeThatFits`, with almost the same set beneath
+`AssistantRowLayout.sizeThatFits`; another substantial path is AttributeGraph updating.
+Reasoning preparation is not the dominant sampled cost. This attributes the sampled
+stall to native text measurement within the row, but does not identify which layout
+proposal or view invalidation triggers it. A targeted layout correction and a new
+uninstrumented run are still required.
+
 The subsequent local theme/focus patch passes full Release verification on macOS 27 /
 Xcode 27 with 579 app tests passing, none failing and three skipped. The new regression
 checks actual bundled Mermaid SVG node and connector colors in both light and dark modes.
-A real-scene smoke test of the new focus shortcuts remains pending.
+The real SwiftUI scene smoke test passes: Option-Command-Up focuses the current reading
+window and Option-Command-Down returns to the composer. Mermaid node labels and connectors
+are readable in System/dark and Light. Tab from the focused row returns directly to the
+composer under the tested keyboard preferences; complete control traversal and spoken
+VoiceOver remain unqualified.
+
+At `ed4ebf9`, [CI run 38386649063](https://github.com/goatsoft/GOAT/actions/runs/38386649063)
+passes the Release build and all 579 ordinary app tests on macOS 26 / Xcode 26.6, including
+the actual SVG-color regression. The experimental navigation workload still fails. The
+instrumented shipping workload records 23.168 s answer wall time / 19.671 s CPU / 86.464 ms
+scheduling-overrun p95 and 180.976 s reasoning wall time / 168.310 s CPU / 2,145.852 ms p95.
+
+The same commit's uninstrumented local macOS 27 / Xcode 27 run, after closing the UI fixture,
+records 18.976 s answer wall time / 14.806 s CPU / 8.171 ms scheduling-overrun p95 and
+21.643 s reasoning wall time / 15.310 s CPU / 67.118 ms p95. Lifetime peak host RSS is
+287,752,192 and 334,987,264 bytes respectively. Both phases complete; this is not a
+retention or actual input-latency measurement and does not qualify the macOS 26 path.
 
 ### Reader follow-up implementation
 
