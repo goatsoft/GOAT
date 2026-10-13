@@ -57,7 +57,12 @@ modified reader, not the untouched merged-source receipt above. The checks inclu
 accessibility action names, preview admission and snapshot limits, streamed preview completion,
 day boundaries, search offsets, edit transactions and database page ordering.
 
-Database pages are not yet integrated into chat loading. Performance, retention, actual
+The checkpoint above precedes database-backed reader loading added under ADR-0102. Its new
+2,000-message regression passes initial 40-record admission, bidirectional reachability, a
+120-record idle cache and complete-context hydration. Full `make verify CONFIG=Release` of that
+integration passes on macOS 27 / Xcode 27: 575 app tests passed, none failed, 3 skipped; package
+and tooling tests passed and the Release build succeeded. The initial PR CI attempt on macOS 26
+failed to compile a new assertion, before executing app tests. Performance, retention, actual
 keyboard/VoiceOver interaction, the experimental container comparison and macOS 26 acceptance
 remain open. [ADR-0101](adrs/0101-bounded-inline-artifacts.md) records the preview policy.
 This checkpoint does not qualify a release artifact.

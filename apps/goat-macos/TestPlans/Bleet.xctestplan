@@ -43,6 +43,9 @@
           },
           {
             "name": "ToolActivityDisclosureTests"
+          },
+          {
+            "name": "TranscriptHistoryPagingTests"
           }
         ]
       },

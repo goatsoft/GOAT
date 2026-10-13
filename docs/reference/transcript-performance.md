@@ -44,15 +44,23 @@ Tables scroll horizontally and expose header cells. Display math delimited by st
 or `\\[` / `\\]` lines is explicitly shown as selectable source, with delimiters preserved.
 No math-rendering dependency has been adopted.
 
-Persistence now has bounded keyset page reads and transactional edit guards. **Chat loading still
-uses the complete history.** Wiring paging into the reader and generation/compaction lifecycle,
-lazy provenance loading, and the long-chat measurements remain part of #88. No page of displayed
-history is substituted for the full generation context.
+Stored chats open with the latest 40 records, page by `(position, id)`, and retain at most 120
+idle reader records. The navigation owner preserves stable message/segment anchors when cache
+indices change. Saved provenance is decoded only when details are opened. Generation, retry and
+editing explicitly hydrate complete history before inference or mutation; completed turns trim
+the cache around the reader. Search examines cancellable storage pages with a 200-result cap;
+explicit export reads a complete snapshot without replacing the reader cache. These are record
+bounds, not a byte ceiling for arbitrarily large messages. [ADR-0102](../adrs/0102-paged-reader-history.md)
+records the contract and its limits. Cold/warm performance, retention and supported-OS measurements
+remain part of #88.
 
 These implementation changes do not close the qualification gates in #85–#89. The experimental
 startup probe now bounds first-marker readiness while checking that the clip moves no more than
 1 pt during that interval; it also requires all 192 growth/input samples and zero missing anchors.
-Those stricter assertions must pass on an exact committed source before a comparison is accepted.
+At `d138d2f` on macOS 27 / Xcode 27, the SwiftUI candidate still fails: 46,033 pt startup clip
+movement, no startup anchor within the 200 ms bound, 191 of 192 growth samples, and 120 pt maximum
+input residual. Later width/font reflow probes measured zero drift, but do not override the startup
+and growth failures. The candidate is not accepted and the shipping container is unchanged.
 
 Issue [#29](https://github.com/goatsoft/GOAT/issues/29) requires runtime evidence,
 including histories with fewer than 40 very large messages. The engine-free

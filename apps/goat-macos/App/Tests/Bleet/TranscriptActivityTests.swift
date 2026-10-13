@@ -648,3 +648,100 @@ extension AppTests.Bleet {
         }
     }
 }
+
+@MainActor final class TranscriptHistoryPagingTests: XCTestCase {
+    func testTwoThousandMessagesRemainReachableWithoutLoadingThemAll() async throws {
+        let model = AppModel.shared
+        let previousDB = model.db
+        let previousChats = model.chats
+        let previousSelection = model.selectedChatID
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("goat-history-\(UUID()).sqlite")
+        let db = try ChatDatabase(path: path.path)
+        let session = ChatSession(effort: .trot, modelID: nil)
+        session.messagesLoaded = true
+        model.db = db
+        model.chats = [session]
+        model.selectedChatID = session.id
+        defer {
+            model.db = previousDB
+            model.chats = previousChats
+            model.selectedChatID = previousSelection
+            try? FileManager.default.removeItem(at: path)
+        }
+        try await db.save(model.record(for: session))
+        var ids: [UUID] = []
+        for index in 0..<2_000 {
+            let id = UUID()
+            ids.append(id)
+            try await db.save(
+                MessageRecord(
+                    id: id.uuidString, chatId: session.id.uuidString,
+                    role: index.isMultiple(of: 2) ? "user" : "assistant",
+                    text: "Message \(index) 🐐", thinking: "", error: nil,
+                    statsTtft: nil, statsTokens: nil, statsDuration: nil, complete: true,
+                    position: index, createdAt: .now, generationProvenanceJson: "invalid saved details"))
+        }
+        session.messagesLoaded = false
+        let started = ContinuousClock.now
+        await model.loadMessages(for: session)
+        print("HISTORY_OPEN rows=2000 admitted=\(session.messages.count) elapsed=\(started.duration(to: .now))")
+        XCTAssertEqual(session.messages.map(\.id), Array(ids.suffix(40)))
+        XCTAssertTrue(session.historyHasEarlier)
+        XCTAssertNil(session.messages.first?.generationProvenance)
+        XCTAssertFalse(session.messages.first?.generationProvenanceUnavailable ?? true)
+        var visited = Set(session.messages.map(\.id))
+        var pages = 0
+        while session.historyHasEarlier && pages < 60 {
+            let loaded = await model.pageHistory(for: session, earlier: true)
+            XCTAssertTrue(loaded)
+            XCTAssertLessThanOrEqual(session.messages.count, 120)
+            visited.formUnion(session.messages.map(\.id))
+            pages += 1
+        }
+        XCTAssertEqual(visited, Set(ids))
+        XCTAssertFalse(session.historyHasEarlier)
+        XCTAssertTrue(session.historyHasLater)
+        pages = 0
+        while session.historyHasLater && pages < 60 {
+            let loaded = await model.pageHistory(for: session, earlier: false)
+            XCTAssertTrue(loaded)
+            XCTAssertLessThanOrEqual(session.messages.count, 120)
+            pages += 1
+        }
+        XCTAssertEqual(session.messages.last?.id, ids.last)
+        let held = try XCTUnwrap(session.messages.first)
+        session.historyAnchorID = held.id
+        let pending = ChatMessage(role: .user)
+        pending.text = "New turn"
+        session.messages.append(pending)
+        let hydrated = await model.hydrateHistory(for: session)
+        XCTAssertTrue(hydrated)
+        XCTAssertEqual(session.messages.count, 2_001)
+        XCTAssertTrue(session.messages.first(where: { $0.id == held.id }) === held)
+        XCTAssertTrue(session.messages.last === pending)
+        let receipt = model.controlSnapshot(
+            turn: UUID(), record: .init(chatID: session.id, firstMessageID: pending.id), chat: session, running: false)
+        XCTAssertEqual(receipt["text"], "", "Older assistant output must never become the new turn's receipt")
+        XCTAssertTrue(session.hasCompleteHistory)
+        session.messages.removeLast()
+        model.trimHistory(for: session)
+        XCTAssertLessThanOrEqual(session.messages.count, 120)
+        XCTAssertTrue(session.messages.contains { $0.id == held.id })
+        let around = await model.loadHistory(around: ids[500], for: session)
+        XCTAssertTrue(around)
+        XCTAssertLessThanOrEqual(session.messages.count, 41)
+        XCTAssertTrue(session.messages.contains { $0.id == ids[500] })
+        let matches = try await model.findInHistory("Message 5 🐐", for: session)
+        XCTAssertEqual(matches.map(\.id), [ids[5]])
+        XCTAssertLessThanOrEqual(session.messages.count, 41)
+        let all = try await model.inspectHistory(for: session)
+        XCTAssertEqual(all.map(\.id), ids)
+        XCTAssertLessThanOrEqual(session.messages.count, 41, "Inspection must not replace the reader cache")
+        let latest = await model.loadLatestHistory(for: session)
+        XCTAssertTrue(latest)
+        XCTAssertEqual(session.messages.map(\.id), Array(ids.suffix(40)))
+        session.messages.first?.decodeStoredProvenance()
+        XCTAssertTrue(session.messages.first?.generationProvenanceUnavailable ?? false)
+        XCTAssertEqual(session.messages.first?.storedGenerationProvenance, "invalid saved details")
+    }
+}

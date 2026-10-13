@@ -289,6 +289,11 @@ public final class ChatDatabase: Sendable {
     public struct MessagePage: Sendable {
         public let messages: [MessageRecord]
         public let hasEarlier: Bool
+        public let hasLater: Bool
+        public let precedingVisibleDate: Date?
+        public var laterCursor: MessageCursor? {
+            messages.last.map { MessageCursor(position: $0.position, id: $0.id) }
+        }
         public var earlierCursor: MessageCursor? {
             messages.first.map { MessageCursor(position: $0.position, id: $0.id) }
         }
@@ -296,20 +301,51 @@ public final class ChatDatabase: Sendable {
 
     /// Fetch the latest bounded page, or the page before a previously returned cursor. Reading
     /// history never changes the complete-history API used to construct a generation prompt.
-    public func messagePage(chatId: String, before cursor: MessageCursor? = nil, limit: Int = 40) async throws
-        -> MessagePage
-    {
+    public func messagePage(
+        chatId: String, before cursor: MessageCursor? = nil, after: MessageCursor? = nil,
+        limit: Int = 40
+    ) async throws -> MessagePage {
         let count = min(256, max(1, limit))
         return try await pool.read { db in
             var request = MessageRecord.filter(Column("chatId") == chatId)
-            if let cursor {
+            if let after {
+                request = request.filter(
+                    Column("position") > after.position
+                        || (Column("position") == after.position && Column("id") > after.id))
+            } else if let cursor {
                 request = request.filter(
                     Column("position") < cursor.position
                         || (Column("position") == cursor.position && Column("id") < cursor.id))
             }
-            let records = try request.order(Column("position").desc, Column("id").desc)
-                .limit(count + 1).fetchAll(db)
-            return MessagePage(messages: Array(records.prefix(count).reversed()), hasEarlier: records.count > count)
+            let records = try request.order(
+                after == nil ? Column("position").desc : Column("position").asc,
+                after == nil ? Column("id").desc : Column("id").asc
+            ).limit(count + 1).fetchAll(db)
+            let page = Array(records.prefix(count))
+            let ordered = after == nil ? Array(page.reversed()) : page
+            let precedingDate: Date?
+            if let first = ordered.first {
+                precedingDate = try Date.fetchOne(
+                    db,
+                    sql: """
+                        SELECT createdAt FROM message WHERE chatId = ? AND role != 'tool'
+                        AND (text != '' OR thinking != '' OR toolsJson IS NOT NULL OR attachmentsJson IS NOT NULL OR kind = 'compaction')
+                        AND (position < ? OR (position = ? AND id < ?))
+                        ORDER BY position DESC, id DESC LIMIT 1
+                        """, arguments: [chatId, first.position, first.position, first.id])
+            } else {
+                precedingDate = nil
+            }
+            return MessagePage(
+                messages: ordered,
+                hasEarlier: after != nil || records.count > count,
+                hasLater: after != nil ? records.count > count : cursor != nil, precedingVisibleDate: precedingDate)
+        }
+    }
+
+    public func message(chatId: String, id: String) async throws -> MessageRecord? {
+        try await pool.read { db in
+            try MessageRecord.filter(Column("chatId") == chatId && Column("id") == id).fetchOne(db)
         }
     }
 

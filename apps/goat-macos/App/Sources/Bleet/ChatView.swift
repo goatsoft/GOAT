@@ -203,17 +203,31 @@ struct ChatView: View {
                         .keyboardShortcut("f", modifiers: [.command])
                         .disabled(!session.messagesLoaded)
                     Button("Copy last reply", systemImage: "doc.on.doc") {
-                        if let reply = session.messages.last(where: { $0.role == .assistant && !$0.text.isEmpty }) {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(reply.text, forType: .string)
+                        let pasteboardRevision = NSPasteboard.general.changeCount
+                        Task {
+                            do {
+                                let messages = try await model.inspectHistory(for: session)
+                                guard let reply = messages.last(where: { $0.role == .assistant && !$0.text.isEmpty }),
+                                    NSPasteboard.general.changeCount == pasteboardRevision
+                                else { return }
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(reply.text, forType: .string)
+                            } catch { exportFailure = error.localizedDescription }
                         }
                     }
                     .keyboardShortcut("c", modifiers: [.command, .shift])
-                    .disabled(!session.messages.contains { $0.role == .assistant && !$0.text.isEmpty })
+                    .disabled(
+                        !session.historyHasLater
+                            && !session.messages.contains { $0.role == .assistant && !$0.text.isEmpty })
                     Button("Export Markdown…", systemImage: "square.and.arrow.up") {
-                        transcriptDocument = TranscriptMarkdownDocument(
-                            text: TranscriptText.markdownExport(title: session.title, messages: session.messages))
-                        exportingTranscript = true
+                        Task {
+                            do {
+                                let messages = try await model.inspectHistory(for: session)
+                                transcriptDocument = TranscriptMarkdownDocument(
+                                    text: TranscriptText.markdownExport(title: session.title, messages: messages))
+                                exportingTranscript = true
+                            } catch { exportFailure = error.localizedDescription }
+                        }
                     }
                     .disabled(!session.messagesLoaded || session.messages.isEmpty)
                 }
@@ -367,6 +381,8 @@ private struct TranscriptFindSheet: View {
     @State private var query = ""
     @State private var matches: [TranscriptText.SearchMatch] = []
     @State private var searching = false
+    @State private var failure: String?
+    @Environment(AppModel.self) private var model
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -374,6 +390,7 @@ private struct TranscriptFindSheet: View {
             Text("Find in conversation").font(.headline)
             TextField("Search message text", text: $query).textFieldStyle(.roundedBorder).focused($focused)
             if searching { ProgressView().controlSize(.small) }
+            if let failure { Text(failure).font(.caption).foregroundStyle(Caprine.Semantic.warning) }
             Text(matches.count == 200 ? "First 200 matching messages" : "\(matches.count) matching messages")
                 .font(.caption).foregroundStyle(.secondary)
             List(matches) { match in
@@ -405,22 +422,17 @@ private struct TranscriptFindSheet: View {
             }
             searching = true
             do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
-            let entries = session.messages.filter { $0.role == .user || $0.role == .assistant }.map {
-                TranscriptText.SearchEntry(id: $0.id, source: $0.text)
-            }
-            let query = query
-            let worker = Task.detached(priority: .userInitiated) { try TranscriptText.find(query, in: entries) }
             do {
-                let result = try await withTaskCancellationHandler {
-                    try await worker.value
-                } onCancel: {
-                    worker.cancel()
-                }
+                let result = try await model.findInHistory(query, for: session)
                 guard !Task.isCancelled else { return }
+                failure = nil
                 matches = result
                 searching = false
             } catch {
-                if !Task.isCancelled { searching = false }
+                if !Task.isCancelled {
+                    searching = false
+                    failure = error.localizedDescription
+                }
             }
         }
     }

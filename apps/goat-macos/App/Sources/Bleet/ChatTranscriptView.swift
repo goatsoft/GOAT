@@ -256,6 +256,16 @@ struct TranscriptRevealRequest: Equatable, Sendable {
         restore(anchor)
     }
 
+    /// Database pages and complete-context hydration change array indices, not message identity.
+    func historyRebased(count: Int, anchorIndex: Int?, cost: (Int) -> Int) {
+        guard readerOwnsViewport, let anchorIndex else {
+            contentChanged()
+            return
+        }
+        heldRange = TranscriptWindow.range(count: count, startingAt: max(0, anchorIndex - 1), cost: cost)
+        contentChanged()
+    }
+
     /// Messages were removed (compaction, deletion). The held window keeps the anchor's message
     /// when it survives; otherwise the reader continues at the first surviving message.
     func messagesRemoved(count: Int, anchorIndex: Int?, messageID: (Int) -> UUID, cost: (Int) -> Int) {
@@ -378,6 +388,10 @@ struct ChatTranscriptView: View {
                 ))
     }
 
+    @State private var historyTask: Task<Void, Never>?
+    @State private var earlierLoaderVisible = false
+    @State private var laterLoaderVisible = false
+
     var body: some View {
         if session.isLoadingMessages || (!session.messagesLoaded && session.messageLoadError == nil) {
             VStack(spacing: 10) {
@@ -408,7 +422,11 @@ struct ChatTranscriptView: View {
                 // One centred reading column shared with the composer (#60 D3).
                 BoundedWidthLayout(maximumWidth: readingColumn) {
                     VStack(alignment: .leading, spacing: 0) {
-                        if messageRange.lowerBound > 0 {
+                        if session.isPagingHistory { ProgressView().controlSize(.small) }
+                        if let error = session.historyPageError {
+                            Text(error).font(.caption).foregroundStyle(Caprine.Semantic.warning)
+                        }
+                        if messageRange.lowerBound > 0 || session.historyHasEarlier {
                             Button("Earlier messages", systemImage: "arrow.up") {
                                 viewport.claimViewport(currentRange: messageRange)
                                 loadEarlierMessages()
@@ -419,6 +437,7 @@ struct ChatTranscriptView: View {
                             .onScrollVisibilityChange(threshold: 0.01) { visible in
                                 // Never inside the layout pass that revealed the loader: the scroll that
                                 // revealed it is attributed first.
+                                earlierLoaderVisible = visible
                                 guard visible else { return }
                                 Task { @MainActor in
                                     await Task.yield()
@@ -426,9 +445,10 @@ struct ChatTranscriptView: View {
                                 }
                             }
                         }
-                        let precedingDate = session.messages[..<messageRange.lowerBound].last {
-                            $0.role != .tool && !TranscriptActivity.isEmpty($0)
-                        }?.createdAt
+                        let precedingDate =
+                            session.messages[..<messageRange.lowerBound].last {
+                                $0.role != .tool && !TranscriptActivity.isEmpty($0)
+                            }?.createdAt ?? session.historyPrecedingDate
                         let rows = TranscriptActivity.rows(session.messages[messageRange], precedingDate: precedingDate)
                         let lastMessageID = TranscriptActivity.lastVisibleID(in: session.messages)
                         let activeAssistant =
@@ -485,7 +505,7 @@ struct ChatTranscriptView: View {
                             .onDisappear { reader.rowFrames[row.id] = nil }
                             .id(row.id)
                         }
-                        if messageRange.upperBound < session.messages.count {
+                        if messageRange.upperBound < session.messages.count || session.historyHasLater {
                             Button("Later messages", systemImage: "arrow.down") { loadLaterMessages() }
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.vertical, 8)
@@ -493,6 +513,7 @@ struct ChatTranscriptView: View {
                                 .onScrollVisibilityChange(threshold: 0.01) { visible in
                                     // Never inside the layout pass that revealed the loader: the scroll that
                                     // revealed it is attributed first.
+                                    laterLoaderVisible = visible
                                     guard visible else { return }
                                     Task { @MainActor in
                                         await Task.yield()
@@ -599,7 +620,8 @@ struct ChatTranscriptView: View {
                     // A last reply held on earlier segments is not the conversation's end.
                     let holdsLastReply = session.messages.last.map { holdsEarlierSegments(of: $0) } ?? false
                     viewport.readerSettled(
-                        atTrueBottom: messageRange.upperBound == session.messages.count && reader.isAtBottom
+                        atTrueBottom: !session.historyHasLater && messageRange.upperBound == session.messages.count
+                            && reader.isAtBottom
                             && !holdsLastReply,
                         anchor: reader.measuredAnchor())
                 }
@@ -617,8 +639,23 @@ struct ChatTranscriptView: View {
             // Streaming growth (text, thinking, new messages): following chases it; a reader keeps
             // their anchor.
             .onChange(of: streamRevision) { viewport.contentChanged() }
+            .onChange(of: viewport.anchor) {
+                session.historyAnchorID = viewport.anchor?.messageID
+            }
+            .onChange(of: session.historyRevision) {
+                viewport.historyRebased(count: session.messages.count, anchorIndex: anchorIndex, cost: displayCost)
+            }
+            .onChange(of: pagingPhase) { _, phase in
+                guard phase == .idle, session.historyPageError == nil else { return }
+                Task { @MainActor in
+                    await Task.yield()
+                    if earlierLoaderVisible { loadEarlierMessages() } else if laterLoaderVisible { loadLaterMessages() }
+                }
+            }
             .task(id: revealRequest) {
-                guard let revealRequest,
+                guard let revealRequest else { return }
+                guard await model.loadHistory(around: revealRequest.messageID, for: session), !Task.isCancelled,
+
                     let message = session.messages.first(where: { $0.id == revealRequest.messageID })
                 else { return }
                 let source = message.text
@@ -651,18 +688,20 @@ struct ChatTranscriptView: View {
             .onChange(of: session.isStreaming) { viewport.contentChanged() }
             // A newly sent turn always re-arms following and jumps to the bottom.
             .onChange(of: session.messages.count) { previousCount, count in
-                if count < previousCount, viewport.heldRange != nil {
+                if count < previousCount, session.hasCompleteHistory, viewport.heldRange != nil {
                     viewport.messagesRemoved(
                         count: count, anchorIndex: anchorIndex,
                         messageID: { renderedMessageID(near: $0) ?? session.messages[$0].id }, cost: displayCost)
                 }
-                if session.messages.last?.role == .user {
+                if session.isStreaming && session.messages.last?.role == .user {
                     jumpToLatest()
                 } else {
                     viewport.contentChanged()
                 }
             }
             .onDisappear {
+                historyTask?.cancel()
+                historyTask = nil
                 reader.executorTask?.cancel()
                 reader.executorTask = nil
                 pagingPhase = .idle
@@ -699,6 +738,16 @@ struct ChatTranscriptView: View {
     }
 
     private func jumpToLatest() {
+        if session.historyHasLater {
+            historyTask?.cancel()
+            historyTask = Task { @MainActor in
+                guard await model.loadLatestHistory(for: session), !Task.isCancelled else { return }
+                session.historyAnchorID = nil
+                viewport.jumpToLatest()
+            }
+            return
+        }
+        session.historyAnchorID = nil
         pagingPhase = .idle
         followThrottle.reset()
         reader.isScrolling = false
@@ -712,7 +761,12 @@ struct ChatTranscriptView: View {
     /// moment during layout (a reply still preparing is short), and paging then would leave the latest
     /// output.
     private func loadEarlierMessages() {
-        guard pagingPhase == .idle, messageRange.lowerBound > 0, viewport.readerOwnsViewport else { return }
+        guard pagingPhase == .idle, viewport.readerOwnsViewport else { return }
+        if messageRange.lowerBound == 0, session.historyHasEarlier {
+            fetchHistory(earlier: true)
+            return
+        }
+        guard messageRange.lowerBound > 0 else { return }
         let kept = session.messages[messageRange.lowerBound].id
         let keptOffset = reader.offset(of: kept)
         guard let result = viewport.pageEarlier(count: session.messages.count, cost: displayCost) else { return }
@@ -722,12 +776,32 @@ struct ChatTranscriptView: View {
 
     /// Pages later while keeping the message at the end of the window where the reader sees it.
     private func loadLaterMessages() {
-        guard pagingPhase == .idle, messageRange.upperBound < session.messages.count else { return }
+        guard pagingPhase == .idle else { return }
+        if messageRange.upperBound == session.messages.count, session.historyHasLater {
+            fetchHistory(earlier: false)
+            return
+        }
+        guard messageRange.upperBound < session.messages.count else { return }
         let kept = session.messages[messageRange.upperBound - 1].id
         let keptOffset = reader.offset(of: kept)
         guard let result = viewport.pageLater(count: session.messages.count, cost: displayCost) else { return }
         pagingPhase = .pagingLater
         restorePagingAnchor(result.anchor, kept: kept, keptOffset: keptOffset)
+    }
+
+    private func fetchHistory(earlier: Bool) {
+        guard !session.isPagingHistory, !session.isStreaming else { return }
+        let anchor = reader.measuredAnchor() ?? viewport.anchor
+        if let anchor { viewport.readerMoved(currentRange: messageRange, anchor: anchor) }
+        pagingPhase = earlier ? .pagingEarlier : .pagingLater
+        historyTask = Task { @MainActor in
+            let loaded = await model.pageHistory(for: session, earlier: earlier)
+            guard !Task.isCancelled else { return }
+            pagingPhase = .idle
+            guard loaded else { return }
+            viewport.historyRebased(count: session.messages.count, anchorIndex: anchorIndex, cost: displayCost)
+            if earlier { loadEarlierMessages() } else { loadLaterMessages() }
+        }
     }
 
     /// Resolves the page's anchor index to a stable message identity before scrolling. When pages
@@ -810,7 +884,8 @@ struct ChatTranscriptView: View {
     private func handleGeometry(from previous: TranscriptScrollMetrics, to metrics: TranscriptScrollMetrics) {
         reader.metrics = metrics
         let atBottom =
-            metrics.distanceFromBottom <= Self.bottomTolerance && messageRange.upperBound == session.messages.count
+            !session.historyHasLater && metrics.distanceFromBottom <= Self.bottomTolerance
+            && messageRange.upperBound == session.messages.count
         reader.isAtBottom = atBottom
         if !reader.isScrolling {
             if metrics.layout != previous.layout {

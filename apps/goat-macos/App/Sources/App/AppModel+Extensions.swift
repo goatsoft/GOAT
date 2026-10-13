@@ -83,7 +83,8 @@ extension AppModel {
     }
 
     func controlSnapshot(turn: UUID, record: ControlTurn, chat: ChatSession, running: Bool) -> [String: String] {
-        let last = chat.messages.dropFirst(record.firstMessageIndex).last { $0.role == .assistant }
+        let start = chat.messages.firstIndex { $0.id == record.firstMessageID } ?? chat.messages.endIndex
+        let last = chat.messages.dropFirst(start).last { $0.role == .assistant }
         let state =
             running
             ? (mcp.pendingPermission == nil ? "streaming" : "awaiting_approval")
@@ -147,9 +148,10 @@ extension AppModel {
             try Task.checkCancellation()
             guard controlEnabled, chats.contains(where: { $0.id == chatID }) else { throw HitchError.disabled }
             guard controlTurns.count < 128 else { throw HitchError.historyFull }
-            let index = chat.messages.count
-            guard let turn = send(text, in: chat) else { throw HitchError.unavailable }
-            controlTurns[turn] = ControlTurn(chatID: chatID, firstMessageIndex: index)
+            guard let turn = send(text, in: chat), let submitted = chat.messages.last else {
+                throw HitchError.unavailable
+            }
+            controlTurns[turn] = ControlTurn(chatID: chatID, firstMessageID: submitted.id)
             return try controlJSON(["turn": turn.uuidString, "chat": chatID.uuidString, "state": "accepted"])
         case "turn.read":
             let turn = try uuid("turn")

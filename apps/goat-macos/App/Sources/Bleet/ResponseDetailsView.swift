@@ -9,7 +9,8 @@ struct ResponseDetailsView: View {
     @Environment(\.dismiss) private var dismiss
 
     static func hasUsefulDetails(_ message: ChatMessage) -> Bool {
-        message.generationProvenance != nil || message.generationProvenanceUnavailable
+        message.generationProvenance != nil || message.storedGenerationProvenance != nil
+            || message.generationProvenanceUnavailable
     }
 
     var body: some View {
@@ -39,6 +40,7 @@ struct ResponseDetailsView: View {
                     }
                 }
             }
+            .task { message.decodeStoredProvenance() }
             .formStyle(.grouped)
             .frame(minWidth: Caprine.Models.reportMinWidth, minHeight: Caprine.Models.reportMinHeight)
         }

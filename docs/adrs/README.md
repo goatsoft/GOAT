@@ -112,4 +112,6 @@ Older records retain the package and type names used when accepted. [ADR-0054](0
 
 | [0101](0101-bounded-inline-artifacts.md) | Bounded inline artifact lifetimes and literal math | Proposed · refines 0010, 0015 and 0091 |
 
+| [0102](0102-paged-reader-history.md) | Paged reader history and complete turn context | Proposed · refines 0003, 0056 and 0091 |
+
 New session? Start with **[../../AGENT.md](../../AGENT.md)**, then [the roadmap](../ROADMAP.md).

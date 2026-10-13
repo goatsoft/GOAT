@@ -63,7 +63,10 @@ final class AppModel {
     var pens: [Pen] = []
     var selectedChatID: UUID? {
         didSet {
-            if oldValue != selectedChatID { paddockArtifact = nil }
+            if oldValue != selectedChatID {
+                paddockArtifact = nil
+                if let previous = chats.first(where: { $0.id == oldValue }) { trimHistory(for: previous) }
+            }
             if selectedChatID != nil {
                 selectedPenID = nil
                 showingPensHome = false
@@ -133,7 +136,7 @@ final class AppModel {
     var controlSession: AppControlSession?
     struct ControlTurn {
         let chatID: UUID
-        let firstMessageIndex: Int
+        let firstMessageID: UUID
         var cancelled = false
         var finalSnapshot: [String: String]?
     }

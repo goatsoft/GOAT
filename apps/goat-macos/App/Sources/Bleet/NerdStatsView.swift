@@ -22,6 +22,11 @@ struct NerdStatsView: View {
         session.isStreaming ? session.messages.last(where: { $0.role == .assistant && !$0.complete }) : nil
     }
     private var history: [GenerationChartValue] {
+        if session.historyHasLater {
+            return session.recentPersistedStats.enumerated().compactMap {
+                GenerationChartValue(id: $0.element.id, ordinal: $0.offset + 1, stats: $0.element.stats)
+            }
+        }
         let messages = session.messages.reversed().lazy.filter { $0.complete && $0.stats != nil }.prefix(12).reversed()
         return messages.enumerated().compactMap { index, message in
             message.stats.flatMap { GenerationChartValue(id: message.id, ordinal: index + 1, stats: $0) }
@@ -37,9 +42,12 @@ struct NerdStatsView: View {
                 Label("Stats", systemImage: "waveform.path.ecg")
                     .font(.headline)
                 Spacer()
-                Text("\(session.messages.count) messages")
-                    .font(Caprine.Activity.font)
-                    .foregroundStyle(tokens.muted)
+                Text(
+                    session.hasCompleteHistory
+                        ? "\(session.messages.count) messages" : "\(session.messages.count) cached messages"
+                )
+                .font(Caprine.Activity.font)
+                .foregroundStyle(tokens.muted)
                 if session.isStreaming {
                     Text("Live")
                         .font(.caption2.weight(.medium))
