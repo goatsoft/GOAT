@@ -89,6 +89,10 @@ private struct ComparisonLazyList: View {
             guard fixture.following, old != new else { return }
             fixture.scrollReaderToLatest()
         }
+        // Any reader movement, native or SwiftUI-driven, refreshes the captured anchor once rows mount.
+        .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y }) { _, _ in
+            fixture.refreshReaderCapture(retries: 12)
+        }
         .onScrollGeometryChange(for: CGSize.self, of: { $0.containerSize }) { old, new in
             viewportSize = new
             fixture.updateSwiftUIVisibility(visibleIDs, viewportHeight: new.height)
@@ -123,11 +127,16 @@ private struct ComparisonLazyList: View {
             var corrections = 0
             var settled = 0
             // The origin this restore last wrote. Any other movement is the reader's, and wins.
-            var written: CGFloat?
+            // Baseline: a move between the reflow and this task's first step is reader input.
+            var written: CGFloat? = fixture.readerOrigin
+            var proxyPending = false
             while ContinuousClock.now < deadline, settled < 2 {
                 await Task.yield()
                 guard !Task.isCancelled else { return }
-                if let written, abs(fixture.readerOrigin - written) > 0.5 {
+                if proxyPending {
+                    proxyPending = false
+                    written = fixture.readerOrigin
+                } else if let written, abs(fixture.readerOrigin - written) > 0.5 {
                     print("COMPARISON_REFLOW_RESTORE yielded_to_reader corrections=\(corrections)")
                     return
                 }
@@ -135,7 +144,7 @@ private struct ComparisonLazyList: View {
                     settled = 0
                     scrolledTo += 1
                     proxy.scrollTo(saved.id, anchor: .top)
-                    written = nil
+                    proxyPending = true
                     try? await Task.sleep(for: .milliseconds(16))
                     continue
                 }

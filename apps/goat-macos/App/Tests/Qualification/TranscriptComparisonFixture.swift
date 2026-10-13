@@ -77,7 +77,10 @@ import SwiftUI
         readerObserver = NotificationCenter.default.addObserver(
             forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refreshReaderCapture(retries: 12) }
+            MainActor.assumeIsolated {
+                self?.boundsNotifications += 1
+                self?.refreshReaderCapture(retries: 12)
+            }
         }
     }
 
@@ -89,13 +92,14 @@ import SwiftUI
         let mounted = frameViews.values.compactMap(\.view).filter { $0.window != nil }.count
         let width = readerClip.map { "\($0.bounds.width)/\(readerWidth)" } ?? "no_clip"
         return
-            "clip_width=\(width) font=\(AppModel.shared.chatFontSize)/\(readerFont) mounted_markers=\(mounted) capture=\(captureHits)/\(captureAttempts)"
+            "clip_width=\(width) font=\(AppModel.shared.chatFontSize)/\(readerFont) mounted_markers=\(mounted) capture=\(captureHits)/\(captureAttempts)/\(captureRequests) bounds_notifications=\(boundsNotifications) following=\(following)"
     }
 
     /// A direct move posts the bounds notification before the lazy stack mounts rows at the new
     /// origin, and supported OSes need not report a visibility change afterwards. An empty sample
     /// therefore retries for a few frames instead of leaving the reader without an anchor.
     func refreshReaderCapture(retries: Int = 0) {
+        captureRequests += 1
         guard !following, let clip = readerClip, abs(clip.bounds.width - readerWidth) <= 1,
             AppModel.shared.chatFontSize == readerFont
         else { return }
@@ -110,6 +114,8 @@ import SwiftUI
             }
         }
     }
+    @ObservationIgnored var boundsNotifications = 0
+    @ObservationIgnored var captureRequests = 0
     @ObservationIgnored private(set) var captureAttempts = 0
     @ObservationIgnored private(set) var captureHits = 0
 
