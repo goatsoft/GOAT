@@ -84,6 +84,13 @@ import SwiftUI
     /// Records the reader's row and offset at the current width and font. A direct move fires the
     /// bounds notification before the lazy stack mounts rows at the new origin, so visibility changes
     /// refresh it too; an empty sample never replaces the last measured anchor.
+    /// Why no reader anchor is held, for supported-OS qualification logs.
+    var captureDiagnostics: String {
+        let mounted = frameViews.values.compactMap(\.view).filter { $0.window != nil }.count
+        let width = readerClip.map { "\($0.bounds.width)/\(readerWidth)" } ?? "no_clip"
+        return "clip_width=\(width) font=\(AppModel.shared.chatFontSize)/\(readerFont) mounted_markers=\(mounted)"
+    }
+
     func refreshReaderCapture() {
         guard !following, let clip = readerClip, abs(clip.bounds.width - readerWidth) <= 1,
             AppModel.shared.chatFontSize == readerFont, let anchor = readerAnchor()
@@ -135,7 +142,9 @@ import SwiftUI
 
     func readerAnchor() -> (id: String, offset: CGFloat)? {
         sampleFrames()
-        guard let marker = frameViews.values.compactMap(\.view).first,
+        // Lazy stacks can keep dismounted row views alive outside the window; only a mounted
+        // marker locates the reader's scroll view.
+        guard let marker = frameViews.values.compactMap(\.view).first(where: { $0.window != nil }),
             let root = marker.window?.contentView
         else { return nil }
         var parent: NSView? = marker

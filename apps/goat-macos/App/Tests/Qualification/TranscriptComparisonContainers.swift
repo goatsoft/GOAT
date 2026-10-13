@@ -108,7 +108,9 @@ private struct ComparisonLazyList: View {
                 }
             }
             guard !fixture.following, let saved else {
-                print("COMPARISON_REFLOW_RESTORE skipped following=\(fixture.following) saved=false")
+                print(
+                    "COMPARISON_REFLOW_RESTORE skipped following=\(fixture.following) saved=false \(fixture.captureDiagnostics)"
+                )
                 return
             }
             // Reflow changes every height above the reader, so the saved row may no longer be mounted
