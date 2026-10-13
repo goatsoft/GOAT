@@ -99,6 +99,9 @@ import SwiftUI
         scroll.reflectScrolledClipView(clip)
     }
 
+    /// The native clip origin the single scroll writer last left, or zero before attachment.
+    var readerOrigin: CGFloat { readerClip?.bounds.minY ?? 0 }
+
     func scrollReaderToLatest() {
         guard let clip = readerClip, let scroll = clip.superview as? NSScrollView,
             let document = scroll.documentView

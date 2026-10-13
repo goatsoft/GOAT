@@ -49,6 +49,8 @@ struct TranscriptComparisonSurface: View {
 }
 
 private struct ComparisonLazyList: View {
+    /// Bounds a reflow restore to about 200 ms, before later reader input can be fought.
+    static let restoreAttempts = 12
     let fixture: TranscriptComparisonFixture
     @State private var viewportSize = CGSize.zero
     @State private var visibleIDs: [String] = []
@@ -56,6 +58,12 @@ private struct ComparisonLazyList: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
+        ScrollViewReader { proxy in
+            list(proxy)
+        }
+    }
+
+    private func list(_ proxy: ScrollViewProxy) -> some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(fixture.rows) { row in
@@ -73,6 +81,12 @@ private struct ComparisonLazyList: View {
         .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { ids in
             visibleIDs = ids
             fixture.updateSwiftUIVisibility(ids, viewportHeight: viewportSize.height)
+        }
+        // Lazy rows replace estimated heights as they mount near the end, so a single jump to the
+        // estimated end falls short. While following, every content height change keeps the end in view.
+        .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentSize.height }) { old, new in
+            guard fixture.following, old != new else { return }
+            fixture.scrollReaderToLatest()
         }
         .onScrollGeometryChange(for: CGSize.self, of: { $0.containerSize }) { old, new in
             viewportSize = new
@@ -93,10 +107,22 @@ private struct ComparisonLazyList: View {
                 }
             }
             guard !fixture.following, let saved else { return }
-            await Task.yield()
-            guard !Task.isCancelled else { return }
-            guard let target = fixture.readerRestoreOffset(id: saved.id, offset: saved.offset) else { return }
-            fixture.scrollReader(to: target)
+            // Reflow changes every height above the reader, so the saved row may no longer be mounted
+            // at the old clip origin. Bring it into the lazy stack by identity, then correct its pixel
+            // offset from native geometry until rows mounted above it stop changing. Each step is one
+            // one-shot write; nothing is retained to replay against later input.
+            for _ in 0..<Self.restoreAttempts {
+                await Task.yield()
+                guard !Task.isCancelled else { return }
+                guard let target = fixture.readerRestoreOffset(id: saved.id, offset: saved.offset) else {
+                    proxy.scrollTo(saved.id, anchor: .top)
+                    try? await Task.sleep(for: .milliseconds(16))
+                    continue
+                }
+                guard abs(target - fixture.readerOrigin) > 0.5 else { return }
+                fixture.scrollReader(to: target)
+                try? await Task.sleep(for: .milliseconds(16))
+            }
         }
         .onChange(of: fixture.latestRequest) {
             fixture.capturedReader = nil
