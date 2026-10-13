@@ -20,6 +20,28 @@ ADR-0099 remains Proposed and the shipping container is unchanged.
 
 ## Workload and measurements
 
+### Supported-OS follow-up run (2026-10-13)
+
+At `2b08d35`, [CI run 38368374287](https://github.com/goatsoft/GOAT/actions/runs/38368374287)
+on macOS 26 / Xcode 26.6 passed the Release build and all 578 ordinary app tests
+(three opt-in skips). This includes the 40-row publication, short reasoning paging and
+database prepend-anchor regressions. The separate synthetic qualification job failed
+experimental navigation; ordinary test success does not supersede that result.
+
+The shipping reader's sequential dense 2 MiB answer and expanded reasoning workload
+completed with these observations:
+
+| Phase | Wall (s) | Host CPU (s) | Sleep-overrun p95 (ms) | Lifetime peak host RSS (bytes) |
+| --- | --- | --- | --- | --- |
+| Answer | 25.505 | 22.199 | 104.431 | 244,662,272 |
+| Reasoning | 182.895 | 179.107 | 2,250.138 | 257,196,032 |
+
+The reasoning delay blocks responsiveness qualification. The workload's successful test
+result asserts completion, not a performance budget. A bounded CPU sample in the isolated
+macOS 26 CI workload is needed to attribute this platform-specific result; local macOS 27
+measurements do not explain it. RSS remains a process-lifetime high-water mark, not retained
+allocation evidence. Delivery 3 remains open.
+
 ### Reader follow-up implementation
 
 The reader adds day boundaries that remain stable across admitted windows, an empty

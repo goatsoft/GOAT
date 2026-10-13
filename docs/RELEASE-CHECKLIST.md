@@ -93,7 +93,13 @@ exposes scene commands as disabled, so it is not a shortcut acceptance harness. 
 navigation and final-source CI remain separate gates. The macOS 26.6 CI Release build at
 `9d421bb` exposed a `ChatView` type-checker timeout not seen with Xcode 27; the follow-up splits
 that view expression into smaller composition properties. Retain the failed CI result and require
-new CI acceptance of the correction.
+new CI acceptance of the correction. At `2b08d35`, macOS 26 / Xcode 26.6 CI passes the
+Release build and all 578 ordinary app tests (three skips). The opt-in navigation workload
+still fails startup/growth tolerances, bottom following and both reflow anchors. The shipping
+expanded-reasoning workload takes 182.895 seconds with 2,250.138 ms scheduling-overrun p95.
+These block qualification; see the [performance](reference/transcript-performance.md) and
+[container comparison](reference/transcript-container-comparison.md) results. The correction
+fixes compilation, not these runtime failures.
 
 ### Transcript follow-up ownership
 

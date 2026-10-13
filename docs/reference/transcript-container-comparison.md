@@ -1,5 +1,21 @@
 # Transcript container comparison
 
+## Supported-OS follow-up result (2026-10-13)
+
+At `2b08d35`, [CI run 38368374287](https://github.com/goatsoft/GOAT/actions/runs/38368374287)
+on macOS 26 / Xcode 26.6 failed the experimental SwiftUI candidate with the unchanged
+1 pt tolerance. The startup anchor was immediately available, but uncaptured startup
+movement was 4 pt and direct-move drift was 2 pt. All 192 growth/input samples were
+present, with zero missing anchors during that phase; maximum residual was 28 pt.
+The final following gap was 9,100 pt. Both width/font reflows (820/20 and 1180/14)
+lost their anchor. Static wheel calibration and subsequent post-reflow input/publication
+residuals were zero; those passing observations do not erase the earlier failures.
+Host resident memory at growth completion was 276,774,912 bytes.
+
+The candidate remains unqualified under #86. The working-tree macOS 27 result below
+does not establish macOS 26 behavior. ADR-0099 remains Proposed, and the shipping
+container is unchanged.
+
 The historical runs below are retained for context. [PR #84](https://github.com/goatsoft/GOAT/pull/84)
 fixes delayed settled-row Markdown spacing, but does not qualify a replacement container.
 Historical `3f62ebc` with renderer `2.4.2-goat.1` passed all 192 growth samples with no missing

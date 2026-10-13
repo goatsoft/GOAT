@@ -154,7 +154,10 @@ jobs:
           status=0
           make test-app CONFIG=Release TEST_PLAN=Qualification CAS_PATH="$CAS_PATH" \
             XCODE_FLAGS='-only-testing:GOATTests/TranscriptPerformanceTests/testContainerComparison' || status=$?
-          make test-app CONFIG=Release TEST_PLAN=Qualification CAS_PATH="$CAS_PATH" \
+          python3 scripts/profile-transcript.py \
+            --log "$RUNNER_TEMP/transcript-production.log" \
+            --sample "$RUNNER_TEMP/transcript-reasoning.sample.txt" -- \
+            make test-app CONFIG=Release TEST_PLAN=Qualification CAS_PATH="$CAS_PATH" \
             XCODE_FLAGS='-only-testing:GOATTests/TranscriptPerformanceTests/testInteractiveDelivery3Qualification' || status=$?
           exit "$status"
       # Only successful runs save. Pushes to main warm the trusted cache; pull requests save
@@ -170,7 +173,9 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: app-test-results
-          path: apps/goat-macos/.build/TestResults/
+          path: |
+            apps/goat-macos/.build/TestResults/
+            ${{ runner.temp }}/transcript-*
           include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 7
