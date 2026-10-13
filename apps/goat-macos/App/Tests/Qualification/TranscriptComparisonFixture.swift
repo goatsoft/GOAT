@@ -77,7 +77,7 @@ import SwiftUI
         readerObserver = NotificationCenter.default.addObserver(
             forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refreshReaderCapture() }
+            MainActor.assumeIsolated { self?.refreshReaderCapture(retries: 12) }
         }
     }
 
@@ -88,15 +88,30 @@ import SwiftUI
     var captureDiagnostics: String {
         let mounted = frameViews.values.compactMap(\.view).filter { $0.window != nil }.count
         let width = readerClip.map { "\($0.bounds.width)/\(readerWidth)" } ?? "no_clip"
-        return "clip_width=\(width) font=\(AppModel.shared.chatFontSize)/\(readerFont) mounted_markers=\(mounted)"
+        return
+            "clip_width=\(width) font=\(AppModel.shared.chatFontSize)/\(readerFont) mounted_markers=\(mounted) capture=\(captureHits)/\(captureAttempts)"
     }
 
-    func refreshReaderCapture() {
+    /// A direct move posts the bounds notification before the lazy stack mounts rows at the new
+    /// origin, and supported OSes need not report a visibility change afterwards. An empty sample
+    /// therefore retries for a few frames instead of leaving the reader without an anchor.
+    func refreshReaderCapture(retries: Int = 0) {
         guard !following, let clip = readerClip, abs(clip.bounds.width - readerWidth) <= 1,
-            AppModel.shared.chatFontSize == readerFont, let anchor = readerAnchor()
+            AppModel.shared.chatFontSize == readerFont
         else { return }
-        capturedReader = anchor
+        captureAttempts += 1
+        if let anchor = readerAnchor() {
+            capturedReader = anchor
+            captureHits += 1
+        } else if retries > 0 {
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(16))
+                self?.refreshReaderCapture(retries: retries - 1)
+            }
+        }
     }
+    @ObservationIgnored private(set) var captureAttempts = 0
+    @ObservationIgnored private(set) var captureHits = 0
 
     /// The candidate uses the same one-shot native scroll ownership as the shipping reader.
     /// A persistent ScrollPosition target can replay after a direct reader move; no binding
