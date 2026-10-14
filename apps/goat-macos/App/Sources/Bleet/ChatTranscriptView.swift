@@ -1057,9 +1057,16 @@ struct ChatTranscriptView: View {
         // Where the reader was before this snapshot, for attributing a move it reports.
         let anchorBefore = reader.measuredAnchor()
         reader.metrics = metrics
-        if previous.width > 0, abs(metrics.width - previous.width) >= 1 {
+        // Rows reflow only when the reading column's width changes: it is capped, so a wide window's
+        // resize changes nothing. Re-identifying the lazy stack rebuilds the rows it shows, so only a
+        // reflow large enough to leave its estimates wrong does it (not a scroller appearing).
+        let column = min(readingColumn, max(0, metrics.width - 48))
+        if previous.width > 0, abs(column - reader.relayoutColumn) >= 32 {
+            reader.relayoutColumn = column
             // Never invalidate layout from inside its own geometry callback.
             Task { @MainActor in scheduleRelayout() }
+        } else if reader.relayoutColumn == 0 {
+            reader.relayoutColumn = column
         }
         if TranscriptViewport.traces, metrics != previous {
             let anchorTop = viewport.anchor.flatMap { reader.rowFrames[$0.messageID] }.map { "\(Int($0.minY))" } ?? "-"
@@ -1800,6 +1807,8 @@ nonisolated func transcriptContentFrame(_ proxy: GeometryProxy) -> CGRect? {
     var proxy: ScrollViewProxy?
     var expectsProxyLanding = false
     var lastRescue: ContinuousClock.Instant?
+    /// The reading column's width the lazy stack was last identified for.
+    var relayoutColumn: CGFloat = 0
     /// The pending attempt waits, with a deadline, for its target row's first layout.
     var awaitingFrame = false
     var attemptGeneration: UInt64 = 0
