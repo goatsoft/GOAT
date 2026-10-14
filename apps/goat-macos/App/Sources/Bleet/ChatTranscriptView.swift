@@ -593,6 +593,7 @@ struct ChatTranscriptView: View {
             // A restoring transcript appears at the reader's anchor, not where it starts.
             .opacity(initiallyPlaced || viewport.autoFollow ? 1 : 0)
             .overlay(alignment: .bottom) {
+                ZStack {
                 if !viewport.isScrolledToBottom {
                     Button {
                         jumpToLatest()
@@ -623,6 +624,12 @@ struct ChatTranscriptView: View {
                     .onHover { isHoveringScrollButton = $0 }
                     .transition(.opacity.combined(with: .scale(scale: 0.85)))
                 }
+                }
+                // Only the button animates: a transaction animation would also fade the rows the lazy
+                // stack inserts and removes in the same update, drawing a row twice as it cross-fades.
+                .animation(
+                    model.animationsEnabled && !reduceMotion ? .easeInOut(duration: 0.2) : nil,
+                    value: viewport.isScrolledToBottom)
             }
             .environment(\.transcriptViewport, viewport)
             .environment(
@@ -836,9 +843,8 @@ struct ChatTranscriptView: View {
         pagingPhase = .idle
         followThrottle.reset()
         reader.isScrolling = false
-        withAnimation(model.animationsEnabled && !reduceMotion ? .easeInOut(duration: 0.2) : nil) {
-            viewport.jumpToLatest()
-        }
+        // Not in an animation transaction: the window change would cross-fade every row it replaces.
+        viewport.jumpToLatest()
     }
 
     /// Pages through a loader the reader scrolled to. A loader is also seen for a moment while a
@@ -1081,7 +1087,7 @@ struct ChatTranscriptView: View {
         if viewport.isScrolledToBottom != showsLatest {
             // Presentation only; never invalidate layout from inside its own geometry callback.
             Task { @MainActor in
-                withAnimation(.easeInOut(duration: 0.2)) { viewport.isScrolledToBottom = showsLatest }
+                viewport.isScrolledToBottom = showsLatest
             }
         }
         executePendingRequest()
