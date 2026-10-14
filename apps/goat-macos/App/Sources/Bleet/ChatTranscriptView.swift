@@ -982,6 +982,10 @@ struct ChatTranscriptView: View {
 
     private func recordFrame(_ frame: CGRect?, of id: UUID, segment: Int, laidOutIn window: Range<Int>) {
         let previous = reader.segmentFrames[id]?[segment]
+        if TranscriptViewport.traces {
+            viewport.note(
+                "segment \(id.uuidString.prefix(4)) \(segment) in \(window) at \(frame.map { "\(Int($0.minY))" } ?? "gone")")
+        }
         reader.segmentFrames[id, default: [:]][segment] = frame
         if let previous, let frame, previous.minY != frame.minY, viewport.anchor?.messageID == id,
             viewport.anchor?.segment == segment
