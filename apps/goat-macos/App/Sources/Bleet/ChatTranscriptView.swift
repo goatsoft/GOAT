@@ -930,7 +930,13 @@ struct ChatTranscriptView: View {
     }
 
     private func recordFrame(_ frame: CGRect, of id: UUID) {
+        let previous = reader.rowFrames[id]
         reader.rowFrames[id] = frame
+        if let previous, previous.minY != frame.minY, viewport.anchor?.messageID == id,
+            viewport.anchor?.segment == nil
+        {
+            keepAnchorInPlace()
+        }
         if viewport.anchor == nil, viewport.readerOwnsViewport, !reader.isScrolling,
             let anchor = reader.measuredAnchor()
         {
@@ -944,7 +950,13 @@ struct ChatTranscriptView: View {
     }
 
     private func recordFrame(_ frame: CGRect?, of id: UUID, segment: Int, laidOutIn window: Range<Int>) {
+        let previous = reader.segmentFrames[id]?[segment]
         reader.segmentFrames[id, default: [:]][segment] = frame
+        if let previous, let frame, previous.minY != frame.minY, viewport.anchor?.messageID == id,
+            viewport.anchor?.segment == segment
+        {
+            keepAnchorInPlace()
+        }
         if frame != nil { reader.segmentFrameWindows[id] = window }
         if reader.segmentFrames[id]?.isEmpty == true {
             reader.segmentFrames[id] = nil
@@ -1129,6 +1141,20 @@ struct ChatTranscriptView: View {
                 + laidOut.map { "\($0.0)@\(Int($0.1.minY))" }.joined(separator: ","))
         reader.executor.scroll(toY: y)
         viewport.recordScrollCommand()
+    }
+
+    /// The reader's anchor moved with layout. The lazy stack keeps its topmost visible row in place,
+    /// which is the anchor's row unless the anchor starts below the viewport's top edge (space above it,
+    /// as under a loader) or names a segment: then a size change above it moves what the reader sees,
+    /// and the owner puts it back. Only while the reader owns the viewport and nothing else moves it.
+    private func keepAnchorInPlace() {
+        guard viewport.readerOwnsViewport, viewport.request == nil, !reader.isScrolling, !reader.attributingMove,
+            pagingPhase == .idle, let anchor = viewport.anchor,
+            let frame = reader.frame(of: anchor, heldWindow: viewport.segmentWindow(for: anchor.messageID)),
+            abs(frame.minY + anchor.offset - reader.metrics.offset) > 1
+        else { return }
+        viewport.note("anchor drifted \(Int(frame.minY + anchor.offset - reader.metrics.offset))")
+        viewport.restore(anchor)
     }
 
     /// The longest run of frames whose positions agree with their order, so a frame left from an earlier
