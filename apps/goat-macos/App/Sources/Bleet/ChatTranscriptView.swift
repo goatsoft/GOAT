@@ -1315,13 +1315,18 @@ struct ChatTranscriptView: View {
         } else {
             target = rows.first.map { ($0.id, .top) }
         }
+        // At most once per interval: right after it the lazy stack re-estimates the content, and a
+        // second rescue before that settles would chase the estimate.
+        let now = ContinuousClock.now
+        if let last = reader.lastRescue, now - last < .milliseconds(500) { return }
         guard let target, let proxy = reader.proxy else { return }
+        reader.lastRescue = now
         viewport.note("rescue blank viewport at \(Int(top)) to \(target.id.uuidString.prefix(4))")
         // It lands on a later update, as a move the scroll view did not record: the next one is this
-        // scroll's, not the reader's.
+        // scroll's, not the reader's. Its landing at the last row's end is the bottom while following:
+        // a further bottom request would chase the content's estimate past the rows.
         reader.expectsProxyLanding = true
         proxy.scrollTo(target.id, anchor: target.edge)
-        if viewport.autoFollow { viewport.contentChanged() }
     }
 
     /// The identity of the row that shows `key`, a message or its reasoning.
@@ -1718,6 +1723,7 @@ nonisolated func transcriptContentFrame(_ proxy: GeometryProxy) -> CGRect? {
     /// landing is still to come.
     var proxy: ScrollViewProxy?
     var expectsProxyLanding = false
+    var lastRescue: ContinuousClock.Instant?
     /// The pending attempt waits, with a deadline, for its target row's first layout.
     var awaitingFrame = false
     var attemptGeneration: UInt64 = 0
