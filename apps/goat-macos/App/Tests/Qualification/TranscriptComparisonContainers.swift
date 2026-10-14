@@ -31,8 +31,9 @@ struct TranscriptComparisonSurface: View {
             }.padding(8)
             Text(fixture.status).font(.caption)
             HStack(spacing: 0) {
-                ComparisonLazyList(fixture: fixture)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                ComparisonProposalSizedLayout {
+                    ComparisonLazyList(fixture: fixture)
+                }
                 if inspector {
                     VStack {
                         Text("Synthetic inspector")
@@ -132,6 +133,21 @@ private struct ComparisonLazyList: View {
     }
 }
 
+/// Takes the size it is offered and never asks its content for an ideal one. A window's minimum-size
+/// pass and stack prioritisation propose an unspecified size, and a scroll view answers by measuring its
+/// content; on macOS 26 that ideal-size pass laid out the shipping transcript on every update (#85).
+struct ComparisonProposalSizedLayout: Layout {
+    var minimum = CGSize(width: 320, height: 240)
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        proposal.replacingUnspecifiedDimensions(by: minimum)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(bounds.size))
+    }
+}
+
 /// Lays a row out exactly near the viewport and reuses its last measured height elsewhere.
 ///
 /// On a width or font change SwiftUI asks again for the size of every row it has measured before, which
@@ -153,11 +169,20 @@ struct ComparisonRowMeasure: Layout {
     let epoch: Int
     let font: CGFloat
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+    /// SwiftUI asks a lazy row for its size several times per pass (estimation, placement, bounds); the
+    /// row's layout is computed once per width until its content changes, which resets this cache.
+    struct Cache {
+        var sizes: [CGFloat: CGSize] = [:]
+    }
+
+    func makeCache(subviews: Subviews) -> Cache { Cache() }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
         let row = row
         let sizing = sizing
         let font = font
         guard let width = proposal.width else { return subviews.first?.sizeThatFits(proposal) ?? .zero }
+        if let cached = cache.sizes[width] { return cached }
         if let height = MainActor.assumeIsolated({ sizing.reuse(row, width: width, font: font) }) {
             Self.estimates += 1
             return CGSize(width: width, height: height)
@@ -169,10 +194,13 @@ struct ComparisonRowMeasure: Layout {
         let height = size.height.rounded(.up)
         MainActor.assumeIsolated { sizing.measured(row, width: width, font: font, height: height) }
         Self.measuredIDs.insert(MainActor.assumeIsolated { row.id })
-        return CGSize(width: size.width, height: height)
+        let result = CGSize(width: size.width, height: height)
+        if cache.sizes.count >= 4 { cache.sizes.removeAll(keepingCapacity: true) }
+        cache.sizes[width] = result
+        return result
     }
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
         subviews.first?.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(bounds.size))
         let row = row
         let sizing = sizing

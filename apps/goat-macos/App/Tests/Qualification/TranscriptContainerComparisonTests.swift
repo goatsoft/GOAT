@@ -270,7 +270,8 @@ extension TranscriptPerformanceTests {
     let maximumOrigin = max(0, (scroll.documentView?.bounds.height ?? 0) - scroll.contentSize.height)
     let landed = scroll.contentView.bounds.minY
     XCTAssertGreaterThan(landed, scroll.contentSize.height, "A direct move must not replay a top target")
-    XCTAssertLessThan(landed, maximumOrigin - scroll.contentSize.height, "A direct move must not replay a bottom target")
+    XCTAssertLessThan(
+        landed, maximumOrigin - scroll.contentSize.height, "A direct move must not replay a bottom target")
     XCTAssertNotNil(directAnchor, "Startup must produce a visible anchor within the bounded readiness interval")
     try await Task.sleep(for: .milliseconds(500))
     host.layoutSubtreeIfNeeded()
