@@ -1582,7 +1582,6 @@ struct TranscriptFrameReport: ViewModifier {
     func body(content: Content) -> some View {
         content
             .onGeometryChange(for: CGRect?.self, of: { isEnabled ? transcriptContentFrame($0) : nil }) { frame in
-                // Nil is a measurement outside the content, never a disappearance.
                 guard let frame else { return }
                 measurement.frame = frame
                 report(measurement.instance, frame)
@@ -1594,12 +1593,9 @@ struct TranscriptFrameReport: ViewModifier {
     }
 }
 
-/// A view's frame in the transcript's content coordinates, or nil when the layout measuring it does not
-/// place it in the transcript's content: a lazy stack also sizes rows in passes detached from the
-/// scroll content, where a named space falls back to global coordinates and the frame is meaningless.
+/// A view's frame in the transcript's content coordinates.
 nonisolated func transcriptContentFrame(_ proxy: GeometryProxy) -> CGRect? {
-    guard proxy.bounds(of: .named(transcriptContentSpace)) != nil else { return nil }
-    return proxy.frame(in: .named(transcriptContentSpace))
+    proxy.frame(in: .named(transcriptContentSpace))
 }
 
 /// Raw scroll measurements and executor bookkeeping. Deliberately not observable view state.
