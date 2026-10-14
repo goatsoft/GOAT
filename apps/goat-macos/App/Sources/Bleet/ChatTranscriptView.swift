@@ -1073,6 +1073,8 @@ struct ChatTranscriptView: View {
                 try? await Task.sleep(for: .milliseconds(16))
                 reader.executor.scroll(toY: end)
                 reader.syncGeometry()
+                try? await Task.sleep(for: .milliseconds(100))
+                rescueBlankViewport()
             }
         }
         if !reader.isScrolling {
@@ -1291,6 +1293,35 @@ struct ChatTranscriptView: View {
         viewport.restore(anchor)
     }
 
+    /// After a drastic size change while unmounted, the lazy stack can keep a row's old place and lay
+    /// out nothing where the viewport is, whatever the scroll view does; even a wheel then does not move
+    /// it. Only a SwiftUI scroll to a row makes it lay out again. When no laid-out row meets the
+    /// viewport, scrolls to the row the viewport should show: the last row's end while following, else
+    /// the anchor's row. The reader sees nothing then, so there is no reader position to override; the
+    /// executor then places the target exactly.
+    private func rescueBlankViewport() {
+        reader.syncGeometry()
+        let top = reader.metrics.offset
+        let bottom = top + reader.metrics.layout.container.height
+        guard !reader.rowFrames.values.contains(where: { $0.maxY > top && $0.minY < bottom }) else { return }
+        let rows = TranscriptActivity.rows(session.messages[messageRange])
+        let target: (id: UUID, edge: UnitPoint)?
+        if viewport.autoFollow {
+            target = rows.last.map { ($0.id, .bottom) }
+        } else if let anchor = viewport.anchor, let row = rowID(containing: anchor.messageID) {
+            target = (row, .top)
+        } else {
+            target = rows.first.map { ($0.id, .top) }
+        }
+        guard let target, let proxy = reader.proxy else { return }
+        viewport.note("rescue blank viewport at \(Int(top)) to \(target.id.uuidString.prefix(4))")
+        // It lands on a later update, as a move the scroll view did not record: the next one is this
+        // scroll's, not the reader's.
+        reader.expectsProxyLanding = true
+        proxy.scrollTo(target.id, anchor: target.edge)
+        if viewport.autoFollow { viewport.contentChanged() }
+    }
+
     /// The identity of the row that shows `key`, a message or its reasoning.
     private func rowID(containing key: UUID) -> UUID? {
         TranscriptActivity.rows(session.messages[messageRange]).first { row in
@@ -1340,17 +1371,7 @@ struct ChatTranscriptView: View {
         // nothing where the viewport is; only a SwiftUI scroll to the row makes it lay that row out.
         // The reader sees nothing then, so there is no reader position for it to override.
         if reader.rowFrames.isEmpty {
-            if reader.attempts >= 2, case .anchor(let anchor) = request.target,
-                let row = rowID(containing: anchor.messageID)
-            {
-                viewport.note("scroll proxy to \(row.uuidString.prefix(4))")
-                // It lands on a later update, as a move the scroll view did not record: the next one is
-                // this scroll's, not the reader's.
-                reader.expectsProxyLanding = true
-                reader.proxy?.scrollTo(row, anchor: .top)
-            } else {
-                reader.executor.layoutContent()
-            }
+            if reader.attempts >= 2 { rescueBlankViewport() } else { reader.executor.layoutContent() }
         }
         reader.attempts += 1
         viewport.note(
