@@ -505,6 +505,20 @@ extension AppTests.Bleet {
     return session
 }
 
+/// Whether a pixel differs as content would: by more than gradient dithering, which follows a layer's
+/// position in the content and changes when the lazy stack lays a row out at another content offset
+/// while the reader sees it in the same place. Moved text or a different row differs by far more.
+private func visiblyDiffers(_ before: NSBitmapImageRep, _ after: NSBitmapImageRep, x: Int, y: Int) -> Bool {
+    guard let lhs = before.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+        let rhs = after.colorAt(x: x, y: y)?.usingColorSpace(.sRGB)
+    else { return before.colorAt(x: x, y: y) != after.colorAt(x: x, y: y) }
+    let tolerance: CGFloat = 32 / 255
+    return abs(lhs.redComponent - rhs.redComponent) > tolerance
+        || abs(lhs.greenComponent - rhs.greenComponent) > tolerance
+        || abs(lhs.blueComponent - rhs.blueComponent) > tolerance
+        || abs(lhs.alphaComponent - rhs.alphaComponent) > tolerance
+}
+
 @MainActor private func snapshot(_ view: NSView) throws -> NSBitmapImageRep {
     let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
     view.cacheDisplay(in: view.bounds, to: bitmap)
@@ -784,7 +798,7 @@ extension AppTests.Bleet {
             var bands: [ClosedRange<Int>] = []
             for y in stride(from: top, to: bottom, by: 2) {
                 for x in stride(from: 0, to: min(before.pixelsWide, after.pixelsWide), by: 2)
-                where before.colorAt(x: x, y: y) != after.colorAt(x: x, y: y) {
+                where visiblyDiffers(before, after, x: x, y: y) {
                     changed += 1
                     region = (min(region.minX, x), max(region.maxX, x), min(region.minY, y), max(region.maxY, y))
                     if bands.last.map({ y - $0.upperBound > 4 }) ?? true {
@@ -885,7 +899,7 @@ extension AppTests.Bleet {
             var changed = 0
             for y in stride(from: top, to: bottom, by: 2) {
                 for x in stride(from: 0, to: min(before.pixelsWide, after.pixelsWide), by: 2)
-                where before.colorAt(x: x, y: y) != after.colorAt(x: x, y: y) {
+                where visiblyDiffers(before, after, x: x, y: y) {
                     changed += 1
                 }
             }
@@ -994,7 +1008,7 @@ extension AppTests.Bleet {
             var changed = 0
             for y in stride(from: top, to: bottom, by: 2) {
                 for x in stride(from: 0, to: min(before.pixelsWide, after.pixelsWide), by: 2)
-                where before.colorAt(x: x, y: y) != after.colorAt(x: x, y: y) {
+                where visiblyDiffers(before, after, x: x, y: y) {
                     changed += 1
                 }
             }
