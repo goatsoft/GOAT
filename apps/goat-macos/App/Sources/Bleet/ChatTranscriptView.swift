@@ -666,9 +666,11 @@ struct ChatTranscriptView: View {
             // makes continuous as estimates resolve. Following places the transcript at its end through
             // the executor, before the first placement shows it.
             .defaultScrollAnchor(.bottom, for: .alignment)
-            // Keep the reader's content in place as rows grow below it; the owner corrects any
-            // remaining anchor movement explicitly.
-            .defaultScrollAnchor(.top, for: .sizeChanges)
+            // While following, SwiftUI keeps the end in place as the content changes size: it knows
+            // where the lazy stack's rows really end, while the document's end is an estimate until
+            // they are laid out, so following through a reflow does not chase it. A reader's content
+            // stays in place as rows grow below it; the owner corrects any remaining anchor movement.
+            .defaultScrollAnchor(viewport.autoFollow ? .bottom : .top, for: .sizeChanges)
             .onScrollGeometryChange(for: TranscriptScrollMetrics.self) { geometry in
                 TranscriptScrollMetrics(geometry)
             } action: { previous, metrics in
