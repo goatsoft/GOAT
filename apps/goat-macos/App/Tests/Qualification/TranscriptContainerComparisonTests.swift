@@ -50,6 +50,11 @@ extension TranscriptPerformanceTests {
         print(
             "COMPARISON_SETUP backend=\(backend) rounds=\(rounds) rows=\(fixture.rows.count) seconds=\(ProcessInfo.processInfo.systemUptime - setup)"
         )
+        // macOS 26 CI runners show legacy scrollers; reproduce that locally without changing user defaults.
+        if environment["GOAT_COMPARE_LEGACY_SCROLLERS"] == "1" {
+            UserDefaults.standard.setVolatileDomain(
+                ["AppleShowScrollBars": "Always"], forName: UserDefaults.argumentDomain)
+        }
         let host = NSHostingView(
             rootView: TranscriptComparisonSurface(fixture: fixture, backend: backend).environment(model))
         host.sizingOptions = []
@@ -78,6 +83,9 @@ extension TranscriptPerformanceTests {
             return
         }
         XCTAssertGreaterThan(scroll.documentView?.bounds.height ?? 0, scroll.contentSize.height)
+        print(
+            "COMPARISON_SCROLLER style=\(scroll.scrollerStyle == .legacy ? "legacy" : "overlay") backing_scale=\(window.backingScaleFactor)"
+        )
         if environment["GOAT_COMPARE_NAVIGATION"] == "1" {
             try await comparisonNavigation(fixture, backend: backend, host: host, scroll: scroll)
             return
@@ -186,13 +194,24 @@ extension TranscriptPerformanceTests {
     return view.subviews.lazy.compactMap(comparisonScroll).first
 }
 
+/// Mounted rows whose frame touches the viewport's top line, within a point, before a reflow.
+@MainActor private func comparisonTopLineRows(
+    _ fixture: TranscriptComparisonFixture, scroll: NSScrollView, host: NSView
+) -> [(id: String, minY: CGFloat, height: CGFloat, viewportTop: CGFloat)] {
+    fixture.sampleFrames()
+    let top = comparisonViewportTop(scroll, host: host)
+    return fixture.frames.filter { $0.value.minY <= top + 1 && $0.value.maxY >= top - 1 }
+        .sorted { $0.value.minY < $1.value.minY }
+        .map { (id: $0.key, minY: $0.value.minY, height: $0.value.height, viewportTop: top) }
+}
+
 @MainActor private func comparisonViewportTop(_ scroll: NSScrollView, host: NSView) -> CGFloat {
     let rect = scroll.contentView.convert(scroll.contentView.bounds, to: host)
     return host.isFlipped ? rect.minY : host.bounds.height - rect.maxY
 }
 
 @MainActor private func comparisonAnchor(
-    _ fixture: TranscriptComparisonFixture, host: NSView, inputDelta: CGFloat = 0, sliver: CGFloat = 1
+    _ fixture: TranscriptComparisonFixture, host: NSView, inputDelta: CGFloat = 0
 ) -> (String, CGFloat)? {
     // Include a partially visible tall row, not only rows whose top edge is on screen.
     fixture.sampleFrames()
@@ -201,8 +220,8 @@ extension TranscriptPerformanceTests {
     let top = host.isFlipped ? rect.minY : host.bounds.height - rect.maxY
     let bottom = top + rect.height
     return fixture.frames.filter {
-        $0.value.maxY > top + sliver && $0.value.minY < bottom
-            && $0.value.maxY - inputDelta > top + sliver && $0.value.minY - inputDelta < bottom
+        $0.value.maxY > top + 1 && $0.value.minY < bottom
+            && $0.value.maxY - inputDelta > top + 1 && $0.value.minY - inputDelta < bottom
     }
     .min(by: { $0.value.minY < $1.value.minY }).map { ($0.key, $0.value.minY) }
 }
@@ -249,6 +268,9 @@ extension TranscriptPerformanceTests {
     fixture.sampleFrames()
     let replayDrift =
         directAnchor.flatMap { anchor in fixture.frames[anchor.0].map { abs($0.minY - anchor.1) } } ?? .infinity
+    print(
+        "COMPARISON_DIRECT target=\(target) origin=\(scroll.contentView.bounds.minY) row=\(directAnchor?.0 ?? "none") moved=\(directAnchor.flatMap { anchor in fixture.frames[anchor.0].map { $0.minY - anchor.1 } } ?? .nan)"
+    )
     print("COMPARISON_NAVIGATION backend=\(backend) direct_move_drift_pt=\(replayDrift)")
     XCTAssertLessThanOrEqual(replayDrift, 1, "ADR-0097 direct-move replay")
 
@@ -322,6 +344,7 @@ extension TranscriptPerformanceTests {
             continue
         }
         let before = scroll.contentView.bounds.minY
+        let documentBefore = scroll.documentView?.bounds.height ?? 0
         let requestedDelta = comparisonWheel(scroll, direction: 1, tick: tick % 24)
         let maximumOrigin = max(0, (scroll.documentView?.bounds.height ?? 0) - scroll.contentSize.height)
         let applied = max(0, min(maximumOrigin, before + requestedDelta)) - before
@@ -350,6 +373,11 @@ extension TranscriptPerformanceTests {
             residuals.append(residual)
             if residual > 1 {
                 failedTicks.append("\(tick):\(residual)")
+                if failedTicks.count <= 12 {
+                    print(
+                        "COMPARISON_GROWTH_TICK tick=\(tick) row=\(anchor.0) moved=\(frame.minY - anchor.1) applied=\(applied) requested=\(requestedDelta) origin_before=\(before) origin_after=\(scroll.contentView.bounds.minY) document_before=\(documentBefore) document_after=\(scroll.documentView?.bounds.height ?? 0) height=\(frame.height) following=\(fixture.following)"
+                    )
+                }
             }
 
         } else {
@@ -397,9 +425,9 @@ extension TranscriptPerformanceTests {
     for (width, font) in [(820.0, 20.0), (1180.0, 14.0), (1000.0, 17.0)] {
         host.layoutSubtreeIfNeeded()
         // The lazy stack keeps the top edge of its topmost visible row in place, as CSS scroll anchoring
-        // does, and counts a row whose bottom edge touches the viewport top as visible. Measure that row.
-        let anchor = comparisonAnchor(fixture, host: host, sliver: -0.01)
-        let anchorHeight = anchor.flatMap { fixture.frames[$0.0]?.height } ?? 0
+        // does. When the viewport top falls on a row boundary it may keep either row there, so sample
+        // every row touching the top line; the reader's position holds if one of them does.
+        let anchors = comparisonTopLineRows(fixture, scroll: scroll, host: host)
         print(
             "COMPARISON_NAVIGATION backend=\(backend) phase=reflow_start width=\(width) font=\(font) resident_bytes=\(comparisonUsage().resident)"
         )
@@ -429,16 +457,20 @@ extension TranscriptPerformanceTests {
             ComparisonRowMeasure.measuredIDs.count, 64, "A reflow must measure only rows near the viewport")
         host.layoutSubtreeIfNeeded()
         fixture.sampleFrames()
-        guard let anchor, let frame = fixture.frames[anchor.0] else {
-            print("COMPARISON_NAVIGATION backend=\(backend) reflow_width=\(width) font=\(font) anchor_missing=true")
+        let viewportTop = comparisonViewportTop(scroll, host: host)
+        let held = anchors.compactMap { anchor in fixture.frames[anchor.id].map { (anchor, $0) } }
+        guard let (anchor, frame) = held.min(by: { abs($0.1.minY - $0.0.minY) < abs($1.1.minY - $1.0.minY) })
+        else {
+            print(
+                "COMPARISON_NAVIGATION backend=\(backend) reflow_width=\(width) font=\(font) anchor_missing=true candidates=\(anchors.map(\.id))"
+            )
             XCTFail("Reflow must retain a measurable anchor at width \(width)")
             continue
         }
-        let drift = abs(frame.minY - anchor.1)
+        let drift = abs(frame.minY - anchor.minY)
         // Where the viewport top falls inside the anchor row, before and after, as a fraction of its height.
-        let viewportTop = comparisonViewportTop(scroll, host: host)
         print(
-            "COMPARISON_REFLOW_ANCHOR width=\(width) row=\(anchor.0) top_before=\(anchor.1 - viewportTop) height_before=\(anchorHeight) top_after=\(frame.minY - viewportTop) height_after=\(frame.height) fraction_before=\((viewportTop - anchor.1) / max(anchorHeight, 1)) fraction_after=\((viewportTop - frame.minY) / max(frame.height, 1))"
+            "COMPARISON_REFLOW_ANCHOR width=\(width) row=\(anchor.id) candidates=\(anchors.count) held=\(held.count) top_before=\(anchor.minY - anchor.viewportTop) height_before=\(anchor.height) top_after=\(frame.minY - viewportTop) height_after=\(frame.height)"
         )
         print("COMPARISON_NAVIGATION backend=\(backend) reflow_width=\(width) font=\(font) drift_pt=\(drift)")
         XCTAssertLessThanOrEqual(drift, 1)
