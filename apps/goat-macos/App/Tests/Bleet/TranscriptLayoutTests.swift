@@ -780,15 +780,19 @@ extension AppTests.Bleet {
             let top = Int(90 * scale)
             let bottom = before.pixelsHigh - Int(70 * scale)
             var changed = 0
+            var region = (minX: Int.max, maxX: Int.min, minY: Int.max, maxY: Int.min)
             for y in stride(from: top, to: bottom, by: 2) {
                 for x in stride(from: 0, to: min(before.pixelsWide, after.pixelsWide), by: 2)
                 where before.colorAt(x: x, y: y) != after.colorAt(x: x, y: y) {
                     changed += 1
+                    region = (min(region.minX, x), max(region.maxX, x), min(region.minY, y), max(region.maxY, y))
                 }
             }
             #expect(
                 changed == 0,
-                "The reader's view moved while paging earlier: \(changed) pixels; \(viewport.diagnostics.suffix(16))")
+                "The reader's view moved while paging earlier: \(changed) pixels in x \(region.minX)...\(region.maxX) "
+                    + "y \(region.minY)...\(region.maxY) of \(before.pixelsWide)x\(before.pixelsHigh); "
+                    + "\(viewport.diagnostics.suffix(16))")
         }
 
         /// #60 A1 step 3: a long reply renders rich as a bounded window of its latest segments, never as
