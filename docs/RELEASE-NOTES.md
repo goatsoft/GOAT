@@ -6,6 +6,11 @@ GOAT 0.1.4 makes long replies and long conversations easier to read and work wit
 
 This release keeps **oMLX 0.6.4** as the qualified baseline.
 
+### Faster transcripts
+
+- The transcript lays out only the messages near the screen, so long chats and long expanded reasoning stay responsive while a reply streams. On a Mac Studio running macOS 26, streaming long reasoning took about 19 seconds instead of about 154.
+- Your place is kept when earlier messages load above it, when a reply grows below it and when the window is resized.
+
 ### Long replies keep their formatting
 
 - Answers and expanded reasoning up to 2 MiB render as formatted Markdown instead of plain text after 8 KiB. Very long replies show one part at a time, with **Earlier** and **Later** to move through them.
@@ -37,7 +42,7 @@ This release keeps **oMLX 0.6.4** as the qualified baseline.
 
 - CI runs package tests, app tests and the Release build in parallel and reuses Xcode's compilation cache. A warm verification run takes about 6 minutes instead of about 19.
 - Hosted test runs summarise known WebKit framework messages and keep complete logs. `make lint` rejects raw colours in transcript code.
-- An opt-in macOS 26 qualification job measures transcript streaming, paging and reflow. It does not change the shipping reader.
+- An opt-in macOS 26 qualification job measures transcript streaming, paging and reflow.
 
 ### Installation and upgrade
 

@@ -4,12 +4,12 @@
 
 ## 0.1.4 maintenance scope
 
-Qualify the bounded rich replies and reasoning, paged history and reader actions, native syntax highlighting and tool diffs, theme colour editing, and bounded read-only subagent delegation described in the [release notes](RELEASE-NOTES.md). Keep stable oMLX 0.6.4 as the qualified baseline. The flat lazy transcript (ADR-0099, #86) remains test-only and is not part of this release.
+Qualify the bounded rich replies and reasoning, paged history and reader actions, native syntax highlighting and tool diffs, theme colour editing, and bounded read-only subagent delegation described in the [release notes](RELEASE-NOTES.md). Keep stable oMLX 0.6.4 as the qualified baseline. The shipping transcript is lazy (ADR-0099, #85, #95).
 
 - [ ] `make verify CONFIG=Release SWIFT_FLAGS='-c release'` on the final source.
 - [ ] Website and docs build: `npm run build` and `npm run docs:build` in `web/`.
 - [ ] Smoke-test the shipping reader with disposable content: scroll-back over settled rich rows, Earlier/Later and Latest, paging a stored chat, find, copy last reply, export, edit and resend, retry, font and width reflow, code actions, reasoning fold and tool diffs. Record keyboard and VoiceOver observations separately.
-- [ ] Record the macOS 26 expanded-reasoning limit (Delivery 3 reasoning phase) as a known issue with its CI timing.
+- [ ] macOS 26 qualification of the lazy transcript on the Mac Studio: Delivery 3 (streaming reasoning) and the navigation suite on the final source.
 - [ ] Final-source CI, then the tagged release workflow: signed and notarized DMG, manifest and checksums.
 - [ ] Clean-Mac installation, upgrade from 0.1.3 and disposable uninstall acceptance.
 - [ ] Owner review of the notes against the accepted artifact, then publish and update `web/publication.json`.
