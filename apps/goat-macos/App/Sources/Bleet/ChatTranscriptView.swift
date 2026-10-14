@@ -824,11 +824,26 @@ struct ChatTranscriptView: View {
     /// Pages through a loader the reader scrolled to. A loader is also seen for a moment while a
     /// restoration, page or jump is still moving the viewport, or before the first placement: paging
     /// then would cancel that move, so it waits until the move ends and the loader is still visible.
-    private func pageThroughVisibleLoader() {
-        guard initiallyPlaced, viewport.request == nil, pagingPhase == .idle else { return }
+    /// The page also waits, within a bound, for the row it keeps in place to report where it is: the
+    /// lazy stack lays that row out after the move that revealed the loader.
+    private func pageThroughVisibleLoader(attempt: Int = 0) {
+        guard initiallyPlaced, viewport.request == nil, pagingPhase == .idle,
+            earlierLoaderVisible || laterLoaderVisible
+        else { return }
+        let range = messageRange
+        let keptIndex = earlierLoaderVisible ? range.lowerBound : range.upperBound - 1
+        let keptMeasured =
+            !session.messages.indices.contains(keptIndex) || reader.rowFrames[session.messages[keptIndex].id] != nil
+        if !keptMeasured, attempt < Self.maximumScrollAttempts {
+            Task { @MainActor in
+                try? await Task.sleep(for: Self.frameRetryInterval)
+                pageThroughVisibleLoader(attempt: attempt + 1)
+            }
+            return
+        }
         if earlierLoaderVisible {
             loadEarlierMessages()
-        } else if laterLoaderVisible {
+        } else {
             loadLaterMessages()
         }
     }
