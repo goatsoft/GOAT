@@ -709,7 +709,7 @@ struct ChatTranscriptView: View {
                         // A scroll that ended where the lazy stack lays out nothing is rescued there, once the
                         // rows it does lay out have had a moment to report.
                         Task { @MainActor in
-                            try? await Task.sleep(for: .milliseconds(150))
+                            try? await Task.sleep(for: .milliseconds(60))
                             guard !reader.isScrolling else { return }
                             rescueBlankViewport(atReader: true)
                         }
@@ -1320,6 +1320,10 @@ struct ChatTranscriptView: View {
             : nearest.1.maxY + CGFloat(target - nearest.0 - 1) * averageHeight
         let metrics = reader.metrics
         var y = min(max(estimate + anchor.offset, metrics.offset - metrics.topGap), metrics.offset + metrics.bottomGap)
+        // An estimate from few rows can be far off, and one past the rows shows nothing: move at most a few
+        // viewports per attempt, so the rows on the way lay out and the next estimate starts from them.
+        let stride = 3 * metrics.layout.container.height
+        y = min(max(y, metrics.offset - stride), metrics.offset + stride)
         // An estimate that keeps the viewport where it is would wait forever: step a viewport toward the
         // row, so the rows there lay out and the next estimate starts from them.
         if abs(y - metrics.offset) < 1 {
