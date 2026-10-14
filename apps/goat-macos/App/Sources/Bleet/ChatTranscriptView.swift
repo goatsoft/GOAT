@@ -379,6 +379,9 @@ struct ChatTranscriptView: View {
     @State private var followThrottle = TranscriptFollowThrottle()
     @State private var pagingPhase: TranscriptPagingPhase = .idle
     @State private var isHoveringScrollButton = false
+    /// Bumped once a reflow (font or reading width) settles; identifies the lazy stack's layout.
+    @State private var layoutGeneration = 0
+    @State private var reflowTask: Task<Void, Never>?
 
     /// Distance from the bottom within which the latest content counts as shown, for both the
     /// jump button and a reader's return to following.
@@ -585,6 +588,11 @@ struct ChatTranscriptView: View {
                             .frame(height: Caprine.Activity.doubleLineHeight + 1)
                     }
                     .scrollTargetLayout()
+                    // A reflow leaves every row the lazy stack has not laid out since with its height
+                    // from the old layout, so the content's size and every estimate are wrong until each
+                    // row is seen again. A new identity once the reflow settles makes it estimate from
+                    // rows laid out in the new layout.
+                    .id(layoutGeneration)
                 }
                 .padding(.horizontal, 24)
                 .padding(.top, 16)
@@ -770,6 +778,7 @@ struct ChatTranscriptView: View {
                     segment: segment, segmentCount: count)
             }
             .onChange(of: session.isStreaming) { viewport.contentChanged() }
+            .onChange(of: ReflowKey(fontSize: model.chatFontSize, column: readingColumn)) { scheduleRelayout() }
             // Rows near the reader render formatted on their first frame when the lazy stack mounts them.
             .task(id: TranscriptPrewarm.Key(range: messageRange, count: session.messages.count)) {
                 let range = messageRange
@@ -798,6 +807,8 @@ struct ChatTranscriptView: View {
                 reader.attributionTask = nil
                 reader.verificationTask?.cancel()
                 reader.verificationTask = nil
+                reflowTask?.cancel()
+                reflowTask = nil
                 reader.attributingMove = false
                 pagingPhase = .idle
             }
@@ -1046,6 +1057,10 @@ struct ChatTranscriptView: View {
         // Where the reader was before this snapshot, for attributing a move it reports.
         let anchorBefore = reader.measuredAnchor()
         reader.metrics = metrics
+        if previous.width > 0, abs(metrics.width - previous.width) >= 1 {
+            // Never invalidate layout from inside its own geometry callback.
+            Task { @MainActor in scheduleRelayout() }
+        }
         if TranscriptViewport.traces, metrics != previous {
             let anchorTop = viewport.anchor.flatMap { reader.rowFrames[$0.messageID] }.map { "\(Int($0.minY))" } ?? "-"
             viewport.note(
@@ -1267,8 +1282,14 @@ struct ChatTranscriptView: View {
         else { return }
         let order = TranscriptActivity.rows(session.messages[messageRange]).map(\.id)
         guard let target = order.firstIndex(of: message.id) else { return }
+        reader.syncGeometry()
+        // Only frames near the viewport are current: the lazy stack laid them out for where it is.
+        let reach = 4 * reader.metrics.layout.container.height
+        let near = (reader.metrics.offset - reach)...(reader.metrics.offset + reach)
         let laidOut = Self.ordered(
-            order.enumerated().compactMap { index, id in reader.rowFrames[id].map { (index, $0) } })
+            order.enumerated().compactMap { index, id in
+                reader.rowFrames[id].flatMap { near.overlaps($0.minY...$0.maxY) ? (index, $0) : nil }
+            })
         guard let nearest = laidOut.min(by: { abs($0.0 - target) < abs($1.0 - target) }) else { return }
         let averageHeight = laidOut.map(\.1.height).reduce(0, +) / CGFloat(max(laidOut.count, 1))
         let estimate =
@@ -1276,7 +1297,15 @@ struct ChatTranscriptView: View {
             ? nearest.1.minY - CGFloat(nearest.0 - target) * averageHeight
             : nearest.1.maxY + CGFloat(target - nearest.0 - 1) * averageHeight
         let metrics = reader.metrics
-        let y = min(max(estimate + anchor.offset, metrics.offset - metrics.topGap), metrics.offset + metrics.bottomGap)
+        var y = min(max(estimate + anchor.offset, metrics.offset - metrics.topGap), metrics.offset + metrics.bottomGap)
+        // An estimate that keeps the viewport where it is would wait forever: step a viewport toward the
+        // row, so the rows there lay out and the next estimate starts from them.
+        if abs(y - metrics.offset) < 1 {
+            let step = metrics.layout.container.height
+            y = target < nearest.0
+                ? max(metrics.offset - metrics.topGap, metrics.offset - step)
+                : min(metrics.offset + metrics.bottomGap, metrics.offset + step)
+        }
         viewport.note(
             "reveal row \(target) near \(nearest.0) at \(Int(y)) from \(Int(metrics.offset)) gap "
                 + "\(Int(metrics.topGap))/\(Int(metrics.bottomGap)) laid out "
@@ -1347,6 +1376,33 @@ struct ChatTranscriptView: View {
         // Rows after the nearest one, then the trailing space and anything below it.
         return nearest.1.maxY + CGFloat(order.count - 1 - nearest.0) * averageHeight
             + Caprine.Activity.doubleLineHeight + 1 + 64
+    }
+
+    private struct ReflowKey: Equatable {
+        let fontSize: CGFloat
+        let column: CGFloat
+    }
+
+    /// Gives the lazy stack a new identity once a reflow settles, then puts the reader's anchor back
+    /// or follows to the end. A window resize settles after its last change.
+    private func scheduleRelayout() {
+        reflowTask?.cancel()
+        reflowTask = Task { @MainActor in
+            do { try await Task.sleep(for: .milliseconds(150)) } catch { return }
+            guard !reader.isScrolling else { return }
+            layoutGeneration &+= 1
+            reader.rowFrames.removeAll()
+            reader.rowInstances.removeAll()
+            reader.segmentFrames.removeAll()
+            reader.segmentInstances.removeAll()
+            reader.segmentFrameWindows.removeAll()
+            viewport.note("relayout \(layoutGeneration)")
+            if viewport.readerOwnsViewport, let anchor = viewport.anchor {
+                viewport.restore(anchor)
+            } else {
+                viewport.contentChanged()
+            }
+        }
     }
 
     /// The identity of the row that shows `key`, a message or its reasoning.
