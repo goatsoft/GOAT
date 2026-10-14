@@ -982,7 +982,7 @@ struct ChatTranscriptView: View {
         if let previous, previous.minY != frame.minY, viewport.anchor?.messageID == id,
             viewport.anchor?.segment == nil
         {
-            keepAnchorInPlace()
+            keepAnchorInPlace(previousTop: previous.minY)
         }
         if viewport.anchor == nil, viewport.readerOwnsViewport, !reader.isScrolling,
             let anchor = reader.measuredAnchor()
@@ -1012,7 +1012,7 @@ struct ChatTranscriptView: View {
         if let previous, let frame, previous.minY != frame.minY, viewport.anchor?.messageID == id,
             viewport.anchor?.segment == segment
         {
-            keepAnchorInPlace()
+            keepAnchorInPlace(previousTop: previous.minY)
         }
         if frame != nil { reader.segmentFrameWindows[id] = window }
         if reader.segmentFrames[id]?.isEmpty == true {
@@ -1239,10 +1239,13 @@ struct ChatTranscriptView: View {
     /// The reader's anchor moved with layout. The lazy stack keeps its topmost visible row in place,
     /// which is the anchor's row unless the anchor starts below the viewport's top edge (space above it,
     /// as under a loader) or names a segment: then a size change above it moves what the reader sees,
-    /// and the owner puts it back. Only while the reader owns the viewport and nothing else moves it.
-    private func keepAnchorInPlace() {
+    /// and the owner puts it back. Only while the reader owns the viewport, nothing else moves it, and
+    /// the anchor was where the reader sees it before this layout (`previousTop` is its earlier top
+    /// edge): an anchor a cancelled restore left behind describes nothing on screen.
+    private func keepAnchorInPlace(previousTop: CGFloat) {
         guard viewport.readerOwnsViewport, viewport.request == nil, !reader.isScrolling, !reader.attributingMove,
             pagingPhase == .idle, let anchor = viewport.anchor,
+            abs(previousTop + anchor.offset - reader.metrics.offset) <= 1,
             let frame = reader.frame(of: anchor, heldWindow: viewport.segmentWindow(for: anchor.messageID)),
             abs(frame.minY + anchor.offset - reader.metrics.offset) > 1
         else { return }
