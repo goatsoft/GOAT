@@ -1013,7 +1013,6 @@ struct SegmentedMarkdownView: View {
 
     private func cost(_ index: Int) -> Int { document.segments[index].textBytes }
 
-
     /// The segment code-block choices are kept by: a piece of an oversized fence uses the fence's
     /// first piece, so a choice applies to the whole fence.
     static func codeSegment<Segments: RandomAccessCollection>(of index: Int, in segments: Segments) -> Int

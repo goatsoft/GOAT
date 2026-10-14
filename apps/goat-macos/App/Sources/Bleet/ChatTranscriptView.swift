@@ -211,7 +211,11 @@ struct TranscriptRevealRequest: Equatable, Sendable {
     /// A reader gesture, keyboard or scroller movement, or an inspection took the viewport. The
     /// reader's input always wins, so any pending scroll is cancelled.
     func readerMoved(currentRange: Range<Int>, anchor: Anchor? = nil, replacingUnknown: Bool = false) {
-        if Self.traces { note("readerMoved \(currentRange) anchor \(anchor.map { "\($0.messageID.uuidString.prefix(4))+\(Int($0.offset))" } ?? "nil")") }
+        if Self.traces {
+            note(
+                "readerMoved \(currentRange) anchor \(anchor.map { "\($0.messageID.uuidString.prefix(4))+\(Int($0.offset))" } ?? "nil")"
+            )
+        }
         if heldRange == nil { heldRange = currentRange }
         autoFollow = false
         if let anchor {
@@ -270,7 +274,11 @@ struct TranscriptRevealRequest: Equatable, Sendable {
 
     /// Makes `anchor` the reader's position and scrolls to it (paging, restoration, compaction).
     func restore(_ anchor: Anchor) {
-        if Self.traces { note("restore \(anchor.messageID.uuidString.prefix(4))+\(Int(anchor.offset)) seg \(anchor.segment.map(String.init) ?? "-")") }
+        if Self.traces {
+            note(
+                "restore \(anchor.messageID.uuidString.prefix(4))+\(Int(anchor.offset)) seg \(anchor.segment.map(String.init) ?? "-")"
+            )
+        }
         autoFollow = false
         self.anchor = anchor
         issue(.anchor(anchor))
@@ -505,54 +513,55 @@ struct ChatTranscriptView: View {
                                 .current?.id
                         }()
                         LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(rows) { row in
-                            // Each message retains its identity and ancestry as tool events arrive.
-                            // Keep projection inside the existing bounded, fully measured window.
-                            VStack(alignment: .leading, spacing: 0) {
-                                if let message = row.messages.first {
-                                    if row.startsDay {
-                                        Text(message.createdAt, format: .dateTime.year().month(.wide).day())
-                                            .font(Caprine.Activity.font)
-                                            .foregroundStyle(.secondary)
-                                            .frame(maxWidth: .infinity)
-                                            .padding(.vertical, Caprine.Activity.inset)
-                                            .accessibilityAddTraits(.isHeader)
+                            ForEach(rows) { row in
+                                // Each message retains its identity and ancestry as tool events arrive.
+                                // Keep projection inside the existing bounded, fully measured window.
+                                VStack(alignment: .leading, spacing: 0) {
+                                    if let message = row.messages.first {
+                                        if row.startsDay {
+                                            Text(message.createdAt, format: .dateTime.year().month(.wide).day())
+                                                .font(Caprine.Activity.font)
+                                                .foregroundStyle(.secondary)
+                                                .frame(maxWidth: .infinity)
+                                                .padding(.vertical, Caprine.Activity.inset)
+                                                .accessibilityAddTraits(.isHeader)
+                                        }
+                                        TranscriptMessageRow(
+                                            message: message, session: session, isLast: message.id == lastMessageID,
+                                            compactActivity: row.isContinuation,
+                                            joinsPreviousTools: row.joinsPreviousTools,
+                                            joinsNextTools: row.joinsNextTools,
+                                            activeToolID: message.id == activeAssistantID ? activeToolID : nil,
+                                            canDeleteCompaction: CompactionDeletion.canRestore(
+                                                message, in: session.messages),
+                                            canEdit: message.role == .user && !session.isStreaming,
+                                            keyboardFocus: $focusedMessageID,
+                                            isKeyboardFocused: focusedMessageID == message.id
+                                        )
+                                        .equatable()
                                     }
-                                    TranscriptMessageRow(
-                                        message: message, session: session, isLast: message.id == lastMessageID,
-                                        compactActivity: row.isContinuation,
-                                        joinsPreviousTools: row.joinsPreviousTools, joinsNextTools: row.joinsNextTools,
-                                        activeToolID: message.id == activeAssistantID ? activeToolID : nil,
-                                        canDeleteCompaction: CompactionDeletion.canRestore(
-                                            message, in: session.messages),
-                                        canEdit: message.role == .user && !session.isStreaming,
-                                        keyboardFocus: $focusedMessageID,
-                                        isKeyboardFocused: focusedMessageID == message.id
-                                    )
-                                    .equatable()
                                 }
-                            }
-                            // Align the row boundary without traversing completed Markdown.
-                            .alignmentGuide(.leading) { _ in 0 }
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(
-                                .top,
-                                row.joinsPreviousTools || row.messages.allSatisfy(TranscriptActivity.isEmpty)
-                                    ? 0 : Caprine.Activity.messageSpacing
-                            )
-                            // Row frames in content coordinates locate anchors; they are raw measurements,
-                            // kept out of observable state.
-                            .onGeometryChange(for: CGRect?.self, of: transcriptContentFrame) { frame in
-                                if let frame {
-                                    recordFrame(frame, of: row.id)
-                                } else if TranscriptViewport.traces {
-                                    viewport.note("row \(row.id.uuidString.prefix(4)) measured outside the content")
+                                // Align the row boundary without traversing completed Markdown.
+                                .alignmentGuide(.leading) { _ in 0 }
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(
+                                    .top,
+                                    row.joinsPreviousTools || row.messages.allSatisfy(TranscriptActivity.isEmpty)
+                                        ? 0 : Caprine.Activity.messageSpacing
+                                )
+                                // Row frames in content coordinates locate anchors; they are raw measurements,
+                                // kept out of observable state.
+                                .onGeometryChange(for: CGRect?.self, of: transcriptContentFrame) { frame in
+                                    if let frame {
+                                        recordFrame(frame, of: row.id)
+                                    } else if TranscriptViewport.traces {
+                                        viewport.note("row \(row.id.uuidString.prefix(4)) measured outside the content")
+                                    }
                                 }
+                                .onAppear { reader.rowAppeared(row.id) }
+                                .onDisappear { reader.rowDisappeared(row.id) }
+                                .id(row.id)
                             }
-                            .onAppear { reader.rowAppeared(row.id) }
-                            .onDisappear { reader.rowDisappeared(row.id) }
-                            .id(row.id)
-                        }
                         }
                         .scrollTargetLayout()
                         if messageRange.upperBound < session.messages.count || session.historyHasLater {
@@ -986,7 +995,8 @@ struct ChatTranscriptView: View {
         let previous = reader.segmentFrames[id]?[segment]
         if TranscriptViewport.traces {
             viewport.note(
-                "segment \(id.uuidString.prefix(4)) \(segment) in \(window) at \(frame.map { "\(Int($0.minY))" } ?? "gone")")
+                "segment \(id.uuidString.prefix(4)) \(segment) in \(window) at \(frame.map { "\(Int($0.minY))" } ?? "gone")"
+            )
         }
         reader.segmentFrames[id, default: [:]][segment] = frame
         if let previous, let frame, previous.minY != frame.minY, viewport.anchor?.messageID == id,
@@ -1014,7 +1024,8 @@ struct ChatTranscriptView: View {
             let anchorTop = viewport.anchor.flatMap { reader.rowFrames[$0.messageID] }.map { "\(Int($0.minY))" } ?? "-"
             viewport.note(
                 "geometry \(Int(previous.offset))->\(Int(metrics.offset)) content \(Int(metrics.contentHeight)) "
-                    + "cause \(reader.executor.cause(ofOffset: metrics.offset).map { "\($0)" } ?? "nil") anchor row \(anchorTop)")
+                    + "cause \(reader.executor.cause(ofOffset: metrics.offset).map { "\($0)" } ?? "nil") anchor row \(anchorTop)"
+            )
         }
         let atBottom =
             !session.historyHasLater && metrics.distanceFromBottom <= Self.bottomTolerance
@@ -1147,7 +1158,9 @@ struct ChatTranscriptView: View {
     /// A move nothing recorded explains is the reader's only if the content on screen moved with it. The
     /// lazy stack shifts the offset and its rows together when estimates above the viewport resolve; the
     /// reader's anchor then stays where it was, and ownership does not change.
-    private func attributeMove(from previousOffset: CGFloat, to offset: CGFloat, anchorBefore: TranscriptViewport.Anchor?) {
+    private func attributeMove(
+        from previousOffset: CGFloat, to offset: CGFloat, anchorBefore: TranscriptViewport.Anchor?
+    ) {
         reader.attributionTask?.cancel()
         reader.attributingMove = true
         reader.attributionTask = Task { @MainActor in
@@ -1182,7 +1195,8 @@ struct ChatTranscriptView: View {
         else { return }
         let order = TranscriptActivity.rows(session.messages[messageRange]).map(\.id)
         guard let target = order.firstIndex(of: message.id) else { return }
-        let laidOut = Self.ordered(order.enumerated().compactMap { index, id in reader.rowFrames[id].map { (index, $0) } })
+        let laidOut = Self.ordered(
+            order.enumerated().compactMap { index, id in reader.rowFrames[id].map { (index, $0) } })
         guard let nearest = laidOut.min(by: { abs($0.0 - target) < abs($1.0 - target) }) else { return }
         let averageHeight = laidOut.map(\.1.height).reduce(0, +) / CGFloat(max(laidOut.count, 1))
         let estimate =
@@ -1299,7 +1313,8 @@ struct ChatTranscriptView: View {
                 guard source.utf8.count <= TranscriptTextParts.maximumBytes,
                     MarkdownContentCache.shared.peek(id: message.id, source: source) == nil
                 else { continue }
-                if case .parsed(let content) = await MarkdownRenderCache.shared.prepare(id: message.id, source: source) {
+                if case .parsed(let content) = await MarkdownRenderCache.shared.prepare(id: message.id, source: source)
+                {
                     MarkdownContentCache.shared.set(id: message.id, source: source, content: content)
                 }
             case .assistant where message.kind == .regular:
