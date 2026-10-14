@@ -19,6 +19,8 @@ import SwiftUI
     let id: String
     var content: Content
     var revision = 0
+    /// Bumped when the row must replace an estimated height with an exact layout.
+    var sizingEpoch = 0
     init(_ id: String, _ content: Content) {
         self.id = id
         self.content = content
@@ -45,17 +47,22 @@ import SwiftUI
     @ObservationIgnored private weak var readerClip: NSClipView?
     @ObservationIgnored fileprivate var observesReader = false
     @ObservationIgnored private var readerWidth: CGFloat = 0
+    /// The reader's layout width is the scroll view's, not the clip's: a legacy scroller appearing
+    /// narrows the clip without a reflow, which must not invalidate the captured anchor.
+    private var readerLayoutWidth: CGFloat? { (readerClip?.superview as? NSScrollView)?.frame.width }
     @ObservationIgnored private var readerFont: CGFloat = 0
     @ObservationIgnored private var initialPlacementPending = true
     @ObservationIgnored var capturedReader: (id: String, offset: CGFloat)?
 
     func recordReaderGeometry(width: CGFloat, font: CGFloat) {
-        readerWidth = readerClip?.bounds.width ?? width
+        readerWidth = readerLayoutWidth ?? width
         readerFont = font
     }
 
     func observeSwiftUIReader() {
         observesReader = true
+        sizing.index = { [weak self] in self?.rowIndices[$0] }
+        sizing.holdsReader = { [weak self] in self?.reflowPending ?? false }
         guard readerObserver == nil,
             let marker = frameViews.values.compactMap(\.view).first(where: { $0.window != nil })
         else { return }
@@ -63,6 +70,21 @@ import SwiftUI
         while let view = parent, !(view is NSScrollView) { parent = view.superview }
         guard let scroll = parent as? NSScrollView else { return }
         readerClip = scroll.contentView
+        if resizeObserver == nil, let content = scroll.window?.contentView {
+            content.postsFrameChangedNotifications = true
+            resizeWidth = content.frame.width
+            resizeObserver = NotificationCenter.default.addObserver(
+                forName: NSView.frameDidChangeNotification, object: content, queue: nil
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    // Only a width change reflows rows; a height-only resize must not hold the reader.
+                    guard let self, abs(content.frame.width - self.resizeWidth) > 0.5 else { return }
+                    self.resizeWidth = content.frame.width
+                    self.armReflowAnchor()
+                }
+            }
+            observeFontReflow()
+        }
         if initialPlacementPending {
             initialPlacementPending = false
             Task { @MainActor [weak self] in
@@ -71,21 +93,95 @@ import SwiftUI
                 self.scrollReaderToLatest()
             }
         }
-        readerWidth = scroll.contentView.bounds.width
+        readerWidth = scroll.frame.width
         readerFont = AppModel.shared.chatFontSize
         scroll.contentView.postsBoundsChangedNotifications = true
         readerObserver = NotificationCenter.default.addObserver(
             forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, !self.following, let clip = self.readerClip,
-                    abs(clip.bounds.width - self.readerWidth) <= 1,
-                    AppModel.shared.chatFontSize == self.readerFont
-                else { return }
-                self.capturedReader = self.readerAnchor()
+                self?.boundsNotifications += 1
+                self?.refreshReaderCapture(retries: 12)
             }
         }
     }
+
+    /// Records the reader's row and offset at the current width and font. A direct move fires the
+    /// bounds notification before the lazy stack mounts rows at the new origin, so visibility changes
+    /// refresh it too; an empty sample never replaces the last measured anchor.
+    /// Why no reader anchor is held, for supported-OS qualification logs.
+    var captureDiagnostics: String {
+        let mounted = frameViews.values.compactMap(\.view).filter { $0.window != nil }.count
+        let width = readerLayoutWidth.map { "\($0)/\(readerWidth)" } ?? "no_clip"
+        return
+            "clip_width=\(width) font=\(AppModel.shared.chatFontSize)/\(readerFont) mounted_markers=\(mounted) capture=\(captureHits)/\(captureAttempts)/\(captureRequests) bounds_notifications=\(boundsNotifications) following=\(following) rejected=\(captureRejections.sorted { $0.key < $1.key }.map { "\($0.key):\($0.value)" }.joined(separator: ","))"
+    }
+
+    /// A direct move posts the bounds notification before the lazy stack mounts rows at the new
+    /// origin, and supported OSes need not report a visibility change afterwards. An empty sample
+    /// therefore retries for a few frames instead of leaving the reader without an anchor.
+    func refreshReaderCapture(retries: Int = 0) {
+        captureRequests += 1
+        guard !following else {
+            captureRejections["following", default: 0] += 1
+            return
+        }
+        guard let width = readerLayoutWidth else {
+            captureRejections["no_scroll", default: 0] += 1
+            return
+        }
+        // Outside a font or width reflow, a new width is initial layout settling, not a reflow to restore.
+        if abs(width - readerWidth) > 1, !reflowPending { readerWidth = width }
+        guard abs(width - readerWidth) <= 1 else {
+            captureRejections["width_\(Int(width))_\(Int(readerWidth))", default: 0] += 1
+            return
+        }
+        guard AppModel.shared.chatFontSize == readerFont else {
+            captureRejections["font", default: 0] += 1
+            return
+        }
+        captureAttempts += 1
+        if let anchor = readerAnchor() {
+            capturedReader = anchor
+            captureHits += 1
+        } else if retries > 0 {
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(16))
+                self?.refreshReaderCapture(retries: retries - 1)
+            }
+        }
+    }
+    @ObservationIgnored var boundsNotifications = 0
+    @ObservationIgnored var captureRequests = 0
+    /// A font or width change whose restore task has not finished; its old geometry key stays.
+    @ObservationIgnored var reflowPending = false
+    @ObservationIgnored let sizing = ComparisonRowSizing()
+    /// The reader's row while a font or width reflow is laid out, held by identity; nil otherwise.
+    var reflowAnchorID: String?
+    @ObservationIgnored private var resizeObserver: NSObjectProtocol?
+    @ObservationIgnored private var resizeWidth: CGFloat = 0
+
+    /// Arms the identity hold before the reflow's layout pass: a window content resize posts its
+    /// frame change before layout runs, and the font is observed at its change, not after the update.
+    func armReflowAnchor() {
+        reflowPending = true
+        guard !following, reflowAnchorID == nil, let captured = capturedReader else { return }
+        reflowAnchorID = captured.id
+    }
+
+    private func observeFontReflow() {
+        withObservationTracking {
+            _ = AppModel.shared.chatFontSize
+        } onChange: { [weak self] in
+            MainActor.assumeIsolated {
+                self?.armReflowAnchor()
+                self?.observeFontReflow()
+            }
+        }
+    }
+    @ObservationIgnored var captureRejections: [String: Int] = [:]
+    @ObservationIgnored private(set) var captureAttempts = 0
+    @ObservationIgnored private(set) var captureHits = 0
 
     /// The candidate uses the same one-shot native scroll ownership as the shipping reader.
     /// A persistent ScrollPosition target can replay after a direct reader move; no binding
@@ -97,6 +193,15 @@ import SwiftUI
         clip.scroll(
             to: NSPoint(x: clip.bounds.minX, y: max(0, min(offset, document.bounds.height - clip.bounds.height))))
         scroll.reflectScrolledClipView(clip)
+    }
+
+    /// The native clip origin the single scroll writer last left, or zero before attachment.
+    var readerOrigin: CGFloat { readerClip?.bounds.minY ?? 0 }
+
+    /// Native distance from the clip's bottom edge to the document end, or nil before attachment.
+    var readerDistanceFromEnd: CGFloat? {
+        guard let clip = readerClip, let document = (clip.superview as? NSScrollView)?.documentView else { return nil }
+        return document.bounds.height - clip.bounds.maxY
     }
 
     func scrollReaderToLatest() {
@@ -128,7 +233,9 @@ import SwiftUI
 
     func readerAnchor() -> (id: String, offset: CGFloat)? {
         sampleFrames()
-        guard let marker = frameViews.values.compactMap(\.view).first,
+        // Lazy stacks can keep dismounted row views alive outside the window; only a mounted
+        // marker locates the reader's scroll view.
+        guard let marker = frameViews.values.compactMap(\.view).first(where: { $0.window != nil }),
             let root = marker.window?.contentView
         else { return nil }
         var parent: NSView? = marker
@@ -206,6 +313,9 @@ import SwiftUI
             }
         }
         setPreparationOverscan(requested.subtracting(visible))
+        for id in sizing.updateWindow(requested, firstVisible: first) {
+            if let index = rowIndices[id] { rows[index].sizingEpoch += 1 }
+        }
         schedulePreparation()
     }
 
@@ -246,6 +356,9 @@ import SwiftUI
 
     func stopPreparation() {
         if let readerObserver { NotificationCenter.default.removeObserver(readerObserver) }
+        if let resizeObserver { NotificationCenter.default.removeObserver(resizeObserver) }
+        resizeObserver = nil
+        reflowAnchorID = nil
         readerObserver = nil
         readerClip = nil
         observesReader = false
@@ -583,7 +696,10 @@ struct ComparisonRowView: View {
     var recordsVisibility = true
     var recordsAppearance = true
 
+    nonisolated(unsafe) static var bodies = 0
+
     var body: some View {
+        let _ = Self.bodies += 1
         content
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 16)
