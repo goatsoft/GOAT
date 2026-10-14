@@ -67,10 +67,8 @@ private struct ComparisonLazyList: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(fixture.rows) { row in
-                    ComparisonRowMeasure(id: row.id) {
-                        ComparisonRowView(row: row, fixture: fixture, recordsAppearance: false)
-                    }
-                    .id(row.id)
+                    ComparisonSizedRow(row: row, fixture: fixture)
+                        .id(row.id)
                 }
             }
             .scrollTargetLayout()
@@ -84,6 +82,9 @@ private struct ComparisonLazyList: View {
         .defaultScrollAnchor(fixture.following ? .bottom : .top, for: .sizeChanges)
         .onAppear {
             fixture.observeSwiftUIReader()
+        }
+        .task(id: fixture.structureRevision) {
+            await fixture.sizing.prepareAhead(fixture.rows)
         }
         .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.01) { ids in
             visibleIDs = ids
@@ -213,20 +214,460 @@ private struct ComparisonLazyList: View {
     }
 }
 
-/// Counts row measurements so qualification can tell whether a reflow lays out the rows near the
-/// viewport or every row above it. Forwards sizing and placement unchanged.
+/// Lays out a row's content exactly near the viewport and reports a modelled height elsewhere, so a
+/// width or font reflow measures the rows on screen and not every row above them (#85, #86).
+/// Placement is unchanged: a placed row whose size was an estimate is measured exactly next frame.
 struct ComparisonRowMeasure: Layout {
     nonisolated(unsafe) static var measurements = 0
+    nonisolated(unsafe) static var estimates = 0
     nonisolated(unsafe) static var measuredIDs: Set<String> = []
-    let id: String
+    /// Main-thread time spent producing estimates and exact row layouts, for qualification logs.
+    nonisolated(unsafe) static var estimateTime = Duration.zero
+    nonisolated(unsafe) static var measureTime = Duration.zero
+    let row: ComparisonRow
+    let sizing: ComparisonRowSizing
+    /// Changes only when this row must replace an estimate; it invalidates SwiftUI's cached size.
+    let epoch: Int
+    let font: CGFloat
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let row = row
+        let sizing = sizing
+        let font = font
+        guard let width = proposal.width else { return subviews.first?.sizeThatFits(proposal) ?? .zero }
+        let started = ContinuousClock.now
+        if let estimate = MainActor.assumeIsolated({ sizing.estimate(row, width: width, font: font) }) {
+            Self.estimates += 1
+            Self.estimateTime += started.duration(to: .now)
+            return CGSize(width: width, height: estimate)
+        }
         Self.measurements += 1
-        Self.measuredIDs.insert(id)
-        return subviews.first?.sizeThatFits(proposal) ?? .zero
+        let size = subviews.first?.sizeThatFits(proposal) ?? .zero
+        Self.measureTime += started.duration(to: .now)
+        let height = size.height
+        MainActor.assumeIsolated { sizing.measured(row, width: width, font: font, height: height) }
+        Self.measuredIDs.insert(MainActor.assumeIsolated { row.id })
+        return size
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         subviews.first?.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(bounds.size))
+        let row = row
+        let sizing = sizing
+        MainActor.assumeIsolated { sizing.placed(row) }
+    }
+}
+
+/// Estimated row heights for the lazy candidate.
+///
+/// The estimate follows the text-reflow split used by DOM-free text measurement (Pretext with TanStack
+/// Virtual): an expensive width-independent `prepare` (each paragraph's unwrapped advance, in em, and
+/// its word count, cached per row content) and a cheap `layout` for any width and font (greedy-wrap
+/// line counts at the paragraph's real measure, times the font's line height). The last exact height
+/// calibrates it: the residual between that height and the model at the measured width and font is
+/// the row's non-text chrome, carried to the new font in proportion (CSS `contain-intrinsic-size: auto`
+/// keeps the last size; this keeps the last size's non-text part and remodels the text part).
+///
+/// Two learned corrections keep the model honest. A row measured before is scaled by the model's ratio
+/// between the new and the measured geometry, so the row's own chrome and the model's bias cancel. A row
+/// never measured uses the model times its content kind's running ratio of exact to modelled height,
+/// fitted from every exact layout (UITableView and TanStack Virtual take a fixed estimate instead).
+///
+/// Rows inside the window (visible plus one viewport each side) are always exact, and outside a reflow
+/// so is any row never measured: SwiftUI asks for those only as it creates them to show. A row in the
+/// window that still holds an estimate is bumped to measure. The lazy stack keeps the rows on screen
+/// in place when a row above them changes height (TanStack Virtual's scroll adjustment), so replacing an
+/// estimate above the reader needs no native correction; qualification measures that it holds.
+@MainActor final class ComparisonRowSizing {
+    struct Paragraph {
+        enum Kind { case prose, code }
+        var kind: Kind
+        /// Unwrapped advance at 1 pt, so any font size is a multiplication.
+        var em: CGFloat
+        var words: Int
+        var scale: CGFloat
+        var indent: CGFloat
+    }
+    struct Prepared {
+        let key: Int
+        let paragraphs: [Paragraph]
+    }
+    struct Measured {
+        let key: Int
+        let width: CGFloat
+        let font: CGFloat
+        let height: CGFloat
+        let model: CGFloat
+    }
+    struct Flip {
+        let exact: CGFloat
+        let model: CGFloat
+        let lastSize: CGFloat?
+        let proportional: CGFloat?
+    }
+
+    /// Rows that must lay out exactly. Empty until the reader reports visibility.
+    private(set) var window: Set<String> = []
+    private var firstVisibleIndex: Int?
+    private var measuredRows: [String: Measured] = [:]
+    private var estimatedRows: [String: CGFloat] = [:]
+    private var preparedRows: [String: Prepared] = [:]
+    private var placedEstimates: Set<String> = []
+    private var advanceTables: [String: [CGFloat]] = [:]
+    var index: (String) -> Int? = { _ in nil }
+    var holdsReader: () -> Bool = { false }
+    private(set) var flips: [Flip] = []
+    /// Estimates replaced above the first visible row outside a reflow.
+    private(set) var replacedAbove = 0
+    /// Running exact and modelled height per content kind.
+    private var calibration: [Int: (exact: CGFloat, model: CGFloat)] = [:]
+    private var family = ""
+    private var codeLine: CGFloat = 0
+    private var codeFontKey = ""
+
+    func isEstimated(_ id: String) -> Bool { estimatedRows[id] != nil }
+
+    /// Prepares row text ahead of the first reflow, a few rows per main-actor turn. Preparation is the
+    /// width-independent half of the model; once done, an estimate is arithmetic.
+    func prepareAhead(_ rows: [ComparisonRow]) async {
+        for (offset, row) in rows.enumerated() {
+            _ = prepare(row, key: contentKey(row))
+            if offset % 16 == 15 { await Task.yield() }
+        }
+    }
+
+    /// Returns rows that hold an estimate and have entered the window; the caller invalidates them.
+    func updateWindow(_ ids: Set<String>, firstVisible: Int?) -> [String] {
+        window = ids
+        firstVisibleIndex = firstVisible
+        return ids.filter { estimatedRows[$0] != nil }
+    }
+
+    func resetStatistics() {
+        flips.removeAll()
+        replacedAbove = 0
+    }
+
+    /// Fonts are looked up once per change, not per row.
+    private func refreshFonts() {
+        let model = AppModel.shared
+        let chat = model.effectiveChatFontID
+        if chat != family {
+            family = chat
+            lineHeights.removeAll()
+            measuredRows.removeAll()
+        }
+        let codeKey = "\(model.effectiveCodeFontID):\(model.codeFontSize)"
+        if codeKey != codeFontKey {
+            codeFontKey = codeKey
+            let font = ReadingFonts.nsFont(model.effectiveCodeFontID, size: model.codeFontSize, role: .code)
+            codeLine = ceil(font.ascender - font.descender + font.leading)
+        }
+    }
+
+    /// nil means lay the row out exactly.
+    func estimate(_ row: ComparisonRow, width: CGFloat, font: CGFloat) -> CGFloat? {
+        if window.isEmpty || window.contains(row.id) || placedEstimates.contains(row.id) { return nil }
+        let measured = measuredRows[row.id]
+        if measured == nil, !holdsReader() { return nil }
+        let key = contentKey(row)
+        if let measured, measured.key == key, abs(measured.width - width) < 0.5, measured.font == font {
+            // Back at its measured geometry the row's exact height is known again.
+            estimatedRows[row.id] = nil
+            return measured.height
+        }
+        let value = modelEstimate(row, key: key, width: width, font: font)
+        estimatedRows[row.id] = value
+        return value
+    }
+
+    func measured(_ row: ComparisonRow, width: CGFloat, font: CGFloat, height: CGFloat) {
+        let key = contentKey(row)
+        refreshFonts()
+        let model = modelHeight(prepare(row, key: key), width: width, font: font)
+        let kind = kind(of: row)
+        let fit = calibration[kind] ?? (0, 0)
+        calibration[kind] = (fit.exact + height, fit.model + model)
+        if let estimate = estimatedRows.removeValue(forKey: row.id) {
+            let previous = measuredRows[row.id]
+            // Baselines are only comparable for a row whose content has not changed since it was measured.
+            let comparable = previous.flatMap { $0.key == key ? $0 : nil }
+            flips.append(
+                Flip(
+                    exact: height, model: estimate, lastSize: comparable?.height,
+                    proportional: comparable.map { proportionalEstimate($0, width: width, font: font) }))
+            let above =
+                !holdsReader() && firstVisibleIndex.map { first in index(row.id).map { $0 < first } ?? false } ?? false
+            if above { replacedAbove += 1 }
+        }
+        placedEstimates.remove(row.id)
+        measuredRows[row.id] = Measured(key: key, width: width, font: font, height: height, model: model)
+    }
+
+    /// A row SwiftUI placed with an estimate is about to be drawn; measure it next update.
+    func placed(_ row: ComparisonRow) {
+        guard estimatedRows[row.id] != nil, !placedEstimates.contains(row.id) else { return }
+        placedEstimates.insert(row.id)
+        Task { @MainActor in row.sizingEpoch += 1 }
+    }
+
+    private func contentKey(_ row: ComparisonRow) -> Int {
+        var hasher = Hasher()
+        hasher.combine(row.revision)
+        hasher.combine(text(of: row)?.utf8.count ?? -1)
+        return hasher.finalize()
+    }
+
+    // MARK: Model
+
+    private func modelEstimate(_ row: ComparisonRow, key: Int, width: CGFloat, font: CGFloat) -> CGFloat {
+        refreshFonts()
+        let model = modelHeight(prepare(row, key: key), width: width, font: font)
+        // A row whose content changed since its measurement (a streaming tail) has no comparable size.
+        guard let measured = measuredRows[row.id], measured.key == key, measured.model > 0 else {
+            let fit = calibration[kind(of: row)]
+            let ratio = fit.map { $0.model > 0 ? $0.exact / $0.model : 1 } ?? 1
+            return model * ratio
+        }
+        return measured.height * model / measured.model
+    }
+
+    /// Rows of one kind share chrome and markdown structure, so they share a calibration ratio.
+    private func kind(of row: ComparisonRow) -> Int {
+        switch row.content {
+        case .message: 0
+        case .markdown(_, let segment, _): segment.kind == .fencedCodePiece ? 2 : 1
+        case .reasoning(let segment): segment.language != nil ? 4 : 3
+        case .label: 5
+        case .tools: 6
+        }
+    }
+
+    /// The baseline the model is judged against: text area scales with font squared over measure.
+    private func proportionalEstimate(_ measured: Measured, width: CGFloat, font: CGFloat) -> CGFloat {
+        let oldMeasure = proseWidth(measured.width, font: measured.font)
+        let newMeasure = proseWidth(width, font: font)
+        let ratio = font / max(measured.font, 1)
+        return Self.verticalPadding + (measured.height - Self.verticalPadding) * ratio * ratio * oldMeasure
+            / max(newMeasure, 1)
+    }
+
+    static let verticalPadding: CGFloat = 12
+    static let horizontalPadding: CGFloat = 32
+
+    private func proseWidth(_ width: CGFloat, font: CGFloat) -> CGFloat {
+        let measure = ReadingMeasure.prose(fontID: family, size: font)
+        return max(1, min(width - Self.horizontalPadding, measure))
+    }
+
+    private var lineHeights: [CGFloat: CGFloat] = [:]
+    private func lineHeight(_ size: CGFloat) -> CGFloat {
+        if let cached = lineHeights[size] { return cached }
+        let font = ReadingFonts.nsFont(family, size: size, role: .chat)
+        // Natural line height plus the paragraph style's 0.15 em line spacing.
+        let height = ceil(font.ascender - font.descender + font.leading) + 0.15 * size
+        lineHeights[size] = height
+        return height
+    }
+
+    func modelHeight(_ prepared: Prepared, width: CGFloat, font: CGFloat) -> CGFloat {
+        let measure = proseWidth(width, font: font)
+        let code = codeLine
+        // Rows without text (tool groups) still grow with the font.
+        guard !prepared.paragraphs.isEmpty else { return Self.verticalPadding + 6 * lineHeight(font) }
+        var height = Self.verticalPadding
+        var previousCode = false
+        for paragraph in prepared.paragraphs {
+            switch paragraph.kind {
+            case .code:
+                height += code
+                previousCode = true
+            case .prose:
+                if previousCode { height += font }
+                previousCode = false
+                let size = font * paragraph.scale
+                let available = max(size * 4, measure - paragraph.indent)
+                let lines = Self.wrappedLines(
+                    extent: paragraph.em * size, words: paragraph.words, width: available)
+                // Paragraph blocks carry a 1 em bottom margin.
+                height += CGFloat(lines) * lineHeight(size) + font
+            }
+        }
+        if previousCode { height += font }
+        return height
+    }
+
+    /// Greedy word wrap leaves, on average, half a word's advance unused at the end of each line.
+    static func wrappedLines(extent: CGFloat, words: Int, width: CGFloat) -> Int {
+        guard extent > width else { return 1 }
+        let word = extent / CGFloat(max(words, 1))
+        let usable = max(width * 0.5, width - min(word, width * 0.5) / 2)
+        return Int((extent / usable).rounded(.up))
+    }
+
+    // MARK: Prepare
+
+    private func text(of row: ComparisonRow) -> String? {
+        switch row.content {
+        case .message(let message): message.text
+        case .markdown(_, let segment, _): segment.body
+        case .reasoning(let segment): segment.text
+        case .label(let label): label
+        case .tools: nil
+        }
+    }
+
+    private func prepare(_ row: ComparisonRow, key: Int) -> Prepared {
+        if let prepared = preparedRows[row.id], prepared.key == key { return prepared }
+        var allCode = false
+        switch row.content {
+        case .markdown(_, let segment, _): allCode = segment.kind == .fencedCodePiece
+        case .reasoning(let segment): allCode = segment.language != nil
+        default: break
+        }
+        let prepared = Prepared(key: key, paragraphs: paragraphs(text(of: row) ?? "", allCode: allCode))
+        preparedRows[row.id] = prepared
+        return prepared
+    }
+
+    /// Advances at 1 pt for ASCII in the chat font; other scripts use an em fraction.
+    private func advances() -> [CGFloat] {
+        refreshFonts()
+        if let table = advanceTables[family] { return table }
+        let font = ReadingFonts.nsFont(family, size: 100, role: .chat) as CTFont
+        var characters = (0..<128).map { UniChar($0) }
+        var glyphs = [CGGlyph](repeating: 0, count: 128)
+        CTFontGetGlyphsForCharacters(font, &characters, &glyphs, 128)
+        var sizes = [CGSize](repeating: .zero, count: 128)
+        CTFontGetAdvancesForGlyphs(font, .horizontal, glyphs, &sizes, 128)
+        let table = sizes.map { $0.width / 100 }
+        advanceTables[family] = table
+        return table
+    }
+
+    private func paragraphs(_ source: String, allCode: Bool) -> [Paragraph] {
+        let table = advances()
+        var result: [Paragraph] = []
+        var current: Paragraph?
+        var inFence = false
+        func close() {
+            if let paragraph = current { result.append(paragraph) }
+            current = nil
+        }
+        for line in source.split(separator: "\n", omittingEmptySubsequences: false) {
+            let trimmed = line.drop { $0 == " " || $0 == "\t" }
+            if allCode || inFence {
+                if !allCode, trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
+                    inFence = false
+                    close()
+                    continue
+                }
+                result.append(Paragraph(kind: .code, em: 0, words: 1, scale: 1, indent: 0))
+                continue
+            }
+            if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
+                close()
+                inFence = true
+                continue
+            }
+            if trimmed.isEmpty {
+                close()
+                continue
+            }
+            if trimmed.hasPrefix("|") {
+                close()
+                result.append(Paragraph(kind: .code, em: 0, words: 1, scale: 1, indent: 0))
+                continue
+            }
+            var body = trimmed
+            var scale: CGFloat = 1
+            var indent: CGFloat = 0
+            var starts = false
+            if let hashes = Optional(body.prefix { $0 == "#" }.count), hashes > 0, hashes <= 6,
+                body.dropFirst(hashes).first == " "
+            {
+                scale = [1.6, 1.35, 1.15, 1, 1, 1][hashes - 1]
+                body = body.dropFirst(hashes + 1)
+                starts = true
+            } else if body.hasPrefix("- ") || body.hasPrefix("* ") || body.hasPrefix("+ ") {
+                body = body.dropFirst(2)
+                indent = 24 + CGFloat(line.count - trimmed.count) * 4
+                starts = true
+            } else if let digits = Optional(body.prefix { $0.isNumber }.count), digits > 0,
+                body.dropFirst(digits).hasPrefix(". ")
+            {
+                body = body.dropFirst(digits + 2)
+                indent = 28
+                starts = true
+            } else if body.hasPrefix(">") {
+                body = body.dropFirst().drop { $0 == " " }
+                indent = 24
+                starts = current?.indent != 24
+            }
+            if starts || current == nil {
+                close()
+                current = Paragraph(kind: .prose, em: 0, words: 0, scale: scale, indent: indent)
+            } else {
+                // A soft break joins the paragraph with a space.
+                current?.em += table[32]
+                current?.words += 1
+            }
+            let (em, words) = Self.extent(of: body, table: table)
+            current?.em += em
+            current?.words += words
+            if scale != 1 { close() }
+        }
+        close()
+        return result
+    }
+
+    /// Unwrapped advance of rendered text, skipping emphasis, code spans and link destinations.
+    private static func extent(of text: Substring, table: [CGFloat]) -> (CGFloat, Int) {
+        var em: CGFloat = 0
+        var words = 1
+        var skippingDestination = false
+        var previous: UInt8 = 0
+        for scalar in text.unicodeScalars {
+            let value = scalar.value
+            if skippingDestination {
+                if value == 41 { skippingDestination = false }
+                continue
+            }
+            if value < 128 {
+                let byte = UInt8(value)
+                switch byte {
+                case 42, 96, 91: break  // * ` [
+                case 93: break  // ]
+                case 40 where previous == 93: skippingDestination = true  // ](
+                case 32:
+                    em += table[32]
+                    if previous != 32 { words += 1 }
+                default: em += table[Int(byte)]
+                }
+                previous = byte
+            } else {
+                // Wide East Asian scripts advance a full em; other scripts about Latin's average.
+                em += (0x2E80...0xFFEF).contains(value) || value >= 0x1F000 ? 1 : 0.55
+                if value >= 0x2E80 { words += 1 }
+                previous = 0
+            }
+        }
+        return (em, words)
+    }
+}
+
+/// Observes the one row's sizing epoch, so only a row that replaces an estimate is invalidated.
+struct ComparisonSizedRow: View {
+    let row: ComparisonRow
+    let fixture: TranscriptComparisonFixture
+    @Environment(AppModel.self) private var model
+
+    nonisolated(unsafe) static var bodies = 0
+
+    var body: some View {
+        let _ = Self.bodies += 1
+        ComparisonRowMeasure(row: row, sizing: fixture.sizing, epoch: row.sizingEpoch, font: model.chatFontSize) {
+            ComparisonRowView(row: row, fixture: fixture, recordsAppearance: false)
+        }
     }
 }

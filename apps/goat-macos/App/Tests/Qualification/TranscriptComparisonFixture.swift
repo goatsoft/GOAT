@@ -19,6 +19,8 @@ import SwiftUI
     let id: String
     var content: Content
     var revision = 0
+    /// Bumped when the row must replace an estimated height with an exact layout.
+    var sizingEpoch = 0
     init(_ id: String, _ content: Content) {
         self.id = id
         self.content = content
@@ -59,6 +61,8 @@ import SwiftUI
 
     func observeSwiftUIReader() {
         observesReader = true
+        sizing.index = { [weak self] in self?.rowIndices[$0] }
+        sizing.holdsReader = { [weak self] in self?.reflowPending ?? false }
         guard readerObserver == nil,
             let marker = frameViews.values.compactMap(\.view).first(where: { $0.window != nil })
         else { return }
@@ -151,6 +155,7 @@ import SwiftUI
     @ObservationIgnored var captureRequests = 0
     /// A font or width change whose restore task has not finished; its old geometry key stays.
     @ObservationIgnored var reflowPending = false
+    @ObservationIgnored let sizing = ComparisonRowSizing()
     /// The reader's row while a font or width reflow is laid out, held by identity; nil otherwise.
     var reflowAnchorID: String?
     @ObservationIgnored private var resizeObserver: NSObjectProtocol?
@@ -308,6 +313,9 @@ import SwiftUI
             }
         }
         setPreparationOverscan(requested.subtracting(visible))
+        for id in sizing.updateWindow(requested, firstVisible: first) {
+            if let index = rowIndices[id] { rows[index].sizingEpoch += 1 }
+        }
         schedulePreparation()
     }
 
@@ -688,7 +696,10 @@ struct ComparisonRowView: View {
     var recordsVisibility = true
     var recordsAppearance = true
 
+    nonisolated(unsafe) static var bodies = 0
+
     var body: some View {
+        let _ = Self.bodies += 1
         content
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 16)
