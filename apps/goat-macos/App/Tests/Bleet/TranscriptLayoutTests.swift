@@ -781,18 +781,24 @@ extension AppTests.Bleet {
             let bottom = before.pixelsHigh - Int(70 * scale)
             var changed = 0
             var region = (minX: Int.max, maxX: Int.min, minY: Int.max, maxY: Int.min)
+            var bands: [ClosedRange<Int>] = []
             for y in stride(from: top, to: bottom, by: 2) {
                 for x in stride(from: 0, to: min(before.pixelsWide, after.pixelsWide), by: 2)
                 where before.colorAt(x: x, y: y) != after.colorAt(x: x, y: y) {
                     changed += 1
                     region = (min(region.minX, x), max(region.maxX, x), min(region.minY, y), max(region.maxY, y))
+                    if bands.last.map({ y - $0.upperBound > 4 }) ?? true {
+                        bands.append(y...y)
+                    } else if let last = bands.last {
+                        bands[bands.count - 1] = last.lowerBound...y
+                    }
                 }
             }
             #expect(
                 changed == 0,
                 """
                 The reader's view moved while paging earlier: \(changed) pixels in x \(region.minX)...\(region.maxX) \
-                y \(region.minY)...\(region.maxY) of \(before.pixelsWide)x\(before.pixelsHigh); \
+                y \(region.minY)...\(region.maxY) of \(before.pixelsWide)x\(before.pixelsHigh), bands \(bands); \
                 \(viewport.diagnostics.suffix(16))
                 """)
         }
