@@ -1173,6 +1173,7 @@ struct ChatTranscriptView: View {
             reader.attemptGeneration = request.generation
             reader.attempts = 0
             reader.frameWaitStarted = nil
+            reader.revealsTried.removeAll()
         }
         let delay =
             request.target == .bottom && session.isStreaming
@@ -1333,6 +1334,19 @@ struct ChatTranscriptView: View {
                 ? max(metrics.offset - metrics.topGap, metrics.offset - step)
                 : min(metrics.offset + metrics.bottomGap, metrics.offset + step)
         }
+        // Estimates that return to a place already tried are not converging: the rows laid out do not
+        // place the target (a window rebased under the reveal renumbers them). SwiftUI knows where the
+        // row is in what it renders; its scroll lands on a later update, and the executor then places
+        // the target exactly.
+        if reader.revealsTried.contains(where: { abs($0 - y) < 1 }), let proxy = reader.proxy {
+            viewport.note("reveal row \(target) through SwiftUI after \(reader.revealsTried.count) estimates")
+            reader.expectsProxyLanding = true
+            proxy.scrollTo(rowID(containing: message.id) ?? message.id, anchor: .top)
+            viewport.recordScrollCommand()
+            verifyAfterScroll()
+            return
+        }
+        reader.revealsTried.append(y)
         viewport.note(
             "reveal row \(target) near \(nearest.0) at \(Int(y)) from \(Int(metrics.offset)) gap "
                 + "\(Int(metrics.topGap))/\(Int(metrics.bottomGap)) laid out "
@@ -1859,6 +1873,8 @@ nonisolated func transcriptContentFrame(_ proxy: GeometryProxy) -> CGRect? {
     var proxy: ScrollViewProxy?
     var expectsProxyLanding = false
     var lastRescue: ContinuousClock.Instant?
+    /// The offsets the current request's reveals moved to.
+    var revealsTried: [CGFloat] = []
     /// The reading column's width the lazy stack was last identified for.
     var relayoutColumn: CGFloat = 0
     /// The pending attempt waits, with a deadline, for its target row's first layout.
