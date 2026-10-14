@@ -202,11 +202,23 @@ struct TranscriptRevealRequest: Equatable, Sendable {
 
     /// A reader gesture, keyboard or scroller movement, or an inspection took the viewport. The
     /// reader's input always wins, so any pending scroll is cancelled.
-    func readerMoved(currentRange: Range<Int>, anchor: Anchor? = nil) {
+    func readerMoved(currentRange: Range<Int>, anchor: Anchor? = nil, replacingUnknown: Bool = false) {
         if heldRange == nil { heldRange = currentRange }
         autoFollow = false
-        if let anchor { self.anchor = anchor }
+        if let anchor {
+            self.anchor = anchor
+        } else if replacingUnknown {
+            // A direct move to rows not laid out yet: the previous anchor no longer describes the
+            // reader's position; the rows that lay out there supply the next one.
+            self.anchor = nil
+        }
         request = nil
+    }
+
+    /// The rows at a reader's position laid out after a move that had no measurable anchor.
+    func adoptAnchor(_ anchor: Anchor) {
+        guard readerOwnsViewport, self.anchor == nil, request == nil else { return }
+        self.anchor = anchor
     }
 
     func claimViewport(currentRange: Range<Int>) {
@@ -432,7 +444,6 @@ struct ChatTranscriptView: View {
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            ScrollViewReader { proxy in
             ScrollView {
                 // One centred reading column shared with the composer (#60 D3).
                 BoundedWidthLayout(maximumWidth: readingColumn) {
@@ -550,9 +561,6 @@ struct ChatTranscriptView: View {
                 .coordinateSpace(.named(transcriptContentSpace))
                 .background { TranscriptScrollAttachment(executor: reader.executor) }
             }
-            // A lazy stack lays out only rows near the viewport. A restore whose row is not laid out
-            // first brings it into the stack by identity, once per request, then corrects its offset.
-            .onAppear { reader.revealRow = { id in proxy.scrollTo(id, anchor: .top) } }
             // A restoring transcript appears at the reader's anchor, not where it starts.
             .opacity(initiallyPlaced || viewport.autoFollow ? 1 : 0)
             .overlay(alignment: .bottom) {
@@ -733,9 +741,7 @@ struct ChatTranscriptView: View {
                 historyTask = nil
                 reader.executorTask?.cancel()
                 reader.executorTask = nil
-                reader.revealRow = nil
                 pagingPhase = .idle
-            }
             }
         }
     }
@@ -891,6 +897,11 @@ struct ChatTranscriptView: View {
 
     private func recordFrame(_ frame: CGRect, of id: UUID) {
         reader.rowFrames[id] = frame
+        if viewport.anchor == nil, viewport.readerOwnsViewport, !reader.isScrolling,
+            let anchor = reader.measuredAnchor()
+        {
+            viewport.adoptAnchor(anchor)
+        }
         if case .anchor(let anchor) = viewport.request?.target, anchor.messageID == id {
             // The awaited row arrived: run now rather than at the retry.
             cancelFrameWait()
@@ -935,7 +946,8 @@ struct ChatTranscriptView: View {
                     // cancels any pending scroll.
                     viewport.note("reader offset \(Int(previous.offset))->\(Int(metrics.offset))")
                     if viewport.readerOwnsViewport || !atBottom {
-                        viewport.readerMoved(currentRange: messageRange, anchor: reader.measuredAnchor())
+                        viewport.readerMoved(
+                            currentRange: messageRange, anchor: reader.measuredAnchor(), replacingUnknown: true)
                     }
                 case nil:
                     // No recorded move lands here, so it changes no ownership.
@@ -1013,7 +1025,7 @@ struct ChatTranscriptView: View {
                 // after paging it is still the previous window's, which the anchor was measured from.
                 guard let frame = reader.frame(of: anchor, heldWindow: viewport.segmentWindow(for: anchor.messageID))
                 else {
-                    revealIfUnmounted(anchor, for: request)
+                    revealIfUnmounted(anchor)
                     return awaitLayout(request, for: anchor.segment == nil ? "row" : "segment")
                 }
                 target = frame.minY + anchor.offset
@@ -1028,19 +1040,29 @@ struct ChatTranscriptView: View {
         }
     }
 
-    /// Brings an anchor's row into the lazy stack by identity when it has no frame, at most once per
-    /// request. The executor attributes the resulting move to itself, so it is not the reader's.
-    private func revealIfUnmounted(_ anchor: TranscriptViewport.Anchor, for request: TranscriptViewport.Request) {
-        guard reader.revealedGeneration != request.generation, reader.rowFrames[anchor.messageID] == nil,
-            let reveal = reader.revealRow,
+    /// The lazy stack lays out only rows near the viewport, so an anchor's row may have no frame. Moves
+    /// the viewport, with the executor's own native command, to where the row is estimated to be from the
+    /// rows that are laid out; the row's layout there then gives the exact offset on a later attempt. A
+    /// SwiftUI scroll is not used: it lands after the request returns and can override a reader's move.
+    private func revealIfUnmounted(_ anchor: TranscriptViewport.Anchor) {
+        guard
             let message = session.messages.first(where: {
                 TranscriptSegmentOwner.key(anchor.messageID, belongsTo: $0.id)
-            })
+            }), reader.rowFrames[message.id] == nil
         else { return }
-        reader.revealedGeneration = request.generation
-        viewport.note("reveal \(request.generation)")
-        reader.executor.expectCommand()
-        reveal(message.id)
+        let order = TranscriptActivity.rows(session.messages[messageRange]).map(\.id)
+        guard let target = order.firstIndex(of: message.id) else { return }
+        let laidOut = order.enumerated().compactMap { index, id in reader.rowFrames[id].map { (index, $0) } }
+        guard let nearest = laidOut.min(by: { abs($0.0 - target) < abs($1.0 - target) }) else { return }
+        let averageHeight = laidOut.map(\.1.height).reduce(0, +) / CGFloat(max(laidOut.count, 1))
+        let estimate =
+            target < nearest.0
+            ? nearest.1.minY - CGFloat(nearest.0 - target) * averageHeight
+            : nearest.1.maxY + CGFloat(target - nearest.0 - 1) * averageHeight
+        let metrics = reader.metrics
+        let y = min(max(estimate + anchor.offset, metrics.offset - metrics.topGap), metrics.offset + metrics.bottomGap)
+        viewport.note("reveal row \(target) near \(nearest.0) at \(Int(y))")
+        reader.executor.scroll(toY: y)
         viewport.recordScrollCommand()
     }
 
@@ -1150,9 +1172,6 @@ struct TranscriptScrollMetrics: Equatable {
     private weak var scrollView: NSScrollView?
     private var observer: NSObjectProtocol?
     private var commanding = false
-    /// A SwiftUI scroll the executor requested lands after the request returns; until then its moves
-    /// are the executor's.
-    private var expectingCommandUntil: ContinuousClock.Instant?
     private var previousOrigin: NSPoint?
     /// The last recorded bounds change: where the clip view's top edge moved, and why.
     private(set) var lastMove: (offset: CGFloat, cause: Cause)?
@@ -1189,11 +1208,6 @@ struct TranscriptScrollMetrics: Equatable {
         scrollView.reflectScrolledClipView(clip)
     }
 
-    /// The next moves, for a short interval, come from a scroll the executor requested through SwiftUI.
-    func expectCommand(for interval: Duration = .milliseconds(250)) {
-        expectingCommandUntil = ContinuousClock.now + interval
-    }
-
     /// Why the viewport's top edge is at `offset`, if a recorded move put it there.
     func cause(ofOffset offset: CGFloat) -> Cause? {
         guard let lastMove, abs(lastMove.offset - offset) <= 0.5 else { return nil }
@@ -1205,8 +1219,7 @@ struct TranscriptScrollMetrics: Equatable {
         let origin = clip.bounds.origin
         defer { previousOrigin = origin }
         let cause: Cause
-        if let until = expectingCommandUntil, ContinuousClock.now >= until { expectingCommandUntil = nil }
-        if commanding || expectingCommandUntil != nil {
+        if commanding {
             cause = .executor
         } else if let previousOrigin, abs(previousOrigin.y - origin.y) > 0.5,
             abs(clip.constrainBoundsRect(NSRect(origin: previousOrigin, size: clip.bounds.size)).minY - origin.y) <= 0.5
@@ -1275,10 +1288,6 @@ let transcriptContentSpace = "transcript-content"
     /// The transcript's only scroll writer.
     let executor = TranscriptScrollExecutor()
     var executorTask: Task<Void, Never>?
-    /// Brings a row into the lazy stack by identity; set while the transcript is shown.
-    var revealRow: (@MainActor (UUID) -> Void)?
-    /// The request that last revealed its row, so each request reveals at most once.
-    var revealedGeneration: UInt64?
     /// The pending attempt waits, with a deadline, for its target row's first layout.
     var awaitingFrame = false
     var attemptGeneration: UInt64 = 0
@@ -1308,8 +1317,12 @@ let transcriptContentSpace = "transcript-content"
     /// In a windowed long reply or expanded reasoning, the topmost segment still visible.
     func measuredAnchor() -> TranscriptViewport.Anchor? {
         let top = metrics.offset
+        // A lazy stack keeps rows it laid out elsewhere until they disappear: only a row on screen
+        // locates the reader.
+        let bottom = top + metrics.layout.container.height
         guard
-            let row = rowFrames.filter({ $0.value.maxY > top }).min(by: { $0.value.minY < $1.value.minY })
+            let row = rowFrames.filter({ $0.value.maxY > top && $0.value.minY < bottom })
+                .min(by: { $0.value.minY < $1.value.minY })
         else { return nil }
         var topmost: (key: UUID, segment: Int, frame: CGRect)?
         for key in [row.key, TranscriptSegmentOwner.reasoning(of: row.key)] {
