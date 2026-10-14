@@ -157,6 +157,11 @@ extension AppTests.Bleet {
                             }
                         }
                         print("REFLOW_RECOVERY \(context) after \(recovered.map { "\($0)" } ?? "none in 2 s")")
+                        if recovered == nil, let directory = ProcessInfo.processInfo.environment["GOAT_TEST_SNAPSHOT_DIR"] {
+                            try? bitmap.representation(using: .png, properties: [:])?.write(
+                                to: URL(fileURLWithPath: directory).appendingPathComponent(
+                                    "reflow-\(Int(width))-\(Int(font))-\(delta).png"))
+                        }
                     }
                     #expect(ink > 100, "Viewport must contain visible text after \(context); \(state)")
 
