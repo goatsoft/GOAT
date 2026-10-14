@@ -145,6 +145,21 @@ struct BoundedWidthLayout: Layout {
     }
 }
 
+/// Takes the size it is offered and never asks its content for an ideal one, standing in for a flexible
+/// scroll view whose ideal size would otherwise be its laid-out content. An unspecified dimension takes
+/// `minimum`.
+struct ProposalSizedLayout: Layout {
+    var minimum = CGSize(width: 320, height: 240)
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        proposal.replacingUnspecifiedDimensions(by: minimum)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(bounds.size))
+    }
+}
+
 /// Fills the offered width and places its content at the trailing edge, offering it at most a
 /// fraction of that width (#60 D3: user bubbles).
 struct FractionalWidthLayout: Layout {
