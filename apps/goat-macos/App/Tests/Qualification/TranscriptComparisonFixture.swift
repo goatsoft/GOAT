@@ -45,12 +45,15 @@ import SwiftUI
     @ObservationIgnored private weak var readerClip: NSClipView?
     @ObservationIgnored fileprivate var observesReader = false
     @ObservationIgnored private var readerWidth: CGFloat = 0
+    /// The reader's layout width is the scroll view's, not the clip's: a legacy scroller appearing
+    /// narrows the clip without a reflow, which must not invalidate the captured anchor.
+    private var readerLayoutWidth: CGFloat? { (readerClip?.superview as? NSScrollView)?.frame.width }
     @ObservationIgnored private var readerFont: CGFloat = 0
     @ObservationIgnored private var initialPlacementPending = true
     @ObservationIgnored var capturedReader: (id: String, offset: CGFloat)?
 
     func recordReaderGeometry(width: CGFloat, font: CGFloat) {
-        readerWidth = readerClip?.bounds.width ?? width
+        readerWidth = readerLayoutWidth ?? width
         readerFont = font
     }
 
@@ -71,7 +74,7 @@ import SwiftUI
                 self.scrollReaderToLatest()
             }
         }
-        readerWidth = scroll.contentView.bounds.width
+        readerWidth = scroll.frame.width
         readerFont = AppModel.shared.chatFontSize
         scroll.contentView.postsBoundsChangedNotifications = true
         readerObserver = NotificationCenter.default.addObserver(
@@ -90,7 +93,7 @@ import SwiftUI
     /// Why no reader anchor is held, for supported-OS qualification logs.
     var captureDiagnostics: String {
         let mounted = frameViews.values.compactMap(\.view).filter { $0.window != nil }.count
-        let width = readerClip.map { "\($0.bounds.width)/\(readerWidth)" } ?? "no_clip"
+        let width = readerLayoutWidth.map { "\($0)/\(readerWidth)" } ?? "no_clip"
         return
             "clip_width=\(width) font=\(AppModel.shared.chatFontSize)/\(readerFont) mounted_markers=\(mounted) capture=\(captureHits)/\(captureAttempts)/\(captureRequests) bounds_notifications=\(boundsNotifications) following=\(following)"
     }
@@ -100,7 +103,7 @@ import SwiftUI
     /// therefore retries for a few frames instead of leaving the reader without an anchor.
     func refreshReaderCapture(retries: Int = 0) {
         captureRequests += 1
-        guard !following, let clip = readerClip, abs(clip.bounds.width - readerWidth) <= 1,
+        guard !following, let width = readerLayoutWidth, abs(width - readerWidth) <= 1,
             AppModel.shared.chatFontSize == readerFont
         else { return }
         captureAttempts += 1
