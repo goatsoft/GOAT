@@ -553,7 +553,7 @@ struct ChatTranscriptView: View {
                                 // Row frames in content coordinates locate anchors; they are raw measurements,
                                 // kept out of observable state.
                                 .modifier(
-                                    TranscriptFrameReport { instance, frame in
+                                    TranscriptFrameReport(label: "row \(row.id.uuidString.prefix(4))") { instance, frame in
                                         recordFrame(frame, of: row.id, instance: instance)
                                     })
                                 .id(row.id)
@@ -1579,6 +1579,8 @@ let transcriptContentSpace = "transcript-content"
 /// change only when the value changes, so an instance that returns where it was reports nothing.
 struct TranscriptFrameReport: ViewModifier {
     var isEnabled = true
+    /// Names the view in traces.
+    var label = ""
     let report: @MainActor (_ instance: UUID, _ frame: CGRect?) -> Void
     /// A reference, so recording a measurement never invalidates the view.
     @State private var measurement = Measurement()
@@ -1591,20 +1593,33 @@ struct TranscriptFrameReport: ViewModifier {
     func body(content: Content) -> some View {
         content
             .onGeometryChange(for: CGRect?.self, of: { isEnabled ? transcriptContentFrame($0) : nil }) { frame in
-                guard let frame else { return }
+                guard let frame else {
+                    if isEnabled, TranscriptViewport.traces { print("TRANSCRIPT_TRACE \(label) measured outside") }
+                    return
+                }
                 measurement.frame = frame
                 report(measurement.instance, frame)
             }
             .onAppear {
+                if isEnabled, TranscriptViewport.traces {
+                    print("TRANSCRIPT_TRACE \(label) appeared with \(measurement.frame.map { "\(Int($0.minY))" } ?? "-")")
+                }
                 if isEnabled, let frame = measurement.frame { report(measurement.instance, frame) }
             }
-            .onDisappear { if isEnabled { report(measurement.instance, nil) } }
+            .onDisappear {
+                if isEnabled, TranscriptViewport.traces { print("TRANSCRIPT_TRACE \(label) disappeared") }
+                if isEnabled { report(measurement.instance, nil) }
+            }
     }
 }
 
-/// A view's frame in the transcript's content coordinates.
+/// A view's frame in the transcript's content coordinates, or nil when the layout measuring it does not
+/// place it in the transcript's content: a lazy stack also sizes rows in passes detached from the
+/// scroll content, where a named space falls back to other coordinates and the frame is meaningless
+/// (a long reply's segment reported 855 pt below where it was).
 nonisolated func transcriptContentFrame(_ proxy: GeometryProxy) -> CGRect? {
-    proxy.frame(in: .named(transcriptContentSpace))
+    guard proxy.bounds(of: .named(transcriptContentSpace)) != nil else { return nil }
+    return proxy.frame(in: .named(transcriptContentSpace))
 }
 
 /// Raw scroll measurements and executor bookkeeping. Deliberately not observable view state.
