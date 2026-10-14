@@ -471,9 +471,10 @@ struct ChatTranscriptView: View {
                 BoundedWidthLayout(maximumWidth: readingColumn) {
                     // Lazy: only rows near the viewport are laid out. A plain stack re-measured every row,
                     // including the scroll view's ideal-size pass, on each streamed update (#85, ADR-0099).
-                    // Loaders, progress and the trailing space sit outside the lazy stack, so the row the lazy
-                    // stack keeps in place when rows arrive above it is the reader's row, never a loader.
-                    VStack(alignment: .leading, spacing: 0) {
+                    // Everything sits in the one lazy stack: a plain stack around it measured it in full
+                    // again (Delivery 3 reasoning on macOS 26: 19 s became 78 s). Paging restores the kept
+                    // row explicitly, so a loader the stack anchors to never moves what the reader sees.
+                    LazyVStack(alignment: .leading, spacing: 0) {
                         if session.isPagingHistory { ProgressView().controlSize(.small) }
                         if let error = session.historyPageError {
                             Text(error).font(.caption).foregroundStyle(Caprine.Semantic.warning)
@@ -512,7 +513,6 @@ struct ChatTranscriptView: View {
                             return TranscriptActivity.summary([activeAssistant], activeAssistantID: activeAssistant.id)
                                 .current?.id
                         }()
-                        LazyVStack(alignment: .leading, spacing: 0) {
                             ForEach(rows) { row in
                                 // Each message retains its identity and ancestry as tool events arrive.
                                 // Keep projection inside the existing bounded, fully measured window.
@@ -562,8 +562,6 @@ struct ChatTranscriptView: View {
                                 .onDisappear { reader.rowDisappeared(row.id) }
                                 .id(row.id)
                             }
-                        }
-                        .scrollTargetLayout()
                         if messageRange.upperBound < session.messages.count || session.historyHasLater {
                             Button("Later messages", systemImage: "arrow.down") { loadLaterMessages() }
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -588,6 +586,7 @@ struct ChatTranscriptView: View {
                         Color.clear
                             .frame(height: Caprine.Activity.doubleLineHeight + 1)
                     }
+                    .scrollTargetLayout()
                 }
                 .padding(.horizontal, 24)
                 .padding(.top, 16)
