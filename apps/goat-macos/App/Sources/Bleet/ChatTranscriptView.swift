@@ -1301,6 +1301,8 @@ struct ChatTranscriptView: View {
             return
         }
         if reader.frameWaitStarted == nil { reader.frameWaitStarted = now }
+        // No row is laid out at all: the content was not laid out for where the viewport is.
+        if reader.rowFrames.isEmpty { reader.executor.layoutContent() }
         reader.attempts += 1
         viewport.note(
             "awaiting \(missing) \(request.generation)"
@@ -1470,6 +1472,14 @@ struct TranscriptScrollMetrics: Equatable {
         defer { commanding = false }
         clip.scroll(to: NSPoint(x: clip.bounds.minX, y: y))
         scrollView.reflectScrolledClipView(clip)
+    }
+
+    /// Lays out the scroll view's content now. After the clip view is clamped into a document that
+    /// shrank, nothing else asks the lazy stack for the rows the viewport now shows.
+    func layoutContent() {
+        guard let scrollView else { return }
+        scrollView.documentView?.needsLayout = true
+        scrollView.layoutSubtreeIfNeeded()
     }
 
     /// Where the viewport is now, read from the scroll view itself: the top edge's offset, how far it
