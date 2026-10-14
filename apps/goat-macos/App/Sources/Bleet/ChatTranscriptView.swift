@@ -531,7 +531,8 @@ struct ChatTranscriptView: View {
                             // Row frames in content coordinates locate anchors; they are raw measurements,
                             // kept out of observable state.
                             .onGeometryChange(for: CGRect.self, of: Self.contentFrame) { recordFrame($0, of: row.id) }
-                            .onDisappear { reader.rowFrames[row.id] = nil }
+                            .onAppear { reader.rowAppeared(row.id) }
+                            .onDisappear { reader.rowDisappeared(row.id) }
                             .id(row.id)
                         }
                         }
@@ -904,6 +905,7 @@ struct ChatTranscriptView: View {
     }
 
     private func recordFrame(_ frame: CGRect, of id: UUID) {
+        reader.reportedFrames[id] = frame
         reader.rowFrames[id] = frame
         if viewport.anchor == nil, viewport.readerOwnsViewport, !reader.isScrolling,
             let anchor = reader.measuredAnchor()
@@ -1314,8 +1316,29 @@ let transcriptContentSpace = "transcript-content"
     var isAtBottom = true
     var isScrolling = false
     var metrics = TranscriptScrollMetrics()
-    /// Row frames in content coordinates, keyed by message identity.
+    /// Row frames in content coordinates, keyed by message identity, for rows laid out now.
     var rowFrames: [UUID: CGRect] = [:]
+    /// The last frame each row reported, and how many instances of it are mounted. A lazy stack can
+    /// mount a row's new instance, which reports its frame, before the old instance disappears, so only
+    /// the last disappearance clears a frame, and an appearance restores the frame last reported (the
+    /// new instance's geometry report replaces it).
+    var reportedFrames: [UUID: CGRect] = [:]
+    private var rowMounts: [UUID: Int] = [:]
+
+    func rowAppeared(_ id: UUID) {
+        rowMounts[id, default: 0] += 1
+        if rowFrames[id] == nil { rowFrames[id] = reportedFrames[id] }
+    }
+
+    func rowDisappeared(_ id: UUID) {
+        let mounted = (rowMounts[id] ?? 1) - 1
+        guard mounted <= 0 else {
+            rowMounts[id] = mounted
+            return
+        }
+        rowMounts[id] = nil
+        rowFrames[id] = nil
+    }
     /// Frames of the shown segments of windowed long replies in content coordinates, by message and
     /// segment index.
     var segmentFrames: [UUID: [Int: CGRect]] = [:]
