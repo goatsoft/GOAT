@@ -741,8 +741,9 @@ extension AppTests.Bleet {
             try #require(document.window?.upperBound == document.segments.count, "The latest segments are shown")
             let scroll = try #require(findTranscriptScroll(host))
 
-            // The reader moves up a little, short of the earlier loader.
-            scroll.contentView.scroll(to: NSPoint(x: 0, y: scroll.contentView.bounds.minY - 200))
+            // The reader moves up a little, short of the earlier loader at the top of the reply.
+            let up = min(200, scroll.contentView.bounds.minY / 3)
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: scroll.contentView.bounds.minY - up))
             scroll.reflectScrolledClipView(scroll.contentView)
             try await settle(viewport, host: host)
             let trace = { viewport.diagnostics.suffix(16) }
