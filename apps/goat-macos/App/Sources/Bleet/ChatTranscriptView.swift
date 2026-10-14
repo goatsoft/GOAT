@@ -1057,7 +1057,7 @@ struct ChatTranscriptView: View {
             !session.historyHasLater && metrics.distanceFromBottom <= Self.bottomTolerance
             && messageRange.upperBound == session.messages.count
         reader.isAtBottom = atBottom
-        if !reader.isScrolling, metrics.contentHeight > 0,
+        if !reader.isScrolling, metrics.contentHeight > metrics.layout.container.height,
             metrics.offset > metrics.contentHeight - metrics.layout.container.height + 1
         {
             // The content shrank above a viewport past its new end. The scroll view keeps its bounds
@@ -1307,22 +1307,20 @@ struct ChatTranscriptView: View {
     /// After a drastic size change while unmounted, the lazy stack can keep a row's old place and lay
     /// out nothing where the viewport is, whatever the scroll view does; even a wheel then does not move
     /// it. Only a SwiftUI scroll to a row makes it lay out again. When no laid-out row meets the
-    /// viewport, scrolls to the row the viewport should show: the last row's end while following, else
-    /// the anchor's row. The reader sees nothing then, so there is no reader position to override; the
+    /// viewport, scrolls to the anchor's row while the reader owns the viewport. The reader sees nothing then, so there is no reader position to override; the
     /// executor then places the target exactly.
     private func rescueBlankViewport() {
         reader.syncGeometry()
         let top = reader.metrics.offset
         let bottom = top + reader.metrics.layout.container.height
         guard !reader.rowFrames.values.contains(where: { $0.maxY > top && $0.minY < bottom }) else { return }
-        let rows = TranscriptActivity.rows(session.messages[messageRange])
+        // Following reaches the end through the rows' own estimate instead (`estimatedContentEnd`).
+        guard viewport.readerOwnsViewport else { return }
         let target: (id: UUID, edge: UnitPoint)?
-        if viewport.autoFollow {
-            target = rows.last.map { ($0.id, .bottom) }
-        } else if let anchor = viewport.anchor, let row = rowID(containing: anchor.messageID) {
+        if let anchor = viewport.anchor, let row = rowID(containing: anchor.messageID) {
             target = (row, .top)
         } else {
-            target = rows.first.map { ($0.id, .top) }
+            target = TranscriptActivity.rows(session.messages[messageRange]).first.map { ($0.id, .top) }
         }
         // At most once per interval: right after it the lazy stack re-estimates the content, and a
         // second rescue before that settles would chase the estimate.
