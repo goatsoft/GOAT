@@ -30,6 +30,10 @@ struct TranscriptSegmentNavigation: Equatable, Sendable {
         { _, _, _, _ in }
     /// Short windows use explicit buttons; mounting the opposite boundary must not reverse a page.
     var canAutomaticallyPage: @MainActor @Sendable () -> Bool = { true }
+    /// Whether a loader seen now can page, keeping `segment` of `messageID` in place: the reader owns
+    /// the viewport, no move is pending or being attributed, and that segment has reported where it is.
+    /// A loader seen while one of these is still settling waits for it, within a bound.
+    var readyToPage: @MainActor @Sendable (_ messageID: UUID, _ segment: Int) -> Bool = { _, _ in true }
     /// A reply's segment count changed as it streamed.
     var recordSegmentCount: @MainActor @Sendable (_ messageID: UUID, _ segmentCount: Int) -> Void = { _, _ in }
     /// The reader took the viewport while a reply showed `window` of its `segmentCount` segments,
@@ -626,6 +630,10 @@ struct ChatTranscriptView: View {
                     },
                     canAutomaticallyPage: {
                         reader.metrics.contentHeight > reader.metrics.layout.container.height + 1
+                    },
+                    readyToPage: { id, segment in
+                        pagingPhase == .idle && viewport.readerOwnsViewport && viewport.request == nil
+                            && !reader.attributingMove && reader.segmentFrames[id]?[segment] != nil
                     },
                     recordSegmentCount: { id, segmentCount in viewport.recordSegmentCount(segmentCount, of: id) },
                     hold: { id, window, segmentCount in

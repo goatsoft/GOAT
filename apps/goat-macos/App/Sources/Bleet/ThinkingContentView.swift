@@ -1077,7 +1077,7 @@ struct ThinkingSegmentsView: View {
         let isWindowed = window != nil
         VStack(alignment: .leading, spacing: 0) {
             if isWindowed, shown.lowerBound > 0 {
-                SegmentLoader(label: "Earlier reasoning") {
+                SegmentLoader(label: "Earlier reasoning", keeps: navigationKey.map { ($0, shown.lowerBound) }) {
                     page(
                         ReplyWindow.earlier(shown, count: segments.count, cost: cost), shown.lowerBound,
                         segments.count)
@@ -1098,7 +1098,7 @@ struct ThinkingSegmentsView: View {
                 .padding(.top, index == shown.lowerBound || segments[index].continuesPrevious ? 0 : 8)
             }
             if isWindowed, shown.upperBound < segments.count {
-                SegmentLoader(label: "Later reasoning") {
+                SegmentLoader(label: "Later reasoning", keeps: navigationKey.map { ($0, shown.upperBound - 1) }) {
                     page(
                         ReplyWindow.later(shown, count: segments.count, cost: cost), shown.upperBound - 1,
                         segments.count)

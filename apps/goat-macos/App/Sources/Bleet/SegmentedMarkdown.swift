@@ -974,7 +974,7 @@ struct SegmentedMarkdownView: View {
         let isWindowed = document.window != nil
         VStack(alignment: .leading, spacing: 0) {
             if isWindowed, shown.lowerBound > 0 {
-                SegmentLoader(label: "Earlier text") {
+                SegmentLoader(label: "Earlier text", keeps: messageID.map { ($0, shown.lowerBound) }) {
                     let earlier = ReplyWindow.earlier(shown, count: document.segments.count, cost: cost)
                     page(earlier, shown.lowerBound, document.segments.count)
                 }
@@ -998,7 +998,7 @@ struct SegmentedMarkdownView: View {
                 .padding(.top, index == shown.lowerBound ? 0 : gap(before: segment))
             }
             if isWindowed, shown.upperBound < document.segments.count {
-                SegmentLoader(label: "Later text") {
+                SegmentLoader(label: "Later text", keeps: messageID.map { ($0, shown.upperBound - 1) }) {
                     let later = ReplyWindow.later(shown, count: document.segments.count, cost: cost)
                     page(later, shown.upperBound - 1, document.segments.count)
                 }
@@ -1041,9 +1041,12 @@ struct SegmentedMarkdownView: View {
 /// the main actor, after the scroll that revealed it has been attributed to the reader.
 struct SegmentLoader: View {
     let label: String
+    /// The paged text's navigation key and the segment the page keeps in place, when an owner hosts it.
+    var keeps: (key: UUID, segment: Int)? = nil
     let action: () -> Void
     @Environment(\.transcriptInspection) private var inspection
     @Environment(\.transcriptSegments) private var navigation
+    @State private var isVisible = false
 
     var body: some View {
         Button {
@@ -1064,11 +1067,22 @@ struct SegmentLoader: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, Caprine.Activity.spacing)
         .onScrollVisibilityChange(threshold: 0.01) { visible in
+            isVisible = visible
             guard visible else { return }
             Task { @MainActor in
                 await Task.yield()
-                guard navigation.canAutomaticallyPage() else { return }
-                action()
+                // The move that revealed the loader may still be settling: who made it, and where the
+                // kept segment now is. Wait for it, within a bound, while the loader stays visible.
+                for _ in 0..<12 {
+                    guard isVisible, !Task.isCancelled else { return }
+                    if let keeps, !navigation.readyToPage(keeps.key, keeps.segment) {
+                        try? await Task.sleep(for: .milliseconds(50))
+                        continue
+                    }
+                    guard navigation.canAutomaticallyPage() else { return }
+                    action()
+                    return
+                }
             }
         }
     }
