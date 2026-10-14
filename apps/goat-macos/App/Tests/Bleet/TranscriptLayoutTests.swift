@@ -561,7 +561,8 @@ extension AppTests.Bleet {
             #expect(viewport.request == nil, "A stale completion changes nothing")
 
             viewport.contentChanged()
-            #expect(viewport.request?.target == .anchor(anchor), "Content changes restore the reader's anchor")
+            // The lazy stack keeps the reader's rows in place, so content changes issue nothing (ADR-0099).
+            #expect(viewport.request == nil, "Content changes never move a reader who owns the viewport")
             viewport.readerSettled(atTrueBottom: false, anchor: nil)
             #expect(viewport.readerOwnsViewport)
             viewport.readerSettled(atTrueBottom: true, anchor: nil)
