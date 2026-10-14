@@ -776,6 +776,8 @@ struct ChatTranscriptView: View {
                 reader.executorTask = nil
                 reader.attributionTask?.cancel()
                 reader.attributionTask = nil
+                reader.verificationTask?.cancel()
+                reader.verificationTask = nil
                 reader.attributingMove = false
                 pagingPhase = .idle
             }
@@ -1120,6 +1122,19 @@ struct ChatTranscriptView: View {
             reader.executor.scroll(toY: target)
             reader.attempts += 1
             viewport.recordScrollCommand()
+            verifyAfterScroll()
+        }
+    }
+
+    /// Checks the pending request again shortly after a scroll command. A command's geometry report
+    /// normally runs the check, but the scroll view does not always report a move it was told to make
+    /// (an off-screen or idle window), and the request must not wait on it.
+    private func verifyAfterScroll() {
+        reader.verificationTask?.cancel()
+        reader.verificationTask = Task { @MainActor in
+            do { try await Task.sleep(for: Self.frameRetryInterval) } catch { return }
+            reader.verificationTask = nil
+            executePendingRequest()
         }
     }
 
@@ -1176,6 +1191,7 @@ struct ChatTranscriptView: View {
                 + laidOut.map { "\($0.0)@\(Int($0.1.minY))" }.joined(separator: ","))
         reader.executor.scroll(toY: y)
         viewport.recordScrollCommand()
+        verifyAfterScroll()
     }
 
     /// The reader's anchor moved with layout. The lazy stack keeps its topmost visible row in place,
@@ -1496,6 +1512,8 @@ let transcriptContentSpace = "transcript-content"
     /// A move awaiting attribution holds the executor until the rows report their positions.
     var attributingMove = false
     var attributionTask: Task<Void, Never>?
+    /// Re-checks the pending request after a scroll command whether or not its geometry is reported.
+    var verificationTask: Task<Void, Never>?
     /// The pending attempt waits, with a deadline, for its target row's first layout.
     var awaitingFrame = false
     var attemptGeneration: UInt64 = 0
