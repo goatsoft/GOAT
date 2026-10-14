@@ -741,6 +741,9 @@ struct ChatTranscriptView: View {
                 historyTask = nil
                 reader.executorTask?.cancel()
                 reader.executorTask = nil
+                reader.attributionTask?.cancel()
+                reader.attributionTask = nil
+                reader.attributingMove = false
                 pagingPhase = .idle
             }
         }
