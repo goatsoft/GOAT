@@ -111,6 +111,8 @@ import SwiftUI
             captureRejections["no_scroll", default: 0] += 1
             return
         }
+        // Outside a font or width reflow, a new width is initial layout settling, not a reflow to restore.
+        if abs(width - readerWidth) > 1, !reflowPending { readerWidth = width }
         guard abs(width - readerWidth) <= 1 else {
             captureRejections["width_\(Int(width))_\(Int(readerWidth))", default: 0] += 1
             return
@@ -132,6 +134,8 @@ import SwiftUI
     }
     @ObservationIgnored var boundsNotifications = 0
     @ObservationIgnored var captureRequests = 0
+    /// A font or width change whose restore task has not finished; its old geometry key stays.
+    @ObservationIgnored var reflowPending = false
     @ObservationIgnored var captureRejections: [String: Int] = [:]
     @ObservationIgnored private(set) var captureAttempts = 0
     @ObservationIgnored private(set) var captureHits = 0

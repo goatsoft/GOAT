@@ -99,16 +99,21 @@ private struct ComparisonLazyList: View {
             if old == .zero {
                 fixture.recordReaderGeometry(width: new.width, font: model.chatFontSize)
             } else if old.width != new.width {
+                fixture.reflowPending = true
                 reflowRevision += 1
             }
         }
-        .onChange(of: model.chatFontSize) { reflowRevision += 1 }
+        .onChange(of: model.chatFontSize) {
+            fixture.reflowPending = true
+            reflowRevision += 1
+        }
         .task(id: reflowRevision) {
             let saved = fixture.capturedReader
             defer {
                 // A cancelled font/width transaction must not advance the successor's key.
                 if !Task.isCancelled {
                     fixture.recordReaderGeometry(width: viewportSize.width, font: model.chatFontSize)
+                    fixture.reflowPending = false
                 }
             }
             guard !fixture.following, let saved else {
@@ -165,6 +170,16 @@ private struct ComparisonLazyList: View {
         .onChange(of: fixture.latestRequest) {
             fixture.capturedReader = nil
             fixture.scrollReaderToLatest()
+        }
+        // Rows near the end replace estimates for a few frames after a jump, and a supported OS need not
+        // report each document growth through scroll geometry. Settle the jump while still following.
+        .task(id: fixture.latestRequest) {
+            for _ in 0..<30 {
+                try? await Task.sleep(for: .milliseconds(16))
+                guard !Task.isCancelled, fixture.following else { return }
+                guard let gap = fixture.readerDistanceFromEnd, gap > 0.5 else { continue }
+                fixture.scrollReaderToLatest()
+            }
         }
         .onScrollPhaseChange { _, phase, context in
             if phase == .tracking || phase == .interacting { fixture.following = false }
