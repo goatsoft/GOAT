@@ -481,7 +481,7 @@ struct ChatTranscriptView: View {
                                 guard visible else { return }
                                 Task { @MainActor in
                                     await Task.yield()
-                                    loadEarlierMessages()
+                                    pageThroughVisibleLoader()
                                 }
                             }
                         }
@@ -557,7 +557,7 @@ struct ChatTranscriptView: View {
                                     guard visible else { return }
                                     Task { @MainActor in
                                         await Task.yield()
-                                        loadLaterMessages()
+                                        pageThroughVisibleLoader()
                                     }
                                 }
                         }
@@ -672,6 +672,11 @@ struct ChatTranscriptView: View {
                     // A reader gesture that cancels a paging scroll also ends that page load.
                     if pagingPhase != .idle { pagingPhase = .idle }
                     placeInitiallyIfReady()
+                    // A loader seen while the request ran pages once the reader is where it put them.
+                    Task { @MainActor in
+                        await Task.yield()
+                        pageThroughVisibleLoader()
+                    }
                 }
                 // A replaced request does not wait out its predecessor's frame deadline.
                 cancelFrameWait()
@@ -691,7 +696,7 @@ struct ChatTranscriptView: View {
                 guard phase == .idle, session.historyPageError == nil else { return }
                 Task { @MainActor in
                     await Task.yield()
-                    if earlierLoaderVisible { loadEarlierMessages() } else if laterLoaderVisible { loadLaterMessages() }
+                    pageThroughVisibleLoader()
                 }
             }
             .onChange(of: focusRequest) {
@@ -807,6 +812,18 @@ struct ChatTranscriptView: View {
         reader.isScrolling = false
         withAnimation(model.animationsEnabled && !reduceMotion ? .easeInOut(duration: 0.2) : nil) {
             viewport.jumpToLatest()
+        }
+    }
+
+    /// Pages through a loader the reader scrolled to. A loader is also seen for a moment while a
+    /// restoration, page or jump is still moving the viewport, or before the first placement: paging
+    /// then would cancel that move, so it waits until the move ends and the loader is still visible.
+    private func pageThroughVisibleLoader() {
+        guard initiallyPlaced, viewport.request == nil, pagingPhase == .idle else { return }
+        if earlierLoaderVisible {
+            loadEarlierMessages()
+        } else if laterLoaderVisible {
+            loadLaterMessages()
         }
     }
 
@@ -1098,7 +1115,7 @@ struct ChatTranscriptView: View {
         else { return }
         let order = TranscriptActivity.rows(session.messages[messageRange]).map(\.id)
         guard let target = order.firstIndex(of: message.id) else { return }
-        let laidOut = order.enumerated().compactMap { index, id in reader.rowFrames[id].map { (index, $0) } }
+        let laidOut = Self.ordered(order.enumerated().compactMap { index, id in reader.rowFrames[id].map { (index, $0) } })
         guard let nearest = laidOut.min(by: { abs($0.0 - target) < abs($1.0 - target) }) else { return }
         let averageHeight = laidOut.map(\.1.height).reduce(0, +) / CGFloat(max(laidOut.count, 1))
         let estimate =
@@ -1113,6 +1130,27 @@ struct ChatTranscriptView: View {
                 + laidOut.map { "\($0.0)@\(Int($0.1.minY))" }.joined(separator: ","))
         reader.executor.scroll(toY: y)
         viewport.recordScrollCommand()
+    }
+
+    /// The longest run of frames whose positions agree with their order, so a frame left from an earlier
+    /// layout never steers an estimate. `frames` is sorted by row index.
+    static func ordered(_ frames: [(Int, CGRect)]) -> [(Int, CGRect)] {
+        guard frames.count > 1 else { return frames }
+        var length = Array(repeating: 1, count: frames.count)
+        var previous = Array(repeating: -1, count: frames.count)
+        for i in frames.indices {
+            for j in 0..<i where frames[j].1.minY < frames[i].1.minY && length[j] + 1 > length[i] {
+                length[i] = length[j] + 1
+                previous[i] = j
+            }
+        }
+        var index = length.indices.max(by: { length[$0] < length[$1] }) ?? 0
+        var run: [(Int, CGRect)] = []
+        while index >= 0 {
+            run.append(frames[index])
+            index = previous[index]
+        }
+        return run.reversed()
     }
 
     /// Ends the initial placement once the transcript has content and no restoration is pending.
