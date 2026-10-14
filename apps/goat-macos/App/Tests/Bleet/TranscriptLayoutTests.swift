@@ -513,7 +513,9 @@ extension AppTests.Bleet {
 /// than a device pixel, or a different row, still differs.
 private func visiblyDiffers(_ before: NSBitmapImageRep, _ after: NSBitmapImageRep, x: Int, y: Int) -> Bool {
     guard let shown = after.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { return true }
-    let tolerance: CGFloat = 32 / 255
+    // Glyph edges antialias differently by up to about 75 levels at another sub-pixel phase; text
+    // moved by two device pixels or more differs by about 200 along its stems.
+    let tolerance: CGFloat = 96 / 255
     for dy in [0, -1, 1] where (0..<before.pixelsHigh).contains(y + dy) {
         guard let earlier = before.colorAt(x: x, y: y + dy)?.usingColorSpace(.sRGB) else { continue }
         if abs(earlier.redComponent - shown.redComponent) <= tolerance
