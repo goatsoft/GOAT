@@ -137,7 +137,11 @@ struct TranscriptRevealRequest: Equatable, Sendable {
     /// The executor's recent steps, for test failure messages and debugging. Bounded.
     @ObservationIgnored private(set) var diagnostics: [String] = []
 
+    /// Prints every step when set, for debugging navigation beyond the bounded diagnostics.
+    nonisolated static let traces = ProcessInfo.processInfo.environment["GOAT_TRANSCRIPT_TRACE"] == "1"
+
     func note(_ event: String) {
+        if Self.traces { print("TRANSCRIPT_TRACE \(event)") }
         diagnostics.append(event)
         if diagnostics.count > 40 { diagnostics.removeFirst(diagnostics.count - 40) }
     }
@@ -203,6 +207,7 @@ struct TranscriptRevealRequest: Equatable, Sendable {
     /// A reader gesture, keyboard or scroller movement, or an inspection took the viewport. The
     /// reader's input always wins, so any pending scroll is cancelled.
     func readerMoved(currentRange: Range<Int>, anchor: Anchor? = nil, replacingUnknown: Bool = false) {
+        if Self.traces { note("readerMoved \(currentRange) anchor \(anchor.map { "\($0.messageID.uuidString.prefix(4))+\(Int($0.offset))" } ?? "nil")") }
         if heldRange == nil { heldRange = currentRange }
         autoFollow = false
         if let anchor {
@@ -218,6 +223,7 @@ struct TranscriptRevealRequest: Equatable, Sendable {
     /// The rows at a reader's position laid out after a move that had no measurable anchor.
     func adoptAnchor(_ anchor: Anchor) {
         guard readerOwnsViewport, self.anchor == nil, request == nil else { return }
+        if Self.traces { note("adopt \(anchor.messageID.uuidString.prefix(4))+\(Int(anchor.offset))") }
         self.anchor = anchor
     }
 
@@ -260,6 +266,7 @@ struct TranscriptRevealRequest: Equatable, Sendable {
 
     /// Makes `anchor` the reader's position and scrolls to it (paging, restoration, compaction).
     func restore(_ anchor: Anchor) {
+        if Self.traces { note("restore \(anchor.messageID.uuidString.prefix(4))+\(Int(anchor.offset)) seg \(anchor.segment.map(String.init) ?? "-")") }
         autoFollow = false
         self.anchor = anchor
         issue(.anchor(anchor))
@@ -283,7 +290,8 @@ struct TranscriptRevealRequest: Equatable, Sendable {
             return
         }
         heldRange = TranscriptWindow.range(count: count, startingAt: anchorIndex, cost: cost)
-        contentChanged()
+        // The window moved under the reader: verify their row is where it was.
+        if let anchor { restore(anchor) }
     }
 
     /// Messages were removed (compaction, deletion). The held window keeps the anchor's message
@@ -1099,7 +1107,10 @@ struct ChatTranscriptView: View {
             : nearest.1.maxY + CGFloat(target - nearest.0 - 1) * averageHeight
         let metrics = reader.metrics
         let y = min(max(estimate + anchor.offset, metrics.offset - metrics.topGap), metrics.offset + metrics.bottomGap)
-        viewport.note("reveal row \(target) near \(nearest.0) at \(Int(y))")
+        viewport.note(
+            "reveal row \(target) near \(nearest.0) at \(Int(y)) from \(Int(metrics.offset)) gap "
+                + "\(Int(metrics.topGap))/\(Int(metrics.bottomGap)) laid out "
+                + laidOut.map { "\($0.0)@\(Int($0.1.minY))" }.joined(separator: ","))
         reader.executor.scroll(toY: y)
         viewport.recordScrollCommand()
     }
