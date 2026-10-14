@@ -505,26 +505,28 @@ extension AppTests.Bleet {
     return session
 }
 
-/// Whether a pixel differs as content that moved would. The lazy stack lays a kept row out at another
-/// content offset while the reader sees it in the same place, within a fraction of a point: gradient
-/// dithering, which follows a layer's position in the content, changes by a few levels, and glyphs
-/// rasterize at another sub-pixel phase. So a pixel is unchanged when it matches the earlier image
-/// within a small tolerance at the same place or one device pixel above or below. A move of more
-/// than a device pixel, or a different row, still differs.
+/// Whether the 4x4 device-pixel block at `x`, `y` differs as content that moved would. The lazy stack
+/// lays a kept row out at another content offset while the reader sees it in the same place, within a
+/// fraction of a point: gradient dithering follows a layer's position in the content, glyphs rasterize
+/// at another sub-pixel phase, and edges round to the neighbouring device pixel. Block averages absorb
+/// the first two and a one device pixel offset the third. Content moved by a point or more differs.
 private func visiblyDiffers(_ before: NSBitmapImageRep, _ after: NSBitmapImageRep, x: Int, y: Int) -> Bool {
-    guard let shown = after.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { return true }
-    // Glyph edges antialias differently by up to about 75 levels at another sub-pixel phase; text
-    // moved by two device pixels or more differs by about 200 along its stems.
-    let tolerance: CGFloat = 96 / 255
-    for dy in [0, -1, 1] where (0..<before.pixelsHigh).contains(y + dy) {
-        guard let earlier = before.colorAt(x: x, y: y + dy)?.usingColorSpace(.sRGB) else { continue }
-        if abs(earlier.redComponent - shown.redComponent) <= tolerance
-            && abs(earlier.greenComponent - shown.greenComponent) <= tolerance
-            && abs(earlier.blueComponent - shown.blueComponent) <= tolerance
-            && abs(earlier.alphaComponent - shown.alphaComponent) <= tolerance
-        {
-            return false
+    func average(_ image: NSBitmapImageRep, _ top: Int) -> [Int] {
+        var sum = [0, 0, 0]
+        var pixel = [Int](repeating: 0, count: max(4, image.samplesPerPixel))
+        for row in top..<(top + 4) {
+            let clamped = min(max(0, row), image.pixelsHigh - 1)
+            for column in x..<min(x + 4, image.pixelsWide) {
+                image.getPixel(&pixel, atX: column, y: clamped)
+                for channel in 0..<3 { sum[channel] += pixel[channel] }
+            }
         }
+        return sum.map { $0 / 16 }
+    }
+    let earlier = average(before, y)
+    for dy in [0, -1, 1] {
+        let shown = average(after, y + dy)
+        if zip(earlier, shown).allSatisfy({ abs($0 - $1) <= 40 }) { return false }
     }
     return true
 }
@@ -806,8 +808,8 @@ extension AppTests.Bleet {
             var changed = 0
             var region = (minX: Int.max, maxX: Int.min, minY: Int.max, maxY: Int.min)
             var bands: [ClosedRange<Int>] = []
-            for y in stride(from: top, to: bottom, by: 2) {
-                for x in stride(from: 0, to: min(before.pixelsWide, after.pixelsWide), by: 2)
+            for y in stride(from: top, to: bottom - 4, by: 4) {
+                for x in stride(from: 0, to: min(before.pixelsWide, after.pixelsWide) - 4, by: 8)
                 where visiblyDiffers(before, after, x: x, y: y) {
                     changed += 1
                     region = (min(region.minX, x), max(region.maxX, x), min(region.minY, y), max(region.maxY, y))
@@ -824,9 +826,9 @@ extension AppTests.Bleet {
                         .write(to: URL(fileURLWithPath: directory).appendingPathComponent("paging-earlier-\(name).png"))
                 }
             }
-            // A few isolated glyph-edge pixels may antialias past the tolerance; a move changes thousands.
+            // Content moved by a point changes hundreds of blocks.
             #expect(
-                changed <= 64,
+                changed <= 4,
                 """
                 The reader's view moved while paging earlier: \(changed) pixels in x \(region.minX)...\(region.maxX) \
                 y \(region.minY)...\(region.maxY) of \(before.pixelsWide)x\(before.pixelsHigh), bands \(bands); \
@@ -908,16 +910,16 @@ extension AppTests.Bleet {
             let top = Int(150 * scale)
             let bottom = before.pixelsHigh - Int(70 * scale)
             var changed = 0
-            for y in stride(from: top, to: bottom, by: 2) {
-                for x in stride(from: 0, to: min(before.pixelsWide, after.pixelsWide), by: 2)
+            for y in stride(from: top, to: bottom - 4, by: 4) {
+                for x in stride(from: 0, to: min(before.pixelsWide, after.pixelsWide) - 4, by: 8)
                 where visiblyDiffers(before, after, x: x, y: y) {
                     changed += 1
                 }
             }
             let commandsWhilePaging = viewport.scrollCommands - commands
-            // A few isolated glyph-edge pixels may antialias past the tolerance; a move changes thousands.
+            // Content moved by a point changes hundreds of blocks.
             #expect(
-                changed <= 64,
+                changed <= 4,
                 "The reader's view moved while paging the reply: \(changed) pixels, \(commandsWhilePaging) commands; \(viewport.diagnostics.suffix(16))"
             )
             if changed > 0 {
@@ -1018,15 +1020,15 @@ extension AppTests.Bleet {
             let top = Int(180 * scale)
             let bottom = before.pixelsHigh - Int(70 * scale)
             var changed = 0
-            for y in stride(from: top, to: bottom, by: 2) {
-                for x in stride(from: 0, to: min(before.pixelsWide, after.pixelsWide), by: 2)
+            for y in stride(from: top, to: bottom - 4, by: 4) {
+                for x in stride(from: 0, to: min(before.pixelsWide, after.pixelsWide) - 4, by: 8)
                 where visiblyDiffers(before, after, x: x, y: y) {
                     changed += 1
                 }
             }
-            // A few isolated glyph-edge pixels may antialias past the tolerance; a move changes thousands.
+            // Content moved by a point changes hundreds of blocks.
             #expect(
-                changed <= 64,
+                changed <= 4,
                 "The reader's view moved while paging the reasoning: \(changed) pixels; \(viewport.diagnostics.suffix(16))"
             )
             if changed > 0 {
