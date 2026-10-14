@@ -219,13 +219,14 @@ struct PreparedMarkdownView<Rendered: View>: View {
         .task(id: request) {
             guard source.utf8.count <= TranscriptTextParts.maximumBytes else { return }
             let result = await MarkdownRenderCache.shared.prepare(id: id, source: source)
+            // Kept even when the row left before it finished, so its next mount renders formatted.
+            if case .parsed(let content) = result {
+                MarkdownContentCache.shared.set(id: id, source: source, content: content)
+            }
             guard !Task.isCancelled else { return }
             preparedRequest = request
             preparation = result
-            if case .parsed(let content) = result {
-                MarkdownContentCache.shared.set(id: id, source: source, content: content)
-                onPrepared()
-            }
+            if case .parsed = result { onPrepared() }
         }
     }
 }
@@ -333,12 +334,13 @@ struct StreamingMarkdownView: View {
             guard
                 let prepared = await MarkdownSegmentCache.shared.prepare(
                     id: message.id, source: request.source, revision: request.revision,
-                    isComplete: request.isComplete, window: window),
-                !Task.isCancelled
+                    isComplete: request.isComplete, window: window)
             else { return }
+            // Kept even when the row left before it finished, so its next mount renders formatted.
+            PreparedMarkdownDocumentCache.shared.store(prepared, for: message.id)
+            guard !Task.isCancelled else { return }
             document = prepared
             preparedWindow = window
-            PreparedMarkdownDocumentCache.shared.store(prepared, for: message.id)
             message.markRenderChanged()
         }
         .task(id: message.id) {

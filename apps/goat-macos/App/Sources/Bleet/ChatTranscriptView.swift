@@ -742,6 +742,12 @@ struct ChatTranscriptView: View {
                     segment: segment, segmentCount: count)
             }
             .onChange(of: session.isStreaming) { viewport.contentChanged() }
+            // Rows near the reader render formatted on their first frame when the lazy stack mounts them.
+            .task(id: TranscriptPrewarm.Key(range: messageRange, count: session.messages.count)) {
+                let range = messageRange
+                let focus = (anchorIndex ?? range.upperBound - 1) - range.lowerBound
+                await TranscriptPrewarm.prepare(Array(session.messages[range]), around: focus)
+            }
             // A newly sent turn always re-arms following and jumps to the bottom.
             .onChange(of: session.messages.count) { previousCount, count in
                 if count < previousCount, session.hasCompleteHistory, viewport.heldRange != nil {
@@ -1217,6 +1223,46 @@ struct ChatTranscriptView: View {
         reader.executorTask?.cancel()
         reader.executorTask = nil
         reader.awaitingFrame = false
+    }
+}
+
+/// Prepares the formatted text of the admitted window's settled messages off the main actor, nearest
+/// the reader first. The lazy stack mounts a row only as it nears the viewport, and a row's own
+/// preparation is cancelled if it leaves first, so without this a row coming back into view would show
+/// its placeholder for a frame and then change height (ADR-0099).
+@MainActor enum TranscriptPrewarm {
+    struct Key: Equatable {
+        let range: Range<Int>
+        let count: Int
+    }
+
+    static func prepare(_ messages: [ChatMessage], around focus: Int) async {
+        let order = messages.indices.sorted { abs($0 - focus) < abs($1 - focus) }
+        for index in order {
+            guard !Task.isCancelled else { return }
+            let message = messages[index]
+            guard message.complete, TranscriptText.hasContent(message.text) else { continue }
+            let source = message.text
+            switch message.role {
+            case .user:
+                guard source.utf8.count <= TranscriptTextParts.maximumBytes,
+                    MarkdownContentCache.shared.peek(id: message.id, source: source) == nil
+                else { continue }
+                if case .parsed(let content) = await MarkdownRenderCache.shared.prepare(id: message.id, source: source) {
+                    MarkdownContentCache.shared.set(id: message.id, source: source, content: content)
+                }
+            case .assistant where message.kind == .regular:
+                let revision = message.textRevision
+                guard revision.utf8Count <= ReplyWindow.richLimit,
+                    PreparedMarkdownDocumentCache.shared.document(for: message.id, revision: revision) == nil,
+                    let document = await MarkdownSegmentCache.shared.prepare(
+                        id: message.id, source: source, revision: revision, isComplete: true, window: .latest)
+                else { continue }
+                PreparedMarkdownDocumentCache.shared.store(document, for: message.id)
+            default:
+                continue
+            }
+        }
     }
 }
 
