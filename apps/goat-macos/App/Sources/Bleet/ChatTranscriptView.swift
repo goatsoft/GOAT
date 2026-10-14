@@ -1307,8 +1307,8 @@ struct ChatTranscriptView: View {
     /// After a drastic size change while unmounted, the lazy stack can keep a row's old place and lay
     /// out nothing where the viewport is, whatever the scroll view does; even a wheel then does not move
     /// it. Only a SwiftUI scroll to a row makes it lay out again. When no laid-out row meets the
-    /// viewport, scrolls to the anchor's row while the reader owns the viewport. The reader sees nothing then, so there is no reader position to override; the
-    /// executor then places the target exactly.
+    /// viewport, scrolls to the anchor's row while the reader owns the viewport. The reader sees nothing
+    /// then, so there is no reader position to override; the executor then places the target exactly.
     private func rescueBlankViewport() {
         reader.syncGeometry()
         let top = reader.metrics.offset
