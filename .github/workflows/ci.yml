@@ -157,8 +157,15 @@ jobs:
           status=0
           make test-app CONFIG=Release TEST_PLAN=Qualification CAS_PATH="$CAS_PATH" \
             XCODE_FLAGS='-only-testing:GOATTests/TranscriptPerformanceTests/testContainerComparison' || status=$?
-          # The candidate's streaming phases, for comparison with the shipping reader's profile below.
-          TEST_RUNNER_GOAT_COMPARE_NAVIGATION=0 make test-app CONFIG=Release TEST_PLAN=Qualification CAS_PATH="$CAS_PATH" \
+          # Navigation again without the candidate's height reuse, to separate it from the lazy stack's own anchoring.
+          TEST_RUNNER_GOAT_COMPARE_NO_REUSE=1 make test-app CONFIG=Release TEST_PLAN=Qualification CAS_PATH="$CAS_PATH" \
+            XCODE_FLAGS='-only-testing:GOATTests/TranscriptPerformanceTests/testContainerComparison' || status=$?
+          # The candidate's streaming phases, sampled in the answer phase, beside the shipping reader's profile below.
+          TEST_RUNNER_GOAT_COMPARE_NAVIGATION=0 python3 scripts/profile-transcript.py \
+            --log "$RUNNER_TEMP/transcript-candidate.log" \
+            --sample "$RUNNER_TEMP/transcript-candidate-answer.sample.txt" \
+            --marker 'COMPARISON_PHASE_START backend=\S+ phase=answer pid=(\d+)' -- \
+            make test-app CONFIG=Release TEST_PLAN=Qualification CAS_PATH="$CAS_PATH" \
             XCODE_FLAGS='-only-testing:GOATTests/TranscriptPerformanceTests/testContainerComparison' || status=$?
           python3 scripts/profile-transcript.py \
             --log "$RUNNER_TEMP/transcript-production.log" \

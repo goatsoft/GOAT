@@ -12,6 +12,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--log", required=True, type=Path)
     parser.add_argument("--sample", required=True, type=Path)
+    parser.add_argument(
+        "--marker", default=r"DELIVERY3_PROFILE_START phase=reasoning pid=(\d+)\b",
+        help="Regular expression whose first group is the PID to sample when a log line matches.")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     command = args.command
@@ -33,7 +36,7 @@ def main():
                 log.write(line)
                 log.flush()
                 print(line, end="", flush=True)
-                marker = re.search(r"DELIVERY3_PROFILE_START phase=reasoning pid=(\d+)\b", line)
+                marker = re.search(args.marker, line)
                 if marker and sampler is None and sample_error is None:
                     try:
                         sampler = subprocess.Popen(

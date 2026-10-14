@@ -207,8 +207,12 @@ struct ComparisonRowMeasure: Layout {
         return ids.filter { estimatedRows.contains($0) }
     }
 
+    /// Qualification can measure the lazy stack without this layer.
+    private let disabled = ProcessInfo.processInfo.environment["GOAT_COMPARE_NO_REUSE"] == "1"
+
     /// nil means lay the row out exactly.
     func reuse(_ row: ComparisonRow, width: CGFloat, font: CGFloat) -> CGFloat? {
+        if disabled { return nil }
         if let geometry, abs(geometry.width - width) > 0.5 || geometry.font != font { reflowing = true }
         geometry = (width, font)
         if window.isEmpty || window.contains(row.id) || placedEstimates.contains(row.id) { return nil }
