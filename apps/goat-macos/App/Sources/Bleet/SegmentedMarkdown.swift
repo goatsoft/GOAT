@@ -992,7 +992,8 @@ struct SegmentedMarkdownView: View {
                 .modifier(
                     TranscriptFrameReport(isEnabled: isWindowed && messageID != nil) { instance, frame in
                         if let messageID { navigation.recordFrame(messageID, index, frame, shown, instance) }
-                    })
+                    }
+                )
                 .padding(.top, index == shown.lowerBound ? 0 : gap(before: segment))
             }
             if isWindowed, shown.upperBound < document.segments.count {

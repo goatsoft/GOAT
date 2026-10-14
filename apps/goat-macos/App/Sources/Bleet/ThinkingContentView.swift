@@ -1092,7 +1092,8 @@ struct ThinkingSegmentsView: View {
                 .modifier(
                     TranscriptFrameReport(isEnabled: isWindowed && navigationKey != nil) { instance, frame in
                         if let navigationKey { navigation.recordFrame(navigationKey, index, frame, shown, instance) }
-                    })
+                    }
+                )
                 .padding(.top, index == shown.lowerBound || segments[index].continuesPrevious ? 0 : 8)
             }
             if isWindowed, shown.upperBound < segments.count {

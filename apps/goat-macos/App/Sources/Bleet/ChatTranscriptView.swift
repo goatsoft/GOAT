@@ -472,53 +472,56 @@ struct ChatTranscriptView: View {
         } else {
             // The proxy is the last resort for a target the lazy stack will not lay out (`awaitLayout`).
             ScrollViewReader { proxy in
-            ScrollView {
-                // One centred reading column shared with the composer (#60 D3).
-                BoundedWidthLayout(maximumWidth: readingColumn) {
-                    // Lazy: only rows near the viewport are laid out. A plain stack re-measured every row,
-                    // including the scroll view's ideal-size pass, on each streamed update (#85, ADR-0099).
-                    // Everything sits in the one lazy stack: a plain stack around it measured it in full
-                    // again (Delivery 3 reasoning on macOS 26: 19 s became 78 s). Paging restores the kept
-                    // row explicitly, so a loader the stack anchors to never moves what the reader sees.
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        if session.isPagingHistory { ProgressView().controlSize(.small) }
-                        if let error = session.historyPageError {
-                            Text(error).font(.caption).foregroundStyle(Caprine.Semantic.warning)
-                        }
-                        if messageRange.lowerBound > 0 || session.historyHasEarlier {
-                            Button("Earlier messages", systemImage: "arrow.up") {
-                                viewport.claimViewport(currentRange: messageRange)
-                                loadEarlierMessages()
+                ScrollView {
+                    // One centred reading column shared with the composer (#60 D3).
+                    BoundedWidthLayout(maximumWidth: readingColumn) {
+                        // Lazy: only rows near the viewport are laid out. A plain stack re-measured every row,
+                        // including the scroll view's ideal-size pass, on each streamed update (#85, ADR-0099).
+                        // Everything sits in the one lazy stack: a plain stack around it measured it in full
+                        // again (Delivery 3 reasoning on macOS 26: 19 s became 78 s). Paging restores the kept
+                        // row explicitly, so a loader the stack anchors to never moves what the reader sees.
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            if session.isPagingHistory { ProgressView().controlSize(.small) }
+                            if let error = session.historyPageError {
+                                Text(error).font(.caption).foregroundStyle(Caprine.Semantic.warning)
                             }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.vertical, 8)
-                            .id("earlier-messages-loader")
-                            .onScrollVisibilityChange(threshold: 0.01) { visible in
-                                // Never inside the layout pass that revealed the loader: the scroll that
-                                // revealed it is attributed first.
-                                earlierLoaderVisible = visible
-                                guard visible else { return }
-                                Task { @MainActor in
-                                    await Task.yield()
-                                    pageThroughVisibleLoader()
+                            if messageRange.lowerBound > 0 || session.historyHasEarlier {
+                                Button("Earlier messages", systemImage: "arrow.up") {
+                                    viewport.claimViewport(currentRange: messageRange)
+                                    loadEarlierMessages()
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.vertical, 8)
+                                .id("earlier-messages-loader")
+                                .onScrollVisibilityChange(threshold: 0.01) { visible in
+                                    // Never inside the layout pass that revealed the loader: the scroll that
+                                    // revealed it is attributed first.
+                                    earlierLoaderVisible = visible
+                                    guard visible else { return }
+                                    Task { @MainActor in
+                                        await Task.yield()
+                                        pageThroughVisibleLoader()
+                                    }
                                 }
                             }
-                        }
-                        let precedingDate =
-                            session.messages[..<messageRange.lowerBound].last {
-                                $0.role != .tool && !TranscriptActivity.isEmpty($0)
-                            }?.createdAt ?? session.historyPrecedingDate
-                        let rows = TranscriptActivity.rows(session.messages[messageRange], precedingDate: precedingDate)
-                        let lastMessageID = TranscriptActivity.lastVisibleID(in: session.messages)
-                        let activeAssistant =
-                            session.isStreaming
-                            ? session.messages.last(where: { $0.role == .assistant }) : nil
-                        let activeAssistantID = activeAssistant?.id
-                        let activeToolID: String? = {
-                            guard let activeAssistant else { return nil }
-                            return TranscriptActivity.summary([activeAssistant], activeAssistantID: activeAssistant.id)
+                            let precedingDate =
+                                session.messages[..<messageRange.lowerBound].last {
+                                    $0.role != .tool && !TranscriptActivity.isEmpty($0)
+                                }?.createdAt ?? session.historyPrecedingDate
+                            let rows = TranscriptActivity.rows(
+                                session.messages[messageRange], precedingDate: precedingDate)
+                            let lastMessageID = TranscriptActivity.lastVisibleID(in: session.messages)
+                            let activeAssistant =
+                                session.isStreaming
+                                ? session.messages.last(where: { $0.role == .assistant }) : nil
+                            let activeAssistantID = activeAssistant?.id
+                            let activeToolID: String? = {
+                                guard let activeAssistant else { return nil }
+                                return TranscriptActivity.summary(
+                                    [activeAssistant], activeAssistantID: activeAssistant.id
+                                )
                                 .current?.id
-                        }()
+                            }()
                             ForEach(rows) { row in
                                 // Each message retains its identity and ancestry as tool events arrive.
                                 // Keep projection inside the existing bounded, fully measured window.
@@ -558,268 +561,270 @@ struct ChatTranscriptView: View {
                                 // Row frames in content coordinates locate anchors; they are raw measurements,
                                 // kept out of observable state.
                                 .modifier(
-                                    TranscriptFrameReport(label: "row \(row.id.uuidString.prefix(4))") { instance, frame in
+                                    TranscriptFrameReport(label: "row \(row.id.uuidString.prefix(4))") {
+                                        instance, frame in
                                         recordFrame(frame, of: row.id, instance: instance)
-                                    })
+                                    }
+                                )
                                 .id(row.id)
                             }
-                        if messageRange.upperBound < session.messages.count || session.historyHasLater {
-                            Button("Later messages", systemImage: "arrow.down") { loadLaterMessages() }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.vertical, 8)
-                                .id("later-messages-loader")
-                                .onScrollVisibilityChange(threshold: 0.01) { visible in
-                                    // Never inside the layout pass that revealed the loader: the scroll that
-                                    // revealed it is attributed first.
-                                    laterLoaderVisible = visible
-                                    guard visible else { return }
-                                    Task { @MainActor in
-                                        await Task.yield()
-                                        pageThroughVisibleLoader()
+                            if messageRange.upperBound < session.messages.count || session.historyHasLater {
+                                Button("Later messages", systemImage: "arrow.down") { loadLaterMessages() }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.vertical, 8)
+                                    .id("later-messages-loader")
+                                    .onScrollVisibilityChange(threshold: 0.01) { visible in
+                                        // Never inside the layout pass that revealed the loader: the scroll that
+                                        // revealed it is attributed first.
+                                        laterLoaderVisible = visible
+                                        guard visible else { return }
+                                        Task { @MainActor in
+                                            await Task.yield()
+                                            pageThroughVisibleLoader()
+                                        }
                                     }
-                                }
+                            }
+                            if session.isStreaming && messageRange.upperBound == session.messages.count {
+                                AgentProgressView(session: session)
+                                    .padding(.top, Caprine.Activity.spacing)
+                            }
+                            // Space below the last row, so the latest line never sits on the window edge.
+                            Color.clear
+                                .frame(height: Caprine.Activity.doubleLineHeight + 1)
                         }
-                        if session.isStreaming && messageRange.upperBound == session.messages.count {
-                            AgentProgressView(session: session)
-                                .padding(.top, Caprine.Activity.spacing)
+                        .scrollTargetLayout()
+                        // A reflow leaves every row the lazy stack has not laid out since with its height
+                        // from the old layout, so the content's size and every estimate are wrong until each
+                        // row is seen again. A new identity once the reflow settles makes it estimate from
+                        // rows laid out in the new layout.
+                        .id(layoutGeneration)
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.top, 16)
+                    .frame(maxWidth: .infinity)
+                    .coordinateSpace(.named(transcriptContentSpace))
+                    .background { TranscriptScrollAttachment(executor: reader.executor) }
+                }
+                // A restoring transcript appears at the reader's anchor, not where it starts.
+                .opacity(initiallyPlaced || viewport.autoFollow ? 1 : 0)
+                .overlay(alignment: .bottom) {
+                    ZStack {
+                        if !viewport.isScrolledToBottom {
+                            Button {
+                                jumpToLatest()
+                            } label: {
+                                Image(systemName: "arrow.down")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(tokens.ink)
+                                    .frame(width: 32, height: 32)
+                                    .background(
+                                        tokens.surface.opacity(isHoveringScrollButton ? 1.0 : 0.92),
+                                        in: Circle()
+                                    )
+                                    .overlay(
+                                        Circle().strokeBorder(
+                                            tokens.muted.opacity(isHoveringScrollButton ? 0.6 : 0.35),
+                                            lineWidth: 1
+                                        )
+                                    )
+                                    .shadow(color: Caprine.Semantic.shadow.opacity(0.25), radius: 4, y: 2)
+                                    .contentShape(Circle())
+                            }
+                            .buttonStyle(.plain)
+                            .help(session.isStreaming ? "New output, jump to latest" : "Jump to latest")
+                            .accessibilityLabel(session.isStreaming ? "New output, jump to latest" : "Jump to latest")
+                            .keyboardShortcut(.end, modifiers: [.command])
+                            .accessibilityIdentifier("chat-transcript-scroll-bottom-button")
+                            .padding(.bottom, Caprine.Activity.inset)
+                            .onHover { isHoveringScrollButton = $0 }
+                            .transition(.opacity.combined(with: .scale(scale: 0.85)))
                         }
-                        // Space below the last row, so the latest line never sits on the window edge.
-                        Color.clear
-                            .frame(height: Caprine.Activity.doubleLineHeight + 1)
                     }
-                    .scrollTargetLayout()
-                    // A reflow leaves every row the lazy stack has not laid out since with its height
-                    // from the old layout, so the content's size and every estimate are wrong until each
-                    // row is seen again. A new identity once the reflow settles makes it estimate from
-                    // rows laid out in the new layout.
-                    .id(layoutGeneration)
+                    // Only the button animates: a transaction animation would also fade the rows the lazy
+                    // stack inserts and removes in the same update, drawing a row twice as it cross-fades.
+                    .animation(
+                        model.animationsEnabled && !reduceMotion ? .easeInOut(duration: 0.2) : nil,
+                        value: viewport.isScrolledToBottom)
                 }
-                .padding(.horizontal, 24)
-                .padding(.top, 16)
-                .frame(maxWidth: .infinity)
-                .coordinateSpace(.named(transcriptContentSpace))
-                .background { TranscriptScrollAttachment(executor: reader.executor) }
-            }
-            // A restoring transcript appears at the reader's anchor, not where it starts.
-            .opacity(initiallyPlaced || viewport.autoFollow ? 1 : 0)
-            .overlay(alignment: .bottom) {
-                ZStack {
-                if !viewport.isScrolledToBottom {
-                    Button {
-                        jumpToLatest()
-                    } label: {
-                        Image(systemName: "arrow.down")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(tokens.ink)
-                            .frame(width: 32, height: 32)
-                            .background(
-                                tokens.surface.opacity(isHoveringScrollButton ? 1.0 : 0.92),
-                                in: Circle()
-                            )
-                            .overlay(
-                                Circle().strokeBorder(
-                                    tokens.muted.opacity(isHoveringScrollButton ? 0.6 : 0.35),
-                                    lineWidth: 1
-                                )
-                            )
-                            .shadow(color: Caprine.Semantic.shadow.opacity(0.25), radius: 4, y: 2)
-                            .contentShape(Circle())
+                .environment(\.transcriptViewport, viewport)
+                .environment(
+                    \.transcriptInspection,
+                    TranscriptInspectionAction {
+                        viewport.readerMoved(currentRange: messageRange, anchor: reader.measuredAnchor())
                     }
-                    .buttonStyle(.plain)
-                    .help(session.isStreaming ? "New output, jump to latest" : "Jump to latest")
-                    .accessibilityLabel(session.isStreaming ? "New output, jump to latest" : "Jump to latest")
-                    .keyboardShortcut(.end, modifiers: [.command])
-                    .accessibilityIdentifier("chat-transcript-scroll-bottom-button")
-                    .padding(.bottom, Caprine.Activity.inset)
-                    .onHover { isHoveringScrollButton = $0 }
-                    .transition(.opacity.combined(with: .scale(scale: 0.85)))
+                )
+                .environment(
+                    \.transcriptSegments,
+                    TranscriptSegmentNavigation(
+                        viewport: viewport,
+                        page: { id, window, kept, segmentCount in
+                            pageSegments(of: id, to: window, keeping: kept, segmentCount: segmentCount)
+                        },
+                        canAutomaticallyPage: {
+                            reader.metrics.contentHeight > reader.metrics.layout.container.height + 1
+                        },
+                        readyToPage: { id, segment in
+                            pagingPhase == .idle && viewport.readerOwnsViewport && viewport.request == nil
+                                && !reader.attributingMove && reader.segmentFrames[id]?[segment] != nil
+                        },
+                        recordSegmentCount: { id, segmentCount in viewport.recordSegmentCount(segmentCount, of: id) },
+                        hold: { id, window, segmentCount in
+                            viewport.holdSegments(of: id, at: window, segmentCount: segmentCount)
+                        },
+                        recordFrame: { id, segment, frame, window, instance in
+                            recordFrame(frame, of: id, segment: segment, laidOutIn: window, instance: instance)
+                        })
+                )
+                // No initial bottom offset: SwiftUI re-applies it on later size changes, which a lazy stack
+                // makes continuous as estimates resolve. Following places the transcript at its end through
+                // the executor, before the first placement shows it.
+                .defaultScrollAnchor(.bottom, for: .alignment)
+                // Keep the reader's content in place as rows grow below it; the owner corrects any
+                // remaining anchor movement explicitly.
+                .defaultScrollAnchor(.top, for: .sizeChanges)
+                .onScrollGeometryChange(for: TranscriptScrollMetrics.self) { geometry in
+                    TranscriptScrollMetrics(geometry)
+                } action: { previous, metrics in
+                    handleGeometry(from: previous, to: metrics)
                 }
-                }
-                // Only the button animates: a transaction animation would also fade the rows the lazy
-                // stack inserts and removes in the same update, drawing a row twice as it cross-fades.
-                .animation(
-                    model.animationsEnabled && !reduceMotion ? .easeInOut(duration: 0.2) : nil,
-                    value: viewport.isScrolledToBottom)
-            }
-            .environment(\.transcriptViewport, viewport)
-            .environment(
-                \.transcriptInspection,
-                TranscriptInspectionAction {
-                    viewport.readerMoved(currentRange: messageRange, anchor: reader.measuredAnchor())
-                }
-            )
-            .environment(
-                \.transcriptSegments,
-                TranscriptSegmentNavigation(
-                    viewport: viewport,
-                    page: { id, window, kept, segmentCount in
-                        pageSegments(of: id, to: window, keeping: kept, segmentCount: segmentCount)
-                    },
-                    canAutomaticallyPage: {
-                        reader.metrics.contentHeight > reader.metrics.layout.container.height + 1
-                    },
-                    readyToPage: { id, segment in
-                        pagingPhase == .idle && viewport.readerOwnsViewport && viewport.request == nil
-                            && !reader.attributingMove && reader.segmentFrames[id]?[segment] != nil
-                    },
-                    recordSegmentCount: { id, segmentCount in viewport.recordSegmentCount(segmentCount, of: id) },
-                    hold: { id, window, segmentCount in
-                        viewport.holdSegments(of: id, at: window, segmentCount: segmentCount)
-                    },
-                    recordFrame: { id, segment, frame, window, instance in
-                        recordFrame(frame, of: id, segment: segment, laidOutIn: window, instance: instance)
-                    })
-            )
-            // No initial bottom offset: SwiftUI re-applies it on later size changes, which a lazy stack
-            // makes continuous as estimates resolve. Following places the transcript at its end through
-            // the executor, before the first placement shows it.
-            .defaultScrollAnchor(.bottom, for: .alignment)
-            // Keep the reader's content in place as rows grow below it; the owner corrects any
-            // remaining anchor movement explicitly.
-            .defaultScrollAnchor(.top, for: .sizeChanges)
-            .onScrollGeometryChange(for: TranscriptScrollMetrics.self) { geometry in
-                TranscriptScrollMetrics(geometry)
-            } action: { previous, metrics in
-                handleGeometry(from: previous, to: metrics)
-            }
-            // Reader gestures own the viewport until they end at the true bottom.
-            .onScrollPhaseChange { _, phase in
-                if phase == .tracking || phase == .interacting || phase == .decelerating {
-                    if !reader.isScrolling { viewport.note("gesture \(phase)") }
-                    reader.isScrolling = true
-                    reader.expectsProxyLanding = false
-                    viewport.readerMoved(currentRange: messageRange, anchor: reader.measuredAnchor())
-                } else if phase == .idle {
-                    let readerFinishedScrolling = reader.isScrolling
-                    reader.isScrolling = false
-                    guard readerFinishedScrolling else { return }
-                    viewport.note("gesture settled at \(Int(reader.metrics.offset))")
-                    // A last reply held on earlier segments is not the conversation's end.
-                    let holdsLastReply = session.messages.last.map { holdsEarlierSegments(of: $0) } ?? false
-                    viewport.readerSettled(
-                        atTrueBottom: !session.historyHasLater && messageRange.upperBound == session.messages.count
-                            && reader.isAtBottom
-                            && !holdsLastReply,
-                        anchor: reader.measuredAnchor())
-                    // A scroll that ended where the lazy stack lays out nothing is rescued there, once the
-                    // rows it does lay out have had a moment to report.
-                    Task { @MainActor in
-                        try? await Task.sleep(for: .milliseconds(150))
-                        guard !reader.isScrolling else { return }
-                        rescueBlankViewport(atReader: true)
+                // Reader gestures own the viewport until they end at the true bottom.
+                .onScrollPhaseChange { _, phase in
+                    if phase == .tracking || phase == .interacting || phase == .decelerating {
+                        if !reader.isScrolling { viewport.note("gesture \(phase)") }
+                        reader.isScrolling = true
+                        reader.expectsProxyLanding = false
+                        viewport.readerMoved(currentRange: messageRange, anchor: reader.measuredAnchor())
+                    } else if phase == .idle {
+                        let readerFinishedScrolling = reader.isScrolling
+                        reader.isScrolling = false
+                        guard readerFinishedScrolling else { return }
+                        viewport.note("gesture settled at \(Int(reader.metrics.offset))")
+                        // A last reply held on earlier segments is not the conversation's end.
+                        let holdsLastReply = session.messages.last.map { holdsEarlierSegments(of: $0) } ?? false
+                        viewport.readerSettled(
+                            atTrueBottom: !session.historyHasLater && messageRange.upperBound == session.messages.count
+                                && reader.isAtBottom
+                                && !holdsLastReply,
+                            anchor: reader.measuredAnchor())
+                        // A scroll that ended where the lazy stack lays out nothing is rescued there, once the
+                        // rows it does lay out have had a moment to report.
+                        Task { @MainActor in
+                            try? await Task.sleep(for: .milliseconds(150))
+                            guard !reader.isScrolling else { return }
+                            rescueBlankViewport(atReader: true)
+                        }
                     }
                 }
-            }
-            .onChange(of: viewport.request) {
-                if viewport.request == nil {
-                    // A reader gesture that cancels a paging scroll also ends that page load.
-                    if pagingPhase != .idle { pagingPhase = .idle }
-                    placeInitiallyIfReady()
-                    // A loader seen while the request ran pages once the reader is where it put them.
+                .onChange(of: viewport.request) {
+                    if viewport.request == nil {
+                        // A reader gesture that cancels a paging scroll also ends that page load.
+                        if pagingPhase != .idle { pagingPhase = .idle }
+                        placeInitiallyIfReady()
+                        // A loader seen while the request ran pages once the reader is where it put them.
+                        Task { @MainActor in
+                            await Task.yield()
+                            pageThroughVisibleLoader()
+                        }
+                    }
+                    // A replaced request does not wait out its predecessor's frame deadline.
+                    cancelFrameWait()
+                    executePendingRequest()
+                }
+                // Streaming growth (text, thinking, new messages): following chases it; a reader keeps
+                // their anchor.
+                .onChange(of: streamRevision) { viewport.contentChanged() }
+                .onAppear {
+                    viewport.historySession = session
+                    session.historyAnchorID = viewport.anchor?.messageID
+                }
+                .onChange(of: session.historyRevision) {
+                    viewport.historyRebased(count: session.messages.count, anchorIndex: anchorIndex, cost: displayCost)
+                }
+                .onChange(of: pagingPhase) { _, phase in
+                    guard phase == .idle, session.historyPageError == nil else { return }
                     Task { @MainActor in
                         await Task.yield()
                         pageThroughVisibleLoader()
                     }
                 }
-                // A replaced request does not wait out its predecessor's frame deadline.
-                cancelFrameWait()
-                executePendingRequest()
-            }
-            // Streaming growth (text, thinking, new messages): following chases it; a reader keeps
-            // their anchor.
-            .onChange(of: streamRevision) { viewport.contentChanged() }
-            .onAppear {
-                viewport.historySession = session
-                session.historyAnchorID = viewport.anchor?.messageID
-            }
-            .onChange(of: session.historyRevision) {
-                viewport.historyRebased(count: session.messages.count, anchorIndex: anchorIndex, cost: displayCost)
-            }
-            .onChange(of: pagingPhase) { _, phase in
-                guard phase == .idle, session.historyPageError == nil else { return }
-                Task { @MainActor in
-                    await Task.yield()
-                    pageThroughVisibleLoader()
+                .onChange(of: focusRequest) {
+                    guard focusRequest != nil else { return }
+                    let anchor = reader.measuredAnchor()
+                    guard let id = anchor?.messageID ?? renderedMessageID(near: messageRange.lowerBound) else { return }
+                    // Keyboard focus is reader input. Keep the current reading window and cancel
+                    // any pending automatic restore before native focus moves within that window.
+                    viewport.readerMoved(currentRange: messageRange, anchor: anchor)
+                    focusedMessageID = id
                 }
-            }
-            .onChange(of: focusRequest) {
-                guard focusRequest != nil else { return }
-                let anchor = reader.measuredAnchor()
-                guard let id = anchor?.messageID ?? renderedMessageID(near: messageRange.lowerBound) else { return }
-                // Keyboard focus is reader input. Keep the current reading window and cancel
-                // any pending automatic restore before native focus moves within that window.
-                viewport.readerMoved(currentRange: messageRange, anchor: anchor)
-                focusedMessageID = id
-            }
-            .task(id: revealRequest) {
-                guard let revealRequest else { return }
-                guard await model.loadHistory(around: revealRequest.messageID, for: session), !Task.isCancelled,
+                .task(id: revealRequest) {
+                    guard let revealRequest else { return }
+                    guard await model.loadHistory(around: revealRequest.messageID, for: session), !Task.isCancelled,
 
-                    let message = session.messages.first(where: { $0.id == revealRequest.messageID })
-                else { return }
-                let source = message.text
-                let complete = message.complete
-                let isAssistant = message.role == .assistant && message.kind == .regular
-                let richLimit = ReplyWindow.richLimit
-                let worker = Task.detached(priority: .userInitiated) { () -> (Int?, Int) in
-                    guard isAssistant, source.utf8.count <= richLimit else { return (nil, 0) }
-                    let segments = MarkdownSegmenter.segment(source, isComplete: complete).segments
-                    let index = segments.firstIndex { $0.sourceRange.contains(revealRequest.byteOffset) }
-                    return (index, segments.count)
+                        let message = session.messages.first(where: { $0.id == revealRequest.messageID })
+                    else { return }
+                    let source = message.text
+                    let complete = message.complete
+                    let isAssistant = message.role == .assistant && message.kind == .regular
+                    let richLimit = ReplyWindow.richLimit
+                    let worker = Task.detached(priority: .userInitiated) { () -> (Int?, Int) in
+                        guard isAssistant, source.utf8.count <= richLimit else { return (nil, 0) }
+                        let segments = MarkdownSegmenter.segment(source, isComplete: complete).segments
+                        let index = segments.firstIndex { $0.sourceRange.contains(revealRequest.byteOffset) }
+                        return (index, segments.count)
+                    }
+                    let (segment, count) = await withTaskCancellationHandler {
+                        await worker.value
+                    } onCancel: {
+                        worker.cancel()
+                    }
+                    guard !Task.isCancelled,
+                        let index = session.messages.firstIndex(where: { $0.id == revealRequest.messageID })
+                    else { return }
+                    pagingPhase = .idle
+                    reader.isScrolling = false
+                    followThrottle.reset()
+                    viewport.reveal(
+                        .init(messageID: message.id, offset: 0, segment: segment),
+                        messageWindow: TranscriptWindow.range(
+                            count: session.messages.count, startingAt: index, cost: displayCost),
+                        segment: segment, segmentCount: count)
                 }
-                let (segment, count) = await withTaskCancellationHandler {
-                    await worker.value
-                } onCancel: {
-                    worker.cancel()
+                .onChange(of: session.isStreaming) { viewport.contentChanged() }
+                .onChange(of: ReflowKey(fontSize: model.chatFontSize, column: readingColumn)) { scheduleRelayout() }
+                // Rows near the reader render formatted on their first frame when the lazy stack mounts them.
+                .task(id: TranscriptPrewarm.Key(range: messageRange, count: session.messages.count)) {
+                    let range = messageRange
+                    let focus = (anchorIndex ?? range.upperBound - 1) - range.lowerBound
+                    await TranscriptPrewarm.prepare(Array(session.messages[range]), around: focus)
                 }
-                guard !Task.isCancelled,
-                    let index = session.messages.firstIndex(where: { $0.id == revealRequest.messageID })
-                else { return }
-                pagingPhase = .idle
-                reader.isScrolling = false
-                followThrottle.reset()
-                viewport.reveal(
-                    .init(messageID: message.id, offset: 0, segment: segment),
-                    messageWindow: TranscriptWindow.range(
-                        count: session.messages.count, startingAt: index, cost: displayCost),
-                    segment: segment, segmentCount: count)
-            }
-            .onChange(of: session.isStreaming) { viewport.contentChanged() }
-            .onChange(of: ReflowKey(fontSize: model.chatFontSize, column: readingColumn)) { scheduleRelayout() }
-            // Rows near the reader render formatted on their first frame when the lazy stack mounts them.
-            .task(id: TranscriptPrewarm.Key(range: messageRange, count: session.messages.count)) {
-                let range = messageRange
-                let focus = (anchorIndex ?? range.upperBound - 1) - range.lowerBound
-                await TranscriptPrewarm.prepare(Array(session.messages[range]), around: focus)
-            }
-            // A newly sent turn always re-arms following and jumps to the bottom.
-            .onChange(of: session.messages.count) { previousCount, count in
-                if count < previousCount, session.hasCompleteHistory, viewport.heldRange != nil {
-                    viewport.messagesRemoved(
-                        count: count, anchorIndex: anchorIndex,
-                        messageID: { renderedMessageID(near: $0) ?? session.messages[$0].id }, cost: displayCost)
+                // A newly sent turn always re-arms following and jumps to the bottom.
+                .onChange(of: session.messages.count) { previousCount, count in
+                    if count < previousCount, session.hasCompleteHistory, viewport.heldRange != nil {
+                        viewport.messagesRemoved(
+                            count: count, anchorIndex: anchorIndex,
+                            messageID: { renderedMessageID(near: $0) ?? session.messages[$0].id }, cost: displayCost)
+                    }
+                    if session.isStreaming && session.messages.last?.role == .user {
+                        jumpToLatest()
+                    } else {
+                        viewport.contentChanged()
+                    }
                 }
-                if session.isStreaming && session.messages.last?.role == .user {
-                    jumpToLatest()
-                } else {
-                    viewport.contentChanged()
+                .onDisappear {
+                    historyTask?.cancel()
+                    historyTask = nil
+                    reader.executorTask?.cancel()
+                    reader.executorTask = nil
+                    reader.attributionTask?.cancel()
+                    reader.attributionTask = nil
+                    reader.verificationTask?.cancel()
+                    reader.verificationTask = nil
+                    reflowTask?.cancel()
+                    reflowTask = nil
+                    reader.attributingMove = false
+                    pagingPhase = .idle
                 }
-            }
-            .onDisappear {
-                historyTask?.cancel()
-                historyTask = nil
-                reader.executorTask?.cancel()
-                reader.executorTask = nil
-                reader.attributionTask?.cancel()
-                reader.attributionTask = nil
-                reader.verificationTask?.cancel()
-                reader.verificationTask = nil
-                reflowTask?.cancel()
-                reflowTask = nil
-                reader.attributingMove = false
-                pagingPhase = .idle
-            }
-            .onAppear { reader.proxy = proxy }
+                .onAppear { reader.proxy = proxy }
             }
         }
     }
@@ -1319,7 +1324,8 @@ struct ChatTranscriptView: View {
         // row, so the rows there lay out and the next estimate starts from them.
         if abs(y - metrics.offset) < 1 {
             let step = metrics.layout.container.height
-            y = target < nearest.0
+            y =
+                target < nearest.0
                 ? max(metrics.offset - metrics.topGap, metrics.offset - step)
                 : min(metrics.offset + metrics.bottomGap, metrics.offset + step)
         }
@@ -1417,7 +1423,8 @@ struct ChatTranscriptView: View {
     private func estimatedContentEnd() -> CGFloat? {
         let order = TranscriptActivity.rows(session.messages[messageRange]).map(\.id)
         guard let last = order.last, reader.rowFrames[last] == nil else { return nil }
-        let laidOut = Self.ordered(order.enumerated().compactMap { index, id in reader.rowFrames[id].map { (index, $0) } })
+        let laidOut = Self.ordered(
+            order.enumerated().compactMap { index, id in reader.rowFrames[id].map { (index, $0) } })
         guard let nearest = laidOut.last else { return nil }
         let averageHeight = laidOut.map(\.1.height).reduce(0, +) / CGFloat(laidOut.count)
         // Rows after the nearest one, then the trailing space and anything below it.
@@ -1799,7 +1806,8 @@ struct TranscriptFrameReport: ViewModifier {
             }
             .onAppear {
                 if isEnabled, TranscriptViewport.traces {
-                    print("TRANSCRIPT_TRACE \(label) appeared with \(measurement.frame.map { "\(Int($0.minY))" } ?? "-")")
+                    print(
+                        "TRANSCRIPT_TRACE \(label) appeared with \(measurement.frame.map { "\(Int($0.minY))" } ?? "-")")
                 }
                 if isEnabled, let frame = measurement.frame { report(measurement.instance, frame) }
             }
