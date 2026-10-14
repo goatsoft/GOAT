@@ -35,7 +35,7 @@ extension TranscriptPerformanceTests {
             model.animationsEnabled = oldAnimations
         }
         print(
-            "COMPARISON_RUN run_id=\(environment["GOAT_COMPARE_RUN_ID"] ?? "unlabelled") commit=\(environment["GOAT_COMPARE_COMMIT"] ?? "unrecorded") scroll_writer=native_one_shot previews=\(environment["GOAT_COMPARE_NO_PREVIEWS"] != "1")"
+            "COMPARISON_RUN run_id=\(environment["GOAT_COMPARE_RUN_ID"] ?? "unlabelled") commit=\(environment["GOAT_COMPARE_COMMIT"] ?? "unrecorded") scroll_writer=swiftui_scroll_position previews=\(environment["GOAT_COMPARE_NO_PREVIEWS"] != "1")"
         )
         print(
             "COMPARISON_HOST os=\(ProcessInfo.processInfo.operatingSystemVersionString) cores=\(ProcessInfo.processInfo.processorCount) memory_bytes=\(ProcessInfo.processInfo.physicalMemory)"
@@ -186,8 +186,13 @@ extension TranscriptPerformanceTests {
     return view.subviews.lazy.compactMap(comparisonScroll).first
 }
 
+@MainActor private func comparisonViewportTop(_ scroll: NSScrollView, host: NSView) -> CGFloat {
+    let rect = scroll.contentView.convert(scroll.contentView.bounds, to: host)
+    return host.isFlipped ? rect.minY : host.bounds.height - rect.maxY
+}
+
 @MainActor private func comparisonAnchor(
-    _ fixture: TranscriptComparisonFixture, host: NSView, inputDelta: CGFloat = 0
+    _ fixture: TranscriptComparisonFixture, host: NSView, inputDelta: CGFloat = 0, sliver: CGFloat = 1
 ) -> (String, CGFloat)? {
     // Include a partially visible tall row, not only rows whose top edge is on screen.
     fixture.sampleFrames()
@@ -196,8 +201,8 @@ extension TranscriptPerformanceTests {
     let top = host.isFlipped ? rect.minY : host.bounds.height - rect.maxY
     let bottom = top + rect.height
     return fixture.frames.filter {
-        $0.value.maxY > top + 1 && $0.value.minY < bottom
-            && $0.value.maxY - inputDelta > top + 1 && $0.value.minY - inputDelta < bottom
+        $0.value.maxY > top + sliver && $0.value.minY < bottom
+            && $0.value.maxY - inputDelta > top + sliver && $0.value.minY - inputDelta < bottom
     }
     .min(by: { $0.value.minY < $1.value.minY }).map { ($0.key, $0.value.minY) }
 }
@@ -377,6 +382,9 @@ extension TranscriptPerformanceTests {
     try await Task.sleep(for: .milliseconds(500))
     host.layoutSubtreeIfNeeded()
     let gap = (scroll.documentView?.bounds.height ?? 0) - scroll.contentView.bounds.maxY
+    print(
+        "COMPARISON_FOLLOW native_gap=\(gap) swiftui_end_distance=\(fixture.swiftUIEndDistance) document_height=\(scroll.documentView?.bounds.height ?? 0) last_row=\(fixture.rows.last?.id ?? "none") last_frame=\(fixture.rows.last.flatMap { fixture.frames[$0.id] }.map { "\($0)" } ?? "unmounted")"
+    )
     print("COMPARISON_NAVIGATION backend=\(backend) following_gap_pt=\(gap)")
     XCTAssertLessThanOrEqual(abs(gap), 1, "Following uses the laid-out document height")
 
@@ -385,20 +393,19 @@ extension TranscriptPerformanceTests {
     scroll.reflectScrolledClipView(scroll.contentView)
     try await Task.sleep(for: .milliseconds(500))
     let window = try XCTUnwrap(host.window)
-    fixture.sizing.resetStatistics()
-    // The third geometry is new to every row, so reading back afterwards replaces estimates.
+    // The third geometry is new to every row, so reading back afterwards resolves the lazy stack's estimates.
     for (width, font) in [(820.0, 20.0), (1180.0, 14.0), (1000.0, 17.0)] {
         host.layoutSubtreeIfNeeded()
-        let anchor = comparisonAnchor(fixture, host: host)
+        // The lazy stack keeps the top edge of its topmost visible row in place, as CSS scroll anchoring
+        // does, and counts a row whose bottom edge touches the viewport top as visible. Measure that row.
+        let anchor = comparisonAnchor(fixture, host: host, sliver: -0.01)
+        let anchorHeight = anchor.flatMap { fixture.frames[$0.0]?.height } ?? 0
         print(
             "COMPARISON_NAVIGATION backend=\(backend) phase=reflow_start width=\(width) font=\(font) resident_bytes=\(comparisonUsage().resident)"
         )
         let measuredBefore = ComparisonRowMeasure.measurements
-        let estimatedBefore = ComparisonRowMeasure.estimates
-        ComparisonRowMeasure.estimateTime = .zero
-        let sizedBodiesBefore = ComparisonSizedRow.bodies
         let rowBodiesBefore = ComparisonRowView.bodies
-        ComparisonRowMeasure.measureTime = .zero
+        let estimatesBefore = ComparisonRowMeasure.estimates
         ComparisonRowMeasure.measuredIDs.removeAll()
         let reflowStarted = ContinuousClock.now
         AppModel.shared.chatFontSize = font
@@ -406,8 +413,6 @@ extension TranscriptPerformanceTests {
         host.layoutSubtreeIfNeeded()
         let synchronous = reflowStarted.duration(to: .now)
         let synchronousMeasurements = ComparisonRowMeasure.measurements - measuredBefore
-        let synchronousEstimateTime = ComparisonRowMeasure.estimateTime
-        let synchronousMeasureTime = ComparisonRowMeasure.measureTime
         let measuredIndices = fixture.rows.indices.filter {
             ComparisonRowMeasure.measuredIDs.contains(fixture.rows[$0].id)
         }
@@ -417,7 +422,7 @@ extension TranscriptPerformanceTests {
         )
         try await Task.sleep(for: .milliseconds(500))
         print(
-            "COMPARISON_REFLOW_COST backend=\(backend) width=\(width) font=\(font) synchronous_layout=\(synchronous) synchronous_row_measurements=\(synchronousMeasurements) total_row_measurements=\(ComparisonRowMeasure.measurements - measuredBefore) rows=\(fixture.rows.count) distinct_rows=\(ComparisonRowMeasure.measuredIDs.count) estimates=\(ComparisonRowMeasure.estimates - estimatedBefore) window=\(fixture.sizing.window.count) synchronous_estimate_time=\(synchronousEstimateTime) synchronous_measure_time=\(synchronousMeasureTime) estimate_time=\(ComparisonRowMeasure.estimateTime) measure_time=\(ComparisonRowMeasure.measureTime) sized_bodies=\(ComparisonSizedRow.bodies - sizedBodiesBefore) row_bodies=\(ComparisonRowView.bodies - rowBodiesBefore)"
+            "COMPARISON_REFLOW_COST backend=\(backend) width=\(width) font=\(font) synchronous_layout=\(synchronous) synchronous_row_measurements=\(synchronousMeasurements) total_row_measurements=\(ComparisonRowMeasure.measurements - measuredBefore) rows=\(fixture.rows.count) distinct_rows=\(ComparisonRowMeasure.measuredIDs.count) row_bodies=\(ComparisonRowView.bodies - rowBodiesBefore) reused_heights=\(ComparisonRowMeasure.estimates - estimatesBefore) window=\(fixture.sizing.window.count)"
         )
         // A reflow lays out the rows near the reader, not the rows above it (#85, #86).
         XCTAssertLessThanOrEqual(
@@ -430,6 +435,11 @@ extension TranscriptPerformanceTests {
             continue
         }
         let drift = abs(frame.minY - anchor.1)
+        // Where the viewport top falls inside the anchor row, before and after, as a fraction of its height.
+        let viewportTop = comparisonViewportTop(scroll, host: host)
+        print(
+            "COMPARISON_REFLOW_ANCHOR width=\(width) row=\(anchor.0) top_before=\(anchor.1 - viewportTop) height_before=\(anchorHeight) top_after=\(frame.minY - viewportTop) height_after=\(frame.height) fraction_before=\((viewportTop - anchor.1) / max(anchorHeight, 1)) fraction_after=\((viewportTop - frame.minY) / max(frame.height, 1))"
+        )
         print("COMPARISON_NAVIGATION backend=\(backend) reflow_width=\(width) font=\(font) drift_pt=\(drift)")
         XCTAssertLessThanOrEqual(drift, 1)
     }
@@ -447,7 +457,7 @@ extension TranscriptPerformanceTests {
     print("COMPARISON_NAVIGATION backend=\(backend) post_reflow_input_residual_pt=\(inputResidual)")
     XCTAssertLessThanOrEqual(inputResidual, 1, "Reflow must not leave a target that fights subsequent input")
 
-    // Reading back up replaces estimates above the reader with exact layouts; rows on screen stay put.
+    // Reading back up resolves the lazy stack's estimates above the reader; rows on screen stay put.
     var scrollBackResidual: CGFloat = 0
     var scrollBackMissing = 0
     for _ in 0..<24 {
@@ -465,23 +475,12 @@ extension TranscriptPerformanceTests {
         }
         scrollBackResidual = max(scrollBackResidual, abs(frame.minY - saved.1 + (target - start)))
     }
-    let flips = fixture.sizing.flips
-    func estimateError(_ value: (ComparisonRowSizing.Flip) -> CGFloat?) -> String {
-        let errors = flips.compactMap { flip in value(flip).map { abs($0 - flip.exact) / max(flip.exact, 1) } }.sorted()
-        guard !errors.isEmpty else { return "n/a" }
-        let mean = errors.reduce(0, +) / CGFloat(errors.count)
-        let p90 = errors[min(errors.count - 1, Int(CGFloat(errors.count) * 0.9))]
-        return String(format: "mean=%.1f%%,p90=%.1f%%,max=%.1f%%", mean * 100, p90 * 100, errors.last! * 100)
-    }
-    print(
-        "COMPARISON_ESTIMATE backend=\(backend) replaced=\(flips.count) model=\(estimateError { $0.model }) last_size=\(estimateError { $0.lastSize }) proportional=\(estimateError { $0.proportional }) replaced_above=\(fixture.sizing.replacedAbove)"
-    )
     print(
         "COMPARISON_NAVIGATION backend=\(backend) scroll_back_residual_pt=\(scrollBackResidual) missing=\(scrollBackMissing)"
     )
     XCTAssertEqual(scrollBackMissing, 0, "Every scroll-back step must retain a measurable anchor")
     XCTAssertLessThanOrEqual(
-        scrollBackResidual, 1, "Replacing an estimate above the reader must not move the rows on screen")
+        scrollBackResidual, 1, "Resolving an estimate above the reader must not move the rows on screen")
     let afterInput = comparisonAnchor(fixture, host: host)
     try await fixture.append("\nOffscreen publication after reader input.\n", reasoning: false)
     try await Task.sleep(for: .milliseconds(500))

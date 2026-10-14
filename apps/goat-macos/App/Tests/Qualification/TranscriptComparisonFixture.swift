@@ -19,7 +19,7 @@ import SwiftUI
     let id: String
     var content: Content
     var revision = 0
-    /// Bumped when the row must replace an estimated height with an exact layout.
+    /// Bumped when the row must replace a reused height with an exact layout.
     var sizingEpoch = 0
     init(_ id: String, _ content: Content) {
         self.id = id
@@ -61,8 +61,6 @@ import SwiftUI
 
     func observeSwiftUIReader() {
         observesReader = true
-        sizing.index = { [weak self] in self?.rowIndices[$0] }
-        sizing.holdsReader = { [weak self] in self?.reflowPending ?? false }
         guard readerObserver == nil,
             let marker = frameViews.values.compactMap(\.view).first(where: { $0.window != nil })
         else { return }
@@ -156,6 +154,8 @@ import SwiftUI
     /// A font or width change whose restore task has not finished; its old geometry key stays.
     @ObservationIgnored var reflowPending = false
     @ObservationIgnored let sizing = ComparisonRowSizing()
+    /// SwiftUI's own distance from the viewport bottom to the content end, for qualification logs.
+    @ObservationIgnored var swiftUIEndDistance: CGFloat = 0
     /// The reader's row while a font or width reflow is laid out, held by identity; nil otherwise.
     var reflowAnchorID: String?
     @ObservationIgnored private var resizeObserver: NSObjectProtocol?
@@ -313,7 +313,7 @@ import SwiftUI
             }
         }
         setPreparationOverscan(requested.subtracting(visible))
-        for id in sizing.updateWindow(requested, firstVisible: first) {
+        for id in sizing.updateWindow(requested) {
             if let index = rowIndices[id] { rows[index].sizingEpoch += 1 }
         }
         schedulePreparation()
