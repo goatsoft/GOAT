@@ -1147,11 +1147,17 @@ struct ChatTranscriptView: View {
     /// Checks the pending request again shortly after a scroll command. A command's geometry report
     /// normally runs the check, but the scroll view does not always report a move it was told to make
     /// (an off-screen or idle window), and the request must not wait on it.
+    /// Following also checks that the end is still shown: the lazy stack lays out the last rows at their
+    /// real heights once the command reveals them, which moves the end below the viewport.
     private func verifyAfterScroll() {
         reader.verificationTask?.cancel()
         reader.verificationTask = Task { @MainActor in
             do { try await Task.sleep(for: Self.frameRetryInterval) } catch { return }
             reader.verificationTask = nil
+            if viewport.request == nil, viewport.autoFollow, !reader.isScrolling {
+                reader.syncGeometry()
+                if reader.metrics.bottomGap > 1 { viewport.contentChanged() }
+            }
             executePendingRequest()
         }
     }
