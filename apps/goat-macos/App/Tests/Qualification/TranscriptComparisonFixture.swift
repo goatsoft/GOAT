@@ -95,7 +95,7 @@ import SwiftUI
         let mounted = frameViews.values.compactMap(\.view).filter { $0.window != nil }.count
         let width = readerLayoutWidth.map { "\($0)/\(readerWidth)" } ?? "no_clip"
         return
-            "clip_width=\(width) font=\(AppModel.shared.chatFontSize)/\(readerFont) mounted_markers=\(mounted) capture=\(captureHits)/\(captureAttempts)/\(captureRequests) bounds_notifications=\(boundsNotifications) following=\(following)"
+            "clip_width=\(width) font=\(AppModel.shared.chatFontSize)/\(readerFont) mounted_markers=\(mounted) capture=\(captureHits)/\(captureAttempts)/\(captureRequests) bounds_notifications=\(boundsNotifications) following=\(following) rejected=\(captureRejections.sorted { $0.key < $1.key }.map { "\($0.key):\($0.value)" }.joined(separator: ","))"
     }
 
     /// A direct move posts the bounds notification before the lazy stack mounts rows at the new
@@ -103,9 +103,22 @@ import SwiftUI
     /// therefore retries for a few frames instead of leaving the reader without an anchor.
     func refreshReaderCapture(retries: Int = 0) {
         captureRequests += 1
-        guard !following, let width = readerLayoutWidth, abs(width - readerWidth) <= 1,
-            AppModel.shared.chatFontSize == readerFont
-        else { return }
+        guard !following else {
+            captureRejections["following", default: 0] += 1
+            return
+        }
+        guard let width = readerLayoutWidth else {
+            captureRejections["no_scroll", default: 0] += 1
+            return
+        }
+        guard abs(width - readerWidth) <= 1 else {
+            captureRejections["width_\(Int(width))_\(Int(readerWidth))", default: 0] += 1
+            return
+        }
+        guard AppModel.shared.chatFontSize == readerFont else {
+            captureRejections["font", default: 0] += 1
+            return
+        }
         captureAttempts += 1
         if let anchor = readerAnchor() {
             capturedReader = anchor
@@ -119,6 +132,7 @@ import SwiftUI
     }
     @ObservationIgnored var boundsNotifications = 0
     @ObservationIgnored var captureRequests = 0
+    @ObservationIgnored var captureRejections: [String: Int] = [:]
     @ObservationIgnored private(set) var captureAttempts = 0
     @ObservationIgnored private(set) var captureHits = 0
 
