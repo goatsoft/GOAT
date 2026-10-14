@@ -248,12 +248,14 @@ struct TranscriptRevealRequest: Equatable, Sendable {
         issue(.bottom)
     }
 
-    /// Content grew, regrouped or reflowed. Following asks for the bottom; a reader's anchor is
-    /// restored. An equal pending request is kept, so repeated changes coalesce.
+    /// Content grew, regrouped or reflowed. Following asks for the bottom. A reader's position needs no
+    /// request: the lazy stack keeps its topmost visible row in place as rows above, below or within the
+    /// viewport change size (WWDC26 "Dive into lazy stacks and scrolling with SwiftUI"), and the explicit
+    /// restores (paging, restoration, reveal, compaction) issue their own. An equal pending request is
+    /// kept, so repeated changes coalesce.
     func contentChanged() {
-        guard let target = autoFollow ? Target.bottom : anchor.map(Target.anchor), request?.target != target
-        else { return }
-        issue(target)
+        guard autoFollow, request?.target != .bottom else { return }
+        issue(.bottom)
     }
 
     /// Makes `anchor` the reader's position and scrolls to it (paging, restoration, compaction).
@@ -620,10 +622,9 @@ struct ChatTranscriptView: View {
                         recordFrame(frame, of: id, segment: segment, laidOutIn: window)
                     })
             )
-            // SwiftUI re-applies its initial bottom offset on later size changes until a gesture positions
-            // the view, even after the executor or a direct reader move did; it holds only until the first
-            // placement.
-            .defaultScrollAnchor(initiallyPlaced ? nil : .bottom, for: .initialOffset)
+            // No initial bottom offset: SwiftUI re-applies it on later size changes, which a lazy stack
+            // makes continuous as estimates resolve. Following places the transcript at its end through
+            // the executor, before the first placement shows it.
             .defaultScrollAnchor(.bottom, for: .alignment)
             // Keep the reader's content in place as rows grow below it; the owner corrects any
             // remaining anchor movement explicitly.
