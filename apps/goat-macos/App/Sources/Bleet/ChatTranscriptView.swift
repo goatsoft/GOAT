@@ -1082,7 +1082,9 @@ struct ChatTranscriptView: View {
                 // Content grew or reflowed, or the viewport resized, moving the offset with it if at all:
                 // follow it, or put the reader's anchor back.
                 viewport.contentChanged()
-            } else if metrics.offset != previous.offset {
+            } else if abs(metrics.offset - previous.offset) >= 1 {
+                // Less than a point is the scroll view aligning to device pixels as content changes,
+                // never a reader.
                 // Who moved the viewport is recorded where the move happens, never inferred from geometry.
                 switch reader.executor.cause(ofOffset: metrics.offset) {
                 case .executor, .layout:
