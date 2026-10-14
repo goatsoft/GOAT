@@ -979,6 +979,12 @@ struct ChatTranscriptView: View {
         // Where the reader was before this snapshot, for attributing a move it reports.
         let anchorBefore = reader.measuredAnchor()
         reader.metrics = metrics
+        if TranscriptViewport.traces, metrics != previous {
+            let anchorTop = viewport.anchor.flatMap { reader.rowFrames[$0.messageID] }.map { "\(Int($0.minY))" } ?? "-"
+            viewport.note(
+                "geometry \(Int(previous.offset))->\(Int(metrics.offset)) content \(Int(metrics.contentHeight)) "
+                    + "cause \(reader.executor.cause(ofOffset: metrics.offset).map { "\($0)" } ?? "nil") anchor row \(anchorTop)")
+        }
         let atBottom =
             !session.historyHasLater && metrics.distanceFromBottom <= Self.bottomTolerance
             && messageRange.upperBound == session.messages.count
