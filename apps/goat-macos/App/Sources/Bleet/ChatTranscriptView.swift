@@ -1173,6 +1173,15 @@ struct ChatTranscriptView: View {
                 RenderSignposts.event("TranscriptFollow")
                 followThrottle.recordFire(at: ProcessInfo.processInfo.systemUptime)
                 target = metrics.offset + metrics.bottomGap
+                // While the last row is not laid out, the document's end is SwiftUI's estimate, which can
+                // lie far past the rows (a reflow made it 15,000 pt too long): a move there shows nothing.
+                // Step to the end estimated from the rows laid out instead; the last rows then lay out and
+                // the next attempt moves to the document's real end.
+                if let end = estimatedContentEnd(), end < target + metrics.layout.container.height - 1 {
+                    let step = max(metrics.offset, end - metrics.layout.container.height)
+                    viewport.note("bottom estimate \(Int(step)) short of the document's \(Int(target))")
+                    target = step
+                }
             case .anchor(let anchor):
                 // Not laid out yet: the row's or segment's first geometry report runs this again, else a
                 // retry does, within the same bound.
@@ -1327,6 +1336,19 @@ struct ChatTranscriptView: View {
         // a further bottom request would chase the content's estimate past the rows.
         reader.expectsProxyLanding = true
         proxy.scrollTo(target.id, anchor: target.edge)
+    }
+
+    /// Where the content ends, estimated from the rows laid out, while the last row is not laid out;
+    /// nil when it is, or when nothing is laid out to estimate from.
+    private func estimatedContentEnd() -> CGFloat? {
+        let order = TranscriptActivity.rows(session.messages[messageRange]).map(\.id)
+        guard let last = order.last, reader.rowFrames[last] == nil else { return nil }
+        let laidOut = Self.ordered(order.enumerated().compactMap { index, id in reader.rowFrames[id].map { (index, $0) } })
+        guard let nearest = laidOut.last else { return nil }
+        let averageHeight = laidOut.map(\.1.height).reduce(0, +) / CGFloat(laidOut.count)
+        // Rows after the nearest one, then the trailing space and anything below it.
+        return nearest.1.maxY + CGFloat(order.count - 1 - nearest.0) * averageHeight
+            + Caprine.Activity.doubleLineHeight + 1 + 64
     }
 
     /// The identity of the row that shows `key`, a message or its reasoning.
