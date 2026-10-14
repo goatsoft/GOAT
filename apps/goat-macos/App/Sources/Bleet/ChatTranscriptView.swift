@@ -1123,7 +1123,7 @@ struct ChatTranscriptView: View {
             viewport.note(
                 "scroll \(request.generation) \(request.target == .bottom ? "bottom" : "anchor") "
                     + "\(Int(metrics.offset))->\(Int(target)) gap \(Int(metrics.topGap))/\(Int(metrics.bottomGap))")
-            reader.executor.scroll(toY: target)
+            reader.landed(at: reader.executor.scroll(toY: target))
             reader.attempts += 1
             viewport.recordScrollCommand()
             verifyAfterScroll()
@@ -1193,7 +1193,7 @@ struct ChatTranscriptView: View {
             "reveal row \(target) near \(nearest.0) at \(Int(y)) from \(Int(metrics.offset)) gap "
                 + "\(Int(metrics.topGap))/\(Int(metrics.bottomGap)) laid out "
                 + laidOut.map { "\($0.0)@\(Int($0.1.minY))" }.joined(separator: ","))
-        reader.executor.scroll(toY: y)
+        reader.landed(at: reader.executor.scroll(toY: y))
         viewport.recordScrollCommand()
         verifyAfterScroll()
     }
@@ -1405,14 +1405,17 @@ struct TranscriptScrollMetrics: Equatable {
         previousOrigin = nil
     }
 
-    /// Moves the viewport's top edge to `y` in content coordinates, without animation.
-    func scroll(toY y: CGFloat) {
-        guard let scrollView else { return }
+    /// Moves the viewport's top edge to `y` in content coordinates, without animation, and returns
+    /// where the top edge is now (the clip view keeps it inside the document).
+    @discardableResult
+    func scroll(toY y: CGFloat) -> CGFloat? {
+        guard let scrollView else { return nil }
         let clip = scrollView.contentView
         commanding = true
         defer { commanding = false }
         clip.scroll(to: NSPoint(x: clip.bounds.minX, y: y))
         scrollView.reflectScrolledClipView(clip)
+        return clip.bounds.minY
     }
 
     /// Why the viewport's top edge is at `offset`, if a recorded move put it there.
@@ -1523,6 +1526,18 @@ let transcriptContentSpace = "transcript-content"
     var attemptGeneration: UInt64 = 0
     var attempts = 0
     var frameWaitStarted: ContinuousClock.Instant?
+
+    /// Records where a command left the viewport's top edge. SwiftUI reports the move with its next
+    /// update, which an idle or off-screen window may defer; verifying a command must not read the
+    /// offset from before it.
+    func landed(at offset: CGFloat?) {
+        guard let offset else { return }
+        let delta = offset - metrics.offset
+        guard abs(delta) > 0.25 else { return }
+        metrics.offset = offset
+        metrics.topGap = max(0, metrics.topGap + delta)
+        metrics.bottomGap = max(0, metrics.bottomGap - delta)
+    }
 
     /// The distance from `id`'s top edge to the viewport's top edge, when laid out.
     func offset(of id: UUID) -> CGFloat? {
