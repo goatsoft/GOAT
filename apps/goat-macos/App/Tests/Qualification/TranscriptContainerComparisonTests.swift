@@ -391,9 +391,25 @@ extension TranscriptPerformanceTests {
         print(
             "COMPARISON_NAVIGATION backend=\(backend) phase=reflow_start width=\(width) font=\(font) resident_bytes=\(comparisonUsage().resident)"
         )
+        let measuredBefore = ComparisonRowMeasure.measurements
+        ComparisonRowMeasure.measuredIDs.removeAll()
+        let reflowStarted = ContinuousClock.now
         AppModel.shared.chatFontSize = font
         window.setContentSize(NSSize(width: width, height: 780))
+        host.layoutSubtreeIfNeeded()
+        let synchronous = reflowStarted.duration(to: .now)
+        let synchronousMeasurements = ComparisonRowMeasure.measurements - measuredBefore
+        let measuredIndices = fixture.rows.indices.filter {
+            ComparisonRowMeasure.measuredIDs.contains(fixture.rows[$0].id)
+        }
+        let visibleIndices = fixture.rows.indices.filter { fixture.visible.contains(fixture.rows[$0].id) }
+        print(
+            "COMPARISON_REFLOW_ROWS width=\(width) measured=\(measuredIndices.first ?? -1)...\(measuredIndices.last ?? -1) visible=\(visibleIndices.first ?? -1)...\(visibleIndices.last ?? -1) document_height=\(scroll.documentView?.bounds.height ?? 0) origin=\(scroll.contentView.bounds.minY)"
+        )
         try await Task.sleep(for: .milliseconds(500))
+        print(
+            "COMPARISON_REFLOW_COST backend=\(backend) width=\(width) font=\(font) synchronous_layout=\(synchronous) synchronous_row_measurements=\(synchronousMeasurements) total_row_measurements=\(ComparisonRowMeasure.measurements - measuredBefore) rows=\(fixture.rows.count) distinct_rows=\(ComparisonRowMeasure.measuredIDs.count)"
+        )
         host.layoutSubtreeIfNeeded()
         fixture.sampleFrames()
         guard let anchor, let frame = fixture.frames[anchor.0] else {

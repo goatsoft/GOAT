@@ -67,12 +67,19 @@ private struct ComparisonLazyList: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(fixture.rows) { row in
-                    ComparisonRowView(row: row, fixture: fixture, recordsAppearance: false)
-                        .id(row.id)
+                    ComparisonRowMeasure(id: row.id) {
+                        ComparisonRowView(row: row, fixture: fixture, recordsAppearance: false)
+                    }
+                    .id(row.id)
                 }
             }
             .scrollTargetLayout()
         }
+        // During a font or width reflow only, SwiftUI holds the reader's row by identity. A lazy stack that
+        // keeps a content offset instead re-measures every row above the reader to find it again, which
+        // costs the bytes above the viewport rather than the rows on screen (#85, #86). The binding is
+        // read-only: SwiftUI never retains a target that could replay against later reader input.
+        .scrollPosition(id: Binding(get: { fixture.reflowAnchorID }, set: { _ in }), anchor: .top)
         .defaultScrollAnchor(.bottom, for: .alignment)
         .defaultScrollAnchor(fixture.following ? .bottom : .top, for: .sizeChanges)
         .onAppear {
@@ -114,6 +121,7 @@ private struct ComparisonLazyList: View {
                 if !Task.isCancelled {
                     fixture.recordReaderGeometry(width: viewportSize.width, font: model.chatFontSize)
                     fixture.reflowPending = false
+                    fixture.reflowAnchorID = nil
                 }
             }
             guard !fixture.following, let saved else {
@@ -141,6 +149,8 @@ private struct ComparisonLazyList: View {
                 if proxyPending {
                     proxyPending = false
                     written = fixture.readerOrigin
+                } else if written == nil {
+                    written = fixture.readerOrigin
                 } else if let written, abs(fixture.readerOrigin - written) > 0.5 {
                     print("COMPARISON_REFLOW_RESTORE yielded_to_reader corrections=\(corrections)")
                     return
@@ -150,6 +160,14 @@ private struct ComparisonLazyList: View {
                     scrolledTo += 1
                     proxy.scrollTo(saved.id, anchor: .top)
                     proxyPending = true
+                    try? await Task.sleep(for: .milliseconds(16))
+                    continue
+                }
+                // The row is placed; release the identity hold before the native pixel correction so
+                // SwiftUI cannot place the row's top edge again over it.
+                if fixture.reflowAnchorID != nil {
+                    fixture.reflowAnchorID = nil
+                    written = nil
                     try? await Task.sleep(for: .milliseconds(16))
                     continue
                 }
@@ -192,5 +210,23 @@ private struct ComparisonLazyList: View {
                     ?? (geometry.contentSize.height - geometry.visibleRect.maxY < 24)
             }
         }
+    }
+}
+
+/// Counts row measurements so qualification can tell whether a reflow lays out the rows near the
+/// viewport or every row above it. Forwards sizing and placement unchanged.
+struct ComparisonRowMeasure: Layout {
+    nonisolated(unsafe) static var measurements = 0
+    nonisolated(unsafe) static var measuredIDs: Set<String> = []
+    let id: String
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        Self.measurements += 1
+        Self.measuredIDs.insert(id)
+        return subviews.first?.sizeThatFits(proposal) ?? .zero
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(bounds.size))
     }
 }

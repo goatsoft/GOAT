@@ -66,6 +66,21 @@ import SwiftUI
         while let view = parent, !(view is NSScrollView) { parent = view.superview }
         guard let scroll = parent as? NSScrollView else { return }
         readerClip = scroll.contentView
+        if resizeObserver == nil, let content = scroll.window?.contentView {
+            content.postsFrameChangedNotifications = true
+            resizeWidth = content.frame.width
+            resizeObserver = NotificationCenter.default.addObserver(
+                forName: NSView.frameDidChangeNotification, object: content, queue: nil
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    // Only a width change reflows rows; a height-only resize must not hold the reader.
+                    guard let self, abs(content.frame.width - self.resizeWidth) > 0.5 else { return }
+                    self.resizeWidth = content.frame.width
+                    self.armReflowAnchor()
+                }
+            }
+            observeFontReflow()
+        }
         if initialPlacementPending {
             initialPlacementPending = false
             Task { @MainActor [weak self] in
@@ -136,6 +151,29 @@ import SwiftUI
     @ObservationIgnored var captureRequests = 0
     /// A font or width change whose restore task has not finished; its old geometry key stays.
     @ObservationIgnored var reflowPending = false
+    /// The reader's row while a font or width reflow is laid out, held by identity; nil otherwise.
+    var reflowAnchorID: String?
+    @ObservationIgnored private var resizeObserver: NSObjectProtocol?
+    @ObservationIgnored private var resizeWidth: CGFloat = 0
+
+    /// Arms the identity hold before the reflow's layout pass: a window content resize posts its
+    /// frame change before layout runs, and the font is observed at its change, not after the update.
+    func armReflowAnchor() {
+        reflowPending = true
+        guard !following, reflowAnchorID == nil, let captured = capturedReader else { return }
+        reflowAnchorID = captured.id
+    }
+
+    private func observeFontReflow() {
+        withObservationTracking {
+            _ = AppModel.shared.chatFontSize
+        } onChange: { [weak self] in
+            MainActor.assumeIsolated {
+                self?.armReflowAnchor()
+                self?.observeFontReflow()
+            }
+        }
+    }
     @ObservationIgnored var captureRejections: [String: Int] = [:]
     @ObservationIgnored private(set) var captureAttempts = 0
     @ObservationIgnored private(set) var captureHits = 0
@@ -310,6 +348,9 @@ import SwiftUI
 
     func stopPreparation() {
         if let readerObserver { NotificationCenter.default.removeObserver(readerObserver) }
+        if let resizeObserver { NotificationCenter.default.removeObserver(resizeObserver) }
+        resizeObserver = nil
+        reflowAnchorID = nil
         readerObserver = nil
         readerClip = nil
         observesReader = false
