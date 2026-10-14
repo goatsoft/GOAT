@@ -542,7 +542,13 @@ struct ChatTranscriptView: View {
                             )
                             // Row frames in content coordinates locate anchors; they are raw measurements,
                             // kept out of observable state.
-                            .onGeometryChange(for: CGRect.self, of: Self.contentFrame) { recordFrame($0, of: row.id) }
+                            .onGeometryChange(for: CGRect?.self, of: transcriptContentFrame) { frame in
+                                if let frame {
+                                    recordFrame(frame, of: row.id)
+                                } else if TranscriptViewport.traces {
+                                    viewport.note("row \(row.id.uuidString.prefix(4)) measured outside the content")
+                                }
+                            }
                             .onAppear { reader.rowAppeared(row.id) }
                             .onDisappear { reader.rowDisappeared(row.id) }
                             .id(row.id)
@@ -954,10 +960,6 @@ struct ChatTranscriptView: View {
             (start..<range.upperBound).first(where: rendered)
             ?? (range.lowerBound..<start).last(where: rendered)
         return found.map { messages[$0].id }
-    }
-
-    nonisolated private static func contentFrame(_ proxy: GeometryProxy) -> CGRect {
-        proxy.frame(in: .named(transcriptContentSpace))
     }
 
     private func recordFrame(_ frame: CGRect, of id: UUID) {
@@ -1482,6 +1484,14 @@ private struct TranscriptScrollAttachment: NSViewRepresentable {
 /// The scroll content's coordinate space. Frames measured in it change only with layout, never with
 /// scrolling, so an anchor measured as the reader scrolls is never read from a stale frame.
 let transcriptContentSpace = "transcript-content"
+
+/// A view's frame in the transcript's content coordinates, or nil when the layout measuring it does not
+/// place it in the transcript's content: a lazy stack also sizes rows in passes detached from the
+/// scroll content, where a named space falls back to global coordinates and the frame is meaningless.
+nonisolated func transcriptContentFrame(_ proxy: GeometryProxy) -> CGRect? {
+    guard proxy.bounds(of: .named(transcriptContentSpace)) != nil else { return nil }
+    return proxy.frame(in: .named(transcriptContentSpace))
+}
 
 /// Raw scroll measurements and executor bookkeeping. Deliberately not observable view state.
 @MainActor private final class TranscriptReaderState {

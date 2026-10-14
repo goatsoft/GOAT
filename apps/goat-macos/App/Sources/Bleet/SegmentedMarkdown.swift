@@ -989,8 +989,9 @@ struct SegmentedMarkdownView: View {
                 .equatable()
                 // Measured before the gap, which changes when the segment stops being the first shown,
                 // and in the transcript's content coordinates, which scrolling does not change.
-                .onGeometryChange(for: CGRect?.self, of: { isWindowed ? Self.contentFrame($0) : nil }) { frame in
-                    if let messageID, isWindowed { navigation.recordFrame(messageID, index, frame, shown) }
+                .onGeometryChange(for: CGRect?.self, of: { isWindowed ? transcriptContentFrame($0) : nil }) { frame in
+                    // Nil is a measurement outside the content, never a disappearance.
+                    if let frame, let messageID, isWindowed { navigation.recordFrame(messageID, index, frame, shown) }
                 }
                 .onDisappear {
                     if let messageID, isWindowed { navigation.recordFrame(messageID, index, nil, shown) }
@@ -1012,9 +1013,6 @@ struct SegmentedMarkdownView: View {
 
     private func cost(_ index: Int) -> Int { document.segments[index].textBytes }
 
-    nonisolated private static func contentFrame(_ proxy: GeometryProxy) -> CGRect {
-        proxy.frame(in: .named(transcriptContentSpace))
-    }
 
     /// The segment code-block choices are kept by: a piece of an oversized fence uses the fence's
     /// first piece, so a choice applies to the whole fence.
