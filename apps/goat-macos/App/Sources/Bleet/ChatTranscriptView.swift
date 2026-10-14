@@ -1063,7 +1063,9 @@ struct ChatTranscriptView: View {
                 guard reader.metrics.bottomGap <= 0.5 else { return }
                 let end = max(0, reader.metrics.contentHeight - reader.metrics.layout.container.height)
                 viewport.note("keep inside the content at \(Int(end))")
+                // Two moves on separate turns: SwiftUI coalesces a move and its return within one.
                 reader.executor.scroll(toY: end - 1)
+                try? await Task.sleep(for: .milliseconds(16))
                 reader.executor.scroll(toY: end)
                 reader.syncGeometry()
             }
@@ -1494,17 +1496,14 @@ struct TranscriptScrollMetrics: Equatable {
     /// shrank, nothing else asks the lazy stack for the rows the viewport now shows.
     func layoutContent() {
         guard let scrollView else { return }
-        let clip = scrollView.contentView
-        let origin = clip.bounds.origin
-        // A move, which the lazy stack answers by laying out what the viewport shows, and back.
-        commanding = true
-        defer { commanding = false }
-        clip.scroll(to: NSPoint(x: origin.x, y: origin.y - 1))
-        scrollView.reflectScrolledClipView(clip)
-        scrollView.documentView?.needsLayout = true
-        scrollView.layoutSubtreeIfNeeded()
-        clip.scroll(to: origin)
-        scrollView.reflectScrolledClipView(clip)
+        let origin = scrollView.contentView.bounds.origin
+        // A move, which the lazy stack answers by laying out what the viewport shows, and back on a
+        // later turn: SwiftUI coalesces a move and its return within one.
+        scroll(toY: origin.y - 1)
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(16))
+            self?.scroll(toY: origin.y)
+        }
     }
 
     /// Where the viewport is now, read from the scroll view itself: the top edge's offset, how far it
