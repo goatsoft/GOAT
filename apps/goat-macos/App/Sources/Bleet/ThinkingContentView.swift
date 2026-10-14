@@ -1089,15 +1089,10 @@ struct ThinkingSegmentsView: View {
                     joinsNext: index + 1 < segments.count && segments[index + 1].continuesPrevious
                 )
                 // Measured before the gap, in the transcript's content coordinates.
-                .onGeometryChange(for: CGRect?.self, of: { isWindowed ? transcriptContentFrame($0) : nil }) { frame in
-                    // Nil is a measurement outside the content, never a disappearance.
-                    if let frame, let navigationKey, isWindowed {
-                        navigation.recordFrame(navigationKey, index, frame, shown)
-                    }
-                }
-                .onDisappear {
-                    if let navigationKey, isWindowed { navigation.recordFrame(navigationKey, index, nil, shown) }
-                }
+                .modifier(
+                    TranscriptFrameReport(isEnabled: isWindowed && navigationKey != nil) { instance, frame in
+                        if let navigationKey { navigation.recordFrame(navigationKey, index, frame, shown, instance) }
+                    })
                 .padding(.top, index == shown.lowerBound || segments[index].continuesPrevious ? 0 : 8)
             }
             if isWindowed, shown.upperBound < segments.count {

@@ -43,10 +43,11 @@ struct TranscriptSegmentNavigation: Equatable, Sendable {
     }
     /// A shown segment's frame in content coordinates, or nil when it is no longer laid out, and the
     /// window of segments that layout shows.
+    /// `instance` identifies the mounted view that measured it.
     var recordFrame:
-        @MainActor @Sendable (_ messageID: UUID, _ segment: Int, _ frame: CGRect?, _ window: Range<Int>) -> Void = {
-            _, _, _, _ in
-        }
+        @MainActor @Sendable (
+            _ messageID: UUID, _ segment: Int, _ frame: CGRect?, _ window: Range<Int>, _ instance: UUID
+        ) -> Void = { _, _, _, _, _ in }
 
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.viewport === rhs.viewport }
 }
@@ -551,15 +552,10 @@ struct ChatTranscriptView: View {
                                 )
                                 // Row frames in content coordinates locate anchors; they are raw measurements,
                                 // kept out of observable state.
-                                .onGeometryChange(for: CGRect?.self, of: transcriptContentFrame) { frame in
-                                    if let frame {
-                                        recordFrame(frame, of: row.id)
-                                    } else if TranscriptViewport.traces {
-                                        viewport.note("row \(row.id.uuidString.prefix(4)) measured outside the content")
-                                    }
-                                }
-                                .onAppear { reader.rowAppeared(row.id) }
-                                .onDisappear { reader.rowDisappeared(row.id) }
+                                .modifier(
+                                    TranscriptFrameReport { instance, frame in
+                                        recordFrame(frame, of: row.id, instance: instance)
+                                    })
                                 .id(row.id)
                             }
                         if messageRange.upperBound < session.messages.count || session.historyHasLater {
@@ -653,8 +649,8 @@ struct ChatTranscriptView: View {
                     hold: { id, window, segmentCount in
                         viewport.holdSegments(of: id, at: window, segmentCount: segmentCount)
                     },
-                    recordFrame: { id, segment, frame, window in
-                        recordFrame(frame, of: id, segment: segment, laidOutIn: window)
+                    recordFrame: { id, segment, frame, window, instance in
+                        recordFrame(frame, of: id, segment: segment, laidOutIn: window, instance: instance)
                     })
             )
             // No initial bottom offset: SwiftUI re-applies it on later size changes, which a lazy stack
@@ -970,7 +966,17 @@ struct ChatTranscriptView: View {
         return found.map { messages[$0].id }
     }
 
-    private func recordFrame(_ frame: CGRect, of id: UUID) {
+    private func recordFrame(_ frame: CGRect?, of id: UUID, instance: UUID) {
+        guard let frame else {
+            // Only the instance whose frame is held clears it: a lazy stack can mount a row's
+            // replacement, which reports its frame, before the replaced instance disappears.
+            if reader.rowInstances[id] == instance {
+                reader.rowFrames[id] = nil
+                reader.rowInstances[id] = nil
+            }
+            return
+        }
+        reader.rowInstances[id] = instance
         let previous = reader.rowFrames[id]
         reader.rowFrames[id] = frame
         if let previous, previous.minY != frame.minY, viewport.anchor?.messageID == id,
@@ -990,7 +996,12 @@ struct ChatTranscriptView: View {
         }
     }
 
-    private func recordFrame(_ frame: CGRect?, of id: UUID, segment: Int, laidOutIn window: Range<Int>) {
+    private func recordFrame(
+        _ frame: CGRect?, of id: UUID, segment: Int, laidOutIn window: Range<Int>, instance: UUID
+    ) {
+        if frame == nil, reader.segmentInstances[id]?[segment] != instance { return }
+        reader.segmentInstances[id, default: [:]][segment] = frame == nil ? nil : instance
+        if reader.segmentInstances[id]?.isEmpty == true { reader.segmentInstances[id] = nil }
         let previous = reader.segmentFrames[id]?[segment]
         if TranscriptViewport.traces {
             viewport.note(
@@ -1154,7 +1165,10 @@ struct ChatTranscriptView: View {
         reader.verificationTask = Task { @MainActor in
             do { try await Task.sleep(for: Self.frameRetryInterval) } catch { return }
             reader.verificationTask = nil
-            if viewport.request == nil, viewport.autoFollow, !reader.isScrolling {
+            // Only while the executor made the last move: a reader's direct move is attributed first.
+            if viewport.request == nil, viewport.autoFollow, !reader.isScrolling, !reader.attributingMove,
+                reader.executor.lastMove?.cause != .other
+            {
                 reader.syncGeometry()
                 if reader.metrics.bottomGap > 1 { viewport.contentChanged() }
             }
@@ -1520,6 +1534,24 @@ private struct TranscriptScrollAttachment: NSViewRepresentable {
 /// scrolling, so an anchor measured as the reader scrolls is never read from a stale frame.
 let transcriptContentSpace = "transcript-content"
 
+/// Reports a view's frame in the transcript's content coordinates, and nil when it disappears, as one
+/// mounted instance: each instance reports under its own identity, so the disappearance of an instance
+/// a lazy stack replaced never clears the frame its replacement reported.
+struct TranscriptFrameReport: ViewModifier {
+    var isEnabled = true
+    let report: @MainActor (_ instance: UUID, _ frame: CGRect?) -> Void
+    @State private var instance = UUID()
+
+    func body(content: Content) -> some View {
+        content
+            .onGeometryChange(for: CGRect?.self, of: { isEnabled ? transcriptContentFrame($0) : nil }) { frame in
+                // Nil is a measurement outside the content, never a disappearance.
+                if let frame { report(instance, frame) }
+            }
+            .onDisappear { if isEnabled { report(instance, nil) } }
+    }
+}
+
 /// A view's frame in the transcript's content coordinates, or nil when the layout measuring it does not
 /// place it in the transcript's content: a lazy stack also sizes rows in passes detached from the
 /// scroll content, where a named space falls back to global coordinates and the frame is meaningless.
@@ -1535,24 +1567,9 @@ nonisolated func transcriptContentFrame(_ proxy: GeometryProxy) -> CGRect? {
     var metrics = TranscriptScrollMetrics()
     /// Row frames in content coordinates, keyed by message identity, for rows laid out now.
     var rowFrames: [UUID: CGRect] = [:]
-    /// How many instances of each row are mounted. A lazy stack can mount a row's new instance, which
-    /// reports its frame, before the old instance disappears, so only the last disappearance clears a
-    /// frame. A frame is only ever one a mounted instance reported.
-    private var rowMounts: [UUID: Int] = [:]
-
-    func rowAppeared(_ id: UUID) {
-        rowMounts[id, default: 0] += 1
-    }
-
-    func rowDisappeared(_ id: UUID) {
-        let mounted = (rowMounts[id] ?? 1) - 1
-        guard mounted <= 0 else {
-            rowMounts[id] = mounted
-            return
-        }
-        rowMounts[id] = nil
-        rowFrames[id] = nil
-    }
+    /// The mounted instance that reported each row's and segment's frame.
+    var rowInstances: [UUID: UUID] = [:]
+    var segmentInstances: [UUID: [Int: UUID]] = [:]
     /// Frames of the shown segments of windowed long replies in content coordinates, by message and
     /// segment index.
     var segmentFrames: [UUID: [Int: CGRect]] = [:]

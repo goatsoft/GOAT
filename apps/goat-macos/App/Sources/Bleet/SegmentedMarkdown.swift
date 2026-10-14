@@ -989,13 +989,10 @@ struct SegmentedMarkdownView: View {
                 .equatable()
                 // Measured before the gap, which changes when the segment stops being the first shown,
                 // and in the transcript's content coordinates, which scrolling does not change.
-                .onGeometryChange(for: CGRect?.self, of: { isWindowed ? transcriptContentFrame($0) : nil }) { frame in
-                    // Nil is a measurement outside the content, never a disappearance.
-                    if let frame, let messageID, isWindowed { navigation.recordFrame(messageID, index, frame, shown) }
-                }
-                .onDisappear {
-                    if let messageID, isWindowed { navigation.recordFrame(messageID, index, nil, shown) }
-                }
+                .modifier(
+                    TranscriptFrameReport(isEnabled: isWindowed && messageID != nil) { instance, frame in
+                        if let messageID { navigation.recordFrame(messageID, index, frame, shown, instance) }
+                    })
                 .padding(.top, index == shown.lowerBound ? 0 : gap(before: segment))
             }
             if isWindowed, shown.upperBound < document.segments.count {
