@@ -1052,6 +1052,22 @@ struct ChatTranscriptView: View {
             !session.historyHasLater && metrics.distanceFromBottom <= Self.bottomTolerance
             && messageRange.upperBound == session.messages.count
         reader.isAtBottom = atBottom
+        if !reader.isScrolling, metrics.contentHeight > 0,
+            metrics.offset > metrics.contentHeight - metrics.layout.container.height + 1
+        {
+            // The content shrank above a viewport past its new end. The scroll view keeps its bounds
+            // valid, but the lazy stack lays out the rows there only after a move it is told about, so
+            // the executor makes that move. Never inside the geometry callback.
+            Task { @MainActor in
+                reader.syncGeometry()
+                guard reader.metrics.bottomGap <= 0.5 else { return }
+                let end = max(0, reader.metrics.contentHeight - reader.metrics.layout.container.height)
+                viewport.note("keep inside the content at \(Int(end))")
+                reader.executor.scroll(toY: end - 1)
+                reader.executor.scroll(toY: end)
+                reader.syncGeometry()
+            }
+        }
         if !reader.isScrolling {
             if metrics.layout != previous.layout {
                 // Content grew or reflowed, or the viewport resized, moving the offset with it if at all:
