@@ -1549,18 +1549,32 @@ let transcriptContentSpace = "transcript-content"
 /// Reports a view's frame in the transcript's content coordinates, and nil when it disappears, as one
 /// mounted instance: each instance reports under its own identity, so the disappearance of an instance
 /// a lazy stack replaced never clears the frame its replacement reported.
+///
+/// An instance the lazy stack brings back reports its last frame again: SwiftUI reports a geometry
+/// change only when the value changes, so an instance that returns where it was reports nothing.
 struct TranscriptFrameReport: ViewModifier {
     var isEnabled = true
     let report: @MainActor (_ instance: UUID, _ frame: CGRect?) -> Void
-    @State private var instance = UUID()
+    /// A reference, so recording a measurement never invalidates the view.
+    @State private var measurement = Measurement()
+
+    private final class Measurement {
+        let instance = UUID()
+        var frame: CGRect?
+    }
 
     func body(content: Content) -> some View {
         content
             .onGeometryChange(for: CGRect?.self, of: { isEnabled ? transcriptContentFrame($0) : nil }) { frame in
                 // Nil is a measurement outside the content, never a disappearance.
-                if let frame { report(instance, frame) }
+                guard let frame else { return }
+                measurement.frame = frame
+                report(measurement.instance, frame)
             }
-            .onDisappear { if isEnabled { report(instance, nil) } }
+            .onAppear {
+                if isEnabled, let frame = measurement.frame { report(measurement.instance, frame) }
+            }
+            .onDisappear { if isEnabled { report(measurement.instance, nil) } }
     }
 }
 
