@@ -1107,8 +1107,11 @@ extension AppTests.Bleet {
             try await settle(viewport, host: host)
             let trace = viewport.diagnostics.suffix(16)
             #expect(viewport.readerOwnsViewport && viewport.request == nil, "\(trace)")
+            // The lazy stack keeps the reader's rows in place as estimates above them resolve, which moves
+            // the offset by a few points; the failure this guards against moves it back to the command's
+            // target, thousands of points away.
             #expect(
-                abs(scroll.contentView.bounds.minY - target) <= 1,
+                abs(scroll.contentView.bounds.minY - target) <= 8,
                 "The viewport left the reader's position: \(scroll.contentView.bounds.minY) vs \(target); \(trace)")
         }
 

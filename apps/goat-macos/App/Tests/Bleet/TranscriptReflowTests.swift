@@ -144,6 +144,20 @@ extension AppTests.Bleet {
                         "host \(host.frame), window \(window.frame), min \(window.contentMinSize), max \(window.contentMaxSize)"
                     let state = "\(clip), \(hostGeometry), \(owner), \(trace)"
                     let context = "width \(width), font \(font), wheel \(delta); ink=\(ink)"
+                    if ink <= 100 {
+                        // How long the lazy stack takes to show the rows there, for diagnosis.
+                        let started = ContinuousClock.now
+                        var recovered: Duration?
+                        for _ in 0..<100 {
+                            try await Task.sleep(for: .milliseconds(20))
+                            host.layoutSubtreeIfNeeded()
+                            if reflowInk(host) > 100 {
+                                recovered = started.duration(to: .now)
+                                break
+                            }
+                        }
+                        print("REFLOW_RECOVERY \(context) after \(recovered.map { "\($0)" } ?? "none in 2 s")")
+                    }
                     #expect(ink > 100, "Viewport must contain visible text after \(context); \(state)")
 
                 }
@@ -515,4 +529,20 @@ final class TranscriptComparisonPreparationTests: XCTestCase {
 
 @MainActor private final class ComparisonFrameSamplingDocument: NSView {
     override var isFlipped: Bool { true }
+}
+
+@MainActor private func reflowInk(_ view: NSView) -> Int {
+    guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return 0 }
+    view.cacheDisplay(in: view.bounds, to: bitmap)
+    var ink = 0
+    for y in stride(from: 10, to: bitmap.pixelsHigh - 10, by: 3) {
+        for x in stride(from: 20, to: bitmap.pixelsWide - 20, by: 3) {
+            if let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB), color.alphaComponent > 0.9,
+                color.redComponent < 0.6, color.greenComponent < 0.6, color.blueComponent < 0.6
+            {
+                ink += 1
+            }
+        }
+    }
+    return ink
 }
