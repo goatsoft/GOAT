@@ -679,6 +679,7 @@ struct ChatTranscriptView: View {
                 if phase == .tracking || phase == .interacting || phase == .decelerating {
                     if !reader.isScrolling { viewport.note("gesture \(phase)") }
                     reader.isScrolling = true
+                    reader.expectsProxyLanding = false
                     viewport.readerMoved(currentRange: messageRange, anchor: reader.measuredAnchor())
                 } else if phase == .idle {
                     let readerFinishedScrolling = reader.isScrolling
@@ -1086,6 +1087,10 @@ struct ChatTranscriptView: View {
                     // The executor's own command, checked for fulfilment below, or AppKit keeping the
                     // bounds valid as the document resized.
                     break
+                case .other where reader.expectsProxyLanding:
+                    // The executor's last-resort SwiftUI scroll landing; the pending request continues.
+                    reader.expectsProxyLanding = false
+                    viewport.note("proxy landed at \(Int(metrics.offset))")
                 case .other:
                     // The keyboard, a scroller or another direct move without a gesture phase, or the lazy
                     // stack moving the offset with its content as row estimates resolve. Only the first
@@ -1339,6 +1344,9 @@ struct ChatTranscriptView: View {
                 let row = rowID(containing: anchor.messageID)
             {
                 viewport.note("scroll proxy to \(row.uuidString.prefix(4))")
+                // It lands on a later update, as a move the scroll view did not record: the next one is
+                // this scroll's, not the reader's.
+                reader.expectsProxyLanding = true
                 reader.proxy?.scrollTo(row, anchor: .top)
             } else {
                 reader.executor.layoutContent()
@@ -1683,8 +1691,10 @@ nonisolated func transcriptContentFrame(_ proxy: GeometryProxy) -> CGRect? {
     var attributionTask: Task<Void, Never>?
     /// Re-checks the pending request after a scroll command whether or not its geometry is reported.
     var verificationTask: Task<Void, Never>?
-    /// SwiftUI's own scroll, used only for a target the lazy stack does not lay out.
+    /// SwiftUI's own scroll, used only for a target the lazy stack does not lay out, and whether its
+    /// landing is still to come.
     var proxy: ScrollViewProxy?
+    var expectsProxyLanding = false
     /// The pending attempt waits, with a deadline, for its target row's first layout.
     var awaitingFrame = false
     var attemptGeneration: UInt64 = 0
