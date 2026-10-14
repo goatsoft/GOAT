@@ -790,9 +790,11 @@ extension AppTests.Bleet {
             }
             #expect(
                 changed == 0,
-                "The reader's view moved while paging earlier: \(changed) pixels in x \(region.minX)...\(region.maxX) "
-                    + "y \(region.minY)...\(region.maxY) of \(before.pixelsWide)x\(before.pixelsHigh); "
-                    + "\(viewport.diagnostics.suffix(16))")
+                """
+                The reader's view moved while paging earlier: \(changed) pixels in x \(region.minX)...\(region.maxX) \
+                y \(region.minY)...\(region.maxY) of \(before.pixelsWide)x\(before.pixelsHigh); \
+                \(viewport.diagnostics.suffix(16))
+                """)
         }
 
         /// #60 A1 step 3: a long reply renders rich as a bounded window of its latest segments, never as
