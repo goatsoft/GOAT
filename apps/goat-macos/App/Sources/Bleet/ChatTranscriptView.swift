@@ -924,6 +924,8 @@ struct ChatTranscriptView: View {
     }
 
     private func handleGeometry(from previous: TranscriptScrollMetrics, to metrics: TranscriptScrollMetrics) {
+        // Where the reader was before this snapshot, for attributing a move it reports.
+        let anchorBefore = reader.measuredAnchor()
         reader.metrics = metrics
         let atBottom =
             !session.historyHasLater && metrics.distanceFromBottom <= Self.bottomTolerance
@@ -942,13 +944,11 @@ struct ChatTranscriptView: View {
                     // bounds valid as the document resized.
                     break
                 case .other:
-                    // The keyboard, a scroller or another direct move, without a gesture phase; it
-                    // cancels any pending scroll.
-                    viewport.note("reader offset \(Int(previous.offset))->\(Int(metrics.offset))")
-                    if viewport.readerOwnsViewport || !atBottom {
-                        viewport.readerMoved(
-                            currentRange: messageRange, anchor: reader.measuredAnchor(), replacingUnknown: true)
-                    }
+                    // The keyboard, a scroller or another direct move without a gesture phase, or the lazy
+                    // stack moving the offset with its content as row estimates resolve. Only the first
+                    // moves what the reader sees, so decide once the rows report where they now are, and
+                    // hold any pending scroll until then.
+                    attributeMove(from: previous.offset, to: metrics.offset, anchorBefore: anchorBefore)
                 case nil:
                     // No recorded move lands here, so it changes no ownership.
                     viewport.note(
@@ -978,7 +978,8 @@ struct ChatTranscriptView: View {
     /// `maximumScrollAttempts` times. A target that has no row yet is retried on the same bound, so one
     /// that never renders is abandoned. Reader input cancels it through the owner.
     private func executePendingRequest() {
-        guard let request = viewport.request, reader.executorTask == nil, !reader.isScrolling else { return }
+        guard let request = viewport.request, reader.executorTask == nil, !reader.isScrolling, !reader.attributingMove
+        else { return }
         if reader.attemptGeneration != request.generation {
             reader.attemptGeneration = request.generation
             reader.attempts = 0
@@ -998,7 +999,8 @@ struct ChatTranscriptView: View {
             defer {
                 if !Task.isCancelled, let pending = viewport.request, pending != request { executePendingRequest() }
             }
-            guard !Task.isCancelled, viewport.request == request, !reader.isScrolling else { return }
+            guard !Task.isCancelled, viewport.request == request, !reader.isScrolling, !reader.attributingMove
+            else { return }
             if reader.shows(request.target, heldWindow: viewport.segmentWindow(for:)) {
                 viewport.note("fulfilled \(request.generation) at \(Int(reader.metrics.offset))")
                 viewport.fulfilled(request)
@@ -1037,6 +1039,32 @@ struct ChatTranscriptView: View {
             reader.executor.scroll(toY: target)
             reader.attempts += 1
             viewport.recordScrollCommand()
+        }
+    }
+
+    /// A move nothing recorded explains is the reader's only if the content on screen moved with it. The
+    /// lazy stack shifts the offset and its rows together when estimates above the viewport resolve; the
+    /// reader's anchor then stays where it was, and ownership does not change.
+    private func attributeMove(from previousOffset: CGFloat, to offset: CGFloat, anchorBefore: TranscriptViewport.Anchor?) {
+        reader.attributionTask?.cancel()
+        reader.attributingMove = true
+        reader.attributionTask = Task { @MainActor in
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            reader.attributingMove = false
+            reader.attributionTask = nil
+            let anchorAfter = reader.measuredAnchor()
+            if let anchorBefore, let anchorAfter, anchorBefore.messageID == anchorAfter.messageID,
+                anchorBefore.segment == anchorAfter.segment, abs(anchorBefore.offset - anchorAfter.offset) <= 1
+            {
+                viewport.note("layout offset \(Int(previousOffset))->\(Int(offset))")
+            } else {
+                viewport.note("reader offset \(Int(previousOffset))->\(Int(offset))")
+                if viewport.readerOwnsViewport || !reader.isAtBottom {
+                    viewport.readerMoved(currentRange: messageRange, anchor: anchorAfter, replacingUnknown: true)
+                }
+            }
+            executePendingRequest()
         }
     }
 
@@ -1288,6 +1316,9 @@ let transcriptContentSpace = "transcript-content"
     /// The transcript's only scroll writer.
     let executor = TranscriptScrollExecutor()
     var executorTask: Task<Void, Never>?
+    /// A move awaiting attribution holds the executor until the rows report their positions.
+    var attributingMove = false
+    var attributionTask: Task<Void, Never>?
     /// The pending attempt waits, with a deadline, for its target row's first layout.
     var awaitingFrame = false
     var attemptGeneration: UInt64 = 0
