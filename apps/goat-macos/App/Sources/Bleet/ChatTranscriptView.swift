@@ -850,6 +850,11 @@ struct ChatTranscriptView: View {
         guard initiallyPlaced, viewport.request == nil, pagingPhase == .idle,
             earlierLoaderVisible || laterLoaderVisible
         else { return }
+        // SwiftUI reports a loader leaving the viewport with its next update: confirm from the scroll
+        // view that the viewport is still at that end, so a reader who moved on is not paged.
+        reader.syncGeometry()
+        let reach = reader.metrics.layout.container.height
+        guard earlierLoaderVisible ? reader.metrics.topGap <= reach : reader.metrics.bottomGap <= reach else { return }
         let range = messageRange
         let keptIndex = earlierLoaderVisible ? range.lowerBound : range.upperBound - 1
         let keptMeasured =
@@ -1291,7 +1296,11 @@ struct ChatTranscriptView: View {
         }
         if reader.frameWaitStarted == nil { reader.frameWaitStarted = now }
         reader.attempts += 1
-        viewport.note("awaiting \(missing) \(request.generation)")
+        viewport.note(
+            "awaiting \(missing) \(request.generation)"
+                + (TranscriptViewport.traces
+                    ? " rows \(reader.rowFrames.count) at \(Int(reader.metrics.offset)) of \(Int(reader.metrics.contentHeight))"
+                    : ""))
         reader.awaitingFrame = true
         reader.executorTask = Task { @MainActor in
             do { try await Task.sleep(for: Self.frameRetryInterval) } catch { return }
