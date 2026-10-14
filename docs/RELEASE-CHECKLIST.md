@@ -2,6 +2,18 @@
 
 **The current Kid release is available as a signed, notarized Mac download.** This is the acceptance checklist for ongoing releases, not a claim that every configuration or workflow has been tested. See [Known issues](KNOWN-ISSUES.md#release-qualification) for the scope of Kid’s installation check. Detailed machine logs and historical reports remain in the private maintainer archive.
 
+## 0.1.4 maintenance scope
+
+Qualify the bounded rich replies and reasoning, paged history and reader actions, native syntax highlighting and tool diffs, theme colour editing, and bounded read-only subagent delegation described in the [release notes](RELEASE-NOTES.md). Keep stable oMLX 0.6.4 as the qualified baseline. The flat lazy transcript (ADR-0099, #86) remains test-only and is not part of this release.
+
+- [ ] `make verify CONFIG=Release SWIFT_FLAGS='-c release'` on the final source.
+- [ ] Website and docs build: `npm run build` and `npm run docs:build` in `web/`.
+- [ ] Smoke-test the shipping reader with disposable content: scroll-back over settled rich rows, Earlier/Later and Latest, paging a stored chat, find, copy last reply, export, edit and resend, retry, font and width reflow, code actions, reasoning fold and tool diffs. Record keyboard and VoiceOver observations separately.
+- [ ] Record the macOS 26 expanded-reasoning limit (Delivery 3 reasoning phase) as a known issue with its CI timing.
+- [ ] Final-source CI, then the tagged release workflow: signed and notarized DMG, manifest and checksums.
+- [ ] Clean-Mac installation, upgrade from 0.1.3 and disposable uninstall acceptance.
+- [ ] Owner review of the notes against the accepted artifact, then publish and update `web/publication.json`.
+
 ## 0.1.3 maintenance scope
 
 Qualify the model-management, compaction and recovery work; long-transcript navigation; oMLX status, limit and measurement changes; Custom endpoint restoration; maintained Xcode project; domain test organisation; focused test runners; and signed-build verification described in the [release notes](RELEASE-NOTES.md). Use the exact final 0.1.3 source and artifact for distribution evidence. Keep stable oMLX 0.6.4 as the qualified baseline and preserve the documented limits of the unreproduced throughput report.
