@@ -1101,6 +1101,7 @@ struct ChatTranscriptView: View {
             }
             guard !Task.isCancelled, viewport.request == request, !reader.isScrolling, !reader.attributingMove
             else { return }
+            reader.syncGeometry()
             if reader.shows(request.target, heldWindow: viewport.segmentWindow(for:)) {
                 viewport.note("fulfilled \(request.generation) at \(Int(reader.metrics.offset))")
                 viewport.fulfilled(request)
@@ -1136,7 +1137,8 @@ struct ChatTranscriptView: View {
             viewport.note(
                 "scroll \(request.generation) \(request.target == .bottom ? "bottom" : "anchor") "
                     + "\(Int(metrics.offset))->\(Int(target)) gap \(Int(metrics.topGap))/\(Int(metrics.bottomGap))")
-            reader.landed(at: reader.executor.scroll(toY: target))
+            reader.executor.scroll(toY: target)
+            reader.syncGeometry()
             reader.attempts += 1
             viewport.recordScrollCommand()
             verifyAfterScroll()
@@ -1209,7 +1211,8 @@ struct ChatTranscriptView: View {
             "reveal row \(target) near \(nearest.0) at \(Int(y)) from \(Int(metrics.offset)) gap "
                 + "\(Int(metrics.topGap))/\(Int(metrics.bottomGap)) laid out "
                 + laidOut.map { "\($0.0)@\(Int($0.1.minY))" }.joined(separator: ","))
-        reader.landed(at: reader.executor.scroll(toY: y))
+        reader.executor.scroll(toY: y)
+        reader.syncGeometry()
         viewport.recordScrollCommand()
         verifyAfterScroll()
     }
@@ -1422,17 +1425,29 @@ struct TranscriptScrollMetrics: Equatable {
         previousOrigin = nil
     }
 
-    /// Moves the viewport's top edge to `y` in content coordinates, without animation, and returns
-    /// where the top edge is now (the clip view keeps it inside the document).
-    @discardableResult
-    func scroll(toY y: CGFloat) -> CGFloat? {
-        guard let scrollView else { return nil }
+    /// Moves the viewport's top edge to `y` in content coordinates, without animation.
+    func scroll(toY y: CGFloat) {
+        guard let scrollView else { return }
         let clip = scrollView.contentView
         commanding = true
         defer { commanding = false }
         clip.scroll(to: NSPoint(x: clip.bounds.minX, y: y))
         scrollView.reflectScrolledClipView(clip)
-        return clip.bounds.minY
+    }
+
+    /// Where the viewport is now, read from the scroll view itself: the top edge's offset, how far it
+    /// can still move up and down, and the content's height. SwiftUI reports geometry with its next
+    /// update, which an idle or off-screen window may defer, and a lazy stack changes the content's
+    /// height as estimates resolve, so a command is planned and verified against this.
+    func geometry() -> (offset: CGFloat, topGap: CGFloat, bottomGap: CGFloat, contentHeight: CGFloat)? {
+        guard let scrollView, let document = scrollView.documentView else { return nil }
+        let clip = scrollView.contentView
+        let bounds = clip.bounds
+        let insets = clip.contentInsets
+        return (
+            bounds.minY, max(0, bounds.minY + insets.top), max(0, document.frame.maxY + insets.bottom - bounds.maxY),
+            document.frame.height
+        )
     }
 
     /// Why the viewport's top edge is at `offset`, if a recorded move put it there.
@@ -1552,16 +1567,15 @@ nonisolated func transcriptContentFrame(_ proxy: GeometryProxy) -> CGRect? {
     var attempts = 0
     var frameWaitStarted: ContinuousClock.Instant?
 
-    /// Records where a command left the viewport's top edge. SwiftUI reports the move with its next
-    /// update, which an idle or off-screen window may defer; verifying a command must not read the
-    /// offset from before it.
-    func landed(at offset: CGFloat?) {
-        guard let offset else { return }
-        let delta = offset - metrics.offset
-        guard abs(delta) > 0.25 else { return }
-        metrics.offset = offset
-        metrics.topGap = max(0, metrics.topGap + delta)
-        metrics.bottomGap = max(0, metrics.bottomGap - delta)
+    /// Takes the viewport's position from the scroll view, so a command is never planned or verified
+    /// against geometry SwiftUI has not reported yet. Only the executor reads it; SwiftUI's next report
+    /// replaces it as usual.
+    func syncGeometry() {
+        guard let geometry = executor.geometry() else { return }
+        metrics.offset = geometry.offset
+        metrics.topGap = geometry.topGap
+        metrics.bottomGap = geometry.bottomGap
+        metrics.contentHeight = geometry.contentHeight
     }
 
     /// The distance from `id`'s top edge to the viewport's top edge, when laid out.
