@@ -435,7 +435,9 @@ struct ChatTranscriptView: View {
             ScrollView {
                 // One centred reading column shared with the composer (#60 D3).
                 BoundedWidthLayout(maximumWidth: readingColumn) {
-                    VStack(alignment: .leading, spacing: 0) {
+                    // Lazy: only rows near the viewport are laid out. A plain stack re-measured every row,
+                    // including the scroll view's ideal-size pass, on each streamed update (#85, ADR-0099).
+                    LazyVStack(alignment: .leading, spacing: 0) {
                         if session.isPagingHistory { ProgressView().controlSize(.small) }
                         if let error = session.historyPageError {
                             Text(error).font(.caption).foregroundStyle(Caprine.Semantic.warning)
