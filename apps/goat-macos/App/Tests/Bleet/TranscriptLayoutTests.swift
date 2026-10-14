@@ -505,18 +505,26 @@ extension AppTests.Bleet {
     return session
 }
 
-/// Whether a pixel differs as content would: by more than gradient dithering, which follows a layer's
-/// position in the content and changes when the lazy stack lays a row out at another content offset
-/// while the reader sees it in the same place. Moved text or a different row differs by far more.
+/// Whether a pixel differs as content that moved would. The lazy stack lays a kept row out at another
+/// content offset while the reader sees it in the same place, within a fraction of a point: gradient
+/// dithering, which follows a layer's position in the content, changes by a few levels, and glyphs
+/// rasterize at another sub-pixel phase. So a pixel is unchanged when it matches the earlier image
+/// within a small tolerance at the same place or one device pixel above or below. A move of more
+/// than a device pixel, or a different row, still differs.
 private func visiblyDiffers(_ before: NSBitmapImageRep, _ after: NSBitmapImageRep, x: Int, y: Int) -> Bool {
-    guard let lhs = before.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
-        let rhs = after.colorAt(x: x, y: y)?.usingColorSpace(.sRGB)
-    else { return before.colorAt(x: x, y: y) != after.colorAt(x: x, y: y) }
+    guard let shown = after.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { return true }
     let tolerance: CGFloat = 32 / 255
-    return abs(lhs.redComponent - rhs.redComponent) > tolerance
-        || abs(lhs.greenComponent - rhs.greenComponent) > tolerance
-        || abs(lhs.blueComponent - rhs.blueComponent) > tolerance
-        || abs(lhs.alphaComponent - rhs.alphaComponent) > tolerance
+    for dy in [0, -1, 1] where (0..<before.pixelsHigh).contains(y + dy) {
+        guard let earlier = before.colorAt(x: x, y: y + dy)?.usingColorSpace(.sRGB) else { continue }
+        if abs(earlier.redComponent - shown.redComponent) <= tolerance
+            && abs(earlier.greenComponent - shown.greenComponent) <= tolerance
+            && abs(earlier.blueComponent - shown.blueComponent) <= tolerance
+            && abs(earlier.alphaComponent - shown.alphaComponent) <= tolerance
+        {
+            return false
+        }
+    }
+    return true
 }
 
 @MainActor private func snapshot(_ view: NSView) throws -> NSBitmapImageRep {
