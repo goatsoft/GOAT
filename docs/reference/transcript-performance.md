@@ -16,7 +16,8 @@ open issues. Closing the original audit records this transfer; Deliveries 3–6 
 The dated evidence below remains historical. References there to gates being open in #60 now
 resolve through this ownership table. No unchecked acceptance is certified by the transfer.
 The maintenance release retains its separate [release checklist](../RELEASE-CHECKLIST.md);
-ADR-0099 remains Proposed and the shipping container is unchanged.
+ADR-0099 remains Proposed. Since 0.1.4 the shipping transcript's outer stack is lazy (its shipping
+amendment): on the macOS 26 Mac Studio, Delivery 3 reasoning takes 19.4 s and 4.1 s CPU (main 153.6 s).
 
 ## Workload and measurements
 
