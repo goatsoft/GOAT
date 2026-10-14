@@ -1068,12 +1068,15 @@ struct ChatTranscriptView: View {
         // resize changes nothing. Re-identifying the lazy stack rebuilds the rows it shows, so only a
         // reflow large enough to leave its estimates wrong does it (not a scroller appearing).
         let column = min(readingColumn, max(0, metrics.width - 48))
-        if previous.width > 0, abs(column - reader.relayoutColumn) >= 32 {
-            reader.relayoutColumn = column
-            // Never invalidate layout from inside its own geometry callback.
-            Task { @MainActor in scheduleRelayout() }
-        } else if reader.relayoutColumn == 0 {
-            reader.relayoutColumn = column
+        if column > 0 {
+            if reader.relayoutColumn == 0 {
+                // The first width the transcript is laid out at.
+                reader.relayoutColumn = column
+            } else if abs(column - reader.relayoutColumn) >= 32 {
+                reader.relayoutColumn = column
+                // Never invalidate layout from inside its own geometry callback.
+                Task { @MainActor in scheduleRelayout() }
+            }
         }
         if TranscriptViewport.traces, metrics != previous {
             let anchorTop = viewport.anchor.flatMap { reader.rowFrames[$0.messageID] }.map { "\(Int($0.minY))" } ?? "-"
