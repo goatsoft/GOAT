@@ -806,9 +806,11 @@ extension TranscriptHistoryPagingTests {
             window.close()
         }
         try await Task.sleep(for: .seconds(1))
-        XCTAssertTrue(
-            Set(TranscriptRenderMetrics.evaluations.keys).isSuperset(of: Set(session.messages.map(\.id))),
-            "The instrumentation must include all 40 admitted rows")
+        // The lazy stack evaluates the rows near the viewport, not every admitted row (ADR-0099).
+        XCTAssertNotNil(TranscriptRenderMetrics.evaluations[active.id], "The live row must be evaluated")
+        XCTAssertFalse(
+            Set(TranscriptRenderMetrics.evaluations.keys).isDisjoint(with: settledIDs),
+            "The instrumentation must include the settled rows on screen")
         TranscriptRenderMetrics.evaluations = [:]
         for index in 0..<20 {
             active.appendStream(text: " Publication \(index).", thinking: "")
