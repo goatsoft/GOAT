@@ -930,7 +930,6 @@ struct ChatTranscriptView: View {
     }
 
     private func recordFrame(_ frame: CGRect, of id: UUID) {
-        reader.reportedFrames[id] = frame
         reader.rowFrames[id] = frame
         if viewport.anchor == nil, viewport.readerOwnsViewport, !reader.isScrolling,
             let anchor = reader.measuredAnchor()
@@ -1367,16 +1366,13 @@ let transcriptContentSpace = "transcript-content"
     var metrics = TranscriptScrollMetrics()
     /// Row frames in content coordinates, keyed by message identity, for rows laid out now.
     var rowFrames: [UUID: CGRect] = [:]
-    /// The last frame each row reported, and how many instances of it are mounted. A lazy stack can
-    /// mount a row's new instance, which reports its frame, before the old instance disappears, so only
-    /// the last disappearance clears a frame, and an appearance restores the frame last reported (the
-    /// new instance's geometry report replaces it).
-    var reportedFrames: [UUID: CGRect] = [:]
+    /// How many instances of each row are mounted. A lazy stack can mount a row's new instance, which
+    /// reports its frame, before the old instance disappears, so only the last disappearance clears a
+    /// frame. A frame is only ever one a mounted instance reported.
     private var rowMounts: [UUID: Int] = [:]
 
     func rowAppeared(_ id: UUID) {
         rowMounts[id, default: 0] += 1
-        if rowFrames[id] == nil { rowFrames[id] = reportedFrames[id] }
     }
 
     func rowDisappeared(_ id: UUID) {
