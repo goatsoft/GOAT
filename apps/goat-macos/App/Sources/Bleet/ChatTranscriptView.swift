@@ -1369,9 +1369,24 @@ struct ChatTranscriptView: View {
         let target: (id: UUID, edge: UnitPoint)?
         if atReader {
             let reach = metrics.layout.container.height
+            // At either end the rows' own estimate, or the top itself, is where the rows are: SwiftUI
+            // places a row by its estimate of the content, which is what left the viewport blank.
+            if metrics.bottomGap <= reach, let end = estimatedContentEnd(), end < top + reach {
+                let y = max(0, end - reach)
+                viewport.note("rescue blank viewport at \(Int(top)) to the rows' end \(Int(y))")
+                reader.executor.scroll(toY: y)
+                reader.syncGeometry()
+                return
+            }
+            if metrics.topGap <= reach {
+                viewport.note("rescue blank viewport at \(Int(top)) to the top")
+                reader.executor.scroll(toY: 0)
+                reader.syncGeometry()
+                return
+            }
             if metrics.bottomGap <= reach {
                 target = rows.last.map { ($0.id, .bottom) }
-            } else if metrics.topGap <= reach || metrics.contentHeight <= 0 {
+            } else if metrics.contentHeight <= 0 {
                 target = rows.first.map { ($0.id, .top) }
             } else {
                 let fraction = min(1, max(0, top / metrics.contentHeight))
