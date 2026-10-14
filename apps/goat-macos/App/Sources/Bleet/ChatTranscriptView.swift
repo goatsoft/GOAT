@@ -383,8 +383,6 @@ struct ChatTranscriptView: View {
     /// Distance from the bottom within which the latest content counts as shown, for both the
     /// jump button and a reader's return to following.
     static let bottomTolerance: CGFloat = 50
-    /// The trailing space's identity: the transcript's end, for SwiftUI scrolls to it.
-    static let endID = "transcript-end"
     /// Attempts per request while layout settles before it is abandoned (and instrumented).
     static let maximumScrollAttempts = 12
     /// How long an attempt waits for a target row that has not laid out, so a target that never renders
@@ -585,7 +583,6 @@ struct ChatTranscriptView: View {
                         // Space below the last row, so the latest line never sits on the window edge.
                         Color.clear
                             .frame(height: Caprine.Activity.doubleLineHeight + 1)
-                            .id(Self.endID)
                     }
                     .scrollTargetLayout()
                 }
@@ -1175,21 +1172,6 @@ struct ChatTranscriptView: View {
             case .bottom:
                 RenderSignposts.event("TranscriptFollow")
                 followThrottle.recordFire(at: ProcessInfo.processInfo.systemUptime)
-                // A long way to the end crosses rows the lazy stack only estimated: the document's end
-                // is an estimate that can lie far past the rows, and a move there shows nothing. SwiftUI
-                // lays the last rows out on its way to the end, so it makes long moves; the executor
-                // verifies them as usual. Following a stream moves a short way and stays native.
-                if metrics.bottomGap > 2 * metrics.layout.container.height, let proxy = reader.proxy {
-                    viewport.note(
-                        "scroll \(request.generation) bottom through SwiftUI from \(Int(metrics.offset)) "
-                            + "gap \(Int(metrics.bottomGap))")
-                    reader.expectsProxyLanding = true
-                    proxy.scrollTo(Self.endID, anchor: .bottom)
-                    reader.attempts += 1
-                    viewport.recordScrollCommand()
-                    verifyAfterScroll()
-                    return
-                }
                 target = metrics.offset + metrics.bottomGap
             case .anchor(let anchor):
                 // Not laid out yet: the row's or segment's first geometry report runs this again, else a
@@ -1225,9 +1207,6 @@ struct ChatTranscriptView: View {
         reader.verificationTask = Task { @MainActor in
             do { try await Task.sleep(for: Self.frameRetryInterval) } catch { return }
             reader.verificationTask = nil
-            // A SwiftUI scroll lands within a frame; a landing that moved nothing must not claim the
-            // reader's next move.
-            reader.expectsProxyLanding = false
             // Only while the executor made the last move: a reader's direct move is attributed first.
             if viewport.request == nil, viewport.autoFollow, !reader.isScrolling, !reader.attributingMove,
                 reader.executor.lastMove?.cause != .other
