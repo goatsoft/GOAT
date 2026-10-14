@@ -467,6 +467,8 @@ struct ChatTranscriptView: View {
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
+            // The proxy is the last resort for a target the lazy stack will not lay out (`awaitLayout`).
+            ScrollViewReader { proxy in
             ScrollView {
                 // One centred reading column shared with the composer (#60 D3).
                 BoundedWidthLayout(maximumWidth: readingColumn) {
@@ -797,6 +799,8 @@ struct ChatTranscriptView: View {
                 reader.verificationTask = nil
                 reader.attributingMove = false
                 pagingPhase = .idle
+            }
+            .onAppear { reader.proxy = proxy }
             }
         }
     }
@@ -1282,6 +1286,13 @@ struct ChatTranscriptView: View {
         viewport.restore(anchor)
     }
 
+    /// The identity of the row that shows `key`, a message or its reasoning.
+    private func rowID(containing key: UUID) -> UUID? {
+        TranscriptActivity.rows(session.messages[messageRange]).first { row in
+            row.messages.contains { TranscriptSegmentOwner.key(key, belongsTo: $0.id) }
+        }?.id
+    }
+
     /// The longest run of frames whose positions agree with their order, so a frame left from an earlier
     /// layout never steers an estimate. `frames` is sorted by row index.
     static func ordered(_ frames: [(Int, CGRect)]) -> [(Int, CGRect)] {
@@ -1319,8 +1330,20 @@ struct ChatTranscriptView: View {
             return
         }
         if reader.frameWaitStarted == nil { reader.frameWaitStarted = now }
-        // No row is laid out at all: the content was not laid out for where the viewport is.
-        if reader.rowFrames.isEmpty { reader.executor.layoutContent() }
+        // No row is laid out at all: the content was not laid out for where the viewport is. After a
+        // drastic size change while unmounted, the lazy stack can keep a row's old place and lay out
+        // nothing where the viewport is; only a SwiftUI scroll to the row makes it lay that row out.
+        // The reader sees nothing then, so there is no reader position for it to override.
+        if reader.rowFrames.isEmpty {
+            if reader.attempts >= 2, case .anchor(let anchor) = request.target,
+                let row = rowID(containing: anchor.messageID)
+            {
+                viewport.note("scroll proxy to \(row.uuidString.prefix(4))")
+                reader.proxy?.scrollTo(row, anchor: .top)
+            } else {
+                reader.executor.layoutContent()
+            }
+        }
         reader.attempts += 1
         viewport.note(
             "awaiting \(missing) \(request.generation)"
@@ -1660,6 +1683,8 @@ nonisolated func transcriptContentFrame(_ proxy: GeometryProxy) -> CGRect? {
     var attributionTask: Task<Void, Never>?
     /// Re-checks the pending request after a scroll command whether or not its geometry is reported.
     var verificationTask: Task<Void, Never>?
+    /// SwiftUI's own scroll, used only for a target the lazy stack does not lay out.
+    var proxy: ScrollViewProxy?
     /// The pending attempt waits, with a deadline, for its target row's first layout.
     var awaitingFrame = false
     var attemptGeneration: UInt64 = 0
