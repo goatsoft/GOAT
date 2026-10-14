@@ -103,8 +103,9 @@ private struct ComparisonLazyList: View {
             fixture.swiftUIEndDistance = value
             atEnd = value < 24
         }
-        // Rows near the end replace their estimates as they mount; while following, keep the end in view
-        // through SwiftUI's own position rather than a native write.
+        // Rows near the end replace their estimates as they mount, and the bottom size-change anchor alone
+        // does not keep the end in view as rows are appended (976,507 pt behind after 2 MiB locally). While
+        // following, each content height change keeps the end in view through SwiftUI's own position.
         .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentSize.height }) { old, new in
             guard fixture.following, old != new else { return }
             scrollToEnd(proxy)
@@ -163,10 +164,12 @@ struct ComparisonRowMeasure: Layout {
         }
         Self.measurements += 1
         let size = subviews.first?.sizeThatFits(proposal) ?? .zero
-        let height = size.height
+        // Whole-point rows keep every row edge, and so every scroll offset the lazy stack derives from
+        // them, on the pixel grid of a 1x display; half-point heights left the clip at half points there.
+        let height = size.height.rounded(.up)
         MainActor.assumeIsolated { sizing.measured(row, width: width, font: font, height: height) }
         Self.measuredIDs.insert(MainActor.assumeIsolated { row.id })
-        return size
+        return CGSize(width: size.width, height: height)
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {

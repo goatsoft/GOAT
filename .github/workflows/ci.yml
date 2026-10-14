@@ -157,6 +157,9 @@ jobs:
           status=0
           make test-app CONFIG=Release TEST_PLAN=Qualification CAS_PATH="$CAS_PATH" \
             XCODE_FLAGS='-only-testing:GOATTests/TranscriptPerformanceTests/testContainerComparison' || status=$?
+          # The candidate's streaming phases, for comparison with the shipping reader's profile below.
+          TEST_RUNNER_GOAT_COMPARE_NAVIGATION=0 make test-app CONFIG=Release TEST_PLAN=Qualification CAS_PATH="$CAS_PATH" \
+            XCODE_FLAGS='-only-testing:GOATTests/TranscriptPerformanceTests/testContainerComparison' || status=$?
           python3 scripts/profile-transcript.py \
             --log "$RUNNER_TEMP/transcript-production.log" \
             --sample "$RUNNER_TEMP/transcript-reasoning.sample.txt" -- \

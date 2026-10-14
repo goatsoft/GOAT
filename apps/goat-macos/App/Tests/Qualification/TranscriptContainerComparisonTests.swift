@@ -83,6 +83,7 @@ extension TranscriptPerformanceTests {
             return
         }
         XCTAssertGreaterThan(scroll.documentView?.bounds.height ?? 0, scroll.contentSize.height)
+        if environment["GOAT_COMPARE_LEGACY_SCROLLERS"] == "1" { scroll.scrollerStyle = .legacy }
         print(
             "COMPARISON_SCROLLER style=\(scroll.scrollerStyle == .legacy ? "legacy" : "overlay") backing_scale=\(window.backingScaleFactor)"
         )
@@ -145,6 +146,7 @@ extension TranscriptPerformanceTests {
                 fixture.frames[saved.0].map { Double($0.minY - saved.1) }
             }
             let preparation = await fixture.markdown.snapshot()
+            let endGap = (scroll.documentView?.bounds.height ?? 0) - scroll.contentView.bounds.maxY
             let result: [String: Any] = [
                 "preparation_cache_bytes": preparation.cost,
                 "preparation_scanned_bytes": preparation.work.scannedBytes,
@@ -158,6 +160,7 @@ extension TranscriptPerformanceTests {
                 "peak_appeared_rows": fixture.peakVisible, "height_updates": fixture.heightUpdates,
                 "reader_anchor_drift_pt": anchorDrift as Any? ?? NSNull(),
                 "completion_anchor_drift_pt": completionDrift as Any? ?? NSNull(),
+                "follow_gap_pt": follows ? Double(endGap) : NSNull(),
             ]
             print(
                 "COMPARISON_RESULT "
@@ -428,6 +431,8 @@ extension TranscriptPerformanceTests {
         // does. When the viewport top falls on a row boundary it may keep either row there, so sample
         // every row touching the top line; the reader's position holds if one of them does.
         let anchors = comparisonTopLineRows(fixture, scroll: scroll, host: host)
+        let originBefore = scroll.contentView.bounds.minY
+        let documentBefore = scroll.documentView?.bounds.height ?? 0
         print(
             "COMPARISON_NAVIGATION backend=\(backend) phase=reflow_start width=\(width) font=\(font) resident_bytes=\(comparisonUsage().resident)"
         )
@@ -461,8 +466,9 @@ extension TranscriptPerformanceTests {
         let held = anchors.compactMap { anchor in fixture.frames[anchor.id].map { (anchor, $0) } }
         guard let (anchor, frame) = held.min(by: { abs($0.1.minY - $0.0.minY) < abs($1.1.minY - $1.0.minY) })
         else {
+            let nowAtTop = comparisonTopLineRows(fixture, scroll: scroll, host: host)
             print(
-                "COMPARISON_NAVIGATION backend=\(backend) reflow_width=\(width) font=\(font) anchor_missing=true candidates=\(anchors.map(\.id))"
+                "COMPARISON_NAVIGATION backend=\(backend) reflow_width=\(width) font=\(font) anchor_missing=true candidates=\(anchors.map(\.id)) now_at_top=\(nowAtTop.map(\.id)) origin=\(originBefore)->\(scroll.contentView.bounds.minY) document=\(documentBefore)->\(scroll.documentView?.bounds.height ?? 0) clip_width=\(scroll.contentView.bounds.width) style=\(scroll.scrollerStyle == .legacy ? "legacy" : "overlay") mounted=\(fixture.frames.count)"
             )
             XCTFail("Reflow must retain a measurable anchor at width \(width)")
             continue
