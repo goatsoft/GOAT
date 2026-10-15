@@ -12,7 +12,12 @@ struct ToolActivityGroup: View {
     var connectsBelow = false
     @Environment(AppModel.self) private var model
     @Environment(\.transcriptInspection) private var inspection
-    @State private var memoryExpanded = false
+    /// The reader's choice; until they make one, the session's earlier choice for this group.
+    @State private var memoryChoice: Bool?
+    private var memoryKey: String { "memory \(messages.first?.id.uuidString ?? "")" }
+    private var memoryExpanded: Bool {
+        memoryChoice ?? TranscriptDisclosureStore.shared.isOpen(memoryKey) ?? false
+    }
 
     private var penName: String? {
         projectID.flatMap { id in model.pens.first(where: { $0.id == id })?.name }
@@ -26,7 +31,9 @@ struct ToolActivityGroup: View {
             if groupsMemory {
                 Button {
                     inspection.perform()
-                    memoryExpanded.toggle()
+                    let next = !memoryExpanded
+                    memoryChoice = next
+                    TranscriptDisclosureStore.shared.set(next, for: memoryKey)
                 } label: {
                     HStack(spacing: Caprine.Activity.spacing) {
                         Image(systemName: memoryExpanded ? "chevron.down" : "chevron.right")

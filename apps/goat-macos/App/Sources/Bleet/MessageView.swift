@@ -61,9 +61,11 @@ struct MessageView: View {
             .sheet(isPresented: $showingResponseDetails) {
                 ResponseDetailsView(message: message)
             }
+            .holdsTranscriptLayout(while: showingResponseDetails)
             .sheet(isPresented: $showingEditor) {
                 if let editMessage { TranscriptMessageEditor(source: message.text, resend: editMessage) }
             }
+            .holdsTranscriptLayout(while: showingEditor)
             .contextMenu {
                 Button("Copy Markdown", systemImage: "doc.on.doc") {
                     NSPasteboard.general.clearContents()
@@ -423,20 +425,24 @@ struct CompactionRow: View {
     let info: CompactionInfo
     let delete: (() -> Void)?
     @Environment(AppModel.self) private var model
-    @State private var expanded = false
+    @State private var expanded: Bool
 
     init(message: ChatMessage, info: CompactionInfo, delete: (() -> Void)?, initiallyExpanded: Bool = false) {
         self.message = message
         self.info = info
         self.delete = delete
-        _expanded = State(initialValue: initiallyExpanded)
+        _expanded = State(
+            initialValue: TranscriptDisclosureStore.shared.isOpen(Self.key(message.id)) ?? initiallyExpanded)
     }
+
+    private static func key(_ id: UUID) -> String { "compaction \(id)" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Caprine.Activity.spacing) {
             HStack(spacing: Caprine.Activity.spacing) {
                 Button {
                     expanded.toggle()
+                    TranscriptDisclosureStore.shared.set(expanded, for: Self.key(message.id))
                 } label: {
                     Label {
                         Text("Compacted \(info.coveredExchangeCount) \(exchangeLabel)")
@@ -633,7 +639,15 @@ private struct ExternalToolCallCard: View {
     let event: ToolEventSnapshot
     let live: Bool
     var penName: String? = nil
-    @State private var expanded = false
+    @State private var expanded: Bool
+
+    init(event: ToolEventSnapshot, live: Bool, penName: String? = nil) {
+        self.event = event
+        self.live = live
+        self.penName = penName
+        let key = TranscriptDisclosureStore.key(for: event)
+        _expanded = State(initialValue: TranscriptDisclosureStore.shared.isOpen(key) ?? false)
+    }
 
     private var presentation: ToolEventPresentation {
         ToolActivityLabel.presentation(for: event, rootName: penName)
@@ -644,6 +658,7 @@ private struct ExternalToolCallCard: View {
             Button {
                 inspection.perform()
                 expanded.toggle()
+                TranscriptDisclosureStore.shared.set(expanded, for: TranscriptDisclosureStore.key(for: event))
             } label: {
                 HStack(spacing: Caprine.Activity.spacing) {
                     ToolCallStateIndicator(event: event, live: live)
@@ -712,6 +727,7 @@ private struct MemoryToolCallCard: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("Memory · " + action)
                 .help("Show memory operation details")
+                .holdsTranscriptLayout(while: detailsPresented)
                 .popover(
                     isPresented: $detailsPresented,
                     attachmentAnchor: .point(.bottomLeading), arrowEdge: .bottom
@@ -988,6 +1004,60 @@ extension EnvironmentValues {
     /// The transcript's navigation owner, so a row can tell whether the reader owns the viewport
     /// without observing it.
     @Entry var transcriptViewport: TranscriptViewport?
+}
+
+/// Keeps the transcript from replacing its rows while `isPresented`: a sheet or popover a row presents
+/// is dismissed when its row is replaced, with whatever it holds.
+private struct TranscriptLayoutHold: ViewModifier {
+    let isPresented: Bool
+    @Environment(\.transcriptViewport) private var viewport
+    @State private var holding = false
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: isPresented, initial: true) { _, presented in hold(presented) }
+            .onDisappear { hold(false) }
+    }
+
+    private func hold(_ next: Bool) {
+        guard next != holding, let viewport else { return }
+        holding = next
+        if next { viewport.holdLayout() } else { viewport.releaseLayout() }
+    }
+}
+
+extension View {
+    func holdsTranscriptLayout(while isPresented: Bool) -> some View {
+        modifier(TranscriptLayoutHold(isPresented: isPresented))
+    }
+}
+
+/// Whether the reader opened a tool or compaction disclosure, for this session, by a key stable across
+/// row recreation: paging, chat switches and the transcript's relayout after a reflow replace rows,
+/// and the reader's choice must survive them. Bounded; the oldest are dropped.
+@MainActor final class TranscriptDisclosureStore {
+    static let shared = TranscriptDisclosureStore()
+
+    let limit: Int
+    private var open: [String: Bool] = [:]
+    private var order: [String] = []
+
+    init(limit: Int = 1_024) {
+        self.limit = max(1, limit)
+    }
+
+    func isOpen(_ key: String) -> Bool? { open[key] }
+
+    func set(_ isOpen: Bool, for key: String) {
+        if open.updateValue(isOpen, forKey: key) == nil { order.append(key) }
+        while order.count > limit { open[order.removeFirst()] = nil }
+    }
+
+    /// A tool call's key: model call identifiers repeat across replies, so the call's content is part
+    /// of it.
+    static func key(for event: ToolEventSnapshot) -> String {
+        "tool \(event.id) \(event.server) \(event.tool) \(event.arguments.hashValue)"
+    }
 }
 
 /// The reader's reasoning choices per message for this session, so a row that SwiftUI recreates

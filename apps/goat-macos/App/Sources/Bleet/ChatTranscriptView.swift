@@ -138,6 +138,14 @@ struct TranscriptRevealRequest: Equatable, Sendable {
     private var generation: UInt64 = 0
     /// Scroll commands issued and requests abandoned after the bounded attempts, for instrumentation.
     @ObservationIgnored private(set) var scrollCommands = 0
+    /// Sheets and popovers that rows present. The relayout after a reflow replaces every row, which would
+    /// dismiss them and discard what they hold (an unsaved edit), so it waits while any is open.
+    private(set) var layoutHolds = 0
+    func holdLayout() { layoutHolds += 1 }
+    func releaseLayout() { layoutHolds = max(0, layoutHolds - 1) }
+    /// How many times the lazy stack took a new identity after a reflow.
+    @ObservationIgnored private(set) var relayouts = 0
+    func recordRelayout() { relayouts += 1 }
     @ObservationIgnored private(set) var abandonedRequests = 0
     /// The executor's recent steps, for test failure messages and debugging. Bounded.
     @ObservationIgnored private(set) var diagnostics: [String] = []
@@ -381,6 +389,8 @@ struct ChatTranscriptView: View {
     @State private var isHoveringScrollButton = false
     /// Bumped once a reflow (font or reading width) settles; identifies the lazy stack's layout.
     @State private var layoutGeneration = 0
+    /// A relayout waiting for the sheets and popovers rows present to close.
+    @State private var relayoutDeferred = false
     @State private var reflowTask: Task<Void, Never>?
 
     /// Distance from the bottom within which the latest content counts as shown, for both the
@@ -692,7 +702,7 @@ struct ChatTranscriptView: View {
                     if phase == .tracking || phase == .interacting || phase == .decelerating {
                         if !reader.isScrolling { viewport.note("gesture \(phase)") }
                         reader.isScrolling = true
-                        reader.expectsProxyLanding = false
+                        reader.proxyLanding = nil
                         viewport.readerMoved(currentRange: messageRange, anchor: reader.measuredAnchor())
                     } else if phase == .idle {
                         let readerFinishedScrolling = reader.isScrolling
@@ -791,6 +801,11 @@ struct ChatTranscriptView: View {
                 }
                 .onChange(of: session.isStreaming) { viewport.contentChanged() }
                 .onChange(of: ReflowKey(fontSize: model.chatFontSize, column: readingColumn)) { scheduleRelayout() }
+                .onChange(of: viewport.layoutHolds) {
+                    guard viewport.layoutHolds == 0, relayoutDeferred else { return }
+                    relayoutDeferred = false
+                    scheduleRelayout()
+                }
                 // Rows near the reader render formatted on their first frame when the lazy stack mounts them.
                 .task(id: TranscriptPrewarm.Key(range: messageRange, count: session.messages.count)) {
                     let range = messageRange
@@ -817,6 +832,9 @@ struct ChatTranscriptView: View {
                     reader.executorTask = nil
                     reader.attributionTask?.cancel()
                     reader.attributionTask = nil
+                    reader.keepInsideTask?.cancel()
+                    reader.keepInsideTask = nil
+                    reader.executor.cancelDeferredMove()
                     reader.verificationTask?.cancel()
                     reader.verificationTask = nil
                     reflowTask?.cancel()
@@ -1117,20 +1135,36 @@ struct ChatTranscriptView: View {
             // The content shrank above a viewport past its new end. The scroll view keeps its bounds
             // valid, but the lazy stack lays out the rows there only after a move it is told about, so
             // the executor makes that move. Never inside the geometry callback.
-            Task { @MainActor in
+            reader.keepInsideTask?.cancel()
+            reader.keepInsideTask = Task { @MainActor in
+                await Task.yield()
+                guard !Task.isCancelled, !reader.isScrolling else { return }
                 reader.syncGeometry()
                 guard reader.metrics.bottomGap <= 0.5 else { return }
                 let end = max(0, reader.metrics.contentHeight - reader.metrics.layout.container.height)
                 viewport.note("keep inside the content at \(Int(end))")
-                // Two moves on separate turns: SwiftUI coalesces a move and its return within one.
-                reader.executor.scroll(toY: end - 1)
-                try? await Task.sleep(for: .milliseconds(16))
-                reader.executor.scroll(toY: end)
-                reader.syncGeometry()
-                try? await Task.sleep(for: .milliseconds(100))
-                rescueBlankViewport()
+                reader.executor.nudge(to: end - 1, thenTo: end, while: { !reader.isScrolling }) {
+                    reader.syncGeometry()
+                    let generation = reader.executor.otherMoves
+                    reader.keepInsideTask = Task { @MainActor in
+                        do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+                        // Only if nothing moved the viewport since: a reader's move is never undone.
+                        guard reader.executor.unmoved(since: generation), !reader.isScrolling else { return }
+                        rescueBlankViewport()
+                    }
+                }
             }
         }
+        // The proxy's landing is the first move after it that the executor did not make, whether or not
+        // the content changed size with it, while the request it served is pending. Confirmed reader input
+        // always wins over it.
+        let landing = ProxyLanding.resolve(
+            reader.proxyLanding, moved: abs(metrics.offset - previous.offset) >= 1,
+            cause: reader.executor.cause(ofOffset: metrics.offset),
+            followedInput: reader.executor.lastMoveFollowedInput, pending: viewport.request?.generation)
+        reader.proxyLanding = landing.remaining
+        let proxyLanded = landing.landed
+        if proxyLanded { viewport.note("proxy landed at \(Int(metrics.offset))") }
         if !reader.isScrolling {
             if metrics.layout != previous.layout {
                 // Content grew or reflowed, or the viewport resized, moving the offset with it if at all:
@@ -1146,10 +1180,9 @@ struct ChatTranscriptView: View {
                     // The executor's own command, checked for fulfilment below, or AppKit keeping the
                     // bounds valid as the document resized.
                     break
-                case .other where reader.expectsProxyLanding:
+                case .other where proxyLanded:
                     // The executor's last-resort SwiftUI scroll landing; the pending request continues.
-                    reader.expectsProxyLanding = false
-                    viewport.note("proxy landed at \(Int(metrics.offset))")
+                    break
                 case .other where restoringAnchor && !reader.executor.lastMoveFollowedInput:
                     // No reader input came with this move: the lazy stack moving the offset as rows above
                     // resolve while the executor restores the reader's anchor. The restore continues and is
@@ -1218,6 +1251,7 @@ struct ChatTranscriptView: View {
             reader.syncGeometry()
             if reader.shows(request.target, heldWindow: viewport.segmentWindow(for:)) {
                 viewport.note("fulfilled \(request.generation) at \(Int(reader.metrics.offset))")
+                if reader.proxyLanding?.request == request.generation { reader.proxyLanding = nil }
                 viewport.fulfilled(request)
                 if pagingPhase != .idle { pagingPhase = .idle }
                 return
@@ -1370,7 +1404,7 @@ struct ChatTranscriptView: View {
         // the target exactly.
         if reader.revealsTried.contains(where: { abs($0 - y) < 1 }), let proxy = reader.proxy {
             viewport.note("reveal row \(target) through SwiftUI after \(reader.revealsTried.count) estimates")
-            reader.expectsProxyLanding = true
+            reader.proxyLanding = .init(request: viewport.request?.generation)
             proxy.scrollTo(rowID(containing: message.id) ?? message.id, anchor: .top)
             viewport.recordScrollCommand()
             verifyAfterScroll()
@@ -1462,7 +1496,7 @@ struct ChatTranscriptView: View {
         // It lands on a later update, as a move the scroll view did not record: the next one is this
         // scroll's, not the reader's. Its landing at the last row's end is the bottom while following:
         // a further bottom request would chase the content's estimate past the rows.
-        reader.expectsProxyLanding = true
+        reader.proxyLanding = .init(request: viewport.request?.generation)
         proxy.scrollTo(target.id, anchor: target.edge)
     }
 
@@ -1492,7 +1526,13 @@ struct ChatTranscriptView: View {
         reflowTask = Task { @MainActor in
             do { try await Task.sleep(for: .milliseconds(150)) } catch { return }
             guard !reader.isScrolling else { return }
+            guard viewport.layoutHolds == 0 else {
+                relayoutDeferred = true
+                viewport.note("relayout waits for \(viewport.layoutHolds) presentation(s)")
+                return
+            }
             layoutGeneration &+= 1
+            viewport.recordRelayout()
             reader.rowFrames.removeAll()
             reader.reportedAnchor = nil
             reader.rowInstances.removeAll()
@@ -1557,7 +1597,11 @@ struct ChatTranscriptView: View {
         // nothing where the viewport is; only a SwiftUI scroll to the row makes it lay that row out.
         // The reader sees nothing then, so there is no reader position for it to override.
         if reader.rowFrames.isEmpty {
-            if reader.attempts >= 2 { rescueBlankViewport() } else { reader.executor.layoutContent() }
+            if reader.attempts >= 2 {
+                rescueBlankViewport()
+            } else {
+                reader.executor.layoutContent { [viewport] in viewport.request == request }
+            }
         }
         reader.attempts += 1
         viewport.note(
@@ -1575,6 +1619,7 @@ struct ChatTranscriptView: View {
     }
 
     private func abandonRequest(_ request: TranscriptViewport.Request) {
+        if reader.proxyLanding?.request == request.generation { reader.proxyLanding = nil }
         viewport.note("abandoned \(request.generation)")
         RenderSignposts.event("TranscriptScrollAbandoned")
         viewport.abandon(request)
@@ -1716,6 +1761,7 @@ struct TranscriptScrollMetrics: Equatable {
     }
 
     func detach() {
+        cancelDeferredMove()
         observer.map(NotificationCenter.default.removeObserver)
         observer = nil
         scrollView = nil
@@ -1736,16 +1782,46 @@ struct TranscriptScrollMetrics: Equatable {
 
     /// Lays out the scroll view's content now. After the clip view is clamped into a document that
     /// shrank, nothing else asks the lazy stack for the rows the viewport now shows.
-    func layoutContent() {
+    func layoutContent(while stillWanted: @escaping @MainActor () -> Bool) {
         guard let scrollView else { return }
-        let origin = scrollView.contentView.bounds.origin
-        // A move, which the lazy stack answers by laying out what the viewport shows, and back on a
-        // later turn: SwiftUI coalesces a move and its return within one.
-        scroll(toY: origin.y - 1)
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(16))
-            self?.scroll(toY: origin.y)
+        let y = scrollView.contentView.bounds.minY
+        // A move, which the lazy stack answers by laying out what the viewport shows, and back.
+        nudge(to: y - 1, thenTo: y, while: stillWanted)
+    }
+
+    /// Moves to `first` now and to `second` on a later turn: SwiftUI coalesces a move and its return
+    /// within one. The second move is owned here and made only if nothing else moved the viewport in
+    /// between (the reader's input always wins), the same scroll view is still attached, and
+    /// `stillWanted` holds for the caller's purpose. `then` runs after the second move.
+    func nudge(
+        to first: CGFloat, thenTo second: CGFloat, while stillWanted: @escaping @MainActor () -> Bool,
+        then: (@MainActor () -> Void)? = nil
+    ) {
+        cancelDeferredMove()
+        guard let scrollView else { return }
+        scroll(toY: first)
+        let generation = otherMoves
+        deferredMove = Task { @MainActor [weak self, weak scrollView] in
+            do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
+            guard let self, let scrollView, self.scrollView === scrollView, self.otherMoves == generation,
+                stillWanted()
+            else { return }
+            self.deferredMove = nil
+            self.scroll(toY: second)
+            then?()
         }
+    }
+
+    /// Whether no move but the executor's own and AppKit's layout clamping happened since `generation`.
+    func unmoved(since generation: Int) -> Bool { otherMoves == generation }
+
+    /// Counts moves that were neither the executor's nor layout clamping: the reader's, or SwiftUI's.
+    private(set) var otherMoves = 0
+    private var deferredMove: Task<Void, Never>?
+
+    func cancelDeferredMove() {
+        deferredMove?.cancel()
+        deferredMove = nil
     }
 
     /// Where the viewport is now, read from the scroll view itself: the top edge's offset, how far it
@@ -1786,6 +1862,10 @@ struct TranscriptScrollMetrics: Equatable {
         }
         lastMove = (origin.y, cause)
         lastMoveFollowedInput = cause == .other && Self.readerInputIsCurrent()
+        if cause == .other {
+            otherMoves &+= 1
+            cancelDeferredMove()
+        }
     }
 
     private static let readerInput: Set<NSEvent.EventType> = [
@@ -1893,6 +1973,33 @@ nonisolated func transcriptContentFrame(_ proxy: GeometryProxy) -> CGRect? {
 }
 
 /// Raw scroll measurements and executor bookkeeping. Deliberately not observable view state.
+/// A SwiftUI scroll the executor issued as a last resort. It lands on a later update, as a move the
+/// scroll view did not record; that move is the executor's only for the request it served (none for a
+/// rescue), and only briefly: a landing that never came must not claim a later move.
+struct ProxyLanding: Equatable {
+    let request: UInt64?
+    let issued = ContinuousClock.now
+
+    init(request: UInt64?) { self.request = request }
+
+    func isCurrent(request pending: UInt64?, now: ContinuousClock.Instant = .now) -> Bool {
+        now - issued < .seconds(1) && (request == nil || request == pending)
+    }
+
+    /// Whether a reported move is `landing`'s, and what is still expected. Any move the executor did not
+    /// make retires the landing, whether or not the content changed size with it; it is the landing's
+    /// only without reader input and while the landing is current.
+    static func resolve(
+        _ landing: ProxyLanding?, moved: Bool, cause: TranscriptScrollExecutor.Cause?, followedInput: Bool,
+        pending: UInt64?, now: ContinuousClock.Instant = .now
+    ) -> (landed: Bool, remaining: ProxyLanding?) {
+        guard let landing else { return (false, nil) }
+        guard landing.isCurrent(request: pending, now: now) else { return (false, nil) }
+        guard moved, cause != .executor else { return (false, landing) }
+        return (!followedInput, nil)
+    }
+}
+
 @MainActor private final class TranscriptReaderState {
     var isAtBottom = true
     var isScrolling = false
@@ -1913,6 +2020,8 @@ nonisolated func transcriptContentFrame(_ proxy: GeometryProxy) -> CGRect? {
     /// A move awaiting attribution holds the executor until the rows report their positions.
     var attributingMove = false
     var attributionTask: Task<Void, Never>?
+    /// The correction that keeps the viewport inside content that shrank under it.
+    var keepInsideTask: Task<Void, Never>?
     /// Where the reader was as of the last geometry report or attributed move.
     var reportedAnchor: TranscriptViewport.Anchor?
     /// Re-checks the pending request after a scroll command whether or not its geometry is reported.
@@ -1920,7 +2029,8 @@ nonisolated func transcriptContentFrame(_ proxy: GeometryProxy) -> CGRect? {
     /// SwiftUI's own scroll, used only for a target the lazy stack does not lay out, and whether its
     /// landing is still to come.
     var proxy: ScrollViewProxy?
-    var expectsProxyLanding = false
+    /// The executor's last-resort SwiftUI scroll, whose landing is still to come.
+    var proxyLanding: ProxyLanding?
     var lastRescue: ContinuousClock.Instant?
     /// The offsets the current request's reveals moved to.
     var revealsTried: [CGFloat] = []

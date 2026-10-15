@@ -1109,6 +1109,87 @@ extension AppTests.Bleet {
                 "The viewport left the reader's position: \(scroll.contentView.bounds.minY) vs \(target); \(trace)")
         }
 
+        /// The executor's last-resort SwiftUI scroll lands as a move nothing recorded. Only that move is the
+        /// executor's: it is claimed even when the content changes size with it, and a later keyboard or
+        /// direct move is the reader's. Reader input, an ended request and expiry all retire it.
+        @Test @MainActor func aProxyLandingClaimsOnlyItsOwnMove() {
+            let landing = ProxyLanding(request: 7)
+            // Lands in an update that also changes the content's height.
+            var resolved = ProxyLanding.resolve(landing, moved: true, cause: .other, followedInput: false, pending: 7)
+            #expect(resolved.landed && resolved.remaining == nil)
+            // The next direct move, with no input event as in a test or an accessibility client, is not its.
+            resolved = ProxyLanding.resolve(
+                resolved.remaining, moved: true, cause: .other, followedInput: false, pending: 7)
+            #expect(!resolved.landed)
+            // The executor's own moves and unmoved reports leave it expected.
+            resolved = ProxyLanding.resolve(landing, moved: true, cause: .executor, followedInput: false, pending: 7)
+            #expect(!resolved.landed && resolved.remaining == landing)
+            resolved = ProxyLanding.resolve(landing, moved: false, cause: nil, followedInput: false, pending: 7)
+            #expect(!resolved.landed && resolved.remaining == landing)
+            // Confirmed reader input always wins, and retires it.
+            resolved = ProxyLanding.resolve(landing, moved: true, cause: .other, followedInput: true, pending: 7)
+            #expect(!resolved.landed && resolved.remaining == nil)
+            // Its request was fulfilled, abandoned or replaced.
+            for pending in [nil, 8] as [UInt64?] {
+                resolved = ProxyLanding.resolve(
+                    landing, moved: true, cause: .other, followedInput: false, pending: pending)
+                #expect(!resolved.landed && resolved.remaining == nil)
+            }
+            // A landing that never came does not claim a move a second later.
+            resolved = ProxyLanding.resolve(
+                landing, moved: true, cause: .other, followedInput: false, pending: 7, now: .now + .seconds(2))
+            #expect(!resolved.landed && resolved.remaining == nil)
+            // A rescue serves no request: its landing is the executor's whatever is pending.
+            resolved = ProxyLanding.resolve(
+                ProxyLanding(request: nil), moved: true, cause: .other, followedInput: false, pending: 3)
+            #expect(resolved.landed)
+        }
+
+        /// The executor's two-step nudges (laying out the content, keeping the viewport inside content that
+        /// shrank) make their second move on a later turn. A reader's move in between wins: the second move
+        /// is dropped, and so is one whose purpose ended or whose scroll view was replaced.
+        @Test @MainActor func aMoveBetweenANudgesTwoStepsKeepsTheReadersPosition() async throws {
+            final class Document: NSView { override var isFlipped: Bool { true } }
+            func scrollView() -> NSScrollView {
+                let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+                scroll.documentView = Document(frame: NSRect(x: 0, y: 0, width: 400, height: 5_000))
+                return scroll
+            }
+            let scroll = scrollView()
+            let executor = TranscriptScrollExecutor()
+            executor.attach(scroll)
+            defer { executor.detach() }
+            var offset: CGFloat { scroll.contentView.bounds.minY }
+
+            // Uninterrupted, the nudge returns to where it started.
+            executor.scroll(toY: 1_000)
+            executor.layoutContent { true }
+            #expect(offset == 999)
+            try await Task.sleep(for: .milliseconds(60))
+            #expect(offset == 1_000)
+
+            // The reader moves between the two steps: their position stands.
+            executor.layoutContent { true }
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: 1_600))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            try await Task.sleep(for: .milliseconds(60))
+            #expect(offset == 1_600, "The nudge's return overrode the reader's move")
+
+            // The request it served ended: no second move, and its follow-up never runs.
+            var followedUp = false
+            executor.nudge(to: 2_000, thenTo: 2_001, while: { false }) { followedUp = true }
+            try await Task.sleep(for: .milliseconds(60))
+            #expect(offset == 2_000 && !followedUp)
+
+            // Reattached to another scroll view: the old one is never moved again.
+            executor.nudge(to: 2_500, thenTo: 2_501, while: { true })
+            let replacement = scrollView()
+            executor.attach(replacement)
+            try await Task.sleep(for: .milliseconds(60))
+            #expect(offset == 2_500)
+            #expect(replacement.contentView.bounds.minY == 0)
+        }
+
         /// A target without a row (missing, removed or never rendering) is abandoned within the bounded
         /// attempts instead of waiting for a layout that never comes; one that arrives in time is shown.
         @Test @MainActor func targetsWithoutARowHaveABoundedLifecycle() async throws {

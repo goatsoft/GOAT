@@ -58,6 +58,21 @@ import XCTest
         try await Task.sleep(for: .milliseconds(20))
     }
 }
+@MainActor @Observable private final class PresentedRow {
+    var isPresented = false
+    var shown = true
+}
+
+/// A row that presents something while `presented.isPresented`, and goes away when `shown` is false.
+private struct PresentingRow: View {
+    let presented: PresentedRow
+    var body: some View {
+        if presented.shown {
+            Text("Row").holdsTranscriptLayout(while: presented.isPresented)
+        }
+    }
+}
+
 extension AppTests.Bleet {
     @Suite struct TranscriptReflowTests {
 
@@ -148,6 +163,136 @@ extension AppTests.Bleet {
 
                 }
             }
+        }
+
+        /// The relayout after a reflow replaces every row. What the reader opened survives it: a tool
+        /// disclosure stays expanded, and while a row presents a sheet or popover (an edit with an unsaved
+        /// draft, response details) the relayout waits for it to close instead of dismissing it.
+        @Test @MainActor func reflowKeepsWhatTheReaderOpened() async throws {
+            let model = AppModel.shared
+            let originalFont = model.chatFontSize
+            defer { model.chatFontSize = originalFont }
+            let session = ChatSession(effort: .trot, modelID: nil)
+            session.messagesLoaded = true
+            session.messages = (0..<12).map { index in
+                let message = ChatMessage(role: index.isMultiple(of: 2) ? .user : .assistant)
+                message.text = "Reflow row \(index). A short paragraph of transcript text."
+                message.complete = true
+                return message
+            }
+            let toolID = "reflow-disclosure-\(UUID().uuidString)"
+            session.messages[11].toolEvents = [
+                ToolEventSnapshot(
+                    id: toolID, server: "GOATed", tool: "pen_read_file",
+                    arguments: #"{"path":"App.swift"}"#, result: "Read successfully")
+            ]
+            let window = NSWindow(
+                contentRect: NSRect(x: 80, y: 80, width: 760, height: 520), styleMask: [.titled, .resizable],
+                backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            let navigation = TranscriptViewport()
+            // SwiftUI builds its accessibility tree for an assistive client.
+            let enhancedUI = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+            let previousEnhancedUI = NSApp.accessibilityAttributeValue(enhancedUI)
+            NSApp.accessibilitySetValue(true, forAttribute: enhancedUI)
+            let host = NSHostingView(
+                rootView: ChatTranscriptView(session: session, viewport: navigation).environment(model))
+            host.sizingOptions = []
+            installReflowHost(host, in: window)
+            window.orderFront(nil)
+            defer {
+                window.contentView = nil
+                window.close()
+                NSApp.accessibilitySetValue(previousEnhancedUI ?? false, forAttribute: enhancedUI)
+            }
+            try await Task.sleep(for: .milliseconds(500))
+
+            func value(_ object: NSObject, _ name: String) -> Any? {
+                let selector = NSSelectorFromString(name)
+                guard object.responds(to: selector) else { return nil }
+                return object.perform(selector)?.takeUnretainedValue()
+            }
+            func disclosure() -> NSObject? {
+                var visited = Set<ObjectIdentifier>()
+                func find(_ object: Any) -> NSObject? {
+                    guard let object = object as? NSObject, visited.insert(ObjectIdentifier(object)).inserted
+                    else { return nil }
+                    let identifier = object.accessibilityAttributeValue(.identifier) as? String
+                    let label =
+                        object.accessibilityAttributeValue(.title) as? String
+                        ?? object.accessibilityAttributeValue(.description) as? String
+                        ?? value(object, "accessibilityLabel") as? String ?? ""
+                    let state = object.accessibilityAttributeValue(.value) as? String
+                    if identifier == "tool-event-" + toolID
+                        || (label.contains("App.swift") && (state == "Collapsed" || state == "Expanded"))
+                    {
+                        return object
+                    }
+                    let children = value(object, "accessibilityChildren") as? [Any] ?? []
+                    return children.lazy.compactMap(find).first
+                }
+                return find(host)
+            }
+            func state() -> String? {
+                disclosure().flatMap { $0.accessibilityAttributeValue(.value) as? String }
+            }
+            func relayout(toFont font: CGFloat) async throws {
+                model.chatFontSize = font
+                try await Task.sleep(for: .milliseconds(600))
+                host.layoutSubtreeIfNeeded()
+            }
+
+            let control = try #require(disclosure(), "The tool disclosure must be an actionable control")
+            #expect(state() == "Collapsed")
+            let press = NSSelectorFromString("accessibilityPerformPress")
+            let implementation = try #require(control.method(for: press))
+            let perform = unsafeBitCast(implementation, to: (@convention(c) (AnyObject, Selector) -> Bool).self)
+            #expect(perform(control, press))
+            try await Task.sleep(for: .milliseconds(200))
+            #expect(state() == "Expanded")
+
+            let before = navigation.relayouts
+            try await relayout(toFont: 22)
+            #expect(navigation.relayouts > before, "The font change must replace the rows")
+            #expect(state() == "Expanded", "The reader's open disclosure collapsed in the relayout")
+
+            // A row presents a sheet: the relayout waits, then runs once it closes.
+            navigation.holdLayout()
+            let held = navigation.relayouts
+            try await relayout(toFont: 15)
+            #expect(navigation.relayouts == held, "Rows were replaced under an open presentation")
+            navigation.releaseLayout()
+            try await Task.sleep(for: .milliseconds(600))
+            #expect(navigation.relayouts > held, "The deferred relayout must run once the presentation closes")
+            #expect(state() == "Expanded")
+        }
+
+        /// A row's sheet or popover holds the relayout exactly while it is presented, and a row that goes
+        /// away releases its hold.
+        @Test @MainActor func presentationsHoldTheTranscriptLayoutWhileOpen() async throws {
+            let presented = PresentedRow()
+            let navigation = TranscriptViewport()
+            let host = NSHostingView(
+                rootView: PresentingRow(presented: presented).environment(\.transcriptViewport, navigation))
+            host.frame = NSRect(x: 0, y: 0, width: 200, height: 60)
+            func settle() async throws {
+                host.layoutSubtreeIfNeeded()
+                try await Task.sleep(for: .milliseconds(50))
+                host.layoutSubtreeIfNeeded()
+            }
+            try await settle()
+            #expect(navigation.layoutHolds == 0)
+            presented.isPresented = true
+            try await settle()
+            #expect(navigation.layoutHolds == 1)
+            presented.isPresented = false
+            try await settle()
+            #expect(navigation.layoutHolds == 0)
+            presented.isPresented = true
+            try await settle()
+            presented.shown = false
+            try await settle()
+            #expect(navigation.layoutHolds == 0, "A row that went away must release its hold")
         }
 
         @Test @MainActor func directHostingRootKeepsTheProductionMinimumDuringReflow() async throws {
