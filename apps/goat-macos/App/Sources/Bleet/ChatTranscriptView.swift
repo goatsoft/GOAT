@@ -619,6 +619,8 @@ struct ChatTranscriptView: View {
                     reader.attributionTask = nil
                     reader.keepInsideTask?.cancel()
                     reader.keepInsideTask = nil
+                    reader.blankEndTask?.cancel()
+                    reader.blankEndTask = nil
                     reader.executor.cancelDeferredMove()
                     reader.verificationTask?.cancel()
                     reader.verificationTask = nil
@@ -1077,6 +1079,10 @@ struct ChatTranscriptView: View {
                 if reader.proxyLanding?.request == request.generation { reader.proxyLanding = nil }
                 viewport.fulfilled(request)
                 if pagingPhase != .idle { pagingPhase = .idle }
+                // The end a direct move reached can lie past the rows the lazy stack lays out there (a
+                // reflow leaves its estimate long): following then shows nothing until a rescue lays the
+                // last item out, so the end is looked at once the rows there have had a moment to report.
+                if request.target == .bottom { checkForBlankEnd() }
                 return
             }
             guard reader.attempts < Self.maximumScrollAttempts else {
@@ -1400,6 +1406,31 @@ struct ChatTranscriptView: View {
         }
         reader.proxyLanding = .init(request: viewport.request?.generation)
         proxy.scrollTo(target.id, anchor: target.edge)
+    }
+
+    /// Rescues a blank viewport after following reached the end, unless something moved it since. A
+    /// window nothing shows lays out nothing and always looks blank, so an end that stays blank is
+    /// rescued a few times, not on every request the rescues lead to.
+    private func checkForBlankEnd() {
+        // While a reply streams its next update moves the end anyway, and the rescue waits for it.
+        guard !session.isStreaming else { return }
+        reader.blankEndTask?.cancel()
+        reader.blankEndTask = Task { @MainActor in
+            do { try await Task.sleep(for: .milliseconds(150)) } catch { return }
+            reader.blankEndTask = nil
+            guard viewport.autoFollow, viewport.request == nil, !reader.isScrolling, !reader.attributingMove
+            else { return }
+            reader.syncGeometry()
+            let top = reader.metrics.offset
+            let bottom = top + reader.metrics.layout.container.height
+            guard !reader.itemFrames.contains(where: { $0.frame.maxY > top && $0.frame.minY < bottom }) else {
+                reader.blankEndRescues = 0
+                return
+            }
+            guard reader.blankEndRescues < 3 else { return }
+            reader.blankEndRescues += 1
+            rescueBlankViewport()
+        }
     }
 
     /// Where the content ends, estimated from the items laid out, while the last item is not laid out;
@@ -1926,6 +1957,9 @@ struct ProxyLanding: Equatable {
     var bottomChase: [ContinuousClock.Instant] = []
     /// A rescue held back by the rescue interval, to look again once it has passed.
     var rescueRetry: Task<Void, Never>?
+    /// The look at the viewport after following reached the end, and the rescues in a row it made.
+    var blankEndTask: Task<Void, Never>?
+    var blankEndRescues = 0
     /// The offsets the current request's reveals moved to.
     var revealsTried: [CGFloat] = []
     /// The reading column's width the lazy stack was last identified for.
