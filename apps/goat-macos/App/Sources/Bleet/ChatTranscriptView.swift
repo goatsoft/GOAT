@@ -707,7 +707,9 @@ struct ChatTranscriptView: View {
     }
 
     /// The reply whose output is still arriving, which alone shows the streaming caret.
-    private var streamingReplyID: UUID? {
+    private var streamingReplyID: UUID? { Self.streamingReplyID(in: session) }
+
+    static func streamingReplyID(in session: ChatSession) -> UUID? {
         guard session.isStreaming else { return nil }
         return session.messages.last(where: { $0.role == .assistant })?.id
     }

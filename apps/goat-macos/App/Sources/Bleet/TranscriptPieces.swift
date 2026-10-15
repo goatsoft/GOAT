@@ -10,18 +10,24 @@ import SwiftUI
 struct AnswerPiece: View {
     let message: ChatMessage
     let index: Int
+
+    /// Whether `message` carries the caret: it is the reply still arriving, until it completes. Reasoning
+    /// never carries it.
+    static func showsCaret(on message: ChatMessage, streamingReplyID: UUID?) -> Bool {
+        message.role == .assistant && message.id == streamingReplyID && !message.complete
+    }
     @Environment(AppModel.self) private var model
     @Environment(\.transcriptStreamingReplyID) private var streamingReplyID
 
     var body: some View {
         let text = TranscriptTexts.shared.answer(for: message)
-        let isStreaming = message.id == streamingReplyID && !message.complete
+        let showsCaret = Self.showsCaret(on: message, streamingReplyID: streamingReplyID)
         Group {
             if text.isPlain {
                 if let parts = text.parts, parts.indices.contains(index) {
                     TranscriptPlainPart(
                         text: parts[index], fontSize: model.chatFontSize,
-                        showsCaret: isStreaming && index == parts.count - 1)
+                        showsCaret: showsCaret && index == parts.count - 1)
                 } else {
                     // The last bytes, until the parts are prepared (a streaming reply's tail).
                     TranscriptPlainPart(
@@ -31,8 +37,10 @@ struct AnswerPiece: View {
                 let segment = document.segments[index]
                 if segment.isParsed {
                     MarkdownSegmentView(
-                        segment: segment, fontSize: model.chatFontSize, isStreaming: isStreaming,
-                        isTail: isStreaming && index == document.segments.count - 1,
+                        // Incomplete text stays source-only (no live artifact previews) whether or not
+                        // this transcript is the one streaming it.
+                        segment: segment, fontSize: model.chatFontSize, isStreaming: !message.complete,
+                        isTail: showsCaret && index == document.segments.count - 1,
                         codeSegment: MarkdownSegmentView.codeSegment(of: index, in: document.segments)
                     )
                     .equatable()

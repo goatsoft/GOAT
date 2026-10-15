@@ -533,6 +533,37 @@ extension AppTests.Bleet {
 
         /// ADR-0104: short messages are one item; a long reply is a head, its open reasoning's segments, its
         /// answer's segments and a tail, so the lazy stack lays out only the segments near the viewport.
+        /// Only the reply still arriving carries the caret, and it goes once that reply completes or the
+        /// session stops streaming: an earlier reply, the user's message and reasoning never carry it.
+        @Test @MainActor func onlyTheArrivingReplyCarriesTheCaret() {
+            let session = ChatSession(effort: .trot, modelID: nil)
+            session.messagesLoaded = true
+            let earlier = ChatMessage(role: .assistant)
+            earlier.text = "Done."
+            earlier.complete = true
+            let question = ChatMessage(role: .user)
+            question.text = "And now?"
+            let reply = ChatMessage(role: .assistant)
+            reply.thinking = "Working it out now."
+            reply.text = "Here it comes"
+            session.messages = [earlier, question, reply]
+            #expect(ChatTranscriptView.streamingReplyID(in: session) == nil, "Nothing streams")
+            #expect(!AnswerPiece.showsCaret(on: reply, streamingReplyID: nil))
+
+            session.isStreaming = true
+            let streaming = ChatTranscriptView.streamingReplyID(in: session)
+            #expect(streaming == reply.id)
+            #expect(AnswerPiece.showsCaret(on: reply, streamingReplyID: streaming))
+            #expect(!AnswerPiece.showsCaret(on: earlier, streamingReplyID: streaming))
+            #expect(!AnswerPiece.showsCaret(on: question, streamingReplyID: streaming))
+
+            // The reply completes before the session's stream closes: the caret goes with it.
+            reply.complete = true
+            #expect(!AnswerPiece.showsCaret(on: reply, streamingReplyID: streaming))
+            session.isStreaming = false
+            #expect(ChatTranscriptView.streamingReplyID(in: session) == nil)
+        }
+
         @Test @MainActor func longRepliesSplitIntoItemsAndShortOnesStayWhole() async throws {
             let folds = AppModel.shared.foldsCompletedReasoning
             AppModel.shared.foldsCompletedReasoning = true
