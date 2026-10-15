@@ -196,6 +196,12 @@ struct TranscriptRevealRequest: Equatable, Sendable {
         issue(.bottom)
     }
 
+    /// Following lost the items' end (a blank viewport was rescued): a fresh bottom request settles on it.
+    func followAgain() {
+        guard autoFollow else { return }
+        issue(.bottom)
+    }
+
     /// Makes `anchor` the reader's position and scrolls to it (history loads, restoration, compaction).
     func restore(_ anchor: Anchor) {
         if Self.traces {
@@ -982,7 +988,12 @@ struct ChatTranscriptView: View {
                 // Less than a point is the scroll view aligning to device pixels as content changes,
                 // never a reader.
                 // Who moved the viewport is recorded where the move happens, never inferred from geometry.
-                let restoringAnchor = viewport.request.map { $0.target != .bottom } ?? false
+                // A rescue while following lands through SwiftUI and the lazy stack then moves the offset
+                // as rows resolve; until the bottom request it left settles, those moves are not a reader's.
+                let rescuingBottom =
+                    reader.followRescue.map { ContinuousClock.now - $0 < .seconds(1) } == true
+                    && viewport.request?.target == .bottom
+                let restoringAnchor = (viewport.request.map { $0.target != .bottom } ?? false) || rescuingBottom
                 switch reader.executor.cause(ofOffset: metrics.offset) {
                 case .executor, .layout:
                     // The executor's own command, checked for fulfilment below, or AppKit keeping the
@@ -1074,6 +1085,26 @@ struct ChatTranscriptView: View {
             var target: CGFloat
             switch request.target {
             case .bottom:
+                // Each move to the estimated end lays out the rows there at their real heights, which moves
+                // the end again. When following has chased it this often without holding it, SwiftUI's own
+                // scroll to the last item lays that item out exactly, and the chase ends from there. While a
+                // reply streams the end moves anyway, so this waits for it to settle.
+                let now = ContinuousClock.now
+                reader.bottomChase.removeAll { now - $0 > .milliseconds(1_500) }
+                if reader.attempts == 0 { reader.bottomChase.append(now) }
+                if !session.isStreaming, reader.bottomChase.count >= 4, let last = transcriptItems.last,
+                    let proxy = reader.proxy
+                {
+                    viewport.note("bottom chase settles on the last item")
+                    reader.bottomChase.removeAll()
+                    reader.followRescue = now
+                    reader.proxyLanding = .init(request: request.generation)
+                    proxy.scrollTo(last.id, anchor: .bottom)
+                    reader.attempts += 1
+                    viewport.recordScrollCommand()
+                    verifyAfterScroll()
+                    return
+                }
                 RenderSignposts.event("TranscriptFollow")
                 followThrottle.recordFire(at: ProcessInfo.processInfo.systemUptime)
                 target = metrics.offset + metrics.bottomGap
@@ -1262,8 +1293,6 @@ struct ChatTranscriptView: View {
         let top = metrics.offset
         let bottom = top + metrics.layout.container.height
         guard !reader.itemFrames.contains(where: { $0.frame.maxY > top && $0.frame.minY < bottom }) else { return }
-        // Following reaches the end through the items' own estimate instead (`estimatedContentEnd`).
-        guard viewport.readerOwnsViewport else { return }
         let items = transcriptItems
         /// The item as far through the items as the viewport is through the content.
         func itemAtReader() -> (id: TranscriptItem.ID, edge: UnitPoint)? {
@@ -1273,7 +1302,14 @@ struct ChatTranscriptView: View {
             return items.indices.contains(index) ? (items[index].id, .top) : nil
         }
         let target: (id: TranscriptItem.ID, edge: UnitPoint)?
-        if atReader {
+        let following = !viewport.readerOwnsViewport
+        // While a reply streams, its next update moves the end anyway: a gap there is momentary.
+        if following, session.isStreaming { return }
+        if following {
+            // Following, at the end of a content estimate the items no longer reach: SwiftUI lays out the
+            // last item it scrolls to, and following then settles on the items' real end.
+            target = items.last.map { ($0.id, .bottom) }
+        } else if atReader {
             let reach = metrics.layout.container.height
             // At either end the items' own estimate, or the top itself, is where the items are: SwiftUI
             // places an item by its estimate of the content, which is what left the viewport blank.
@@ -1315,6 +1351,10 @@ struct ChatTranscriptView: View {
         // It lands on a later update, as a move the scroll view did not record: the next one is this
         // scroll's, not the reader's. Its landing at the last item's end is the bottom while following:
         // a further bottom request would chase the content's estimate past the items.
+        if following {
+            reader.followRescue = now
+            viewport.followAgain()
+        }
         reader.proxyLanding = .init(request: viewport.request?.generation)
         proxy.scrollTo(target.id, anchor: target.edge)
     }
@@ -1619,6 +1659,10 @@ struct TranscriptScrollMetrics: Equatable {
             do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
             guard let self, let scrollView, self.scrollView === scrollView, stillWanted() else { return }
             self.deferredMove = nil
+            // A move the executor did not make that carried the viewport a screen or more from the first
+            // step is the reader's, even before it is attributed: the lazy stack shifts it far less.
+            let clip = scrollView.contentView
+            if self.lastMove?.cause == .other, abs(clip.bounds.minY - first) >= clip.bounds.height { return }
             self.scroll(toY: second)
             then?()
         }
@@ -1833,6 +1877,10 @@ struct ProxyLanding: Equatable {
     /// The executor's last-resort SwiftUI scroll, whose landing is still to come.
     var proxyLanding: ProxyLanding?
     var lastRescue: ContinuousClock.Instant?
+    /// When a blank viewport was last rescued while following, or a bottom chase settled on the last item.
+    var followRescue: ContinuousClock.Instant?
+    /// When recent bottom requests began, to tell a chase of a moving end from following.
+    var bottomChase: [ContinuousClock.Instant] = []
     /// The offsets the current request's reveals moved to.
     var revealsTried: [CGFloat] = []
     /// The reading column's width the lazy stack was last identified for.

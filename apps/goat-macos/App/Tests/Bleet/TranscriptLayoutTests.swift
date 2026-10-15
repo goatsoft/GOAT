@@ -101,19 +101,26 @@ extension AppTests.Bleet {
             }
 
             // Wait for initial layout at the bottom
+            // A loaded CI runner can take a few seconds to lay out its first rows while earlier tests'
+            // work drains; on a free machine this settles in well under a second.
             var settled: NSScrollView?
-            for _ in 0..<100 {
+            for _ in 0..<250 {
                 host.layoutSubtreeIfNeeded()
+                // Placed: the content is long, the end is shown and the placement request has finished, so
+                // the move below is the reader's and not one the placement can still override.
                 if let scroll = findTranscriptScroll(host), let document = scroll.documentView,
                     document.bounds.height > 3_000,
-                    document.bounds.maxY - document.visibleRect.maxY < 80
+                    document.bounds.maxY - document.visibleRect.maxY < 80, viewport.request == nil
                 {
                     settled = scroll
                     break
                 }
                 try await Task.sleep(for: .milliseconds(20))
             }
-            let scroll = try #require(settled)
+            let scroll = try #require(
+                settled,
+                "Initial bottom placement; document \(String(describing: findTranscriptScroll(host)?.documentView?.bounds)), visible \(String(describing: findTranscriptScroll(host)?.documentView?.visibleRect)), window visible \(window.occlusionState.contains(.visible)), \(viewport.diagnostics.suffix(16))"
+            )
 
             let document = try #require(scroll.documentView)
             // Scroll up to earlier messages
@@ -783,18 +790,26 @@ extension AppTests.Bleet {
                 window.contentView = nil
                 window.close()
             }
+            // The trace when a request is first abandoned, which later steps would push out of view.
+            var firstAbandon: [String]?
             for _ in 0..<200 where segments() < 2 {
                 try await Task.sleep(for: .milliseconds(20))
                 host.layoutSubtreeIfNeeded()
             }
             try #require(segments() > 5, "A long text is several segments")
             try await settle(viewport, host: host)
+            if viewport.abandonedRequests > 0, firstAbandon == nil {
+                firstAbandon = Array(viewport.diagnostics.suffix(24))
+            }
             let scroll = try #require(findTranscriptScroll(host))
             let trace = { viewport.diagnostics.suffix(16) }
             for _ in 0..<40 where scroll.contentView.bounds.minY > 1 {
                 scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, scroll.contentView.bounds.minY - 2_000)))
                 scroll.reflectScrolledClipView(scroll.contentView)
                 try await settle(viewport, host: host)
+                if viewport.abandonedRequests > 0, firstAbandon == nil {
+                    firstAbandon = Array(viewport.diagnostics.suffix(24))
+                }
             }
             #expect(scroll.contentView.bounds.minY <= 1, "The top is reachable; \(trace())")
             // The lazy stack lays the top out over its next updates; it must not stay blank. The reader stays
@@ -805,6 +820,9 @@ extension AppTests.Bleet {
                     scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
                     scroll.reflectScrolledClipView(scroll.contentView)
                     try await settle(viewport, host: host)
+                    if viewport.abandonedRequests > 0, firstAbandon == nil {
+                        firstAbandon = Array(viewport.diagnostics.suffix(24))
+                    }
                 }
             }
             let top = try #require(viewport.anchor, "\(trace())")
@@ -822,12 +840,15 @@ extension AppTests.Bleet {
                 scroll.contentView.scroll(to: NSPoint(x: 0, y: min(end, scroll.contentView.bounds.minY + 2_000)))
                 scroll.reflectScrolledClipView(scroll.contentView)
                 try await settle(viewport, host: host)
+                if viewport.abandonedRequests > 0, firstAbandon == nil {
+                    firstAbandon = Array(viewport.diagnostics.suffix(24))
+                }
             }
             let content = try #require(scroll.documentView)
             #expect(
                 content.bounds.height - scroll.contentView.bounds.maxY <= 1,
                 "The end is reachable; \(trace())")
-            #expect(viewport.abandonedRequests == 0, "\(trace())")
+            #expect(viewport.abandonedRequests == 0, "\(firstAbandon ?? Array(trace()))")
         }
 
         /// A reader who takes the viewport cancels a pending programmatic scroll before it runs.

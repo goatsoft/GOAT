@@ -247,8 +247,19 @@ extension AppTests.Bleet {
                     + "taskResume=\(worstResume), inputEvent=\(worstPause), character=\(slowestCharacter), "
                     + "mainQueue=\(mainQueueProbe.worstDelay)")
             #expect(editor.string == "A responsive draft alongside rich code lists")
-            #expect(worstPause < .milliseconds(250), "Visible chat event-loop delay: \(worstPause)")
-            #expect(mainQueueProbe.worstDelay < .milliseconds(250), "Main-queue delay between inputs")
+            // A window nothing can see (a locked or headless display) is never drawn: AppKit defers its
+            // layout until input arrives, so the transcript's first layout lands on the keystrokes and its
+            // lazy rows mount and unmount with each one. That measures the display, not the chat.
+            let visible = window.occlusionState.contains(.visible)
+            print("Chat responsiveness window visible: \(visible)")
+            withKnownIssue(
+                "The test window is occluded, so input latency cannot be measured", isIntermittent: true
+            ) {
+                #expect(worstPause < .milliseconds(250), "Visible chat event-loop delay: \(worstPause)")
+                #expect(mainQueueProbe.worstDelay < .milliseconds(250), "Main-queue delay between inputs")
+            } when: {
+                !visible
+            }
             window.setContentSize(NSSize(width: 720, height: 700))
             try await Task.sleep(for: .milliseconds(300))
             #expect(editor.string == "A responsive draft alongside rich code lists")
