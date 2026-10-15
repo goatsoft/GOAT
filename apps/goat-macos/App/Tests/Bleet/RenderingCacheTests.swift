@@ -154,71 +154,51 @@ extension AppTests.Bleet {
             #expect(counted.parts(for: "a", source: "p") == nil)
         }
 
-        @Test @MainActor func oversizedPartsRenderFromTheViewAndEvictedPartsRebuild() async throws {
+        /// Parts above the cache's entry ceiling are held by their message's text (ADR-0104), never by the
+        /// cache; after eviction the parts are prepared and retained again.
+        @Test @MainActor func oversizedPartsAreHeldByTheirTextAndEvictedPartsRebuild() async throws {
             let line = String(repeating: "x", count: 99) + "\n"
-            let oversized = String(repeating: line, count: 600 * 1_024 / 100)  // cost above the 1 MiB ceiling
-            let key = "test-oversized-\(UUID().uuidString)"
-            let (window, host) = mounted(
-                TranscriptTextPartsView(source: oversized, fontSize: 13, cacheKey: key)
-                    .frame(width: 500).environment(AppModel.shared))
-            // The first frame shows the latest text, never a placeholder. The source splits into whole
-            // 8 KiB parts, so the last part is that same text, and preparation adds the part controls.
-            let latest = host.fittingSize.height
-            #expect(latest > 1_000, "The latest text shows before the parts are prepared (\(latest))")
-            try await Task.sleep(for: .milliseconds(600))
-            host.layoutSubtreeIfNeeded()
-            #expect(host.fittingSize.height > latest, "View-owned parts render without global retention")
-            #expect(TranscriptPartsCache.shared.parts(for: key, source: oversized) == nil)
-            window.contentView = nil
-            window.close()
+            let oversized = ChatMessage(role: .user)
+            oversized.text = String(repeating: line, count: 600 * 1_024 / 100)  // cost above the 1 MiB ceiling
+            oversized.complete = true
+            let text = TranscriptTexts().answer(for: oversized)
+            for _ in 0..<100 where text.parts == nil { try await Task.sleep(for: .milliseconds(20)) }
+            #expect((text.parts?.count ?? 0) > 70, "The parts render without global retention")
+            #expect(
+                TranscriptPartsCache.shared.parts(for: "\(oversized.id.uuidString):text", source: oversized.text) == nil
+            )
 
-            // After eviction a remounted view prepares and retains the parts again.
-            let source = String(repeating: line, count: 16 * 1_024 / 100)
-            let rebuildKey = "test-rebuild-\(UUID().uuidString)"
-            TranscriptPartsCache.shared.store([source], for: rebuildKey, source: source)
+            let message = ChatMessage(role: .user)
+            message.text = String(repeating: line, count: 16 * 1_024 / 100)
+            message.complete = true
+            let key = "\(message.id.uuidString):text"
+            TranscriptPartsCache.shared.store([message.text], for: key, source: message.text)
             TranscriptPartsCache.shared.removeAll()
-            let (again, _) = mounted(
-                TranscriptTextPartsView(source: source, fontSize: 13, cacheKey: rebuildKey)
-                    .frame(width: 500).environment(AppModel.shared))
-            defer {
-                again.contentView = nil
-                again.close()
-            }
-            try await Task.sleep(for: .milliseconds(400))
-            #expect(TranscriptPartsCache.shared.parts(for: rebuildKey, source: source)?.count == 2)
+            let again = TranscriptTexts().answer(for: message)
+            for _ in 0..<100 where again.parts == nil { try await Task.sleep(for: .milliseconds(20)) }
+            #expect(TranscriptPartsCache.shared.parts(for: key, source: message.text)?.count == 2)
         }
 
-        @Test @MainActor func partsViewNeverSplitsInItsInitializerAndRemountsFromCache() async throws {
+        /// A message's text never splits in its initializer: until the parts are prepared off the main
+        /// actor its item shows the latest text. A text created again takes the exact cached parts at once,
+        /// and a changed source never hits.
+        @Test @MainActor func partsNeverSplitInTheInitializerAndRemountFromCache() async throws {
             let line = String(repeating: "x", count: 99) + "\n"
-            let source = String(repeating: line, count: 16 * 1_024 / 100)
-            let key = "test-parts-\(UUID().uuidString)"
-            func parts() -> some View {
-                TranscriptTextPartsView(source: source, fontSize: 13, cacheKey: key)
-                    .frame(width: 500).environment(AppModel.shared)
-            }
-            // First mount: nothing is prepared yet, so the first frame shows the latest text while the
-            // parts are split off the main actor, and the initializer retains nothing.
-            let (firstWindow, first) = mounted(parts())
-            #expect(first.fittingSize.height > 1_000, "The latest text shows, never a placeholder")
-            #expect(
-                TranscriptPartsCache.shared.parts(for: key, source: source) == nil,
-                "Preparation must happen off the initializer")
-            try await Task.sleep(for: .milliseconds(400))
-            first.layoutSubtreeIfNeeded()
-            let prepared = first.fittingSize.height
-            #expect(TranscriptPartsCache.shared.parts(for: key, source: source)?.count == 2)
-            firstWindow.contentView = nil
-            firstWindow.close()
+            let message = ChatMessage(role: .user)
+            message.text = String(repeating: line, count: 16 * 1_024 / 100)
+            message.complete = true
+            let key = "\(message.id.uuidString):text"
+            let first = TranscriptTexts().answer(for: message)
+            #expect(first.parts == nil || TranscriptPartsCache.shared.parts(for: key, source: message.text) == nil)
+            for _ in 0..<100 where first.parts == nil { try await Task.sleep(for: .milliseconds(20)) }
+            #expect(first.parts?.count == 2)
+            #expect(TranscriptPartsCache.shared.parts(for: key, source: message.text)?.count == 2)
 
-            // Remount: the exact cached parts render on the first frame.
-            let (window, again) = mounted(parts())
-            defer {
-                window.contentView = nil
-                window.close()
-            }
-            #expect(again.fittingSize.height == prepared)
+            let again = TranscriptTexts().answer(for: message)
+            #expect(again.parts == first.parts, "The cached parts are used on creation")
             #expect(
-                TranscriptPartsCache.shared.parts(for: key, source: source + "y") == nil, "A changed source never hits")
+                TranscriptPartsCache.shared.parts(for: key, source: message.text + "y") == nil,
+                "A changed source never hits")
         }
 
         @Test @MainActor func highlightFirstFrameUsesTheEnvironmentSchemeAndSkipsPreparation() async throws {
@@ -682,15 +662,15 @@ extension AppTests.Bleet {
             #expect(pieces.count > 3)
             let first = try #require(pieces.first)
             for piece in pieces {
-                #expect(SegmentedMarkdownView.codeSegment(of: piece, in: document.segments) == first)
+                #expect(MarkdownSegmentView.codeSegment(of: piece, in: document.segments) == first)
             }
             let after = try #require(document.segments.last?.index)
-            #expect(SegmentedMarkdownView.codeSegment(of: after, in: document.segments) == after)
+            #expect(MarkdownSegmentView.codeSegment(of: after, in: document.segments) == after)
         }
 
-        /// Integration with segment windows (#78): a block's remembered choice survives its reply paging
-        /// to another window and back, and every piece of an oversized fence keeps the first piece's
-        /// identity even when that piece lies outside the window.
+        /// Integration with parse windows (#78): a block's remembered choice survives its segment being
+        /// released from the parse window and prepared again, and every piece of an oversized fence keeps
+        /// the first piece's identity even when that piece lies outside the window.
         @Test @MainActor func codeBlockChoicesSurviveSegmentPaging() async throws {
             let fence = "```"
             let messageID = UUID()
@@ -711,7 +691,7 @@ extension AppTests.Bleet {
                 else { return nil }
                 let scope = CodeBlockScope(
                     messageID: messageID,
-                    segment: SegmentedMarkdownView.codeSegment(of: segment.index, in: document.segments),
+                    segment: MarkdownSegmentView.codeSegment(of: segment.index, in: document.segments),
                     content: content, preparationID: segment.preparationID, isFencePiece: false)
                 // Several blocks can share a segment: the block's fence occurrence counts the fences before it.
                 let before = segment.text.components(separatedBy: code)[0]
@@ -747,7 +727,7 @@ extension AppTests.Bleet {
             let pieceWindow = try await prepare((firstPiece + 1)..<min(count, firstPiece + 4))
             #expect(!pieceWindow.shownSegments.contains(firstPiece))
             for piece in pieceWindow.shownSegments where pieceWindow.segments[piece].kind == .fencedCodePiece {
-                #expect(SegmentedMarkdownView.codeSegment(of: piece, in: pieceWindow.segments) == firstPiece)
+                #expect(MarkdownSegmentView.codeSegment(of: piece, in: pieceWindow.segments) == firstPiece)
             }
             // Tags never reach the code a view shows.
             for index in pieceWindow.shownSegments {

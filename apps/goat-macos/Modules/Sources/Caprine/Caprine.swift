@@ -22,6 +22,13 @@ public struct Caprine: Sendable {
         public static let characters = 68.0
         /// User bubbles take at most this share of the transcript column.
         public static let userBubbleFraction = 0.75
+        /// The user bubble: its corner radius, its text insets, the spacing of what stacks around it
+        /// (attachments, footer) and the opacity of its outline.
+        public static let bubbleRadius: CGFloat = 14
+        public static let bubbleHorizontalInset: CGFloat = 14
+        public static let bubbleVerticalInset: CGFloat = 10
+        public static let bubbleStackSpacing: CGFloat = 6
+        public static let bubbleOutlineOpacity = 0.18
         public static let editorWidth: CGFloat = 600
         public static let editorHeight: CGFloat = 300
     }

@@ -1,6 +1,6 @@
 # ADR-0103: Dense reply layout admission
 
-Status: Proposed · 2026-10-13
+Status: Superseded by [ADR-0104](0104-single-stack-transcript.md) · proposed 2026-10-13
 
 Refines [ADR-0091](0091-content-bounded-transcript-layout.md). Qualification belongs to
 [#85](https://github.com/goatsoft/GOAT/issues/85); this does not select the experimental

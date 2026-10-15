@@ -1,5 +1,10 @@
 # Transcript container comparison
 
+> Historical. The comparison harness was removed on 2026-10-15 when 0.1.4 shipped the single-stack
+> transcript ([ADR-0104](../adrs/0104-single-stack-transcript.md), completing
+> [ADR-0099](../adrs/0099-virtualized-transcript-list.md)). The measurements below remain as the
+> evidence for that decision.
+
 ## Supported-OS follow-up result (2026-10-13)
 
 At `2b08d35`, [CI run 38368374287](https://github.com/goatsoft/GOAT/actions/runs/38368374287)

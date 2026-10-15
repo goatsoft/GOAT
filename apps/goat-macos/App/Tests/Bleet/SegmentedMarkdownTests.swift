@@ -318,20 +318,6 @@ extension AppTests.Bleet {
             #expect(cache.snapshot().entryCount == 2 && cache.snapshot().totalCost <= 1_200)
         }
 
-        @Test @MainActor func windowChargesThePreparedRepresentation() async throws {
-            let message = ChatMessage(role: .assistant)
-            message.text = "Use [a][x].\n\nThen [a][x] again.\n\n[x]: https://example.com/x\n"
-            message.complete = true
-            #expect(TranscriptWindow.displayCost(message) == message.text.utf8.count)
-            let document = try #require(
-                await MarkdownSegmentCache(targetBytes: 1).prepare(
-                    id: message.id, source: message.text, revision: message.textRevision, isComplete: true))
-            PreparedMarkdownDocumentCache.shared.store(document, for: message.id)
-            #expect(TranscriptWindow.displayCost(message) == document.renderedBytes)
-            message.text += "\n\nMore."
-            #expect(TranscriptWindow.displayCost(message) == message.text.utf8.count)
-        }
-
         /// #60 A1: a streamed reply extends its segmentation by revision, so a refresh compares only
         /// the bytes it re-prepares, never the reply's prefix, and visits only new and provisional
         /// segments.
@@ -715,13 +701,52 @@ extension AppTests.Bleet {
         .textSelection(.enabled)
 }
 
+/// A prepared document's segments stacked the way the transcript stacks a reply's answer items
+/// (ADR-0104): each segment spaced from the one before it, the caret on the last while streaming.
+private struct DocumentSegments: View {
+    let document: PreparedMarkdownDocument
+    let fontSize: CGFloat
+    let isStreaming: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(0..<document.segments.count, id: \.self) { index in
+                let segment = document.segments[index]
+                MarkdownSegmentView(
+                    segment: segment, fontSize: fontSize, isStreaming: isStreaming,
+                    isTail: isStreaming && index == document.segments.count - 1,
+                    codeSegment: MarkdownSegmentView.codeSegment(of: index, in: document.segments)
+                )
+                .padding(
+                    .top,
+                    index == 0
+                        ? 0
+                        : MarkdownSegmentSpacing.gap(
+                            after: document.segments[index - 1], before: segment, fontSize: fontSize))
+            }
+        }
+    }
+}
+
+/// A message's answer items stacked as the transcript stacks them.
+private struct ReplyPieces: View {
+    let message: ChatMessage
+
+    var body: some View {
+        let count = TranscriptTexts.shared.answer(for: message).pieceCount
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(0..<count, id: \.self) { index in AnswerPiece(message: message, index: index) }
+        }
+    }
+}
+
 /// Captures the final-line caret through the native hosting and paint path after layout.
 /// `ImageRenderer` does not exercise that path.
 @MainActor private func caretPixels(_ document: PreparedMarkdownDocument, streaming: Bool) async throws
     -> NSBitmapImageRep
 {
     let host = NSHostingView(
-        rootView: SegmentedMarkdownView(document: document, fontSize: 14, isStreaming: streaming)
+        rootView: DocumentSegments(document: document, fontSize: 14, isStreaming: streaming)
             .frame(width: 500, alignment: .leading).padding(10).background(.white)
             .environment(AppModel.shared).environment(\.colorScheme, .light))
     host.appearance = NSAppearance(named: .aqua)
@@ -852,7 +877,7 @@ extension AppTests.Bleet {
                 let document = try #require(await cache.prepare(id: UUID(), source: source, isComplete: false))
                 #expect(document.segments.count == count)
                 let segmented = try await height(
-                    SegmentedMarkdownView(document: document, fontSize: fontSize, isStreaming: true))
+                    DocumentSegments(document: document, fontSize: fontSize, isStreaming: true))
                 let whole = try await height(wholeReply(source, fontSize: fontSize))
                 #expect(abs(segmented - whole) < 1, "\(count) blocks: segmented \(segmented) pt, whole \(whole) pt")
             }
@@ -877,7 +902,7 @@ extension AppTests.Bleet {
                 await MarkdownSegmentCache(targetBytes: 1).prepare(id: UUID(), source: source, isComplete: true))
             #expect(document.segments.count == blocks.count, "One segment per top-level block")
             let segmented = try await height(
-                SegmentedMarkdownView(document: document, fontSize: fontSize, isStreaming: false))
+                DocumentSegments(document: document, fontSize: fontSize, isStreaming: false))
             let whole = try await height(wholeReply(source, fontSize: fontSize))
             #expect(abs(segmented - whole) < 1, "Segmented \(segmented) pt, whole \(whole) pt")
         }
@@ -913,7 +938,7 @@ extension AppTests.Bleet {
                 defer: false)
             window.isReleasedWhenClosed = false
             let host = NSHostingView(
-                rootView: StreamingMarkdownView(message: message).frame(width: 600).environment(AppModel.shared))
+                rootView: ReplyPieces(message: message).frame(width: 600).environment(AppModel.shared))
             window.contentView = host
             defer {
                 window.contentView = nil

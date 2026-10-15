@@ -15,8 +15,40 @@ open issues. Closing the original audit records this transfer; Deliveries 3–6 
 
 The dated evidence below remains historical. References there to gates being open in #60 now
 resolve through this ownership table. No unchecked acceptance is certified by the transfer.
-The maintenance release retains its separate [release checklist](../RELEASE-CHECKLIST.md);
-ADR-0099 remains Proposed and the shipping container is unchanged.
+The maintenance release retains its separate [release checklist](../RELEASE-CHECKLIST.md).
+ADR-0099 is accepted, completed by ADR-0104: since 0.1.4 the shipping transcript is one lazy stack of
+items; see [Single-stack Delivery 3](#single-stack-delivery-3-2026-10-15) below.
+
+## Single-stack Delivery 3 (2026-10-15)
+
+Mac Studio, macOS 26.6, Release, the opt-in `testInteractiveDelivery3Qualification` with autorun:
+
+| Phase (2 MiB) | Windowed lazy stack (#95) | Single stack, first cut | Single stack, shipped |
+| --- | --- | --- | --- |
+| Answer | 19.1 s wall, 5.5 s CPU, p95 10 ms | 24.9 s, 22.2 s, 115 ms | 22.4 to 23.9 s, 18.3 to 20.7 s, 85 to 113 ms |
+| Reasoning | 19.3 s wall, 4.1 s CPU, p95 10 ms | 47.3 s, 39.6 s, 861 ms | 24.0 to 24.3 s, 13.2 to 13.5 s, 170 to 179 ms |
+
+Shipped figures are the range over two runs of the final source.
+
+The windowed transcript laid out only a reply's latest two segments while it streamed, so most of
+each update's text was never shown. The single stack shows a full viewport of the reply, and this
+workload streams 16 KiB every 120 ms with a code fence every 100 bytes: every update scrolls to a
+screen of text, dense with code blocks, that was not there before. Text costs roughly the same to
+lay out as to draw, per byte, so the time follows the bytes newly laid out on each update, not the
+reply's length. Measured causes and fixes:
+
+- Dense reasoning past the fence parser's block bound is all prose, and 6 KB pieces made each newly
+  shown piece one expensive Text. Reasoning pieces are 2 KB, and reasoning items pack about 2 KB.
+- An answer segment coming into view prepared the newest text, adding items that came into view and
+  prepared again, so following laid out as fast as text could be prepared. It now parses at the text
+  already prepared, and the sampler alone brings in new text.
+- While output arrives faster than anyone reads (over 4 KB per sample), the transcript samples every
+  400 ms instead of 120 ms.
+- Segment items are built from values, so settled segments are not evaluated again on each update.
+
+Ruled out by measurement: the chat stack's ideal-size pass over the transcript, the reading column's
+placement height, animations, and per-item body evaluation (a few thousand over the run). Ordinary
+model output arrives at well under 1 KB per second, two orders of magnitude below this workload.
 
 ## Workload and measurements
 
@@ -91,16 +123,16 @@ retention or actual input-latency measurement and does not qualify the macOS 26 
 
 ### Reader follow-up implementation
 
-The reader adds day boundaries that remain stable across admitted windows, an empty
-conversation state, explicit Earlier/Later controls, and a Latest shortcut that respects Reduce
-Motion and the animation setting. Find searches message text off the main actor, returns at most
+The reader adds day boundaries that remain stable as history loads, an empty conversation
+state, and a Latest shortcut that respects Reduce Motion and the animation setting. There are no
+paging controls: every loaded message is in the one lazy stack, and stored history loads at either
+end as the reader approaches it (ADR-0104). Find searches message text off the main actor, returns at most
 200 highlighted message excerpts, and sends selection through the existing viewport owner. Rich
-replies are paged to the segment containing the match. The selected source excerpt remains
-visible above the reader, including matches inside collapsed code. Oversized plain-text replies
-currently open at their message boundary. Find (Command-F) and copy-last-reply (Shift-Command-C)
-route through the focused chat window. Segment paging controls are real buttons, so a short
-window can reach earlier text without requiring a preceding scroll gesture.
-Focus conversation (Option-Command-Up) moves keyboard focus to the current reading window;
+replies are revealed at the segment item containing the match. The selected source excerpt remains
+visible above the reader, including matches inside collapsed code. Plain-text parts are revealed at the part
+containing the match. Find (Command-F) and copy-last-reply (Shift-Command-C)
+route through the focused chat window.
+Focus conversation (Option-Command-Up) moves keyboard focus to the message the reader sees;
 Focus composer (Option-Command-Down) returns to the draft. Focusing the conversation is reader
 input and cancels pending automatic restoration through the existing navigation owner.
 
@@ -175,18 +207,21 @@ settings and background load with each local receipt. Retain raw profiles
 privately; public reports should contain synthetic findings only.
 
 The workload is an investigation aid, not complete acceptance. Also exercise
-composer typing, selection/copy, tool and reasoning disclosures, Earlier/Later
-navigation, keyboard, narrow widths, font changes and reader
+composer typing, selection/copy, tool and reasoning disclosures, history loading
+at both ends, keyboard, narrow widths, font changes and reader
 position. Use the existing transcript layout and reflow tests for regression
 coverage. Repeat runtime qualification on Tahoe 26 and Golden Gate 27. Passing
 tests or a faster scheduling proxy does not establish those interactive results.
 
 ## Presentation bounds
 
-The transcript admits at most 40 messages and approximately 16 KiB of source
-cost per window. At least one message is always admitted. Earlier/Later paging
-keeps every message reachable; a reader-owned window holds its range during
-incoming output. Latest or a new user turn restores following.
+Since 0.1.4 the transcript lays every loaded message out as items of one lazy
+stack (ADR-0104): only items near the viewport are laid out, so the layout cost
+is bounded by the viewport, not by the chat. An idle transcript holds a page
+cache of about 120 records (ADR-0102); stored history loads at either end as
+the reader approaches it, keeping their place, and a turn loads the chat's
+complete context. A reader who scrolls up owns the viewport during incoming
+output; the jump button or a new user turn restores following.
 
 Responses through 2 MiB render as rich Markdown segments split at valid block
 boundaries ([ADR-0091](../adrs/0091-content-bounded-transcript-layout.md)).
@@ -196,28 +231,27 @@ final rendering style while the provisional tail streams: completion does not ch
 segment's preview or streaming style at once. Complete HTML/SVG/Mermaid fences can preview when
 their segment settles; oversized fence pieces stay source-only because their closures are
 synthetic. The
-`MarkdownSegmentParse` signpost marks each segment parse. A long response lays
-out a window of at most two segments and 16 KiB of rendered bytes: its latest
-segments while following, or those the reader pages to. Loaders at the window's
-edges page it as they come into view, keeping the reader's segment in place. Only
-the window's segments (and two on each side) keep their parses. The message
-window charges a prepared response the bytes of its shown segments, including
-repeated reference definitions.
+`MarkdownSegmentParse` signpost marks each segment parse. A long response is
+split into items, one per segment (ADR-0104), so the lazy stack lays out only the
+segments near the viewport. Each segment parses as its item comes into view;
+preparation keeps the segments shown and three on each side parsed and releases
+the rest, so retained parses are bounded by what the reader sees, not by the reply.
 
-Reasoning shown in full is windowed the same way through 2 MiB: its fence-aware
-blocks are split at line boundaries into segments of at most 6 KiB, and a window
-of at most two segments and 16 KiB is laid out, paged under its own key. It is
-prepared off the main actor from a 120 ms sample of its text revision. While the
+Open reasoning is split into items the same way through 2 MiB: its fence-aware
+blocks are split at line boundaries into segments of at most 2 KiB, packed into items of
+about 2 KiB measured under the reasoning's own key. Reasoning is folded or full: there is no
+recent excerpt. It is
+prepared off the main actor from a 120 ms sample of its text revision (400 ms while it
+arrives at more than 4 KiB per sample). While the
 revision only appends, the held segmentation lexes each appended character once,
 including within one long unfinished line, and a refresh copies at most one open
 piece and one chunk of segments, so total work grows linearly with the reasoning
 (`streamingPreparationWorkGrowsLinearly` checks completed lines, unbroken prose,
 one long code line and long fence info through 2 MiB).
 
-A response or expanded reasoning above 2 MiB is presented as
-selectable plain-text parts, prepared off the main actor. Earlier text and Later
-text navigate those parts; Latest text follows the newest part. Choosing an
-older part holds that choice as output arrives. Copy retains the full original
+A response or open reasoning above 2 MiB (and user text above 8 KiB) is
+presented as selectable plain-text parts, prepared off the main actor, each part
+an item of the lazy stack. Copy retains the full original
 source, including Markdown fences and whitespace. These are presentation bounds;
 persistence and model context retain the complete content.
 

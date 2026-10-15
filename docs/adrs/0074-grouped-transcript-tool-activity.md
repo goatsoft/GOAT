@@ -1,6 +1,6 @@
 # ADR-0074: Visible agent progress and expandable tool details
 
-Status: Accepted · 2026-09-08 · Amended 2026-09-13 and 2026-09-26 · Refines ADR-0058
+Status: Accepted · 2026-09-08 · Amended 2026-09-13 and 2026-09-26 · Refines ADR-0058 · Reasoning excerpt superseded by [ADR-0104](0104-single-stack-transcript.md)
 
 The 2026-09-13 amendment replaces this ADR's original whole-message grouping decision. It also supersedes ADR-0089's elapsed-time-based “prefill” label. Storage, prompt construction, permissions and tool execution remain separate from this presentation decision.
 
@@ -16,7 +16,7 @@ The waiting label also inferred prefill after ten seconds without output. A sile
 
 Each assistant message retains its own row identity and view ancestry throughout streaming, tool-call arrival, execution and completion. Adjacent assistant rounds share alignment and omit repeated avatars, forming a continuous response. Never reparent a message because its tool-event array becomes nonempty. User and Lead messages remain visible boundaries.
 
-Render the model's emitted reasoning and narration outside tool disclosures. Reasoning is visible by default with a subtle vertical rule and readable text. A bounded recent excerpt keeps long traces manageable; “Show all reasoning” reveals the full content in the transcript without a nested scroll view. The owner can collapse reasoning explicitly. Token arrival, tool events and completion must not reset those choices.
+Render the model's emitted reasoning and narration outside tool disclosures. Reasoning is visible by default with a subtle vertical rule and readable text. The owner can collapse reasoning explicitly. Token arrival, tool events and completion must not reset those choices. (The bounded recent excerpt and “Show all reasoning” of the original decision are superseded by ADR-0104: reasoning is folded or full, laid out as items of the one lazy stack.)
 
 ### Keep tool details expandable
 
