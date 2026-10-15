@@ -821,12 +821,6 @@ extension AppTests.Bleet {
                     }
                 }
             }
-            if changed > 0, let directory = ProcessInfo.processInfo.environment["GOAT_TEST_SNAPSHOT_DIR"] {
-                for (name, image) in [("before", before), ("after", after)] {
-                    try? image.representation(using: .png, properties: [:])?
-                        .write(to: URL(fileURLWithPath: directory).appendingPathComponent("paging-earlier-\(name).png"))
-                }
-            }
             // Content moved by a point changes hundreds of blocks.
             #expect(
                 changed <= 4,

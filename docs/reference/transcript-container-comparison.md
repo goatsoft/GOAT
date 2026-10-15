@@ -1,5 +1,9 @@
 # Transcript container comparison
 
+> Historical. The comparison harness was removed on 2026-10-15 when 0.1.4 shipped the lazy transcript
+> ([ADR-0099 shipping amendment](../adrs/0099-virtualized-transcript-list.md#shipping-amendment-2026-10-15)).
+> The measurements below remain as the evidence for that decision.
+
 ## Supported-OS follow-up result (2026-10-13)
 
 At `2b08d35`, [CI run 38368374287](https://github.com/goatsoft/GOAT/actions/runs/38368374287)
