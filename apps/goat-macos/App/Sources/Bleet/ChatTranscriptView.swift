@@ -1306,7 +1306,8 @@ struct ChatTranscriptView: View {
             if let anchorAfter,
                 anchorsBefore.contains(where: { anchorBefore in
                     guard let anchorBefore else { return false }
-                    return anchorBefore.messageID == anchorAfter.messageID && anchorBefore.segment == anchorAfter.segment
+                    return anchorBefore.messageID == anchorAfter.messageID
+                        && anchorBefore.segment == anchorAfter.segment
                         && abs(anchorBefore.offset - anchorAfter.offset) <= 1
                 })
             {
