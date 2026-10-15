@@ -1135,6 +1135,27 @@ struct ChatTranscriptView: View {
                     return awaitLayout(request, for: anchor.segment == nil ? "row" : "segment")
                 }
                 target = frame.minY + anchor.offset
+                // An item that resolved shorter than when the anchor was measured can end above the
+                // anchor's point: the move there puts the item above the viewport, where the lazy stack no
+                // longer reports it, so the exact move itself is the fulfilment.
+                if anchor.offset >= frame.height - TranscriptReaderState.anchorSlack {
+                    let clamped = min(max(target, metrics.offset - metrics.topGap), metrics.offset + metrics.bottomGap)
+                    viewport.note(
+                        "scroll \(request.generation) past its item \(Int(metrics.offset))->\(Int(clamped)) "
+                            + "item \(Int(frame.height)) offset \(Int(anchor.offset))")
+                    reader.executor.scroll(toY: clamped)
+                    reader.syncGeometry()
+                    viewport.recordScrollCommand()
+                    if abs(reader.metrics.offset - target) <= 1 {
+                        viewport.note("fulfilled \(request.generation) at \(Int(reader.metrics.offset)) past its item")
+                        if reader.proxyLanding?.request == request.generation { reader.proxyLanding = nil }
+                        viewport.fulfilled(request)
+                        return
+                    }
+                    reader.attempts += 1
+                    verifyAfterScroll()
+                    return
+                }
             }
             target = min(max(target, metrics.offset - metrics.topGap), metrics.offset + metrics.bottomGap)
             viewport.note(
@@ -1355,16 +1376,9 @@ struct ChatTranscriptView: View {
                 return
             }
             if metrics.topGap <= reach {
-                // Already at the top with nothing laid out there: only a SwiftUI scroll to the first item
-                // makes the lazy stack lay it out.
-                if metrics.topGap <= 1 {
-                    target = items.first.map { ($0.id, .top) }
-                } else {
-                    viewport.note("rescue blank viewport at \(Int(top)) to the top")
-                    reader.executor.scroll(toY: 0)
-                    reader.syncGeometry()
-                    return
-                }
+                // Near the top with nothing laid out there: only a SwiftUI scroll to the first item makes
+                // the lazy stack lay it out. A direct move to the top would leave it as blank.
+                target = items.first.map { ($0.id, .top) }
             } else if metrics.bottomGap <= reach {
                 target = items.last.map { ($0.id, .bottom) }
             } else {
