@@ -241,8 +241,17 @@ public final class GenerationTransportClosureRegistration: @unchecked Sendable {
 }
 
 /// The lock protects acknowledgement and registrations across producer and cancellation tasks.
+///
+/// Ordering contract: every `onAcknowledge` callback has run before `isClosed` reads true and
+/// before any `waitForClosure` waiter resumes. The producer acknowledges from its own task after
+/// the event stream has finished, so a consumer that waits for closure right after the stream
+/// ends must be able to rely on the callbacks' side effects (the subagent quarantine uses one to
+/// mark the transport closed).
 public final class GenerationTransportClosureHandle: @unchecked Sendable {
     private let lock = NSLock()
+    /// Set once `acknowledge()` has started draining callbacks; makes a second call a no-op.
+    private var isAcknowledging = false
+    /// Set only after the callbacks have run; this is what `isClosed` and the waiters observe.
     private var isAcknowledged = false
     private var onAcknowledgeCallbacks: [@Sendable () -> Void] = []
     private var waiters: [UUID: GenerationTransportClosureRegistration] = [:]
@@ -268,20 +277,33 @@ public final class GenerationTransportClosureHandle: @unchecked Sendable {
 
     public func acknowledge() {
         lock.lock()
-        guard !isAcknowledged else {
+        guard !isAcknowledging else {
             lock.unlock()
             return
         }
-        isAcknowledged = true
-        let callbacks = onAcknowledgeCallbacks
-        onAcknowledgeCallbacks.removeAll()
-        let pendingWaiters = Array(waiters.values)
-        waiters.removeAll()
+        isAcknowledging = true
         lock.unlock()
 
-        for cb in callbacks {
-            cb()
+        // Drain callbacks outside the lock until none are left, so a callback registered while
+        // the drain is in flight still runs before closure becomes observable.
+        let pendingWaiters: [GenerationTransportClosureRegistration]
+        while true {
+            lock.lock()
+            let callbacks = onAcknowledgeCallbacks
+            onAcknowledgeCallbacks.removeAll()
+            if callbacks.isEmpty {
+                isAcknowledged = true
+                pendingWaiters = Array(waiters.values)
+                waiters.removeAll()
+                lock.unlock()
+                break
+            }
+            lock.unlock()
+            for cb in callbacks {
+                cb()
+            }
         }
+
         for waiter in pendingWaiters {
             waiter.resume()
         }
