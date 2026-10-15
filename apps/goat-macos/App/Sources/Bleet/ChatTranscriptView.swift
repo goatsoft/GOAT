@@ -1140,6 +1140,7 @@ struct ChatTranscriptView: View {
                 // Less than a point is the scroll view aligning to device pixels as content changes,
                 // never a reader.
                 // Who moved the viewport is recorded where the move happens, never inferred from geometry.
+                let restoringAnchor = viewport.request.map { $0.target != .bottom } ?? false
                 switch reader.executor.cause(ofOffset: metrics.offset) {
                 case .executor, .layout:
                     // The executor's own command, checked for fulfilment below, or AppKit keeping the
@@ -1149,10 +1150,10 @@ struct ChatTranscriptView: View {
                     // The executor's last-resort SwiftUI scroll landing; the pending request continues.
                     reader.expectsProxyLanding = false
                     viewport.note("proxy landed at \(Int(metrics.offset))")
-                case .other where viewport.request != nil && !reader.executor.lastMoveFollowedInput:
+                case .other where restoringAnchor && !reader.executor.lastMoveFollowedInput:
                     // No reader input came with this move: the lazy stack moving the offset as rows above
-                    // resolve while the executor chases a request. The request continues and is checked
-                    // against where the rows now are.
+                    // resolve while the executor restores the reader's anchor. The restore continues and is
+                    // checked against where the rows now are. Following yields to any move.
                     viewport.note("unprompted offset \(Int(previous.offset))->\(Int(metrics.offset))")
                 case .other:
                     // The keyboard, a scroller or another direct move without a gesture phase, or the lazy
