@@ -8,14 +8,15 @@ This release keeps **oMLX 0.6.4** as the qualified baseline.
 
 ### Faster transcripts
 
-- The transcript lays out only the messages near the screen, so long chats and long expanded reasoning stay responsive while a reply streams. On a Mac Studio running macOS 26, streaming long reasoning took about 19 seconds instead of about 154.
+- The whole conversation scrolls as one continuous transcript, from the first message to the end of the longest reply, with nothing to page through. Only what is near the screen is laid out, so long chats and long replies stay responsive while a reply streams. On a Mac Studio running macOS 26, streaming 2 MiB of open reasoning took about 24 seconds instead of about 154.
 - Your place is kept when earlier messages load above it, when a reply grows below it and when the window is resized.
+- The streaming cursor shows only on the reply that is still arriving.
 
 ### Long replies keep their formatting
 
-- Answers and expanded reasoning up to 2 MiB render as formatted Markdown instead of plain text after 8 KiB. Very long replies show one part at a time, with **Earlier** and **Later** to move through them.
+- Answers up to 2 MiB render as formatted Markdown instead of plain text after 8 KiB, and longer text stays selectable plain text. All of it scrolls in place.
 - A finishing reply no longer jumps. Its footer, **Regenerate** and **Continue response** are laid out while it streams.
-- Finished reasoning folds to one "Thought for 12s" line, and reopening it is remembered. **Fold reasoning after replies** in Appearance settings turns this off.
+- Reasoning is folded or shown in full: finished reasoning folds to one "Thought for 12s" line, and opening it shows all of it in place. Your choice is remembered. **Fold reasoning after replies** in Appearance settings turns this off.
 - Prose keeps a comfortable reading width in a centred column. Wide tables scroll sideways, and display math appears as labelled, selectable source.
 
 ### Long conversations open at the latest messages
