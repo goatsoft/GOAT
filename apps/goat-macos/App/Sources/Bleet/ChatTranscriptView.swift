@@ -890,9 +890,8 @@ struct ChatTranscriptView: View {
         let reach = reader.metrics.layout.container.height
         guard earlierLoaderVisible ? reader.metrics.topGap <= reach : reader.metrics.bottomGap <= reach else { return }
         let range = messageRange
-        let keptIndex = earlierLoaderVisible ? range.lowerBound : range.upperBound - 1
-        let keptMeasured =
-            !session.messages.indices.contains(keptIndex) || reader.rowFrames[session.messages[keptIndex].id] != nil
+        let kept = renderedMessageID(near: earlierLoaderVisible ? range.lowerBound : range.upperBound - 1)
+        let keptMeasured = kept.map { reader.rowFrames[$0] != nil } ?? true
         if !keptMeasured, attempt < Self.maximumScrollAttempts {
             Task { @MainActor in
                 try? await Task.sleep(for: Self.frameRetryInterval)
@@ -917,12 +916,13 @@ struct ChatTranscriptView: View {
             fetchHistory(earlier: true)
             return
         }
-        guard messageRange.lowerBound > 0 else { return }
-        let kept = session.messages[messageRange.lowerBound].id
+        // The first row the reader sees in the window: a tool result or an empty message renders nothing.
+        guard messageRange.lowerBound > 0, let kept = renderedMessageID(near: messageRange.lowerBound) else { return }
         let keptOffset = reader.offset(of: kept)
+        let seen = reader.measuredAnchor()
         guard let result = viewport.pageEarlier(count: session.messages.count, cost: displayCost) else { return }
         pagingPhase = .pagingEarlier
-        restorePagingAnchor(result.anchor, kept: kept, keptOffset: keptOffset)
+        restorePagingAnchor(result.anchor, kept: kept, keptOffset: keptOffset, seen: seen)
     }
 
     /// Pages later while keeping the message at the end of the window where the reader sees it.
@@ -932,12 +932,14 @@ struct ChatTranscriptView: View {
             fetchHistory(earlier: false)
             return
         }
-        guard messageRange.upperBound < session.messages.count else { return }
-        let kept = session.messages[messageRange.upperBound - 1].id
+        guard messageRange.upperBound < session.messages.count,
+            let kept = renderedMessageID(near: messageRange.upperBound - 1)
+        else { return }
         let keptOffset = reader.offset(of: kept)
+        let seen = reader.measuredAnchor()
         guard let result = viewport.pageLater(count: session.messages.count, cost: displayCost) else { return }
         pagingPhase = .pagingLater
-        restorePagingAnchor(result.anchor, kept: kept, keptOffset: keptOffset)
+        restorePagingAnchor(result.anchor, kept: kept, keptOffset: keptOffset, seen: seen)
     }
 
     private func fetchHistory(earlier: Bool) {
@@ -957,7 +959,18 @@ struct ChatTranscriptView: View {
 
     /// Resolves the page's anchor index to a stable message identity before scrolling. When pages
     /// overlap it is the kept message at its measured offset; otherwise the top of the new page.
-    private func restorePagingAnchor(_ index: Int, kept: UUID, keptOffset: CGFloat?) {
+    /// `seen` is what the reader saw at the viewport's top before paging: it stays exactly there whenever
+    /// the new window still holds it. Otherwise the window's edge row `kept` stays where it was.
+    private func restorePagingAnchor(_ index: Int, kept: UUID, keptOffset: CGFloat?, seen: TranscriptViewport.Anchor?) {
+        if let seen,
+            let seenIndex = session.messages.firstIndex(where: {
+                TranscriptSegmentOwner.key(seen.messageID, belongsTo: $0.id)
+            }),
+            messageRange.contains(seenIndex)
+        {
+            viewport.restore(seen)
+            return
+        }
         guard session.messages.indices.contains(index) else {
             pagingPhase = .idle
             return
@@ -1066,9 +1079,13 @@ struct ChatTranscriptView: View {
     }
 
     private func handleGeometry(from previous: TranscriptScrollMetrics, to metrics: TranscriptScrollMetrics) {
-        // Where the reader was before this snapshot, for attributing a move it reports.
+        // Where the reader was before this snapshot, for attributing a move it reports. Rows can report
+        // their new places before the offset that moved with them, so the anchor measured at the previous
+        // report is kept as well: either one matching where the rows are now means the content stayed put.
         let anchorBefore = reader.measuredAnchor()
+        let reportedAnchor = reader.reportedAnchor
         reader.metrics = metrics
+        defer { reader.reportedAnchor = reader.measuredAnchor() }
         // Rows reflow only when the reading column's width changes: it is capped, so a wide window's
         // resize changes nothing. Re-identifying the lazy stack rebuilds the rows it shows, so only a
         // reflow large enough to leave its estimates wrong does it (not a scroller appearing).
@@ -1132,12 +1149,18 @@ struct ChatTranscriptView: View {
                     // The executor's last-resort SwiftUI scroll landing; the pending request continues.
                     reader.expectsProxyLanding = false
                     viewport.note("proxy landed at \(Int(metrics.offset))")
+                case .other where viewport.request != nil && !reader.executor.lastMoveFollowedInput:
+                    // No reader input came with this move: the lazy stack moving the offset as rows above
+                    // resolve while the executor chases a request. The request continues and is checked
+                    // against where the rows now are.
+                    viewport.note("unprompted offset \(Int(previous.offset))->\(Int(metrics.offset))")
                 case .other:
                     // The keyboard, a scroller or another direct move without a gesture phase, or the lazy
                     // stack moving the offset with its content as row estimates resolve. Only the first
                     // moves what the reader sees, so decide once the rows report where they now are, and
                     // hold any pending scroll until then.
-                    attributeMove(from: previous.offset, to: metrics.offset, anchorBefore: anchorBefore)
+                    attributeMove(
+                        from: previous.offset, to: metrics.offset, anchorsBefore: [anchorBefore, reportedAnchor])
                 case nil:
                     // No recorded move lands here, so it changes no ownership.
                     viewport.note(
@@ -1269,7 +1292,7 @@ struct ChatTranscriptView: View {
     /// lazy stack shifts the offset and its rows together when estimates above the viewport resolve; the
     /// reader's anchor then stays where it was, and ownership does not change.
     private func attributeMove(
-        from previousOffset: CGFloat, to offset: CGFloat, anchorBefore: TranscriptViewport.Anchor?
+        from previousOffset: CGFloat, to offset: CGFloat, anchorsBefore: [TranscriptViewport.Anchor?]
     ) {
         reader.attributionTask?.cancel()
         reader.attributingMove = true
@@ -1279,8 +1302,13 @@ struct ChatTranscriptView: View {
             reader.attributingMove = false
             reader.attributionTask = nil
             let anchorAfter = reader.measuredAnchor()
-            if let anchorBefore, let anchorAfter, anchorBefore.messageID == anchorAfter.messageID,
-                anchorBefore.segment == anchorAfter.segment, abs(anchorBefore.offset - anchorAfter.offset) <= 1
+            reader.reportedAnchor = anchorAfter
+            if let anchorAfter,
+                anchorsBefore.contains(where: { anchorBefore in
+                    guard let anchorBefore else { return false }
+                    return anchorBefore.messageID == anchorAfter.messageID && anchorBefore.segment == anchorAfter.segment
+                        && abs(anchorBefore.offset - anchorAfter.offset) <= 1
+                })
             {
                 viewport.note("layout offset \(Int(previousOffset))->\(Int(offset))")
             } else {
@@ -1464,6 +1492,7 @@ struct ChatTranscriptView: View {
             guard !reader.isScrolling else { return }
             layoutGeneration &+= 1
             reader.rowFrames.removeAll()
+            reader.reportedAnchor = nil
             reader.rowInstances.removeAll()
             reader.segmentFrames.removeAll()
             reader.segmentInstances.removeAll()
@@ -1666,6 +1695,9 @@ struct TranscriptScrollMetrics: Equatable {
     private var previousOrigin: NSPoint?
     /// The last recorded bounds change: where the clip view's top edge moved, and why.
     private(set) var lastMove: (offset: CGFloat, cause: Cause)?
+    /// Whether the reader's input was being handled when `lastMove` happened: a key, wheel or mouse
+    /// event the app took moments before, or any move while VoiceOver runs (its scrolling sends none).
+    private(set) var lastMoveFollowedInput = false
 
     var isAttached: Bool { scrollView != nil }
 
@@ -1686,6 +1718,7 @@ struct TranscriptScrollMetrics: Equatable {
         observer = nil
         scrollView = nil
         lastMove = nil
+        lastMoveFollowedInput = false
         previousOrigin = nil
     }
 
@@ -1750,6 +1783,18 @@ struct TranscriptScrollMetrics: Equatable {
             cause = .other
         }
         lastMove = (origin.y, cause)
+        lastMoveFollowedInput = cause == .other && Self.readerInputIsCurrent()
+    }
+
+    private static let readerInput: Set<NSEvent.EventType> = [
+        .keyDown, .scrollWheel, .leftMouseDown, .leftMouseDragged, .leftMouseUp, .rightMouseDown, .otherMouseDown,
+        .otherMouseDragged, .swipe, .magnify, .smartMagnify, .gesture, .pressure,
+    ]
+
+    private static func readerInputIsCurrent() -> Bool {
+        if NSWorkspace.shared.isVoiceOverEnabled { return true }
+        guard let event = NSApp.currentEvent, readerInput.contains(event.type) else { return false }
+        return ProcessInfo.processInfo.systemUptime - event.timestamp < 0.5
     }
 }
 
@@ -1866,6 +1911,8 @@ nonisolated func transcriptContentFrame(_ proxy: GeometryProxy) -> CGRect? {
     /// A move awaiting attribution holds the executor until the rows report their positions.
     var attributingMove = false
     var attributionTask: Task<Void, Never>?
+    /// Where the reader was as of the last geometry report or attributed move.
+    var reportedAnchor: TranscriptViewport.Anchor?
     /// Re-checks the pending request after a scroll command whether or not its geometry is reported.
     var verificationTask: Task<Void, Never>?
     /// SwiftUI's own scroll, used only for a target the lazy stack does not lay out, and whether its
