@@ -756,6 +756,9 @@ struct FeedbackButtons: View {
 
 struct ToolCallCard: View {
     let event: ToolEventSnapshot
+    /// The message the call belongs to: its disclosure is the reader's choice for this call, not for
+    /// an identical call in another reply.
+    let messageID: UUID
     let live: Bool
     var penName: String? = nil
 
@@ -763,7 +766,7 @@ struct ToolCallCard: View {
         if event.server == "Memory" {
             MemoryToolCallCard(event: event, live: live, penName: penName)
         } else {
-            ExternalToolCallCard(event: event, live: live, penName: penName)
+            ExternalToolCallCard(event: event, messageID: messageID, live: live, penName: penName)
         }
     }
 }
@@ -774,15 +777,17 @@ private struct ExternalToolCallCard: View {
     @Environment(\.transcriptInspection) private var inspection
     @Environment(AppModel.self) private var model
     let event: ToolEventSnapshot
+    let messageID: UUID
     let live: Bool
     var penName: String? = nil
     @State private var expanded: Bool
 
-    init(event: ToolEventSnapshot, live: Bool, penName: String? = nil) {
+    init(event: ToolEventSnapshot, messageID: UUID, live: Bool, penName: String? = nil) {
         self.event = event
+        self.messageID = messageID
         self.live = live
         self.penName = penName
-        let key = TranscriptDisclosureStore.key(for: event)
+        let key = TranscriptDisclosureStore.key(for: event, in: messageID)
         _expanded = State(initialValue: TranscriptDisclosureStore.shared.isOpen(key) ?? false)
     }
 
@@ -795,7 +800,8 @@ private struct ExternalToolCallCard: View {
             Button {
                 inspection.perform()
                 expanded.toggle()
-                TranscriptDisclosureStore.shared.set(expanded, for: TranscriptDisclosureStore.key(for: event))
+                TranscriptDisclosureStore.shared.set(
+                    expanded, for: TranscriptDisclosureStore.key(for: event, in: messageID))
             } label: {
                 HStack(spacing: Caprine.Activity.spacing) {
                     ToolCallStateIndicator(event: event, live: live)
@@ -1205,10 +1211,11 @@ extension View {
         while order.count > limit { open[order.removeFirst()] = nil }
     }
 
-    /// A tool call's key: model call identifiers repeat across replies, so the call's content is part
-    /// of it.
-    static func key(for event: ToolEventSnapshot) -> String {
-        "tool \(event.id) \(event.server) \(event.tool) \(event.arguments.hashValue)"
+    /// A tool call's key within its message: model call identifiers repeat across replies, and a
+    /// regenerated or re-sent reply can make the same call with the same arguments, so the message
+    /// and the call's content are both part of it.
+    static func key(for event: ToolEventSnapshot, in messageID: UUID) -> String {
+        "tool \(messageID.uuidString) \(event.id) \(event.server) \(event.tool) \(event.arguments.hashValue)"
     }
 }
 
@@ -1220,6 +1227,9 @@ extension View {
 
     struct Choice: Equatable {
         var isOpen: Bool
+        /// Recorded by the transcript for a reader who owns the viewport while the reply streams, not
+        /// chosen by the reader: withdrawn if they follow again before the reply completes.
+        var isHeld = false
     }
 
     @ObservationIgnored let limit: Int
@@ -1235,6 +1245,11 @@ extension View {
     func set(_ choice: Choice, for id: UUID) {
         if choices.updateValue(choice, forKey: id) == nil { order.append(id) }
         while order.count > limit { choices[order.removeFirst()] = nil }
+    }
+
+    func remove(_ id: UUID) {
+        guard choices.removeValue(forKey: id) != nil else { return }
+        order.removeAll { $0 == id }
     }
 }
 
@@ -1304,7 +1319,9 @@ struct ThinkingDisclosure: View {
         }
         .onChange(of: message.complete) { _, complete in
             // A reader who owns the viewport keeps the reasoning open, so completion moves nothing
-            // they are reading. Folding happens on the next appearance instead.
+            // they are reading. The transcript records this ahead of completion for the reply it
+            // follows (`holdOpenReasoning`), since this row may not exist by then; this covers a
+            // reply shown on its own.
             guard complete, store.choice(for: message.id) == nil, model.foldsCompletedReasoning,
                 viewport?.readerOwnsViewport == true
             else { return }

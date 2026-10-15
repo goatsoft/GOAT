@@ -668,9 +668,9 @@ extension AppTests.Bleet {
             #expect(MarkdownSegmentView.codeSegment(of: after, in: document.segments) == after)
         }
 
-        /// Integration with segment windows (#78): a block's remembered choice survives its reply paging
-        /// to another window and back, and every piece of an oversized fence keeps the first piece's
-        /// identity even when that piece lies outside the window.
+        /// Integration with parse windows (#78): a block's remembered choice survives its segment being
+        /// released from the parse window and prepared again, and every piece of an oversized fence keeps
+        /// the first piece's identity even when that piece lies outside the window.
         @Test @MainActor func codeBlockChoicesSurviveSegmentPaging() async throws {
             let fence = "```"
             let messageID = UUID()

@@ -64,17 +64,19 @@ struct ToolActivityGroup: View {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(messages) { message in
                     ForEach(message.toolEvents) { event in
-                        ToolCallCard(event: event, live: event.id == currentID, penName: resolvedPenName)
-                            .padding(.leading, hasTree ? Caprine.Activity.treeInset : 0)
-                            .background(alignment: .leading) {
-                                if hasTree {
-                                    ToolTreeBranch(
-                                        above: (!isolatedGroup && connectsAbove) || event.id != events.first?.id,
-                                        below: (!isolatedGroup && connectsBelow) || event.id != events.last?.id
-                                    )
-                                    .frame(width: Caprine.Activity.treeInset)
-                                }
+                        ToolCallCard(
+                            event: event, messageID: message.id, live: event.id == currentID, penName: resolvedPenName
+                        )
+                        .padding(.leading, hasTree ? Caprine.Activity.treeInset : 0)
+                        .background(alignment: .leading) {
+                            if hasTree {
+                                ToolTreeBranch(
+                                    above: (!isolatedGroup && connectsAbove) || event.id != events.first?.id,
+                                    below: (!isolatedGroup && connectsBelow) || event.id != events.last?.id
+                                )
+                                .frame(width: Caprine.Activity.treeInset)
                             }
+                        }
                     }
                 }
             }

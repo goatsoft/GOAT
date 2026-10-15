@@ -22,6 +22,26 @@ import XCTest
 }
 
 @MainActor final class ToolActivityDisclosureTests: XCTestCase {
+    /// Engines reuse call identifiers, and a regenerated reply can make the same call with the same
+    /// arguments: the reader's disclosure belongs to the call in its message, not to every identical call.
+    func testDisclosureKeysBelongToTheirMessage() {
+        let event = ToolEventSnapshot(
+            id: "call_0", server: "GOATed", tool: "pen_read_file", arguments: #"{"path":"App.swift"}"#,
+            result: "Read successfully")
+        let first = UUID()
+        let regenerated = UUID()
+        XCTAssertEqual(
+            TranscriptDisclosureStore.key(for: event, in: first), TranscriptDisclosureStore.key(for: event, in: first))
+        XCTAssertNotEqual(
+            TranscriptDisclosureStore.key(for: event, in: first),
+            TranscriptDisclosureStore.key(for: event, in: regenerated))
+        let store = TranscriptDisclosureStore()
+        store.set(true, for: TranscriptDisclosureStore.key(for: event, in: first))
+        XCTAssertNil(
+            store.isOpen(TranscriptDisclosureStore.key(for: event, in: regenerated)),
+            "A regenerated reply's identical call starts collapsed")
+    }
+
     func testActionClickExpandsOnlyItsPayload() async throws {
         let messages = [
             activityMessage(), activityMessage("pen_edit_file"), activityMessage("pen_run_command", result: nil),

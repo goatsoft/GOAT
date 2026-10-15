@@ -196,7 +196,8 @@ extension AppTests.Bleet {
                 arguments: #"{"path":"App.swift"}"#, result: "Read successfully")
             session.messages[11].toolEvents = [event]
             // The reader expanded this tool call earlier: a recreated card keeps their choice.
-            TranscriptDisclosureStore.shared.set(true, for: TranscriptDisclosureStore.key(for: event))
+            TranscriptDisclosureStore.shared.set(
+                true, for: TranscriptDisclosureStore.key(for: event, in: session.messages[11].id))
             let window = NSWindow(
                 contentRect: NSRect(x: 80, y: 80, width: 760, height: 520), styleMask: [.titled, .resizable],
                 backing: .buffered, defer: false)

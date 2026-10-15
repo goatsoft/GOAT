@@ -508,6 +508,7 @@ struct ChatTranscriptView: View {
                 .onChange(of: viewport.autoFollow) {
                     let showsLatest = viewport.autoFollow || reader.isAtBottom
                     if viewport.isScrolledToBottom != showsLatest { viewport.isScrolledToBottom = showsLatest }
+                    holdOpenReasoning()
                 }
                 .onChange(of: viewport.request) {
                     if viewport.request == nil {
@@ -524,7 +525,10 @@ struct ChatTranscriptView: View {
                 }
                 // Streaming growth (text, thinking, new messages): following chases it; a reader keeps
                 // their anchor.
-                .onChange(of: streamRevision) { viewport.contentChanged() }
+                .onChange(of: streamRevision) {
+                    viewport.contentChanged()
+                    holdOpenReasoning()
+                }
                 .onAppear {
                     viewport.historySession = session
                     viewport.messageForKey = { [session] key in
@@ -628,6 +632,7 @@ struct ChatTranscriptView: View {
                     reflowTask = nil
                     reader.attributingMove = false
                     pagingPhase = .idle
+                    TranscriptTexts.shared.release(chat: session.id)
                 }
                 .onAppear { reader.proxy = proxy }
             }
@@ -736,6 +741,8 @@ struct ChatTranscriptView: View {
 
     /// Every loaded message, as the items of the lazy stack (ADR-0104).
     private var transcriptItems: [TranscriptItem] {
+        // The loaded messages' prepared text stays through eviction while this transcript lays it out.
+        TranscriptTexts.shared.hold(Set(session.messages.map(\.id)), for: session.id)
         let rows = TranscriptActivity.rows(session.messages[...], precedingDate: session.historyPrecedingDate)
         return TranscriptItem.items(for: rows, texts: .shared)
     }
@@ -764,6 +771,25 @@ struct ChatTranscriptView: View {
     static func streamingReplyID(in session: ChatSession) -> UUID? {
         guard session.isStreaming else { return nil }
         return session.messages.last(where: { $0.role == .assistant })?.id
+    }
+
+    /// A reader who owns the viewport while a reply's reasoning streams keeps it open when the reply
+    /// completes (#60 B4). The choice is recorded ahead of completion: the transcript decides the reply's
+    /// items from it in the same update that marks the reply complete, when the row that would observe
+    /// completion may already be gone or never laid out. Following again before completion withdraws
+    /// it, so the reply folds as usual; a choice the reader made is never touched.
+    private func holdOpenReasoning() {
+        guard session.isStreaming, model.foldsCompletedReasoning,
+            let reply = session.messages.last(where: { $0.role == .assistant }), !reply.complete,
+            TranscriptText.hasContent(reply.thinking)
+        else { return }
+        let store = ReasoningDisclosureStore.shared
+        if viewport.readerOwnsViewport {
+            guard store.choice(for: reply.id) == nil else { return }
+            store.set(.init(isOpen: true, isHeld: true), for: reply.id)
+        } else if store.choice(for: reply.id)?.isHeld == true {
+            store.remove(reply.id)
+        }
     }
 
     private var anchorIndex: Int? {
@@ -1305,10 +1331,10 @@ struct ChatTranscriptView: View {
 
     /// The reader's anchor moved with layout. The lazy stack keeps its topmost visible row in place,
     /// which is the anchor's row unless the anchor starts below the viewport's top edge (space above it,
-    /// as under a loader) or names a segment: then a size change above it moves what the reader sees,
-    /// and the owner puts it back. Only while the reader owns the viewport, nothing else moves it, and
-    /// the anchor was where the reader sees it before this layout (`previousTop` is its earlier top
-    /// edge): an anchor a cancelled restore left behind describes nothing on screen.
+    /// as under a history progress row) or names a segment: then a size change above it moves what the
+    /// reader sees, and the owner puts it back. Only while the reader owns the viewport, nothing else
+    /// moves it, and the anchor was where the reader sees it before this layout (`previousTop` is its
+    /// earlier top edge): an anchor a cancelled restore left behind describes nothing on screen.
     private func keepAnchorInPlace(previousTop: CGFloat) {
         guard viewport.readerOwnsViewport, viewport.request == nil, !reader.isScrolling, !reader.attributingMove,
             pagingPhase == .idle, let anchor = viewport.anchor,

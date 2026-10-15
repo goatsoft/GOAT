@@ -83,13 +83,33 @@ enum TranscriptMessageLayout: Equatable {
     static let shared = TranscriptTexts()
     private var answers: [UUID: AnswerText] = [:]
     private var reasoning: [UUID: ReasoningText] = [:]
-    /// Bounded: the transcript holds at most a page cache of messages (ADR-0102), and entries for
-    /// messages no longer shown are dropped when it is exceeded.
+    /// Bounded: beyond this, entries that are neither streaming, shown nor held by an open transcript
+    /// are dropped. An idle transcript holds at most a page cache of messages (ADR-0102); a turn loads
+    /// the chat's complete history, which can exceed this, and those entries are held.
     static let maximumEntries = 256
+    /// The messages each open transcript lays out, by chat. Their entries survive eviction: a chat
+    /// longer than the bound would otherwise evict and re-prepare its own entries on every update.
+    private var held: [UUID: Set<UUID>] = [:]
+
+    /// The transcript for `chat` lays out `messages`.
+    func hold(_ messages: Set<UUID>, for chat: UUID) {
+        if held[chat] != messages { held[chat] = messages }
+    }
+
+    /// The transcript for `chat` is gone.
+    func release(chat: UUID) {
+        held[chat] = nil
+    }
+
+    private func isHeld(_ id: UUID) -> Bool {
+        held.values.contains { $0.contains(id) }
+    }
 
     func answer(for message: ChatMessage) -> AnswerText {
         if let existing = answers[message.id] { return existing }
-        if answers.count >= Self.maximumEntries { answers = answers.filter { $0.value.isActive } }
+        if answers.count >= Self.maximumEntries {
+            answers = answers.filter { $0.value.isActive || isHeld($0.key) }
+        }
         let text = AnswerText(message: message)
         answers[message.id] = text
         return text
@@ -97,7 +117,9 @@ enum TranscriptMessageLayout: Equatable {
 
     func reasoning(for message: ChatMessage) -> ReasoningText {
         if let existing = reasoning[message.id] { return existing }
-        if reasoning.count >= Self.maximumEntries { reasoning = reasoning.filter { $0.value.isActive } }
+        if reasoning.count >= Self.maximumEntries {
+            reasoning = reasoning.filter { $0.value.isActive || isHeld($0.key) }
+        }
         let text = ReasoningText(message: message)
         reasoning[message.id] = text
         return text
@@ -137,6 +159,9 @@ enum TranscriptMessageLayout: Equatable {
             return .whole
         }
     }
+
+    /// How many answer and reasoning entries are held, for tests.
+    var entryCount: Int { answers.count + reasoning.count }
 
     func removeAll() {
         answers.removeAll()

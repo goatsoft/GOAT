@@ -652,6 +652,40 @@ extension AppTests.Bleet {
                     + (0..<segments).map { TranscriptItem.Part.answer($0) } + [.tail])
         }
 
+        /// A turn loads a chat's complete history, which can hold more messages than the texts' bound.
+        /// The transcript that lays them out holds their entries, so laying out the chat again does not
+        /// evict and prepare them again; entries nothing holds are evicted once the bound is reached.
+        @Test @MainActor func heldMessagesSurviveEviction() throws {
+            let texts = TranscriptTexts()
+            let chat = UUID()
+            let replies = (0..<(TranscriptTexts.maximumEntries + 40)).map { index in
+                let reply = ChatMessage(role: .assistant)
+                reply.text = "Reply \(index)."
+                reply.complete = true
+                return reply
+            }
+            texts.hold(Set(replies.map(\.id)), for: chat)
+            let first = replies.map { texts.answer(for: $0) }
+            let again = replies.map { texts.answer(for: $0) }
+            #expect(zip(first, again).allSatisfy { $0 === $1 }, "Held entries are kept through eviction")
+            #expect(texts.entryCount == replies.count)
+
+            // Another chat's settled replies, held by nothing, go once the bound is reached.
+            let other = ChatMessage(role: .assistant)
+            other.text = "Another chat's reply."
+            other.complete = true
+            let stray = texts.answer(for: other)
+            texts.release(chat: chat)
+            texts.hold([replies[0].id], for: chat)
+            let newcomer = ChatMessage(role: .assistant)
+            newcomer.text = "A new reply."
+            newcomer.complete = true
+            _ = texts.answer(for: newcomer)
+            #expect(texts.answer(for: other) !== stray, "An entry nothing holds is evicted")
+            #expect(texts.answer(for: replies[0]) === first[0], "The one held entry survives")
+            #expect(texts.answer(for: replies[1]) !== first[1])
+        }
+
         /// #78: a reader who scrolls up while a long reply streams stays where they are as output arrives
         /// below, and stays the owner (ADR-0104).
         @Test @MainActor func aReaderAboveAStreamingReplyStaysWhereTheyAre() async throws {
@@ -1271,6 +1305,96 @@ extension AppTests.Bleet {
             let streaming = host.fittingSize.height
             let completed = try await completeAndMeasure(message, host)
             #expect(completed == streaming, "Completion must not move a reader's content: \(streaming) -> \(completed)")
+        }
+
+        /// A streaming reply with reasoning laid out as items, hosted in the transcript.
+        @MainActor private func hostedSplitReply() async throws -> (
+            ChatSession, ChatMessage, TranscriptViewport, NSWindow, NSView
+        ) {
+            let session = ChatSession(effort: .trot, modelID: nil)
+            session.messagesLoaded = true
+            session.isStreaming = true
+            let reply = ChatMessage(role: .assistant)
+            reply.appendStream(
+                text: "The answer.",
+                thinking: (0..<200).map { "Reasoning step \($0), with words enough to wrap once or twice." }
+                    .joined(separator: "\n\n"))
+            session.messages = [reply]
+            let viewport = TranscriptViewport()
+            let (window, host) = hostedWindow(session, viewport: viewport)
+            for _ in 0..<200 where reasoningItems(of: reply) < 2 {
+                try await Task.sleep(for: .milliseconds(20))
+                host.layoutSubtreeIfNeeded()
+            }
+            try #require(reasoningItems(of: reply) > 1, "Long streaming reasoning is laid out as items")
+            return (session, reply, viewport, window, host)
+        }
+
+        @MainActor private func reasoningItems(of reply: ChatMessage) -> Int {
+            guard case .split(_, let reasoning, _, _) = TranscriptTexts.shared.layout(of: reply) else { return 0 }
+            return reasoning
+        }
+
+        @MainActor private func publish(_ reply: ChatMessage, _ host: NSView) async throws {
+            reply.appendStream(text: " More.", thinking: "")
+            try await Task.sleep(for: .milliseconds(150))
+            host.layoutSubtreeIfNeeded()
+        }
+
+        /// A split reply's items are decided from the store in the update that completes it, before any
+        /// row observes completion (ADR-0104): the transcript records the reader's hold ahead of it.
+        @Test @MainActor func aReaderWhoOwnsTheViewportKeepsSplitReasoningOpen() async throws {
+            let folds = AppModel.shared.foldsCompletedReasoning
+            AppModel.shared.foldsCompletedReasoning = true
+            defer { AppModel.shared.foldsCompletedReasoning = folds }
+            let (session, reply, viewport, window, host) = try await hostedSplitReply()
+            defer {
+                window.contentView = nil
+                window.close()
+            }
+            let store = ReasoningDisclosureStore.shared
+            let reading = TranscriptViewport.Anchor(
+                messageID: TranscriptSegmentOwner.reasoning(of: reply.id), offset: 0, segment: 1)
+
+            // The reader takes the viewport while the reply streams: the hold is recorded, not a choice.
+            viewport.readerMoved(anchor: reading)
+            try await publish(reply, host)
+            #expect(store.choice(for: reply.id) == .init(isOpen: true, isHeld: true))
+
+            // Following again before completion withdraws it.
+            viewport.jumpToLatest()
+            try await publish(reply, host)
+            #expect(store.choice(for: reply.id) == nil, "A follower's reply folds as usual")
+
+            // The reader takes it again and the reply completes: the reasoning stays open, as items.
+            viewport.readerMoved(anchor: reading)
+            try await publish(reply, host)
+            reply.complete = true
+            session.isStreaming = false
+            try await Task.sleep(for: .milliseconds(300))
+            host.layoutSubtreeIfNeeded()
+            #expect(ReasoningDisclosure.isOpen(reply), "Completion must not fold what a reader is reading")
+            #expect(reasoningItems(of: reply) > 1, "The reasoning items stay laid out")
+        }
+
+        @Test @MainActor func completedSplitReasoningFoldsWhileTheTranscriptFollows() async throws {
+            let folds = AppModel.shared.foldsCompletedReasoning
+            AppModel.shared.foldsCompletedReasoning = true
+            defer { AppModel.shared.foldsCompletedReasoning = folds }
+            let (session, reply, viewport, window, host) = try await hostedSplitReply()
+            defer {
+                window.contentView = nil
+                window.close()
+            }
+            try await publish(reply, host)
+            #expect(viewport.autoFollow && ReasoningDisclosureStore.shared.choice(for: reply.id) == nil)
+            reply.complete = true
+            session.isStreaming = false
+            try await Task.sleep(for: .milliseconds(300))
+            host.layoutSubtreeIfNeeded()
+            #expect(!ReasoningDisclosure.isOpen(reply), "A follower's completed reasoning folds")
+            #expect(TranscriptTexts.shared.layout(of: reply) == .whole, "One row: a folded line and a short answer")
+            #expect(ReasoningDisclosureStore.shared.choice(for: reply.id) == nil, "Folding is not a user choice")
         }
 
         @Test @MainActor func turningFoldingOffKeepsReasoningOpen() async throws {
