@@ -596,6 +596,11 @@ extension AppTests.Bleet {
             #expect(AnswerPiece.showsCaret(on: reply, streamingReplyID: streaming))
             #expect(!AnswerPiece.showsCaret(on: earlier, streamingReplyID: streaming))
             #expect(!AnswerPiece.showsCaret(on: question, streamingReplyID: streaming))
+            // Of a reply's items, only the last carries it.
+            #expect(AnswerPiece.carriesCaret(on: reply, index: 3, of: 4, streamingReplyID: streaming))
+            #expect(!AnswerPiece.carriesCaret(on: reply, index: 2, of: 4, streamingReplyID: streaming))
+            #expect(!AnswerPiece.carriesCaret(on: reply, index: 0, of: 4, streamingReplyID: streaming))
+            #expect(!AnswerPiece.carriesCaret(on: earlier, index: 3, of: 4, streamingReplyID: streaming))
 
             // The reply completes before the session's stream closes: the caret goes with it.
             reply.complete = true
@@ -684,6 +689,37 @@ extension AppTests.Bleet {
             #expect(texts.answer(for: other) !== stray, "An entry nothing holds is evicted")
             #expect(texts.answer(for: replies[0]) === first[0], "The one held entry survives")
             #expect(texts.answer(for: replies[1]) !== first[1])
+        }
+
+        /// A streaming reply is sampled only while a transcript shows its chat; switching chats stops
+        /// the sampling and switching back resumes it. A memory-pressure clear keeps the entries that
+        /// stream or have items on screen, whose items hold them.
+        @Test @MainActor func aReleasedChatsStreamIsNotSampledAndClearingKeepsLiveEntries() {
+            let texts = TranscriptTexts()
+            let chat = UUID()
+            let reply = ChatMessage(role: .assistant)
+            reply.appendStream(text: "Streaming.", thinking: "Thinking.")
+            let settled = ChatMessage(role: .assistant)
+            settled.text = "Settled."
+            settled.complete = true
+            texts.hold([reply.id, settled.id], for: chat)
+            let answer = texts.answer(for: reply)
+            let reasoning = texts.reasoning(for: reply)
+            _ = reasoning.pieceCount
+            _ = texts.answer(for: settled)
+            #expect(answer.isSampling && reasoning.isSampling, "A shown stream is sampled")
+
+            texts.release(chat: chat)
+            #expect(!answer.isSampling && !reasoning.isSampling, "Nothing shows the chat")
+            texts.hold([reply.id, settled.id], for: chat)
+            #expect(answer.isSampling && reasoning.isSampling, "Shown again, it is sampled again")
+
+            texts.removeAll()
+            #expect(texts.answer(for: reply) === answer, "A streaming entry survives a clear")
+            #expect(texts.reasoning(for: reply) === reasoning)
+            #expect(texts.entryCount == 2, "The settled entry went")
+            answer.sleep()
+            reasoning.sleep()
         }
 
         /// #78: a reader who scrolls up while a long reply streams stays where they are as output arrives
@@ -1393,7 +1429,13 @@ extension AppTests.Bleet {
             try await Task.sleep(for: .milliseconds(300))
             host.layoutSubtreeIfNeeded()
             #expect(!ReasoningDisclosure.isOpen(reply), "A follower's completed reasoning folds")
-            #expect(TranscriptTexts.shared.layout(of: reply) == .whole, "One row: a folded line and a short answer")
+            // Once split, the reply stays split (its items keep their identity): a head with the folded
+            // line, the one answer segment and nothing of the reasoning.
+            guard case .split(let head, let reasoning, let answer, _) = TranscriptTexts.shared.layout(of: reply) else {
+                Issue.record("A reply once split stays split")
+                return
+            }
+            #expect(head && reasoning == 0 && answer == 1, "The reasoning items are gone")
             #expect(ReasoningDisclosureStore.shared.choice(for: reply.id) == nil, "Folding is not a user choice")
         }
 

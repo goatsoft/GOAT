@@ -16,18 +16,24 @@ struct AnswerPiece: View {
     static func showsCaret(on message: ChatMessage, streamingReplyID: UUID?) -> Bool {
         message.role == .assistant && message.id == streamingReplyID && !message.complete
     }
+
+    /// Whether the item at `index` of `count` carries the caret: only the last item of the reply still
+    /// arriving.
+    static func carriesCaret(on message: ChatMessage, index: Int, of count: Int, streamingReplyID: UUID?) -> Bool {
+        showsCaret(on: message, streamingReplyID: streamingReplyID) && index == count - 1
+    }
     @Environment(AppModel.self) private var model
     @Environment(\.transcriptStreamingReplyID) private var streamingReplyID
 
     var body: some View {
         let text = TranscriptTexts.shared.answer(for: message)
-        let showsCaret = Self.showsCaret(on: message, streamingReplyID: streamingReplyID)
         Group {
             if text.isPlain {
                 if let parts = text.parts, parts.indices.contains(index) {
                     TranscriptPlainPart(
                         text: parts[index], fontSize: model.chatFontSize,
-                        showsCaret: showsCaret && index == parts.count - 1)
+                        showsCaret: Self.carriesCaret(
+                            on: message, index: index, of: parts.count, streamingReplyID: streamingReplyID))
                 } else {
                     // The last bytes, until the parts are prepared (a streaming reply's tail).
                     TranscriptPlainPart(
@@ -40,7 +46,8 @@ struct AnswerPiece: View {
                         // Incomplete text stays source-only (no live artifact previews) whether or not
                         // this transcript is the one streaming it.
                         segment: segment, fontSize: model.chatFontSize, isStreaming: !message.complete,
-                        isTail: showsCaret && index == document.segments.count - 1,
+                        isTail: Self.carriesCaret(
+                            on: message, index: index, of: document.segments.count, streamingReplyID: streamingReplyID),
                         codeSegment: MarkdownSegmentView.codeSegment(of: index, in: document.segments)
                     )
                     .equatable()
@@ -133,7 +140,8 @@ private struct ReasoningGroup: View, Equatable {
                     segment: segment,
                     joinsNext: index + 1 < segments.count ? segments[index + 1].continuesPrevious : joinsNext
                 )
-                .padding(.top, (index == 0 && startsReasoning) || segment.continuesPrevious ? 0 : 8)
+                .padding(
+                    .top, (index == 0 && startsReasoning) || segment.continuesPrevious ? 0 : Caprine.Activity.spacing)
             }
         }
     }
@@ -171,10 +179,10 @@ struct ReplySegmentItem: View, Equatable {
         .onHover { isHovering in
             guard isHovering != hovering else { return }
             hovering = isHovering
-            TranscriptTexts.shared.answer(for: message).hovering += isHovering ? 1 : -1
+            TranscriptTexts.shared.answer(for: message).hover(isHovering)
         }
         .onDisappear {
-            if hovering { TranscriptTexts.shared.answer(for: message).hovering -= 1 }
+            if hovering { TranscriptTexts.shared.answer(for: message).hover(false) }
             hovering = false
         }
         .contextMenu {
@@ -207,6 +215,9 @@ struct ReplySegmentItem: View, Equatable {
                 .reasoningRule(model.theme.tokens.muted)
                 .padding(.top, topPadding)
                 .padding(.bottom, bottomPadding)
+                // Its own group, named: an assistive reader tells reasoning from the answer that follows.
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("Reasoning")
         case .answer(let index):
             AnswerPiece(message: message, index: index)
                 .padding(.top, topPadding)
@@ -244,7 +255,11 @@ struct BubblePieceOutline: Shape {
     func path(in rect: CGRect) -> Path {
         var path = Path()
         let r = min(radius, rect.width / 2, rect.height / 2)
-        let rect = rect.insetBy(dx: 0.5, dy: 0.5)
+        // Half a point in from the edges the stroke must not overrun; a seam with the next piece is
+        // not an edge, so the sides run through it and the pieces' outlines meet.
+        let rect = CGRect(
+            x: rect.minX + 0.5, y: first ? rect.minY + 0.5 : rect.minY, width: rect.width - 1,
+            height: rect.height - (first ? 0.5 : 0) - (last ? 0.5 : 0))
         // Left side, from bottom to top.
         path.move(to: CGPoint(x: rect.minX, y: last ? rect.maxY - r : rect.maxY))
         path.addLine(to: CGPoint(x: rect.minX, y: first ? rect.minY + r : rect.minY))

@@ -2,40 +2,75 @@ import Caprine
 import Foundation
 import SwiftUI
 
-/// Split at Unicode scalar boundaries so even a pathological combining sequence is bounded.
-/// Joining the parts recovers every original scalar, including whitespace and fence markers.
+/// Split at grapheme boundaries, so a combining mark, an emoji sequence or a CRLF never straddles two
+/// parts; a pathological grapheme longer than a part is split at scalar boundaries so every part stays
+/// bounded. Joining the parts recovers every original scalar, including whitespace and fence markers.
 enum TranscriptTextParts {
     static let maximumBytes = 8 * 1_024
 
     static func split(_ source: String, maximumBytes: Int = maximumBytes) throws -> [String] {
         let limit = max(4, maximumBytes)
         var parts: [String] = []
-        var part = String.UnicodeScalarView()
+        var part = ""
         var bytes = 0
-        for scalar in source.unicodeScalars {
-            if bytes + scalar.utf8.count > limit {
-                try Task.checkCancellation()
-                parts.append(String(part))
-                part = String.UnicodeScalarView()
+        var seen = 0
+        for character in source {
+            let size = character.utf8.count
+            if bytes + size > limit, bytes > 0 {
+                parts.append(part)
+                part = ""
                 bytes = 0
             }
-            part.append(scalar)
-            bytes += scalar.utf8.count
+            if size > limit {
+                // A grapheme no part can hold: its scalars fill parts on their own.
+                for scalar in character.unicodeScalars {
+                    if bytes + scalar.utf8.count > limit, bytes > 0 {
+                        parts.append(part)
+                        part = ""
+                        bytes = 0
+                    }
+                    part.unicodeScalars.append(scalar)
+                    bytes += scalar.utf8.count
+                }
+            } else {
+                part.append(character)
+                bytes += size
+            }
+            seen += 1
+            if seen % 4_096 == 0 { try Task.checkCancellation() }
         }
-        if !part.isEmpty || parts.isEmpty { parts.append(String(part)) }
+        if !part.isEmpty || parts.isEmpty { parts.append(part) }
         return parts
     }
 
-    /// The source's last scalars within `maximumBytes`, found without walking the rest, shown until
+    /// The source's last graphemes within `maximumBytes`, found without walking the rest, shown until
     /// the parts are prepared. The final part can be shorter, since parts are split from the start.
     static func tail(_ source: String, maximumBytes: Int = maximumBytes) -> String {
-        let scalars = source.unicodeScalars
+        let limit = max(4, maximumBytes)
+        var start = source.endIndex
+        var bytes = 0
+        while start > source.startIndex {
+            let previous = source.index(before: start)
+            let size = source[previous].utf8.count
+            if bytes + size > limit {
+                // Nothing fits yet: a grapheme longer than the limit yields its last scalars.
+                if bytes == 0 { return tailScalars(of: source[previous...], limit: limit) }
+                break
+            }
+            bytes += size
+            start = previous
+        }
+        return String(source[start...])
+    }
+
+    private static func tailScalars(of text: Substring, limit: Int) -> String {
+        let scalars = text.unicodeScalars
         var start = scalars.endIndex
         var bytes = 0
         while start > scalars.startIndex {
             let previous = scalars.index(before: start)
             bytes += scalars[previous].utf8.count
-            if bytes > max(4, maximumBytes) { break }
+            if bytes > limit { break }
             start = previous
         }
         return String(scalars[start...])

@@ -237,10 +237,20 @@ extension AppTests.Bleet {
                 }
                 return find(host)
             }
-            func relayout(toFont font: CGFloat) async throws {
-                model.chatFontSize = font
-                try await Task.sleep(for: .milliseconds(600))
+            /// Waits for the lazy stack to take a new identity, within 3 s, and for its recreated rows to
+            /// report; a count that does not move is left to the caller's assertion.
+            func awaitRelayout(past count: Int) async throws {
+                for _ in 0..<150 where navigation.relayouts == count {
+                    try await Task.sleep(for: .milliseconds(20))
+                    host.layoutSubtreeIfNeeded()
+                }
+                try await Task.sleep(for: .milliseconds(200))
                 host.layoutSubtreeIfNeeded()
+            }
+            func relayout(toFont font: CGFloat) async throws {
+                let before = navigation.relayouts
+                model.chatFontSize = font
+                try await awaitRelayout(past: before)
             }
 
             // The tool's result shows only while its disclosure is expanded, which the reader chose.
@@ -252,13 +262,16 @@ extension AppTests.Bleet {
             #expect(navigation.relayouts > before, "The font change must replace the rows")
             #expect(shows("Read successfully"), "The reader's open disclosure collapsed in the relayout")
 
-            // A row presents a sheet: the relayout waits, then runs once it closes.
+            // A row presents a sheet: the relayout waits, then runs once it closes. The wait here is
+            // inherent: it checks that nothing happens past the reflow's 150 ms settling.
             navigation.holdLayout()
             let held = navigation.relayouts
-            try await relayout(toFont: 15)
+            model.chatFontSize = 15
+            try await Task.sleep(for: .milliseconds(600))
+            host.layoutSubtreeIfNeeded()
             #expect(navigation.relayouts == held, "Rows were replaced under an open presentation")
             navigation.releaseLayout()
-            try await Task.sleep(for: .milliseconds(600))
+            try await awaitRelayout(past: held)
             #expect(navigation.relayouts > held, "The deferred relayout must run once the presentation closes")
             #expect(shows("Read successfully"))
         }

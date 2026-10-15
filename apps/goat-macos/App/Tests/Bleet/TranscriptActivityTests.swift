@@ -901,6 +901,13 @@ extension TranscriptHistoryPagingTests {
         try await awaitPlacement()
         XCTAssertNil(navigation.request, "Initial placement must finish: \(navigation.diagnostics)")
         XCTAssertEqual(navigation.abandonedRequests, 0)
+        // The reader sits near the loaded records' end, so the transcript may be loading a page of its
+        // own (ADR-0104); this test pages explicitly, once that has settled.
+        for _ in 0..<250 where session.isPagingHistory || navigation.request != nil {
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        try await awaitPlacement()
         let fulfilled = navigation.diagnostics.filter { $0.hasPrefix("fulfilled ") }.count
         let loaded = await model.pageHistory(for: session, earlier: true)
         XCTAssertTrue(loaded)
@@ -918,6 +925,98 @@ extension TranscriptHistoryPagingTests {
 }
 
 extension TranscriptHistoryPagingTests {
+    /// ADR-0104: there is no loader to press. A reader within a viewport of the loaded records' end has
+    /// the adjacent stored page loaded, with their place kept, until the stored history is exhausted.
+    func testApproachingTheLoadedHistorysEndLoadsMoreAndKeepsTheReadersPlace() async throws {
+        let model = AppModel.shared
+        let previousDB = model.db
+        let previousChats = model.chats
+        let previousSelection = model.selectedChatID
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("goat-near-\(UUID()).sqlite")
+        let db = try ChatDatabase(path: path.path)
+        addTeardownBlock { [weak db] in
+            guard db == nil else { return }
+            try? FileManager.default.removeItem(at: path)
+        }
+        let session = ChatSession(effort: .trot, modelID: nil)
+        session.messagesLoaded = true
+        model.db = db
+        model.chats = [session]
+        model.selectedChatID = session.id
+        defer {
+            model.db = previousDB
+            model.chats = previousChats
+            model.selectedChatID = previousSelection
+        }
+        try await db.save(model.record(for: session))
+        let stored = (0..<200).map { index in
+            MessageRecord(
+                id: UUID().uuidString, chatId: session.id.uuidString, role: "assistant",
+                text: "Stored row \(index). A stable paragraph.\n\nSecond paragraph.", thinking: "",
+                error: nil, statsTtft: nil, statsTokens: nil, statsDuration: nil,
+                complete: true, position: index, createdAt: .now)
+        }
+        for record in stored { try await db.save(record) }
+        session.messagesLoaded = false
+        await model.loadMessages(for: session)
+        XCTAssertTrue(session.historyHasEarlier, "The latest page is loaded; earlier records are stored")
+        let earliestLoaded = try XCTUnwrap(session.messages.first?.id)
+        XCTAssertNotEqual(earliestLoaded.uuidString, stored[0].id, "The first record is not loaded")
+
+        // The reader holds a row near the top of the loaded records: within a viewport of their end.
+        let anchor = TranscriptViewport.Anchor(messageID: session.messages[2].id, offset: 0)
+        let navigation = TranscriptViewport(initiallyFollowing: false, initialAnchor: anchor)
+        let host = NSHostingView(
+            rootView: ChatTranscriptView(session: session, viewport: navigation).environment(model)
+                .environment(\.scenePhase, .active).allowsHitTesting(false))
+        host.sizingOptions = []
+        let window = NSWindow(
+            contentRect: NSRect(x: -10_000, y: -10_000, width: 760, height: 520),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.ignoresMouseEvents = true
+        let container = NSView(frame: NSRect(origin: .zero, size: window.contentLayoutRect.size))
+        host.frame = container.bounds
+        host.autoresizingMask = [.width, .height]
+        container.addSubview(host)
+        window.contentView = container
+        window.orderFront(nil)
+        defer {
+            window.contentView = nil
+            window.close()
+        }
+
+        // No call to page: the transcript loads the earlier records itself, since the reader sits within a
+        // viewport of the loaded records' end.
+        let deadline = ContinuousClock.now + .seconds(10)
+        while ContinuousClock.now < deadline, session.messages.first?.id == earliestLoaded {
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertNotEqual(
+            session.messages.first?.id, earliestLoaded,
+            "Earlier history loads as the reader approaches it: \(navigation.diagnostics.suffix(12))")
+        XCTAssertTrue(session.messages.contains { $0.id == anchor.messageID }, "The reader's row stays loaded")
+
+        // The reader's place is kept through every load, and nothing was abandoned.
+        var quietSince: ContinuousClock.Instant?
+        let settle = ContinuousClock.now + .seconds(5)
+        while ContinuousClock.now < settle {
+            host.layoutSubtreeIfNeeded()
+            if navigation.request == nil, !session.isPagingHistory {
+                if let quietSince, ContinuousClock.now - quietSince >= .milliseconds(300) { break }
+                if quietSince == nil { quietSince = ContinuousClock.now }
+            } else {
+                quietSince = nil
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertTrue(navigation.readerOwnsViewport)
+        XCTAssertEqual(navigation.anchor?.messageID, anchor.messageID, "\(navigation.diagnostics.suffix(12))")
+        XCTAssertEqual(navigation.abandonedRequests, 0, navigation.diagnostics.joined(separator: "\n"))
+        XCTAssertLessThanOrEqual(session.messages.count, 120, "The record cache stays bounded")
+    }
+
     /// ADR-0104: open reasoning shows all of it, with no control to page through it.
     func testOpenReasoningShowsAllOfItWithNoPagingControl() async throws {
         let session = ChatSession(effort: .trot, modelID: nil)

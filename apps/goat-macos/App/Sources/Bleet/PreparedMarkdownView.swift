@@ -171,6 +171,9 @@ struct PreparedMarkdownView<Rendered: View>: View {
     private var request: Request { Request(id: id, source: source) }
     @State private var preparedRequest: Request?
     @State private var preparation: MarkdownPreparation?
+    /// Text above the parts threshold, as bounded plain parts (the transcript splits such text into
+    /// items of its own, ADR-0104; elsewhere each part is one bounded text view).
+    @State private var parts: [String]?
 
     init(
         id: UUID,
@@ -196,8 +199,19 @@ struct PreparedMarkdownView<Rendered: View>: View {
     var body: some View {
         Group {
             if source.utf8.count > TranscriptTextParts.maximumBytes {
-                // The transcript splits such text into items (ADR-0104); elsewhere it is plain text.
-                TranscriptPlainPart(text: source, fontSize: fallbackFontSize)
+                // Plain, selectable, in parts: one text view of the whole source would lay out every
+                // byte on the main thread at once.
+                if let parts {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(parts.indices, id: \.self) { index in
+                            TranscriptPlainPart(text: parts[index], fontSize: fallbackFontSize)
+                        }
+                    }
+                } else {
+                    Label("Formatting response…", systemImage: "text.badge.checkmark")
+                        .font(Font(ReadingFonts.nsFont(model.effectiveChatFontID, size: fallbackFontSize, role: .chat)))
+                        .foregroundStyle(.secondary)
+                }
             } else {
                 switch preparedRequest == request || retainsPreviousContent ? preparation : nil {
                 case .parsed(let content):
@@ -220,7 +234,20 @@ struct PreparedMarkdownView<Rendered: View>: View {
         .alignmentGuide(.leading) { _ in 0 }
         .alignmentGuide(.trailing) { dimensions in dimensions.width }
         .task(id: request) {
-            guard source.utf8.count <= TranscriptTextParts.maximumBytes else { return }
+            guard source.utf8.count <= TranscriptTextParts.maximumBytes else {
+                let key = "\(id.uuidString):plain"
+                if let cached = TranscriptPartsCache.shared.parts(for: key, source: source) {
+                    parts = cached
+                    return
+                }
+                let source = source
+                let split = await Task.detached(priority: .userInitiated) { try? TranscriptTextParts.split(source) }
+                    .value
+                guard !Task.isCancelled, let split else { return }
+                TranscriptPartsCache.shared.store(split, for: key, source: source)
+                parts = split
+                return
+            }
             let result = await MarkdownRenderCache.shared.prepare(id: id, source: source)
             // Kept when the row left before it finished, so its next mount renders formatted, but never
             // in place of a newer text's preparation.

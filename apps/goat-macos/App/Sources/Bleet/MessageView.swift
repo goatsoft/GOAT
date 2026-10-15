@@ -80,13 +80,13 @@ struct MessageView: View {
                 // Reduce Motion, the animations setting and inactive scenes all skip the fade (#60 D9).
                 withAnimation(liveAnimations ? .easeOut(duration: 0.12) : nil) {
                     if part != .whole, h != hovering {
-                        TranscriptTexts.shared.answer(for: message).hovering += h ? 1 : -1
+                        TranscriptTexts.shared.answer(for: message).hover(h)
                     }
                     hovering = h
                 }
             }
             .onDisappear {
-                if part != .whole, hovering { TranscriptTexts.shared.answer(for: message).hovering -= 1 }
+                if part != .whole, hovering { TranscriptTexts.shared.answer(for: message).hover(false) }
                 hovering = false
             }
             // Without a transcript to present them (a message shown on its own), the row presents them.
@@ -164,7 +164,7 @@ struct MessageView: View {
     @ViewBuilder private var userAttachments: some View {
         if !message.attachmentPaths.isEmpty {
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
+                HStack(spacing: Caprine.Reading.bubbleStackSpacing) {
                     ForEach(message.attachmentPaths, id: \.self) { path in
                         StoredAttachmentThumbnail(path: path)
                     }
@@ -180,36 +180,41 @@ struct MessageView: View {
         FractionalWidthLayout(fraction: Caprine.Reading.userBubbleFraction) {
             switch part {
             case .head:
-                VStack(alignment: .trailing, spacing: 6) { userAttachments }
+                VStack(alignment: .trailing, spacing: Caprine.Reading.bubbleStackSpacing) { userAttachments }
                     .frame(maxWidth: .infinity, alignment: .trailing)
-                    .padding(.bottom, message.attachmentPaths.isEmpty ? 0 : 6)
+                    .padding(.bottom, message.attachmentPaths.isEmpty ? 0 : Caprine.Reading.bubbleStackSpacing)
             case .answer(let index):
                 let count = TranscriptTexts.shared.answer(for: message).pieceCount
+                let first = index == 0
+                let last = index == count - 1
+                let radius = Caprine.Reading.bubbleRadius
                 AnswerPiece(message: message, index: index)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 14)
-                    .padding(.top, index == 0 ? 10 : 0)
-                    .padding(.bottom, index == count - 1 ? 10 : 0)
+                    .padding(.horizontal, Caprine.Reading.bubbleHorizontalInset)
+                    .padding(.top, first ? Caprine.Reading.bubbleVerticalInset : 0)
+                    .padding(.bottom, last ? Caprine.Reading.bubbleVerticalInset : 0)
+                    // A flat fill: a gradient would restart at every piece, drawing seams across the
+                    // bubble, since each piece is laid out on its own.
                     .background(
-                        model.theme.tokens.bubbleGradient,
+                        model.theme.tokens.userBubble,
                         in: UnevenRoundedRectangle(
-                            topLeadingRadius: index == 0 ? 14 : 0, bottomLeadingRadius: index == count - 1 ? 14 : 0,
-                            bottomTrailingRadius: index == count - 1 ? 14 : 0, topTrailingRadius: index == 0 ? 14 : 0)
+                            topLeadingRadius: first ? radius : 0, bottomLeadingRadius: last ? radius : 0,
+                            bottomTrailingRadius: last ? radius : 0, topTrailingRadius: first ? radius : 0)
                     )
                     .overlay(
-                        BubblePieceOutline(first: index == 0, last: index == count - 1, radius: 14)
-                            .stroke(model.theme.tokens.accent.opacity(0.18))
+                        BubblePieceOutline(first: first, last: last, radius: radius)
+                            .stroke(model.theme.tokens.accent.opacity(Caprine.Reading.bubbleOutlineOpacity))
                     )
             case .tail, .whole, .reasoning:
-                VStack(alignment: .trailing, spacing: 6) { userFooter }
+                VStack(alignment: .trailing, spacing: Caprine.Reading.bubbleStackSpacing) { userFooter }
                     .frame(maxWidth: .infinity, alignment: .trailing)
-                    .padding(.top, 6)
+                    .padding(.top, Caprine.Reading.bubbleStackSpacing)
             }
         }
     }
 
     private var userBubbleContent: some View {
-        VStack(alignment: .trailing, spacing: 6) {
+        VStack(alignment: .trailing, spacing: Caprine.Reading.bubbleStackSpacing) {
             userAttachments
             PreparedMarkdownView(
                 id: message.id,
@@ -225,12 +230,14 @@ struct MessageView: View {
                     }
                     .textSelection(.enabled)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(model.theme.tokens.bubbleGradient, in: RoundedRectangle(cornerRadius: 14))
+            .padding(.horizontal, Caprine.Reading.bubbleHorizontalInset)
+            .padding(.vertical, Caprine.Reading.bubbleVerticalInset)
+            .background(
+                model.theme.tokens.bubbleGradient, in: RoundedRectangle(cornerRadius: Caprine.Reading.bubbleRadius)
+            )
             .overlay(
-                RoundedRectangle(cornerRadius: 14)
-                    .strokeBorder(model.theme.tokens.accent.opacity(0.18))
+                RoundedRectangle(cornerRadius: Caprine.Reading.bubbleRadius)
+                    .strokeBorder(model.theme.tokens.accent.opacity(Caprine.Reading.bubbleOutlineOpacity))
             )
             userFooter
         }

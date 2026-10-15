@@ -83,35 +83,53 @@ enum TranscriptMessageLayout: Equatable {
     static let shared = TranscriptTexts()
     private var answers: [UUID: AnswerText] = [:]
     private var reasoning: [UUID: ReasoningText] = [:]
-    /// Bounded: beyond this, entries that are neither streaming, shown nor held by an open transcript
-    /// are dropped. An idle transcript holds at most a page cache of messages (ADR-0102); a turn loads
-    /// the chat's complete history, which can exceed this, and those entries are held.
+    /// Bounded by entries and by the text they describe: beyond either, entries that are neither
+    /// streaming, shown nor held by an open transcript are dropped. An idle transcript holds at most a
+    /// page cache of messages (ADR-0102); a turn loads the chat's complete history, which can exceed
+    /// this, and those entries are held.
     static let maximumEntries = 256
+    static let maximumBytes = 32 * 1_024 * 1_024
     /// The messages each open transcript lays out, by chat. Their entries survive eviction: a chat
     /// longer than the bound would otherwise evict and re-prepare its own entries on every update.
     private var held: [UUID: Set<UUID>] = [:]
 
-    /// The transcript for `chat` lays out `messages`.
+    /// The transcript for `chat` lays out `messages`. Their streaming text is sampled again if the chat
+    /// was released while it streamed.
     func hold(_ messages: Set<UUID>, for chat: UUID) {
-        if held[chat] != messages { held[chat] = messages }
+        guard held[chat] != messages else { return }
+        held[chat] = messages
+        for id in messages {
+            answers[id]?.wake()
+            reasoning[id]?.wake()
+        }
     }
 
-    /// The transcript for `chat` is gone.
+    /// The transcript for `chat` is gone: nothing shows its messages, so a reply still streaming is
+    /// not prepared again until a transcript holds it.
     func release(chat: UUID) {
-        held[chat] = nil
+        guard let messages = held.removeValue(forKey: chat) else { return }
+        for id in messages where !isHeld(id) {
+            answers[id]?.sleep()
+            reasoning[id]?.sleep()
+        }
     }
 
     private func isHeld(_ id: UUID) -> Bool {
         held.values.contains { $0.contains(id) }
     }
 
+    /// The bytes of text the answer entries describe.
+    private var answerBytes = 0
+
     func answer(for message: ChatMessage) -> AnswerText {
         if let existing = answers[message.id] { return existing }
-        if answers.count >= Self.maximumEntries {
+        if answers.count >= Self.maximumEntries || answerBytes >= Self.maximumBytes {
             answers = answers.filter { $0.value.isActive || isHeld($0.key) }
+            answerBytes = answers.values.reduce(0) { $0 + $1.message.textRevision.utf8Count }
         }
         let text = AnswerText(message: message)
         answers[message.id] = text
+        answerBytes += message.textRevision.utf8Count
         return text
     }
 
@@ -146,10 +164,14 @@ enum TranscriptMessageLayout: Equatable {
                 TranscriptText.hasContent(message.thinking) && ReasoningDisclosure.isOpen(message)
                 && message.thinkingRevision.utf8Count > MarkdownSegmenter.targetBytes
             let reasoningPieces = reasoningOpen ? reasoning(for: message).pieceCount : 0
+            let answerText = answer(for: message)
             guard
-                answerPieces > 1 || reasoningPieces > 1 || answer(for: message).isPlain
-                    || (reasoningOpen && reasoning(for: message).isPlain)
+                answerPieces > 1 || reasoningPieces > 1 || answerText.isPlain
+                    || (reasoningOpen && reasoning(for: message).isPlain) || answerText.wasSplit
             else { return .whole }
+            // Once split, a reply stays split: its items keep their identity through streaming and
+            // through folding on completion.
+            answerText.wasSplit = true
             return .split(
                 head: TranscriptText.hasContent(message.thinking), reasoning: reasoningPieces,
                 answer: hasAnswer ? max(1, answerPieces) : 0,
@@ -163,9 +185,14 @@ enum TranscriptMessageLayout: Equatable {
     /// How many answer and reasoning entries are held, for tests.
     var entryCount: Int { answers.count + reasoning.count }
 
+    /// Memory pressure: drops every entry nothing shows. An entry that streams or has items on screen
+    /// stays, since its items hold it (their hover count, their shown segments) and would otherwise
+    /// address a replacement that knows nothing of them; those entries release their distant parses
+    /// as usual.
     func removeAll() {
-        answers.removeAll()
-        reasoning.removeAll()
+        answers = answers.filter { $0.value.isActive }
+        answerBytes = answers.values.reduce(0) { $0 + $1.message.textRevision.utf8Count }
+        reasoning = reasoning.filter { $0.value.isActive }
     }
 }
 
@@ -178,8 +205,32 @@ enum TranscriptMessageLayout: Equatable {
     private(set) var document: PreparedMarkdownDocument?
     /// The plain parts, while the text is above the rich limit (or user text above the parts threshold).
     private(set) var parts: [String]?
-    /// Hover over any of a split message's items shows its actions.
-    var hovering = 0
+    /// Hover over any of a split message's items shows its actions. Counted, never below zero: an item
+    /// can report the end of a hover to an entry that did not see its start.
+    private(set) var hovering = 0
+    /// Whether the text has ever been laid out as items: it stays so, since items and a whole row
+    /// measure under different keys and the reader's anchor would otherwise lose its item as the text
+    /// crosses a segment boundary while it streams, or folds on completion.
+    @ObservationIgnored var wasSplit = false
+
+    func hover(_ isHovering: Bool) {
+        hovering = max(0, hovering + (isHovering ? 1 : -1))
+    }
+
+    /// A transcript shows this text again: a reply still streaming is sampled again.
+    func wake() {
+        guard !message.complete, sampling == nil else { return }
+        start()
+    }
+
+    /// No transcript shows this text: its stream is not sampled until one does.
+    func sleep() {
+        sampling?.cancel()
+        sampling = nil
+    }
+
+    /// Whether the stream is being sampled, for tests.
+    var isSampling: Bool { sampling != nil }
 
     @ObservationIgnored private var shown: [Int: Int] = [:]
     @ObservationIgnored private var preparation: Task<Void, Never>?
@@ -270,6 +321,7 @@ enum TranscriptMessageLayout: Equatable {
                 try? await Task.sleep(for: interval)
                 if Task.isCancelled { return }
             }
+            self?.sampling = nil
             self?.prepare()
         }
     }
@@ -417,6 +469,25 @@ enum TranscriptMessageLayout: Equatable {
         requested = true
         prepare()
         guard !message.complete else { return }
+        sample()
+    }
+
+    /// A transcript shows this reasoning again: still streaming, it is sampled again.
+    func wake() {
+        guard requested, !message.complete, sampling == nil else { return }
+        sample()
+    }
+
+    /// No transcript shows this reasoning: its stream is not sampled until one does.
+    func sleep() {
+        sampling?.cancel()
+        sampling = nil
+    }
+
+    /// Whether the stream is being sampled, for tests.
+    var isSampling: Bool { sampling != nil }
+
+    private func sample() {
         sampling = Task { @MainActor [weak self] in
             var sampled = self?.message.thinkingRevision.utf8Count ?? 0
             while let self, !self.message.complete {
@@ -427,6 +498,7 @@ enum TranscriptMessageLayout: Equatable {
                 try? await Task.sleep(for: interval)
                 if Task.isCancelled { return }
             }
+            self?.sampling = nil
             self?.prepare()
         }
     }

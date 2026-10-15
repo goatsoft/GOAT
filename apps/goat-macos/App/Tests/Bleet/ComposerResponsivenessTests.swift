@@ -36,9 +36,11 @@ import Testing
     return view.subviews.lazy.compactMap(findComposerEditor).first
 }
 
-/// Returns once the main actor has resumed on time for `quiet` (layout and other work on it done), or
-/// after `limit` whatever it is doing.
-@MainActor private func waitForIdleMainQueue(quiet: Duration, within limit: Duration) async throws {
+/// Returns true once the main actor has resumed on time for `quiet` (layout and other work on it done),
+/// or false after `limit` whatever it is doing, so a measurement taken on a busy runner says so.
+@MainActor @discardableResult private func waitForIdleMainQueue(quiet: Duration, within limit: Duration) async throws
+    -> Bool
+{
     let clock = ContinuousClock()
     let start = clock.now
     var quietSince = start
@@ -48,9 +50,10 @@ import Testing
         if before.duration(to: clock.now) > .milliseconds(60) {
             quietSince = clock.now
         } else if quietSince.duration(to: clock.now) >= quiet {
-            return
+            return true
         }
     }
+    return false
 }
 
 @MainActor private final class LayoutCountingHost<Content: View>: NSHostingView<Content> {
@@ -244,7 +247,7 @@ extension AppTests.Bleet {
             // Opening lays the long replies out, at the window's width and then again where following
             // places the end. Typing is measured in the chat once it has opened, as a reader types.
             try await Task.sleep(for: .seconds(1))
-            try await waitForIdleMainQueue(quiet: .milliseconds(400), within: .seconds(5))
+            let idle = try await waitForIdleMainQueue(quiet: .milliseconds(400), within: .seconds(5))
             let editor = try #require(findComposerEditor(host))
             window.makeFirstResponder(editor)
             let setupDuration = setupStart.duration(to: clock.now)
@@ -269,7 +272,7 @@ extension AppTests.Bleet {
             print(
                 "Chat responsiveness: setup=\(setupDuration), insertion=\(worstInsertion), "
                     + "taskResume=\(worstResume), inputEvent=\(worstPause), character=\(slowestCharacter), "
-                    + "mainQueue=\(mainQueueProbe.worstDelay)")
+                    + "mainQueue=\(mainQueueProbe.worstDelay), idleBeforeTyping=\(idle)")
             #expect(editor.string == "A responsive draft alongside rich code lists")
             // A window nothing can see (a locked or headless display) is never drawn: AppKit defers its
             // layout until input arrives, so the transcript's first layout lands on the keystrokes and its
@@ -279,8 +282,12 @@ extension AppTests.Bleet {
             withKnownIssue(
                 "The test window is occluded, so input latency cannot be measured", isIntermittent: true
             ) {
-                #expect(worstPause < .milliseconds(250), "Visible chat event-loop delay: \(worstPause)")
-                #expect(mainQueueProbe.worstDelay < .milliseconds(250), "Main-queue delay between inputs")
+                #expect(
+                    worstPause < .milliseconds(250),
+                    "Visible chat event-loop delay: \(worstPause) (main queue idle before typing: \(idle))")
+                #expect(
+                    mainQueueProbe.worstDelay < .milliseconds(250),
+                    "Main-queue delay between inputs (main queue idle before typing: \(idle))")
             } when: {
                 !visible
             }

@@ -563,7 +563,11 @@ struct ChatTranscriptView: View {
                     let worker = Task.detached(priority: .userInitiated) { () -> (index: Int?, count: Int) in
                         if segmented {
                             let segments = MarkdownSegmenter.segment(source, isComplete: complete).segments
-                            return (segments.firstIndex { $0.sourceRange.contains(offset) }, segments.count)
+                            // An offset at the text's end (a match ending there) belongs to the last segment.
+                            return (
+                                segments.firstIndex { $0.sourceRange.contains(offset) } ?? segments.indices.last,
+                                segments.count
+                            )
                         }
                         guard plain, let parts = try? TranscriptTextParts.split(source) else { return (nil, 0) }
                         var end = 0
@@ -581,8 +585,16 @@ struct ChatTranscriptView: View {
                     guard !Task.isCancelled else { return }
                     reader.isScrolling = false
                     followThrottle.reset()
-                    // A message laid out whole has no segment items: its first item holds the match.
-                    let segment = (plain || count > 1) ? index : nil
+                    // A message laid out whole has no segment items: its first item holds the match. One
+                    // laid out as items has an answer item even for a one-segment answer (its reasoning
+                    // or a plain part split it), measured under its segment index.
+                    let split: Bool =
+                        if case .split(_, _, let answerItems, _) = TranscriptTexts.shared.layout(of: message) {
+                            answerItems > 0
+                        } else {
+                            false
+                        }
+                    let segment = (plain || count > 1 || split) ? index ?? 0 : nil
                     viewport.reveal(.init(messageID: message.id, offset: 0, segment: segment))
                 }
                 .onChange(of: session.isStreaming) { viewport.contentChanged() }
