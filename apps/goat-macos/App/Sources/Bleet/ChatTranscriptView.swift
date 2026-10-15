@@ -219,7 +219,11 @@ struct TranscriptRevealRequest: Equatable, Sendable {
 
     /// A reader gesture, keyboard or scroller movement, or an inspection took the viewport. The
     /// reader's input always wins, so any pending scroll is cancelled.
+    /// How many times the reader took the viewport, so a deferred correction can tell it was overtaken.
+    @ObservationIgnored private(set) var readerMoves = 0
+
     func readerMoved(currentRange: Range<Int>, anchor: Anchor? = nil, replacingUnknown: Bool = false) {
+        readerMoves &+= 1
         if Self.traces {
             note(
                 "readerMoved \(currentRange) anchor \(anchor.map { "\($0.messageID.uuidString.prefix(4))+\(Int($0.offset))" } ?? "nil")"
@@ -1143,13 +1147,16 @@ struct ChatTranscriptView: View {
                 guard reader.metrics.bottomGap <= 0.5 else { return }
                 let end = max(0, reader.metrics.contentHeight - reader.metrics.layout.container.height)
                 viewport.note("keep inside the content at \(Int(end))")
-                reader.executor.nudge(to: end - 1, thenTo: end, while: { !reader.isScrolling }) {
+                let moves = viewport.readerMoves
+                let readerStayed: @MainActor @Sendable () -> Bool = { [reader, viewport] in
+                    !reader.isScrolling && viewport.readerMoves == moves
+                }
+                reader.executor.nudge(to: end - 1, thenTo: end, while: readerStayed) {
                     reader.syncGeometry()
-                    let generation = reader.executor.otherMoves
                     reader.keepInsideTask = Task { @MainActor in
                         do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
-                        // Only if nothing moved the viewport since: a reader's move is never undone.
-                        guard reader.executor.unmoved(since: generation), !reader.isScrolling else { return }
+                        // Only if the reader did not take the viewport since: their move is never undone.
+                        guard readerStayed() else { return }
                         rescueBlankViewport()
                     }
                 }
@@ -1790,9 +1797,11 @@ struct TranscriptScrollMetrics: Equatable {
     }
 
     /// Moves to `first` now and to `second` on a later turn: SwiftUI coalesces a move and its return
-    /// within one. The second move is owned here and made only if nothing else moved the viewport in
-    /// between (the reader's input always wins), the same scroll view is still attached, and
-    /// `stillWanted` holds for the caller's purpose. `then` runs after the second move.
+    /// within one. The second move is owned here: a move with confirmed reader input cancels it at once,
+    /// and it is made only if the same scroll view is still attached and `stillWanted` holds. The caller's
+    /// `stillWanted` says whether the reader took the viewport since: the transcript attributes a move
+    /// without input (the lazy stack shifting its offset as rows resolve is not the reader's) before the
+    /// second move. `then` runs after the second move.
     func nudge(
         to first: CGFloat, thenTo second: CGFloat, while stillWanted: @escaping @MainActor () -> Bool,
         then: (@MainActor () -> Void)? = nil
@@ -1800,23 +1809,15 @@ struct TranscriptScrollMetrics: Equatable {
         cancelDeferredMove()
         guard let scrollView else { return }
         scroll(toY: first)
-        let generation = otherMoves
         deferredMove = Task { @MainActor [weak self, weak scrollView] in
             do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
-            guard let self, let scrollView, self.scrollView === scrollView, self.otherMoves == generation,
-                stillWanted()
-            else { return }
+            guard let self, let scrollView, self.scrollView === scrollView, stillWanted() else { return }
             self.deferredMove = nil
             self.scroll(toY: second)
             then?()
         }
     }
 
-    /// Whether no move but the executor's own and AppKit's layout clamping happened since `generation`.
-    func unmoved(since generation: Int) -> Bool { otherMoves == generation }
-
-    /// Counts moves that were neither the executor's nor layout clamping: the reader's, or SwiftUI's.
-    private(set) var otherMoves = 0
     private var deferredMove: Task<Void, Never>?
 
     func cancelDeferredMove() {
@@ -1862,10 +1863,7 @@ struct TranscriptScrollMetrics: Equatable {
         }
         lastMove = (origin.y, cause)
         lastMoveFollowedInput = cause == .other && Self.readerInputIsCurrent()
-        if cause == .other {
-            otherMoves &+= 1
-            cancelDeferredMove()
-        }
+        if lastMoveFollowedInput { cancelDeferredMove() }
     }
 
     private static let readerInput: Set<NSEvent.EventType> = [

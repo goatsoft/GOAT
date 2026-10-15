@@ -1147,7 +1147,8 @@ extension AppTests.Bleet {
 
         /// The executor's two-step nudges (laying out the content, keeping the viewport inside content that
         /// shrank) make their second move on a later turn. A reader's move in between wins: the second move
-        /// is dropped, and so is one whose purpose ended or whose scroll view was replaced.
+        /// is dropped, and so is one whose purpose ended or whose scroll view was replaced. A move that is
+        /// only the lazy stack shifting its offset (not attributed to the reader) leaves the return to run.
         @Test @MainActor func aMoveBetweenANudgesTwoStepsKeepsTheReadersPosition() async throws {
             final class Document: NSView { override var isFlipped: Bool { true } }
             func scrollView() -> NSScrollView {
@@ -1168,12 +1169,22 @@ extension AppTests.Bleet {
             try await Task.sleep(for: .milliseconds(60))
             #expect(offset == 1_000)
 
-            // The reader moves between the two steps: their position stands.
-            executor.layoutContent { true }
+            // The reader moves between the two steps: their position stands. The transcript attributes a
+            // move without an input event before the second step; here the reader's move says so.
+            var readerMoved = false
+            executor.layoutContent { !readerMoved }
             scroll.contentView.scroll(to: NSPoint(x: 0, y: 1_600))
             scroll.reflectScrolledClipView(scroll.contentView)
+            readerMoved = true
             try await Task.sleep(for: .milliseconds(60))
             #expect(offset == 1_600, "The nudge's return overrode the reader's move")
+
+            // A move nothing attributes to the reader (the lazy stack's own shift) does not stop the return.
+            executor.layoutContent { true }
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: 1_610))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            try await Task.sleep(for: .milliseconds(60))
+            #expect(offset == 1_600, "The return runs after a layout shift")
 
             // The request it served ended: no second move, and its follow-up never runs.
             var followedUp = false
