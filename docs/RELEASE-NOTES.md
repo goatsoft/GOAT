@@ -51,6 +51,8 @@ GOAT 0.1.4 requires Apple Silicon and macOS 26 or later. Download the signed, no
 
 An ordinary upgrade replaces the app without resetting chats, engine profiles, memory, permissions or Pens. Finish active work before quitting GOAT to install the update, and keep a [backup of local data](reference/STORAGE.md#back-up-safely).
 
+Confirming **Uninstall** under **Settings → General → Manage** now quits GOAT itself, as **Quit GOAT** does, and removal starts once it has closed. Previously GOAT stayed open and waited for you to quit, which looked as if nothing had happened. GOAT still refuses to uninstall while a reply is streaming, a Lead is queued, an approval is pending or extensions are changing.
+
 ### Qualification and known limits
 
 The official Release-channel package is built from the immutable `v0.1.4` source. The release workflow verifies the complete Release suite, website and docs, Developer ID publisher identity, hardened runtime, notarization, stapling and artifact checksums. See the [release metadata](https://github.com/goatsoft/GOAT/releases/latest) for the exact source revision and artifact hashes.
