@@ -22,6 +22,10 @@ The helper validates captured root identities and builds a fresh inventory after
 
 When requested, preferences are backed up as a private plist and cleared through the macOS preferences API after exit. Saved window state is handled separately from the home and database. App and CLI copies move to macOS Trash after data handling. Failures stop further moves and leave a recovery report. The helper removes its private bundle/request directory when it finishes; it never removes the recovery folder.
 
+## Amendment, 2026-10-15: confirming quits GOAT
+
+Waiting for the owner to quit left uninstall looking stalled: nothing said that it had not started. Confirming now quits GOAT through the standard application quit, the same path as the owner's Quit command, once the helper has verified GOAT as its parent and written `ready` into the private job. GOAT never quits before that, since a helper whose parent has gone refuses the job. Preparation still refuses during startup, active turns, queued Lead, extension changes and pending approvals, so the quit happens only when GOAT would refuse nothing else; imports and command jobs remain the owner's to finish first, as before. If GOAT stays open, the scheduled view offers quitting or cancelling, and the one-hour expiry is unchanged.
+
 ## Consequences and validation
 
 Automatic uninstall is recoverable, not secure erasure. Recovery can contain credentials and conversations, and restoring it requires a compatible app version, closed storage and review before overwriting files. A custom home remains recorded in the recovery request even when preferences are removed. Retained Pen memory remains in its original folders when Pen metadata is removed.
