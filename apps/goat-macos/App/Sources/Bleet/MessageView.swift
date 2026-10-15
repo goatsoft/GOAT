@@ -31,7 +31,10 @@ struct MessageView: View {
     var activeToolID: String? = nil
     var deleteCompaction: (() -> Void)? = nil
     var editMessage: (@MainActor (String, String) async -> String?)? = nil
+    /// The piece of a split message this view shows (ADR-0104), or the whole message.
+    var part: TranscriptItem.Part = .whole
     @Environment(AppModel.self) private var model
+    @Environment(\.transcriptPresenter) private var presenter
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
@@ -39,10 +42,29 @@ struct MessageView: View {
     @State private var hovering = false
     @State private var showingResponseDetails = false
     @State private var showingEditor = false
-    private var controlsVisible: Bool { hovering || keyboardFocused || isFocusedInTranscript || voiceOverEnabled }
+    private var controlsVisible: Bool {
+        hovering || sharedHover || keyboardFocused || isFocusedInTranscript || voiceOverEnabled
+    }
+
+    /// A split message's pieces show its actions while any of them is hovered.
+    private var sharedHover: Bool {
+        part != .whole && TranscriptTexts.shared.answer(for: message).hovering > 0
+    }
+
+    /// Only a message's first piece takes keyboard focus, so focus has one place per message.
+    private var leadsMessage: Bool {
+        switch part {
+        case .whole, .head: true
+        case .answer(0):
+            message.role == .user ? message.attachmentPaths.isEmpty : !TranscriptText.hasContent(message.thinking)
+        default: false
+        }
+    }
 
     @ViewBuilder private var focusableContent: some View {
-        if let transcriptKeyboardFocus {
+        if !leadsMessage {
+            content
+        } else if let transcriptKeyboardFocus {
             content.focusable().focused(transcriptKeyboardFocus, equals: message.id)
         } else {
             content.focusable().focused($keyboardFocused)
@@ -56,8 +78,18 @@ struct MessageView: View {
             .contentShape(Rectangle())  // whole row (incl. the area below the text) is hoverable
             .onHover { h in
                 // Reduce Motion, the animations setting and inactive scenes all skip the fade (#60 D9).
-                withAnimation(liveAnimations ? .easeOut(duration: 0.12) : nil) { hovering = h }
+                withAnimation(liveAnimations ? .easeOut(duration: 0.12) : nil) {
+                    if part != .whole, h != hovering {
+                        TranscriptTexts.shared.answer(for: message).hover(h)
+                    }
+                    hovering = h
+                }
             }
+            .onDisappear {
+                if part != .whole, hovering { TranscriptTexts.shared.answer(for: message).hover(false) }
+                hovering = false
+            }
+            // Without a transcript to present them (a message shown on its own), the row presents them.
             .sheet(isPresented: $showingResponseDetails) {
                 ResponseDetailsView(message: message)
             }
@@ -83,14 +115,20 @@ struct MessageView: View {
                     }
                 }
                 if editMessage != nil {
-                    Button("Edit and resend…", systemImage: "pencil") { showingEditor = true }
+                    Button("Edit and resend…", systemImage: "pencil") { edit() }
                 }
                 if message.role == .assistant && ResponseDetailsView.hasUsefulDetails(message) {
-                    Button("Response Details…", systemImage: "info.circle") {
-                        showingResponseDetails = true
-                    }
+                    Button("Response Details…", systemImage: "info.circle") { showDetails() }
                 }
             }
+    }
+
+    private func edit() {
+        if let present = presenter.edit { present(message) } else { showingEditor = true }
+    }
+
+    private func showDetails() {
+        if let present = presenter.showDetails { present(message) } else { showingResponseDetails = true }
     }
 
     @ViewBuilder private var content: some View {
@@ -101,12 +139,15 @@ struct MessageView: View {
                 delete: deleteCompaction)
         } else {
             switch message.role {
-            case .user: userBubble
+            case .user:
+                if part == .whole { userBubble } else { userPiece }
             case .assistant:
                 if TranscriptActivity.isEmpty(message) {
                     EmptyView()
-                } else {
+                } else if part == .whole {
                     assistantBlock
+                } else {
+                    assistantPiece
                 }
             case .system, .tool: EmptyView()
             }
@@ -120,18 +161,61 @@ struct MessageView: View {
         FractionalWidthLayout(fraction: Caprine.Reading.userBubbleFraction) { userBubbleContent }
     }
 
-    private var userBubbleContent: some View {
-        VStack(alignment: .trailing, spacing: 6) {
-            if !message.attachmentPaths.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        ForEach(message.attachmentPaths, id: \.self) { path in
-                            StoredAttachmentThumbnail(path: path)
-                        }
+    @ViewBuilder private var userAttachments: some View {
+        if !message.attachmentPaths.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: Caprine.Reading.bubbleStackSpacing) {
+                    ForEach(message.attachmentPaths, id: \.self) { path in
+                        StoredAttachmentThumbnail(path: path)
                     }
                 }
-                .frame(maxWidth: 420, alignment: .trailing)
             }
+            .frame(maxWidth: 420, alignment: .trailing)
+        }
+    }
+
+    /// A piece of a user message above the parts threshold (ADR-0104): its attachments, one plain part
+    /// of the bubble, or what follows the bubble. The pieces fill the bubble's width, so they line up.
+    @ViewBuilder private var userPiece: some View {
+        FractionalWidthLayout(fraction: Caprine.Reading.userBubbleFraction) {
+            switch part {
+            case .head:
+                VStack(alignment: .trailing, spacing: Caprine.Reading.bubbleStackSpacing) { userAttachments }
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .padding(.bottom, message.attachmentPaths.isEmpty ? 0 : Caprine.Reading.bubbleStackSpacing)
+            case .answer(let index):
+                let count = TranscriptTexts.shared.answer(for: message).pieceCount
+                let first = index == 0
+                let last = index == count - 1
+                let radius = Caprine.Reading.bubbleRadius
+                AnswerPiece(message: message, index: index)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, Caprine.Reading.bubbleHorizontalInset)
+                    .padding(.top, first ? Caprine.Reading.bubbleVerticalInset : 0)
+                    .padding(.bottom, last ? Caprine.Reading.bubbleVerticalInset : 0)
+                    // A flat fill: a gradient would restart at every piece, drawing seams across the
+                    // bubble, since each piece is laid out on its own.
+                    .background(
+                        model.theme.tokens.userBubble,
+                        in: UnevenRoundedRectangle(
+                            topLeadingRadius: first ? radius : 0, bottomLeadingRadius: last ? radius : 0,
+                            bottomTrailingRadius: last ? radius : 0, topTrailingRadius: first ? radius : 0)
+                    )
+                    .overlay(
+                        BubblePieceOutline(first: first, last: last, radius: radius)
+                            .stroke(model.theme.tokens.accent.opacity(Caprine.Reading.bubbleOutlineOpacity))
+                    )
+            case .tail, .whole, .reasoning:
+                VStack(alignment: .trailing, spacing: Caprine.Reading.bubbleStackSpacing) { userFooter }
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .padding(.top, Caprine.Reading.bubbleStackSpacing)
+            }
+        }
+    }
+
+    private var userBubbleContent: some View {
+        VStack(alignment: .trailing, spacing: Caprine.Reading.bubbleStackSpacing) {
+            userAttachments
             PreparedMarkdownView(
                 id: message.id,
                 source: message.text,
@@ -146,13 +230,21 @@ struct MessageView: View {
                     }
                     .textSelection(.enabled)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(model.theme.tokens.bubbleGradient, in: RoundedRectangle(cornerRadius: 14))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14)
-                    .strokeBorder(model.theme.tokens.accent.opacity(0.18))
+            .padding(.horizontal, Caprine.Reading.bubbleHorizontalInset)
+            .padding(.vertical, Caprine.Reading.bubbleVerticalInset)
+            .background(
+                model.theme.tokens.bubbleGradient, in: RoundedRectangle(cornerRadius: Caprine.Reading.bubbleRadius)
             )
+            .overlay(
+                RoundedRectangle(cornerRadius: Caprine.Reading.bubbleRadius)
+                    .strokeBorder(model.theme.tokens.accent.opacity(Caprine.Reading.bubbleOutlineOpacity))
+            )
+            userFooter
+        }
+    }
+
+    @ViewBuilder private var userFooter: some View {
+        Group {
             if let error = message.error {
                 Label(error, systemImage: "exclamationmark.circle")
                     .font(.caption).foregroundStyle(.secondary)
@@ -166,7 +258,7 @@ struct MessageView: View {
             }
             HStack(spacing: 8) {
                 if editMessage != nil {
-                    Button("Edit and resend…", systemImage: "pencil") { showingEditor = true }
+                    Button("Edit and resend…", systemImage: "pencil") { edit() }
                         .labelStyle(.iconOnly)
                 }
                 CopyButton(text: message.text)
@@ -197,49 +289,49 @@ struct MessageView: View {
         model.presentation.isEnabled && !message.complete && message.lastStreamActivity == .reasoning
     }
 
+    private var avatarColumnWidth: CGFloat {
+        model.presentation.isEnabled ? Caprine.Activity.presentationAvatarWidth : Caprine.Activity.standardAvatarWidth
+    }
+
+    private var avatar: some View {
+        Group {
+            if model.presentation.isEnabled && !TranscriptActivity.isToolOnly(message) {
+                GoatieView(pose: avatarPose, size: 60)
+            } else {
+                // Keep the smaller mark centred beside the label and duration without
+                // shrinking either line or retaining the previous wide avatar column.
+                FigureheadView(size: Caprine.Activity.standardAvatarWidth, fillsFrame: true)
+                    .frame(width: avatarColumnWidth)
+                    .frame(height: Caprine.Activity.singleLineHeight)
+                    .frame(
+                        height: message.complete || TranscriptActivity.isToolOnly(message)
+                            ? Caprine.Activity.singleLineHeight : Caprine.Activity.doubleLineHeight
+                    )
+            }
+        }
+        .padding(.top, 1)
+        .overlay(alignment: .top) {
+            if showThinkingBubble {
+                ThinkingBubble(
+                    tint: model.theme.tokens.tint,
+                    height: 30,
+                    animates: liveAnimations
+                )
+                .fixedSize()
+                // Position the bubble above the avatar without covering the reasoning disclosure.
+                .offset(x: 44, y: -28)
+                .transition(.scale(scale: 0.6, anchor: .bottomLeading).combined(with: .opacity))
+                .zIndex(1)
+            }
+        }
+    }
+
     private var assistantBlock: some View {
         AssistantRowLayout {
             if !compactActivity {
-                Group {
-                    if model.presentation.isEnabled && !TranscriptActivity.isToolOnly(message) {
-                        GoatieView(pose: avatarPose, size: 60)
-                    } else {
-                        // Keep the smaller mark centred beside the label and duration without
-                        // shrinking either line or retaining the previous wide avatar column.
-                        FigureheadView(size: Caprine.Activity.standardAvatarWidth, fillsFrame: true)
-                            .frame(
-                                width: model.presentation.isEnabled
-                                    ? Caprine.Activity.presentationAvatarWidth : Caprine.Activity.standardAvatarWidth
-                            )
-                            .frame(height: Caprine.Activity.singleLineHeight)
-                            .frame(
-                                height: message.complete || TranscriptActivity.isToolOnly(message)
-                                    ? Caprine.Activity.singleLineHeight : Caprine.Activity.doubleLineHeight
-                            )
-                    }
-                }
-                .padding(.top, 1)
-                .overlay(alignment: .top) {
-                    if showThinkingBubble {
-                        ThinkingBubble(
-                            tint: model.theme.tokens.tint,
-                            height: 30,
-                            animates: liveAnimations
-                        )
-                        .fixedSize()
-                        // Position the bubble above the avatar without covering the reasoning disclosure.
-                        .offset(x: 44, y: -28)
-                        .transition(.scale(scale: 0.6, anchor: .bottomLeading).combined(with: .opacity))
-                        .zIndex(1)
-                    }
-                }
-            }
-            if compactActivity {
-                Color.clear.frame(
-                    width: model.presentation.isEnabled
-                        ? Caprine.Activity.presentationAvatarWidth : Caprine.Activity.standardAvatarWidth,
-                    height: Caprine.Activity.ruleWidth / 2
-                )
+                avatar
+            } else {
+                Color.clear.frame(width: avatarColumnWidth, height: Caprine.Activity.ruleWidth / 2)
             }
             VStack(alignment: .leading, spacing: Caprine.Activity.spacing) {
                 if TranscriptText.hasContent(message.thinking) {
@@ -248,35 +340,91 @@ struct MessageView: View {
                         .padding(.bottom, TranscriptText.hasContent(message.text) ? Caprine.Activity.reasoningGap : 0)
                 }
                 if TranscriptText.hasContent(message.text) {
-                    StreamingMarkdownView(message: message)
+                    AnswerPiece(message: message, index: 0)
                 }
-                if !message.toolEvents.isEmpty {
-                    ToolActivityGroup(
-                        messages: [message], activeAssistantID: activeToolID == nil ? nil : message.id,
-                        projectID: projectID,
-                        connectsAbove: joinsPreviousTools, connectsBelow: joinsNextTools)
-                }
-                if let error = message.error {
-                    Text(error)
-                        .font(.callout)
-                        .foregroundStyle(Caprine.Semantic.warning)
-                }
-                if Self.showsFooter(for: message) {
-                    // The footer row is reserved from the first answer text, so completion only reveals
-                    // actions and never changes the row height (#60 A2, measurement 2). Continue sits in
-                    // the same row and stays visible without hover when a reply stopped at its limit.
-                    HStack(spacing: 10) {
-                        if canContinue { continueButton }
-                        footer
-                            .opacity(message.complete && (controlsVisible || memorySaveState == .saving) ? 1 : 0)
-                            .allowsHitTesting(message.complete && controlsVisible)
-                            .accessibilityHidden(!message.complete)
-                    }
-                } else if canContinue {
-                    // A reply truncated before any answer text has no footer row to share.
-                    continueButton
-                }
+                replyEnd
             }
+        }
+    }
+
+    /// Tools, error and actions, below the answer.
+    @ViewBuilder private var replyEnd: some View {
+        if !message.toolEvents.isEmpty {
+            ToolActivityGroup(
+                messages: [message], activeAssistantID: activeToolID == nil ? nil : message.id,
+                projectID: projectID,
+                connectsAbove: joinsPreviousTools, connectsBelow: joinsNextTools)
+        }
+        if let error = message.error {
+            Text(error)
+                .font(.callout)
+                .foregroundStyle(Caprine.Semantic.warning)
+        }
+        if Self.showsFooter(for: message) {
+            // The footer row is reserved from the first answer text, so completion only reveals
+            // actions and never changes the row height (#60 A2, measurement 2). Continue sits in
+            // the same row and stays visible without hover when a reply stopped at its limit.
+            HStack(spacing: 10) {
+                if canContinue { continueButton }
+                footer
+                    .opacity(message.complete && (controlsVisible || memorySaveState == .saving) ? 1 : 0)
+                    .allowsHitTesting(message.complete && controlsVisible)
+                    .accessibilityHidden(!message.complete)
+            }
+        } else if canContinue {
+            // A reply truncated before any answer text has no footer row to share.
+            continueButton
+        }
+    }
+
+    /// One piece of a reply split into items (ADR-0104), in the reply's column. The reply's first piece
+    /// carries the avatar, drawn over the column without taking height: a split reply is long.
+    @ViewBuilder private var assistantPiece: some View {
+        let hasReasoning = TranscriptText.hasContent(message.thinking)
+        let hasAnswer = TranscriptText.hasContent(message.text)
+        // Open reasoning past one segment is laid out as items of its own; shorter open reasoning shows in
+        // the head.
+        let reasoningItems: Bool = {
+            if case .split(_, let reasoning, _, _) = TranscriptTexts.shared.layout(of: message) { return reasoning > 0 }
+            return false
+        }()
+        switch part {
+        case .head:
+            replyColumn(leads: true) {
+                ThinkingDisclosure(message: message, showsContent: !reasoningItems)
+                    .padding(.bottom, !reasoningItems && hasAnswer ? Caprine.Activity.reasoningGap : 0)
+            }
+        case .reasoning(let index):
+            let count = TranscriptTexts.shared.reasoning(for: message).pieceCount
+            replyColumn(leads: false) {
+                ReasoningPiece(message: message, index: index)
+                    .reasoningRule(model.theme.tokens.muted)
+                    .padding(.top, index == 0 ? Caprine.Activity.spacing : 0)
+                    .padding(.bottom, index == count - 1 && hasAnswer ? Caprine.Activity.reasoningGap : 0)
+            }
+        case .answer(let index):
+            replyColumn(leads: index == 0 && !hasReasoning) {
+                AnswerPiece(message: message, index: index)
+                    .padding(.top, index == 0 && hasReasoning ? Caprine.Activity.spacing : 0)
+            }
+        case .tail:
+            replyColumn(leads: false) {
+                VStack(alignment: .leading, spacing: Caprine.Activity.spacing) { replyEnd }
+                    .padding(.top, Caprine.Activity.spacing)
+            }
+        case .whole:
+            assistantBlock
+        }
+    }
+
+    private func replyColumn(leads: Bool, @ViewBuilder content: () -> some View) -> some View {
+        AssistantRowLayout {
+            Color.clear
+                .frame(width: avatarColumnWidth, height: Caprine.Activity.ruleWidth / 2)
+                .overlay(alignment: .topLeading) {
+                    if leads && !compactActivity { avatar.fixedSize() }
+                }
+            content()
         }
     }
 
@@ -341,14 +489,12 @@ struct MessageView: View {
                 .labelStyle(.iconOnly)
                 .font(.caption)
             if ResponseDetailsView.hasUsefulDetails(message) {
-                Button("Response Details…", systemImage: "info.circle") {
-                    showingResponseDetails = true
-                }
-                .buttonStyle(.plain)
-                .labelStyle(.iconOnly)
-                .font(Caprine.Activity.font)
-                .foregroundStyle(model.theme.tokens.muted)
-                .help("Response Details")
+                Button("Response Details…", systemImage: "info.circle") { showDetails() }
+                    .buttonStyle(.plain)
+                    .labelStyle(.iconOnly)
+                    .font(Caprine.Activity.font)
+                    .foregroundStyle(model.theme.tokens.muted)
+                    .help("Response Details")
             }
             rememberButton
             FeedbackButtons(message: message)
@@ -423,20 +569,24 @@ struct CompactionRow: View {
     let info: CompactionInfo
     let delete: (() -> Void)?
     @Environment(AppModel.self) private var model
-    @State private var expanded = false
+    @State private var expanded: Bool
 
     init(message: ChatMessage, info: CompactionInfo, delete: (() -> Void)?, initiallyExpanded: Bool = false) {
         self.message = message
         self.info = info
         self.delete = delete
-        _expanded = State(initialValue: initiallyExpanded)
+        _expanded = State(
+            initialValue: TranscriptDisclosureStore.shared.isOpen(Self.key(message.id)) ?? initiallyExpanded)
     }
+
+    private static func key(_ id: UUID) -> String { "compaction \(id)" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Caprine.Activity.spacing) {
             HStack(spacing: Caprine.Activity.spacing) {
                 Button {
                     expanded.toggle()
+                    TranscriptDisclosureStore.shared.set(expanded, for: Self.key(message.id))
                 } label: {
                     Label {
                         Text("Compacted \(info.coveredExchangeCount) \(exchangeLabel)")
@@ -613,6 +763,9 @@ struct FeedbackButtons: View {
 
 struct ToolCallCard: View {
     let event: ToolEventSnapshot
+    /// The message the call belongs to: its disclosure is the reader's choice for this call, not for
+    /// an identical call in another reply.
+    let messageID: UUID
     let live: Bool
     var penName: String? = nil
 
@@ -620,7 +773,7 @@ struct ToolCallCard: View {
         if event.server == "Memory" {
             MemoryToolCallCard(event: event, live: live, penName: penName)
         } else {
-            ExternalToolCallCard(event: event, live: live, penName: penName)
+            ExternalToolCallCard(event: event, messageID: messageID, live: live, penName: penName)
         }
     }
 }
@@ -631,9 +784,19 @@ private struct ExternalToolCallCard: View {
     @Environment(\.transcriptInspection) private var inspection
     @Environment(AppModel.self) private var model
     let event: ToolEventSnapshot
+    let messageID: UUID
     let live: Bool
     var penName: String? = nil
-    @State private var expanded = false
+    @State private var expanded: Bool
+
+    init(event: ToolEventSnapshot, messageID: UUID, live: Bool, penName: String? = nil) {
+        self.event = event
+        self.messageID = messageID
+        self.live = live
+        self.penName = penName
+        let key = TranscriptDisclosureStore.key(for: event, in: messageID)
+        _expanded = State(initialValue: TranscriptDisclosureStore.shared.isOpen(key) ?? false)
+    }
 
     private var presentation: ToolEventPresentation {
         ToolActivityLabel.presentation(for: event, rootName: penName)
@@ -644,6 +807,8 @@ private struct ExternalToolCallCard: View {
             Button {
                 inspection.perform()
                 expanded.toggle()
+                TranscriptDisclosureStore.shared.set(
+                    expanded, for: TranscriptDisclosureStore.key(for: event, in: messageID))
             } label: {
                 HStack(spacing: Caprine.Activity.spacing) {
                     ToolCallStateIndicator(event: event, live: live)
@@ -712,6 +877,7 @@ private struct MemoryToolCallCard: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("Memory · " + action)
                 .help("Show memory operation details")
+                .holdsTranscriptLayout(while: detailsPresented)
                 .popover(
                     isPresented: $detailsPresented,
                     attachmentAnchor: .point(.bottomLeading), arrowEdge: .bottom
@@ -983,26 +1149,99 @@ private struct SubagentInvestigationDetails: View {
 }
 
 extension EnvironmentValues {
-    /// Opens full reasoning instead of the recent excerpt when a disclosure first appears.
-    @Entry var reasoningStartsExpanded = false
     /// The transcript's navigation owner, so a row can tell whether the reader owns the viewport
     /// without observing it.
     @Entry var transcriptViewport: TranscriptViewport?
+    /// The reply whose output is still arriving, which alone carries the streaming caret.
+    @Entry var transcriptStreamingReplyID: UUID?
+    /// Presents a message's edit-and-resend sheet or its response details from the transcript, outside
+    /// the lazy stack, so recreating the item that asked never dismisses them.
+    @Entry var transcriptPresenter = TranscriptPresenter()
 }
 
-/// The reader's reasoning choices per message for this session, so a row that SwiftUI recreates
-/// (paging, chat switches, window changes) keeps them (#60 B4). Bounded; the oldest are dropped.
-@MainActor final class ReasoningDisclosureStore {
+/// Sheets a transcript message asks for, presented by the transcript (see `transcriptPresenter`). Equal
+/// whenever both present or both do not: the actions only set the transcript's own presentation state,
+/// so a transcript update must not invalidate every row that reads this.
+struct TranscriptPresenter: Equatable {
+    var edit: (@MainActor (ChatMessage) -> Void)?
+    var showDetails: (@MainActor (ChatMessage) -> Void)?
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        (lhs.edit == nil) == (rhs.edit == nil) && (lhs.showDetails == nil) == (rhs.showDetails == nil)
+    }
+}
+
+/// Keeps the transcript from replacing its rows while `isPresented`: a sheet or popover a row presents
+/// is dismissed when its row is replaced, with whatever it holds.
+private struct TranscriptLayoutHold: ViewModifier {
+    let isPresented: Bool
+    @Environment(\.transcriptViewport) private var viewport
+    @State private var holding = false
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: isPresented, initial: true) { _, presented in hold(presented) }
+            .onDisappear { hold(false) }
+    }
+
+    private func hold(_ next: Bool) {
+        guard next != holding, let viewport else { return }
+        holding = next
+        if next { viewport.holdLayout() } else { viewport.releaseLayout() }
+    }
+}
+
+extension View {
+    func holdsTranscriptLayout(while isPresented: Bool) -> some View {
+        modifier(TranscriptLayoutHold(isPresented: isPresented))
+    }
+}
+
+/// Whether the reader opened a tool or compaction disclosure, for this session, by a key stable across
+/// row recreation: paging, chat switches and the transcript's relayout after a reflow replace rows,
+/// and the reader's choice must survive them. Bounded; the oldest are dropped.
+@MainActor final class TranscriptDisclosureStore {
+    static let shared = TranscriptDisclosureStore()
+
+    let limit: Int
+    private var open: [String: Bool] = [:]
+    private var order: [String] = []
+
+    init(limit: Int = 1_024) {
+        self.limit = max(1, limit)
+    }
+
+    func isOpen(_ key: String) -> Bool? { open[key] }
+
+    func set(_ isOpen: Bool, for key: String) {
+        if open.updateValue(isOpen, forKey: key) == nil { order.append(key) }
+        while order.count > limit { open[order.removeFirst()] = nil }
+    }
+
+    /// A tool call's key within its message: model call identifiers repeat across replies, and a
+    /// regenerated or re-sent reply can make the same call with the same arguments, so the message
+    /// and the call's content are both part of it.
+    static func key(for event: ToolEventSnapshot, in messageID: UUID) -> String {
+        "tool \(messageID.uuidString) \(event.id) \(event.server) \(event.tool) \(event.arguments.hashValue)"
+    }
+}
+
+/// The reader's reasoning choices per message for this session, so an item that SwiftUI recreates keeps
+/// them (#60 B4). Observable: the transcript lays open reasoning out as items. Bounded; the oldest are
+/// dropped.
+@MainActor @Observable final class ReasoningDisclosureStore {
     static let shared = ReasoningDisclosureStore()
 
     struct Choice: Equatable {
         var isOpen: Bool
-        var showsAll: Bool
+        /// Recorded by the transcript for a reader who owns the viewport while the reply streams, not
+        /// chosen by the reader: withdrawn if they follow again before the reply completes.
+        var isHeld = false
     }
 
-    let limit: Int
+    @ObservationIgnored let limit: Int
     private var choices: [UUID: Choice] = [:]
-    private var order: [UUID] = []
+    @ObservationIgnored private var order: [UUID] = []
 
     init(limit: Int = 512) {
         self.limit = max(1, limit)
@@ -1014,36 +1253,38 @@ extension EnvironmentValues {
         if choices.updateValue(choice, forKey: id) == nil { order.append(id) }
         while order.count > limit { choices[order.removeFirst()] = nil }
     }
+
+    func remove(_ id: UUID) {
+        guard choices.removeValue(forKey: id) != nil else { return }
+        order.removeAll { $0 == id }
+    }
 }
 
-/// Reasoning stays visible while it streams, visually secondary to the answer (#60 B4, ADR-0074).
-/// When the reply completes it folds to one "Thought for" line, unless the reader chose otherwise
-/// for this message or turned folding off. Folding is a deliberate change, so it happens only while
-/// the transcript follows the latest output: a reader who owns the viewport keeps the reasoning
-/// open and nothing they are reading moves. User choices survive stream updates and remounts.
+/// Reasoning is folded or full (ADR-0104), visually secondary to the answer (#60 B4, ADR-0074). Folded,
+/// it is one "Thought for" line; open, all of it is shown. It is open while it streams; when the reply
+/// completes it folds, unless the reader chose otherwise for this message or turned folding off. Folding
+/// is a deliberate change, so it happens only while the transcript follows the latest output: a reader
+/// who owns the viewport keeps the reasoning open and nothing they are reading moves. Choices survive
+/// stream updates and remounts.
+///
+/// `showsContent` is false when the transcript lays the reasoning's segments out as items of their own
+/// (a long reply split into items); the disclosure is then only its header.
 struct ThinkingDisclosure: View {
     @Environment(\.transcriptInspection) private var inspection
-    @Environment(\.reasoningStartsExpanded) private var startsExpanded
     @Environment(\.transcriptViewport) private var viewport
     let message: ChatMessage
-    @State private var choice: ReasoningDisclosureStore.Choice?
+    var showsContent = true
     @Environment(AppModel.self) private var model
 
-    init(message: ChatMessage) {
-        self.message = message
-        _choice = State(initialValue: ReasoningDisclosureStore.shared.choice(for: message.id))
-    }
+    private var store: ReasoningDisclosureStore { .shared }
 
     /// Open while streaming; after completion, folded unless chosen otherwise or folding is off.
     var isOpen: Bool {
-        choice?.isOpen ?? (!message.complete || !model.foldsCompletedReasoning)
+        store.choice(for: message.id)?.isOpen ?? (!message.complete || !model.foldsCompletedReasoning)
     }
 
-    private var showsAll: Bool { choice?.showsAll ?? startsExpanded }
-
-    private func choose(_ next: ReasoningDisclosureStore.Choice) {
-        choice = next
-        ReasoningDisclosureStore.shared.set(next, for: message.id)
+    private func choose(open: Bool) {
+        store.set(ReasoningDisclosureStore.Choice(isOpen: open), for: message.id)
     }
 
     /// "Thought for 12s" once complete ("Thought" when the duration is unknown, as after a reload).
@@ -1054,13 +1295,12 @@ struct ThinkingDisclosure: View {
     }
 
     var body: some View {
-        let preview = ReasoningPreview(message.thinking)
         let isOpen = self.isOpen
         VStack(alignment: .leading, spacing: Caprine.Activity.spacing) {
             HStack {
                 Button {
                     inspection.perform()
-                    choose(ReasoningDisclosureStore.Choice(isOpen: !isOpen, showsAll: showsAll))
+                    choose(open: !isOpen)
                 } label: {
                     HStack(spacing: Caprine.Activity.spacing) {
                         Image(systemName: isOpen ? "chevron.down" : "chevron.right")
@@ -1079,44 +1319,57 @@ struct ThinkingDisclosure: View {
             }
             .font(Caprine.Activity.font)
             .foregroundStyle(model.theme.tokens.muted)
-            if isOpen {
-                Group {
-                    if showsAll {
-                        // All of it, rich and windowed through the navigation owner (#60 A1).
-                        ExpandedThinkingView(message: message, onPrepared: { message.markRenderChanged() })
-                    } else {
-                        ThinkingContentView(
-                            source: TranscriptText.removingBoundaryBlankLines(preview.text),
-                            onPrepared: { message.markRenderChanged() })
-                    }
-                }
-                .padding(.leading, Caprine.Activity.inset)
-                .overlay(alignment: .leading) {
-                    Rectangle().fill(model.theme.tokens.muted.opacity(Caprine.Activity.branchOpacity))
-                        .frame(width: Caprine.Activity.ruleWidth)
-                }
-                if preview.hasEarlierText {
-                    Button(showsAll ? "Show recent reasoning" : "Show all reasoning") {
-                        inspection.perform()
-                        choose(ReasoningDisclosureStore.Choice(isOpen: true, showsAll: !showsAll))
-                    }
-                    .buttonStyle(.plain)
-                    .font(Caprine.Activity.font)
-                    .foregroundStyle(model.theme.tokens.tint)
-                }
+            if isOpen && showsContent {
+                ReasoningBody(message: message)
+                    .reasoningRule(model.theme.tokens.muted)
             }
         }
         .onChange(of: message.complete) { _, complete in
             // A reader who owns the viewport keeps the reasoning open, so completion moves nothing
-            // they are reading. Folding happens on the next appearance instead.
-            guard complete, choice == nil, model.foldsCompletedReasoning, viewport?.readerOwnsViewport == true
+            // they are reading. The transcript records this ahead of completion for the reply it
+            // follows (`holdOpenReasoning`), since this row may not exist by then; this covers a
+            // reply shown on its own.
+            guard complete, store.choice(for: message.id) == nil, model.foldsCompletedReasoning,
+                viewport?.readerOwnsViewport == true
             else { return }
-            choice = ReasoningDisclosureStore.Choice(isOpen: true, showsAll: showsAll)
+            choose(open: true)
         }
     }
 }
 
-private struct TranscriptMessageEditor: View {
+/// All of a short reply's open reasoning, laid out in its row. Longer reasoning is laid out as items.
+private struct ReasoningBody: View {
+    let message: ChatMessage
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let reasoning = TranscriptTexts.shared.reasoning(for: message)
+        let _ = reasoning.request()
+        VStack(alignment: .leading, spacing: 0) {
+            if reasoning.isPlain {
+                ForEach(Array((reasoning.parts ?? []).enumerated()), id: \.offset) { _, part in
+                    TranscriptPlainPart(text: part, fontSize: model.chatFontSize - 1)
+                }
+            } else if let thinking = reasoning.thinking {
+                ThinkingSegmentsView(segments: thinking.segments)
+            }
+        }
+        .onChange(of: reasoning.thinking?.revision) { message.markRenderChanged() }
+    }
+}
+
+extension View {
+    /// The thin rule beside reasoning, and its inset.
+    func reasoningRule(_ color: Color) -> some View {
+        padding(.leading, Caprine.Activity.inset)
+            .overlay(alignment: .leading) {
+                Rectangle().fill(color.opacity(Caprine.Activity.branchOpacity))
+                    .frame(width: Caprine.Activity.ruleWidth)
+            }
+    }
+}
+
+struct TranscriptMessageEditor: View {
     @Environment(\.dismiss) private var dismiss
     @State private var draft: String
     @State private var original: String
@@ -1159,18 +1412,5 @@ private struct TranscriptMessageEditor: View {
         .padding(Caprine.Activity.messageSpacing)
         .frame(width: Caprine.Reading.editorWidth)
         .interactiveDismissDisabled(sending)
-    }
-}
-
-/// A bounded live excerpt, with full content available without a nested scroll view.
-struct ReasoningPreview {
-    static let characterLimit = 1_400
-    let text: String
-    let hasEarlierText: Bool
-
-    init(_ source: String) {
-        let tail = source.suffix(Self.characterLimit + 1)
-        hasEarlierText = tail.count > Self.characterLimit
-        text = hasEarlierText ? String(tail.suffix(Self.characterLimit)) : source
     }
 }

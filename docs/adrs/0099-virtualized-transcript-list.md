@@ -1,7 +1,7 @@
 # ADR-0099: Virtualized transcript list
 
-Status: Proposed · 2026-09-27
-If accepted, supersedes the admission window and endless paging of
+Status: Accepted · proposed 2026-09-27 · completed by [ADR-0104](0104-single-stack-transcript.md) in 0.1.4
+Supersedes the admission window and endless paging of
 [ADR-0091](0091-content-bounded-transcript-layout.md) (its decision, its 2026-09-22 amendment and
 the segment-level windowing of its segmented rendering amendment), section 4 of
 [ADR-0094](0094-pure-swift-syntax-highlighting-and-tool-diffs.md). Retains the single-owner native
@@ -13,6 +13,35 @@ Proposed under [#60](https://github.com/goatsoft/GOAT/issues/60) with
 Current comparison and migration qualification is tracked in
 [#86](https://github.com/goatsoft/GOAT/issues/86), transferred from #60. Production qualification
 remains in [#85](https://github.com/goatsoft/GOAT/issues/85). This transfer does not accept the ADR.
+
+## Shipping amendment, 2026-10-15
+
+GOAT 0.1.4 ships this proposal in full, as [ADR-0104](0104-single-stack-transcript.md) decides:
+the transcript is one `LazyVStack` of items ([#95](https://github.com/goatsoft/GOAT/pull/95),
+production qualification in #85), so only items near the viewport are laid out, and the message
+and segment windows of ADR-0091 are gone. An earlier cut of #95 kept those windows inside the lazy
+stack; on the macOS 26 Mac Studio it streamed Delivery 3's 2 MiB of expanded reasoning in 19.4 s
+wall and 4.1 s CPU (main: 153.6 s), and a 2 MiB answer in 19.1 s and 5.7 s CPU, with a p95 frame
+delay of about 10 ms, while laying out only a streaming reply's latest two segments. The single
+stack lays out a full viewport and costs more under that workload; ADR-0104 records the shipped
+figures. Everything in the transcript, progress rows included, sits in the one lazy stack: a plain
+stack around it measured it in full again (Delivery 3 reasoning went from 19 s to 78 s). The single
+native scroll executor of ADR-0097 is retained, and the navigation owner was adapted to a lazy stack:
+
+- Content changes issue no request while the reader owns the viewport; the lazy stack keeps its
+  topmost visible row in place. An anchor that was in place and moved with layout above it (an
+  anchor below the viewport's top edge, or a segment) is put back explicitly.
+- Frames belong to the mounted instance that measured them, a returning instance reports its frame
+  again, and frames measured outside the content space are ignored.
+- Commands are planned and verified against the scroll view's own geometry and re-checked after
+  each command, since SwiftUI reports geometry with its next update.
+- A target the lazy stack has not laid out is revealed by an estimate from laid-out rows. When no
+  row meets the viewport at all (the lazy stack can keep a row's old place after a drastic size
+  change while it was unmounted), a SwiftUI scroll to the right row is the last resort; its landing
+  is the executor's move, not the reader's.
+- Stored history loads at either end once no move is pending and the reader is within a viewport of
+  it, keeping their place (ADR-0104). Settled messages near the reader are prepared ahead of the
+  lazy stack, and only the jump button animates.
 
 ## Current proposal refinement, 2026-10-13
 

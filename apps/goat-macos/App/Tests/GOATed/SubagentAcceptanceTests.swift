@@ -1793,8 +1793,11 @@ extension AppTests.GOATed {
 
             actor CorruptingEngine: InferenceEngine {
                 let dirToCorrupt: URL
-                init(dirToCorrupt: URL) {
+                /// A write against the database under test; used to wait until the writer rejects it.
+                let probeWrite: @Sendable () async throws -> Void
+                init(dirToCorrupt: URL, probeWrite: @escaping @Sendable () async throws -> Void) {
                     self.dirToCorrupt = dirToCorrupt
+                    self.probeWrite = probeWrite
                 }
                 func health() async -> EngineHealth { .ok([]) }
                 func runtimeStatus() async -> EngineRuntimeStatus? {
@@ -1814,6 +1817,17 @@ extension AppTests.GOATed {
                     // Save subagent run has already succeeded at this point.
                     // Now corrupt/remove the database directory so transitionSubagentRun will fail with SQLite error.
                     try? FileManager.default.removeItem(at: dirToCorrupt)
+                    // libsqlite3 notices the unlinked vnode asynchronously and only then invalidates the
+                    // open descriptors, so a write issued straight away can still succeed. Wait until the
+                    // writer actually rejects a write before letting the worker reach its terminal write.
+                    for _ in 0..<200 {
+                        do {
+                            try await probeWrite()
+                        } catch {
+                            break
+                        }
+                        try? await Task.sleep(for: .milliseconds(10))
+                    }
                     return AsyncThrowingStream { continuation in
                         continuation.yield(.token("Completed task"))
                         continuation.finish()
@@ -1827,7 +1841,9 @@ extension AppTests.GOATed {
                 projectID: nil,
                 workspace: workspace,
                 fileTools: fileTools,
-                engine: CorruptingEngine(dirToCorrupt: tempDir),
+                engine: CorruptingEngine(
+                    dirToCorrupt: tempDir,
+                    probeWrite: { try await db.save(makeChat()) }),
                 database: db,
                 lease: SubagentCapabilityLease()
             )

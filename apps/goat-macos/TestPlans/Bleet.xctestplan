@@ -39,7 +39,7 @@
         ],
         "xctestClasses": [
           {
-            "name": "TranscriptComparisonPreparationTests"
+            "name": "Delivery3QualificationFixtureTests"
           },
           {
             "name": "ToolActivityDisclosureTests"

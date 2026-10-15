@@ -29,6 +29,7 @@ enum RenderingCaches {
             TranscriptPartsCache.shared.removeAll()
             PreparedMarkdownDocumentCache.shared.removeAll()
             PreparedThinkingCache.shared.removeAll()
+            TranscriptTexts.shared.removeAll()
             JSONValueCache.shared.removeAll()
         }
     }

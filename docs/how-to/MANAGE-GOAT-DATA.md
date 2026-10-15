@@ -51,10 +51,10 @@ The app copy shown on this tab is always included. A separately installed CLI is
 
 1. Click **Review choices**.
 2. On **Are you sure?**, check **Will remove**, **Will keep** and the recovery folder. Use **Back** to change selections. **Change folder…** selects a different recovery parent; it must be outside the app and data locations, on the same volume as the data.
-3. Click **Uninstall** to confirm. No additional confirmation dialog appears. GOAT prepares the request and stays open.
-4. Finish chats, imports, command jobs and other work, then quit normally. Removal starts only after GOAT closes.
+3. Click **Uninstall** to confirm. No additional confirmation dialog appears. GOAT refuses while a chat is replying, a Lead is queued, an approval is pending or extensions are changing, so finish imports and command jobs first.
+4. GOAT prepares the request and quits, as with **Quit GOAT**. Removal starts once it has closed, and the recovery folder opens when it finishes.
 
-While waiting, return to **Manage** and choose **Cancel uninstall** to cancel. Closing the Manage window does not cancel a scheduled uninstall. The request expires after one hour. Other running GOAT copies block cleanup; do not open an older GOAT version until cleanup finishes.
+If GOAT stays open (for example, another window asked to keep it open), quit it yourself or return to **Manage** and choose **Cancel uninstall**. The request expires after one hour. Other running GOAT copies, including development builds, block cleanup; quit them first, and do not open an older GOAT version until cleanup finishes.
 
 Selected data and preferences move to a private recovery folder, normally under Downloads. The app and any selected CLI copy move to Trash. A temporary helper completes the work and removes itself. This is recoverable removal, not secure erasure.
 

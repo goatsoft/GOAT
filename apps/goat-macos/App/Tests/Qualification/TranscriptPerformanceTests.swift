@@ -183,7 +183,7 @@ final class TranscriptPerformanceTests: XCTestCase {
             + "```\n\nEnd of fixture."
         reply.thinking = "Consider the options.\n\n```swift\nlet choice = 42\n```\nVerify the result."
         reply.complete = true
-        ReasoningDisclosureStore.shared.set(.init(isOpen: true, showsAll: true), for: reply.id)
+        ReasoningDisclosureStore.shared.set(.init(isOpen: true), for: reply.id)
         session.messages = [reply]
         status = "Ready"
     }
@@ -257,7 +257,7 @@ final class TranscriptPerformanceTests: XCTestCase {
             let reply = ChatMessage(role: .assistant)
             session.messages = [reply]
             session.isStreaming = true
-            ReasoningDisclosureStore.shared.set(.init(isOpen: true, showsAll: true), for: reply.id)
+            ReasoningDisclosureStore.shared.set(.init(isOpen: true), for: reply.id)
             let block =
                 "A synthetic paragraph to inspect **layout** and input responsiveness.\n\n```swift\nlet value = 42\n```\n\n"
             let source = String(String(repeating: block, count: 30_000).prefix(2 * 1_024 * 1_024))

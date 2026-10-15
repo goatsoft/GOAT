@@ -12,6 +12,8 @@ import Observation
     var error: String?
     private var worker: Process?
     private var job: URL?
+    /// Quits GOAT once the helper is waiting for it; the same path as the owner's Quit command.
+    var quit: @MainActor () -> Void = { NSApp.terminate(nil) }
 
     func prepare(plan: DataManagementPlan, inventory: DataManagementInventory, model: AppModel) async {
         guard !pending, !preparing else { return }
@@ -101,7 +103,25 @@ import Observation
             job = staging
             recovery = destination
             pending = true
+            // The helper verifies GOAT as its parent before it waits; quitting earlier would orphan it.
+            guard await helperReady(in: staging, process: process) else {
+                // A cancel while waiting, or a helper that stopped, has already said so.
+                guard pending else { return }
+                cancel()
+                throw UninstallError.unsafe("The cleanup helper did not start. GOAT and its data were kept.")
+            }
+            quit()
         } catch { self.error = error.localizedDescription }
+    }
+
+    private func helperReady(in job: URL, process: Process) async -> Bool {
+        let ready = job.appendingPathComponent("ready").path
+        for _ in 0..<200 {
+            if FileManager.default.fileExists(atPath: ready) { return true }
+            guard process.isRunning, pending else { return false }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return false
     }
 
     func cancel() {
@@ -181,6 +201,8 @@ enum MaintenanceGate {
             guard request.parentPID > 1, getppid() == request.parentPID else {
                 throw UninstallError.unsafe("The launching GOAT process could not be verified.")
             }
+            // GOAT quits only after this: the parent check above must see it alive.
+            try Data().write(to: job.appendingPathComponent("ready"), options: .atomic)
             let deadline = Date().addingTimeInterval(3600)
             while kill(request.parentPID, 0) == 0 {
                 if fm.fileExists(atPath: job.appendingPathComponent("cancel").path) { return 0 }

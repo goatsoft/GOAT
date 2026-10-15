@@ -1,6 +1,6 @@
 # ADR-0102: Paged reader history and complete turn context
 
-Status: Proposed · 2026-10-13
+Status: Proposed · 2026-10-13 · its visible paging is superseded by [ADR-0104](0104-single-stack-transcript.md); the bounded record cache stays
 Refines [ADR-0003](0003-persistence-grdb.md), [ADR-0056](0056-bounded-rendering-and-responsive-io.md) and [ADR-0091](0091-content-bounded-transcript-layout.md).
 
 ## Context

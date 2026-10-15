@@ -3,8 +3,9 @@ import Foundation
 import Inference
 import Persistence
 
-/// A display-only projection of the bounded message window. Stored messages and tool results
-/// retain their original identities and order; user/Lead messages and final replies are boundaries.
+/// A display-only projection of the loaded messages into the transcript's rows. Stored messages and
+/// tool results retain their original identities and order; user/Lead messages and final replies are
+/// boundaries.
 @MainActor
 enum TranscriptActivity {
     struct Row: Identifiable {

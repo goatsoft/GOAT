@@ -235,6 +235,7 @@ extension EnvironmentValues {
     struct State: Equatable {
         var wordWrap: Bool?
         var isExpanded = false
+        var showsSource = false
     }
 
     let limit: Int
@@ -262,7 +263,6 @@ struct CodeBlockView: View {
     let configuration: CodeBlockConfiguration
     var isStreaming = false
     @Environment(AppModel.self) private var model
-    @State private var showingSource = false
     @State private var artifactID = UUID()
     @State private var previewVisible = false
     @State private var measuredPreviewHeight: CGFloat?
@@ -284,6 +284,10 @@ struct CodeBlockView: View {
         blockState ?? identity.map(CodeBlockStateStore.shared.state(for:)) ?? CodeBlockStateStore.State()
     }
     private var wordWrap: Bool { state.wordWrap ?? model.codeWordWrap }
+    private var showingSource: Bool { state.showsSource }
+    private var showingSourceBinding: Binding<Bool> {
+        Binding(get: { state.showsSource }, set: { shows in update { $0.showsSource = shows } })
+    }
     private var wantsPreview: Bool { previewVisible && isInlinePreviewable && !isStreaming && !showingSource }
 
     private func update(_ change: (inout CodeBlockStateStore.State) -> Void) {
@@ -415,7 +419,7 @@ struct CodeBlockView: View {
             }
             Spacer(minLength: 8)
             if isInlinePreviewable && !isStreaming {
-                ArtifactDisplaySwitch(showingSource: $showingSource, compact: true)
+                ArtifactDisplaySwitch(showingSource: showingSourceBinding, compact: true)
             }
             CopyButton(text: code)
                 .accessibilityLabel("Copy source")

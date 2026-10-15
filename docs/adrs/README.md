@@ -86,7 +86,7 @@ Older records retain the package and type names used when accepted. [ADR-0054](0
 | [0078](0078-owner-approved-release-signing.md) | Owner-approved release signing | Accepted · refines 0007 |
 | [0079](0079-shared-aurora-worker.md) | Shared Aurora rendering worker | Accepted · refines 0041 and 0077 |
 | [0080](0080-explicit-first-engine-setup.md) | Explicit first-engine setup | Accepted · refines 0021 |
-| [0081](0081-owner-prepared-automatic-uninstall.md) | Owner-prepared automatic uninstall | Accepted |
+| [0081](0081-owner-prepared-automatic-uninstall.md) | Owner-prepared automatic uninstall | Accepted · amended 2026-10-15 |
 | [0082](0082-direct-preference-reset.md) | Direct preference reset | Accepted · refines 0081 |
 | [0083](0083-selective-app-ci.md) | Selective app verification for content changes | Accepted · refines 0018 |
 | [0084](0084-model-inspection-favourites-and-recovery.md) | Models settings, favourites, effort submenu and diagnostic recovery | Accepted |
@@ -96,7 +96,7 @@ Older records retain the package and type names used when accepted. [ADR-0054](0
 | [0088](0088-single-round-tool-results.md) | Single-round tool results: synchronous commands, plain-text reads, glob, concurrent reads | Accepted · refines 0069 and 0070 |
 | [0089](0089-turn-continuity-and-engine-resilience.md) | Turn continuity and engine resilience: failed turns kept, repetition guard, retry, stall watchdog | Accepted · refines 0023, 0065, 0066 and 0084 |
 | [0090](0090-omlx-capability-status-and-generation-ownership.md) | oMLX capability status and generation-setting ownership | Accepted · refines 0008, 0017, 0021 and 0086 |
-| [0091](0091-content-bounded-transcript-layout.md) | Content-bounded transcript layout | Accepted · amended 2026-09-22 · segmented rendering implemented · refines 0056 and 0074 · 0099 proposes replacing admission window and paging |
+| [0091](0091-content-bounded-transcript-layout.md) | Content-bounded transcript layout | Accepted · amended 2026-09-22 · segmented rendering implemented · refines 0056 and 0074 · windowing superseded by 0104 |
 | [0092](0092-selected-toolchain-resolution-for-pen-commands.md) | Selected toolchain resolution for Pen commands | Accepted · refines 0070 |
 
 | [0093](0093-maintained-xcode-project.md) | Maintained Xcode project and build-time release identity | Proposed · supersedes project ownership in 0004 |
@@ -107,13 +107,14 @@ Older records retain the package and type names used when accepted. [ADR-0054](0
 | [0095](0095-parallel-verification-and-preview-diagnostics.md) | Parallel verification and preview diagnostics | Accepted, amended |
 
 | [0098](0098-shared-oklab-colour-picker.md) | Shared OKLab colour picker | Accepted · refines 0022 |
-| [0099](0099-virtualized-transcript-list.md) | Virtualized transcript list | Proposed · would supersede 0091 windowing and 0094 §4; retains 0097 ownership; refines 0002 and 0028 |
+| [0099](0099-virtualized-transcript-list.md) | Virtualized transcript list | Accepted · completed by 0104 in 0.1.4 · supersedes 0091 windowing and 0094 §4; retains 0097 ownership; refines 0002 and 0028 |
 | [0100](0100-synchronous-markdown-block-spacing.md) | Synchronous Markdown block spacing | Proposed |
 
 | [0101](0101-bounded-inline-artifacts.md) | Bounded inline artifact lifetimes and literal math | Proposed · refines 0010, 0015 and 0091 |
 
-| [0102](0102-paged-reader-history.md) | Paged reader history and complete turn context | Proposed · refines 0003, 0056 and 0091 |
+| [0102](0102-paged-reader-history.md) | Paged reader history and complete turn context | Proposed · visible paging superseded by 0104 (the record cache stays) · refines 0003, 0056 and 0091 |
 
-| [0103](0103-dense-reply-layout-admission.md) | Dense reply layout admission | Proposed · refines 0091 |
+| [0103](0103-dense-reply-layout-admission.md) | Dense reply layout admission | Superseded by 0104 · refines 0091 |
+| [0104](0104-single-stack-transcript.md) | Single-stack transcript | Accepted · 0.1.4 · supersedes 0091 windowing, 0102 visible paging and 0103; completes 0099 |
 
 New session? Start with **[../../AGENT.md](../../AGENT.md)**, then [the roadmap](../ROADMAP.md).

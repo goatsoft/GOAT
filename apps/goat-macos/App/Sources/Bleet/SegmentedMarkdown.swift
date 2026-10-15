@@ -956,124 +956,6 @@ enum MarkdownSegmentSpacing {
     }
 }
 
-/// A reply rendered as independently prepared segments (#60 A1 step 2, ADR-0091). Each segment is
-/// its own Markdown view keyed by its index, so a settled segment keeps its view and prepared content
-/// while later segments stream. Pieces of one oversized block join without a gap.
-struct SegmentedMarkdownView: View {
-    let document: PreparedMarkdownDocument
-    let fontSize: CGFloat
-    let isStreaming: Bool
-    var messageID: UUID?
-    /// Pages a windowed reply: the new window, the segment to keep in place, and the reply's segment
-    /// count.
-    var page: (_ window: Range<Int>, _ kept: Int, _ segmentCount: Int) -> Void = { _, _, _ in }
-    @Environment(\.transcriptSegments) private var navigation
-
-    var body: some View {
-        let shown = document.shownSegments
-        let isWindowed = document.window != nil
-        VStack(alignment: .leading, spacing: 0) {
-            if isWindowed, shown.lowerBound > 0 {
-                SegmentLoader(label: "Earlier text") {
-                    let earlier = ReplyWindow.earlier(shown, count: document.segments.count, cost: cost)
-                    page(earlier, shown.lowerBound, document.segments.count)
-                }
-            }
-            ForEach(shown, id: \.self) { index in
-                let segment = document.segments[index]
-                MarkdownSegmentView(
-                    segment: segment, fontSize: fontSize, isStreaming: isStreaming,
-                    isTail: isStreaming && segment.index == document.segments.count - 1,
-                    codeSegment: Self.codeSegment(of: segment.index, in: document.segments)
-                )
-                .equatable()
-                // Measured before the gap, which changes when the segment stops being the first shown,
-                // and in the transcript's content coordinates, which scrolling does not change.
-                .onGeometryChange(for: CGRect?.self, of: { isWindowed ? Self.contentFrame($0) : nil }) { frame in
-                    if let messageID, isWindowed { navigation.recordFrame(messageID, index, frame, shown) }
-                }
-                .onDisappear {
-                    if let messageID, isWindowed { navigation.recordFrame(messageID, index, nil, shown) }
-                }
-                .padding(.top, index == shown.lowerBound ? 0 : gap(before: segment))
-            }
-            if isWindowed, shown.upperBound < document.segments.count {
-                SegmentLoader(label: "Later text") {
-                    let later = ReplyWindow.later(shown, count: document.segments.count, cost: cost)
-                    page(later, shown.upperBound - 1, document.segments.count)
-                }
-            }
-        }
-        // A held window that reached the end stops reaching it as the reply grows.
-        .onChange(of: document.segments.count) { _, count in
-            if let messageID { navigation.recordSegmentCount(messageID, count) }
-        }
-    }
-
-    private func cost(_ index: Int) -> Int { document.segments[index].textBytes }
-
-    nonisolated private static func contentFrame(_ proxy: GeometryProxy) -> CGRect {
-        proxy.frame(in: .named(transcriptContentSpace))
-    }
-
-    /// The segment code-block choices are kept by: a piece of an oversized fence uses the fence's
-    /// first piece, so a choice applies to the whole fence.
-    static func codeSegment<Segments: RandomAccessCollection>(of index: Int, in segments: Segments) -> Int
-    where Segments.Element == PreparedMarkdownSegment, Segments.Index == Int {
-        var index = index
-        while index > 0, index < segments.count, segments[index].kind == .fencedCodePiece,
-            segments[index].continuesPrevious, segments[index - 1].kind == .fencedCodePiece
-        {
-            index -= 1
-        }
-        return index
-    }
-
-    private func gap(before segment: PreparedMarkdownSegment) -> CGFloat? {
-        guard segment.index > 0, segment.index <= document.segments.count else { return 0 }
-        return MarkdownSegmentSpacing.gap(
-            after: document.segments[segment.index - 1], before: segment, fontSize: fontSize)
-    }
-}
-
-/// Pages a windowed reply as it comes into view, like the transcript's message loaders. It never
-/// scrolls: the navigation owner keeps the reader's segment in place. It acts on the next turn of
-/// the main actor, after the scroll that revealed it has been attributed to the reader.
-struct SegmentLoader: View {
-    let label: String
-    let action: () -> Void
-    @Environment(\.transcriptInspection) private var inspection
-    @Environment(\.transcriptSegments) private var navigation
-
-    var body: some View {
-        Button {
-            // A short window may fit without any scroll range. Explicit paging must still
-            // take reader ownership before requesting earlier or later segments.
-            inspection.perform()
-            action()
-        } label: {
-            HStack {
-                Text(label)
-                Spacer()
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, Caprine.Activity.spacing)
-        .onScrollVisibilityChange(threshold: 0.01) { visible in
-            guard visible else { return }
-            Task { @MainActor in
-                await Task.yield()
-                guard navigation.canAutomaticallyPage() else { return }
-                action()
-            }
-        }
-    }
-}
-
 /// Equal preparations render equal content, so SwiftUI skips a settled segment while the tail streams.
 struct MarkdownSegmentView: View, Equatable {
     let segment: PreparedMarkdownSegment
@@ -1092,6 +974,19 @@ struct MarkdownSegmentView: View, Equatable {
         self.isStreaming = isStreaming && !segment.isSettled
         self.isTail = isTail && !segment.isSettled
         self.codeSegment = codeSegment
+    }
+
+    /// The segment code-block choices are kept by: a piece of an oversized fence uses the fence's
+    /// first piece, so a choice applies to the whole fence.
+    static func codeSegment<Segments: RandomAccessCollection>(of index: Int, in segments: Segments) -> Int
+    where Segments.Element == PreparedMarkdownSegment, Segments.Index == Int {
+        var index = index
+        while index > 0, index < segments.count, segments[index].kind == .fencedCodePiece,
+            segments[index].continuesPrevious, segments[index - 1].kind == .fencedCodePiece
+        {
+            index -= 1
+        }
+        return index
     }
 
     nonisolated static func == (lhs: MarkdownSegmentView, rhs: MarkdownSegmentView) -> Bool {

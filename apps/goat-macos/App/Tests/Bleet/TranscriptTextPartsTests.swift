@@ -20,6 +20,22 @@ extension AppTests.Bleet {
             }
         }
 
+        /// A part boundary never falls inside a grapheme: an emoji sequence, a combining mark or a CRLF
+        /// stays whole, so no part starts with a broken character. The parts are still nearly full.
+        @Test func transcriptPartsSplitAtGraphemeBoundaries() throws {
+            let unit = "👩🏽‍💻 café\r\n"
+            let parts = try TranscriptTextParts.split(String(repeating: unit, count: 3_000))
+            #expect(parts.count > 2)
+            #expect(parts.dropLast().allSatisfy { $0.hasSuffix("\r\n") }, "Every part ends on a whole unit")
+            #expect(parts.dropLast().allSatisfy { $0.utf8.count > TranscriptTextParts.maximumBytes - unit.utf8.count })
+            #expect(parts.allSatisfy { $0.unicodeScalars.first != "\u{200D}" && $0.unicodeScalars.first != "\u{0301}" })
+            let source = String(repeating: unit, count: 3_000)
+            let tail = TranscriptTextParts.tail(source)
+            // A suffix at a grapheme boundary (String's suffix test is grapheme-aware), nearly a part long.
+            #expect(source.hasSuffix(tail) && tail.utf8.count > TranscriptTextParts.maximumBytes - 8)
+            #expect(tail.unicodeScalars.first != "\u{200D}" && tail.unicodeScalars.first != "\u{0301}")
+        }
+
         @Test func appendingTextPreservesCompletedPartsForReaders() throws {
             let source = String(repeating: "let goat = \"🐐\"\n", count: 2_000)
             let before = try TranscriptTextParts.split(source)
@@ -141,7 +157,8 @@ extension AppTests.Bleet {
             #expect(source.unicodeScalars.reversed().starts(with: tail.unicodeScalars.reversed()))
             #expect(tail.hasSuffix("END"))
             #expect(tail.utf8.count <= TranscriptTextParts.maximumBytes)
-            #expect(tail.utf8.count > TranscriptTextParts.maximumBytes - 8)
+            // Within one grapheme of the limit: a part never starts inside one.
+            #expect(tail.utf8.count > TranscriptTextParts.maximumBytes - 24)
             #expect(TranscriptTextParts.tail("short") == "short")
             #expect(TranscriptTextParts.tail("") == "")
         }

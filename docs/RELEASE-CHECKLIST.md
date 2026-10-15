@@ -44,8 +44,10 @@ or artifact acceptance.
   Xcode could not write its caches. Neither attempt executed reader tests; these are environment
   blockers, not passing or failing reader regressions.
 - [ ] Smoke-test the shipping reader using disposable synthetic content: settled rich rows on
-  scroll-back; native scrolling; Earlier/Later/Latest navigation; reader-held incoming output;
-  completion; font and width reflow; selection/copy; code actions; and reasoning/tool disclosures.
+  scroll-back; native scrolling; history loading at both ends of a long chat and virtual scrolling
+  through a long reply and its open reasoning; the jump button; reader-held incoming output;
+  completion with the reasoning kept open for a reader scrolled up; font and width reflow;
+  selection/copy; code actions; and reasoning/tool disclosures.
   Record actual keyboard/accessibility and visual observations separately from automated results.
 - [ ] Finish the applicable product and runtime checks below, recording engine/model versions
   and supported-OS evidence. Existing historical receipts do not qualify this source.

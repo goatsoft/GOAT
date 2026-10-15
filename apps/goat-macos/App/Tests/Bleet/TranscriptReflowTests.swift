@@ -58,6 +58,21 @@ import XCTest
         try await Task.sleep(for: .milliseconds(20))
     }
 }
+@MainActor @Observable private final class PresentedRow {
+    var isPresented = false
+    var shown = true
+}
+
+/// A row that presents something while `presented.isPresented`, and goes away when `shown` is false.
+private struct PresentingRow: View {
+    let presented: PresentedRow
+    var body: some View {
+        if presented.shown {
+            Text("Row").holdsTranscriptLayout(while: presented.isPresented)
+        }
+    }
+}
+
 extension AppTests.Bleet {
     @Suite struct TranscriptReflowTests {
 
@@ -122,22 +137,33 @@ extension AppTests.Bleet {
                         abs(scroll.frame.width - host.bounds.width) <= 1,
                         "The transcript must fill its host: scroll \(scroll.frame), host \(host.bounds)")
                     let viewport = host
-                    let bitmap = try #require(viewport.bitmapImageRepForCachingDisplay(in: viewport.bounds))
-                    viewport.cacheDisplay(in: viewport.bounds, to: bitmap)
-                    var ink = 0
-                    for y in stride(from: 10, to: bitmap.pixelsHigh - 10, by: 3) {
-                        for x in stride(from: 20, to: bitmap.pixelsWide - 20, by: 3) {
-                            if let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
-                                color.alphaComponent > 0.9, color.redComponent < 0.6, color.greenComponent < 0.6,
-                                color.blueComponent < 0.6
-                            {
-                                ink += 1
+                    func inkOnScreen() throws -> Int {
+                        let bitmap = try #require(viewport.bitmapImageRepForCachingDisplay(in: viewport.bounds))
+                        viewport.cacheDisplay(in: viewport.bounds, to: bitmap)
+                        var ink = 0
+                        for y in stride(from: 10, to: bitmap.pixelsHigh - 10, by: 3) {
+                            for x in stride(from: 20, to: bitmap.pixelsWide - 20, by: 3) {
+                                if let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+                                    color.alphaComponent > 0.9, color.redComponent < 0.6, color.greenComponent < 0.6,
+                                    color.blueComponent < 0.6
+                                {
+                                    ink += 1
+                                }
                             }
                         }
+                        return ink
+                    }
+                    // A drastic reflow can leave the lazy stack's estimate past its rows for a moment; the
+                    // transcript must show text again within a second of the scroll settling.
+                    var ink = try inkOnScreen()
+                    for _ in 0..<20 where ink <= 100 {
+                        try await Task.sleep(for: .milliseconds(50))
+                        host.layoutSubtreeIfNeeded()
+                        ink = try inkOnScreen()
                     }
                     let document = String(describing: scroll.documentView?.frame)
                     let clip = "clip \(scroll.contentView.bounds), document \(document)"
-                    let owner = "held \(String(describing: navigation.heldRange)), following \(navigation.autoFollow)"
+                    let owner = "anchor \(String(describing: navigation.anchor)), following \(navigation.autoFollow)"
                     let recent = Array(navigation.diagnostics.suffix(10))
                     let trace = "request \(String(describing: navigation.request)), \(recent)"
                     let hostGeometry =
@@ -148,6 +174,134 @@ extension AppTests.Bleet {
 
                 }
             }
+        }
+
+        /// The relayout after a reflow replaces every row. What the reader opened survives it: a tool
+        /// disclosure stays expanded, and while a row presents a sheet or popover (an edit with an unsaved
+        /// draft, response details) the relayout waits for it to close instead of dismissing it.
+        @Test @MainActor func reflowKeepsWhatTheReaderOpened() async throws {
+            let model = AppModel.shared
+            let originalFont = model.chatFontSize
+            defer { model.chatFontSize = originalFont }
+            let session = ChatSession(effort: .trot, modelID: nil)
+            session.messagesLoaded = true
+            session.messages = (0..<12).map { index in
+                let message = ChatMessage(role: index.isMultiple(of: 2) ? .user : .assistant)
+                message.text = "Reflow row \(index). A short paragraph of transcript text."
+                message.complete = true
+                return message
+            }
+            let event = ToolEventSnapshot(
+                id: "reflow-disclosure-\(UUID().uuidString)", server: "GOATed", tool: "pen_read_file",
+                arguments: #"{"path":"App.swift"}"#, result: "Read successfully")
+            session.messages[11].toolEvents = [event]
+            // The reader expanded this tool call earlier: a recreated card keeps their choice.
+            TranscriptDisclosureStore.shared.set(
+                true, for: TranscriptDisclosureStore.key(for: event, in: session.messages[11].id))
+            let window = NSWindow(
+                contentRect: NSRect(x: 80, y: 80, width: 760, height: 520), styleMask: [.titled, .resizable],
+                backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            let navigation = TranscriptViewport()
+            // SwiftUI builds its accessibility tree for an assistive client.
+            let enhancedUI = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+            let previousEnhancedUI = NSApp.accessibilityAttributeValue(enhancedUI)
+            NSApp.accessibilitySetValue(true, forAttribute: enhancedUI)
+            let host = NSHostingView(
+                rootView: ChatTranscriptView(session: session, viewport: navigation).environment(model))
+            host.sizingOptions = []
+            installReflowHost(host, in: window)
+            window.orderFront(nil)
+            defer {
+                window.contentView = nil
+                window.close()
+                NSApp.accessibilitySetValue(previousEnhancedUI ?? false, forAttribute: enhancedUI)
+            }
+            try await Task.sleep(for: .milliseconds(500))
+
+            /// Whether any accessibility element's label or value contains `text`. SwiftUI's elements answer
+            /// the NSAccessibility getters, read here by key only when the element implements them.
+            func read(_ object: NSObject, _ key: String) -> Any? {
+                object.responds(to: NSSelectorFromString(key)) ? object.value(forKey: key) : nil
+            }
+            func shows(_ text: String) -> Bool {
+                var visited = Set<ObjectIdentifier>()
+                func find(_ object: Any) -> Bool {
+                    guard let object = object as? NSObject, visited.insert(ObjectIdentifier(object)).inserted
+                    else { return false }
+                    for key in ["accessibilityLabel", "accessibilityTitle", "accessibilityValue"] {
+                        if let string = read(object, key) as? String, string.contains(text) { return true }
+                    }
+                    let children = read(object, "accessibilityChildren") as? [Any] ?? []
+                    return children.contains(where: find)
+                }
+                return find(host)
+            }
+            /// Waits for the lazy stack to take a new identity, within 3 s, and for its recreated rows to
+            /// report; a count that does not move is left to the caller's assertion.
+            func awaitRelayout(past count: Int) async throws {
+                for _ in 0..<150 where navigation.relayouts == count {
+                    try await Task.sleep(for: .milliseconds(20))
+                    host.layoutSubtreeIfNeeded()
+                }
+                try await Task.sleep(for: .milliseconds(200))
+                host.layoutSubtreeIfNeeded()
+            }
+            func relayout(toFont font: CGFloat) async throws {
+                let before = navigation.relayouts
+                model.chatFontSize = font
+                try await awaitRelayout(past: before)
+            }
+
+            // The tool's result shows only while its disclosure is expanded, which the reader chose.
+            #expect(shows("App.swift"), "The tool call is shown")
+            #expect(shows("Read successfully"), "The reader's expanded disclosure shows its result")
+
+            let before = navigation.relayouts
+            try await relayout(toFont: 22)
+            #expect(navigation.relayouts > before, "The font change must replace the rows")
+            #expect(shows("Read successfully"), "The reader's open disclosure collapsed in the relayout")
+
+            // A row presents a sheet: the relayout waits, then runs once it closes. The wait here is
+            // inherent: it checks that nothing happens past the reflow's 150 ms settling.
+            navigation.holdLayout()
+            let held = navigation.relayouts
+            model.chatFontSize = 15
+            try await Task.sleep(for: .milliseconds(600))
+            host.layoutSubtreeIfNeeded()
+            #expect(navigation.relayouts == held, "Rows were replaced under an open presentation")
+            navigation.releaseLayout()
+            try await awaitRelayout(past: held)
+            #expect(navigation.relayouts > held, "The deferred relayout must run once the presentation closes")
+            #expect(shows("Read successfully"))
+        }
+
+        /// A row's sheet or popover holds the relayout exactly while it is presented, and a row that goes
+        /// away releases its hold.
+        @Test @MainActor func presentationsHoldTheTranscriptLayoutWhileOpen() async throws {
+            let presented = PresentedRow()
+            let navigation = TranscriptViewport()
+            let host = NSHostingView(
+                rootView: PresentingRow(presented: presented).environment(\.transcriptViewport, navigation))
+            host.frame = NSRect(x: 0, y: 0, width: 200, height: 60)
+            func settle() async throws {
+                host.layoutSubtreeIfNeeded()
+                try await Task.sleep(for: .milliseconds(50))
+                host.layoutSubtreeIfNeeded()
+            }
+            try await settle()
+            #expect(navigation.layoutHolds == 0)
+            presented.isPresented = true
+            try await settle()
+            #expect(navigation.layoutHolds == 1)
+            presented.isPresented = false
+            try await settle()
+            #expect(navigation.layoutHolds == 0)
+            presented.isPresented = true
+            try await settle()
+            presented.shown = false
+            try await settle()
+            #expect(navigation.layoutHolds == 0, "A row that went away must release its hold")
         }
 
         @Test @MainActor func directHostingRootKeepsTheProductionMinimumDuringReflow() async throws {
@@ -285,7 +439,8 @@ extension AppTests.Bleet {
     }
 }
 
-final class TranscriptComparisonPreparationTests: XCTestCase {
+/// The Delivery 3 qualification fixture stops cleanly, so a cancelled run never completes a partial stream.
+final class Delivery3QualificationFixtureTests: XCTestCase {
     @MainActor func testQualificationCancellationDuringStartupKeepsTheOriginalFixture() async {
         let fixture = Delivery3Qualification()
         let original = fixture.session.messages.map(\.id)
@@ -325,194 +480,4 @@ final class TranscriptComparisonPreparationTests: XCTestCase {
             XCTAssertEqual(reasoning ? reply.thinking : reply.text, text)
         }
     }
-
-    @MainActor func testSwiftUIOverscanPreparesColdNeighboursBeforeTheyAppear() async throws {
-        let fixture = TranscriptComparisonFixture()
-        defer { fixture.stopPreparation() }
-        try await fixture.seed(rounds: 3)
-        fixture.documents.removeAll()
-        await fixture.markdown.removeAll()
-        let index = try XCTUnwrap(fixture.rows.firstIndex { $0.id == "header-1" })
-        let visible = fixture.rows[index]
-        fixture.updateSwiftUIVisibility([visible.id], viewportHeight: 780)
-        await fixture.prepareRequestedRows()
-        let neighbour = try XCTUnwrap(
-            fixture.rows[(index + 1)...].first {
-                if case .markdown = $0.content { return true }
-                return false
-            })
-        XCTAssertFalse(fixture.visible.contains(neighbour.id), "The neighbour has not appeared")
-        let userRow = try XCTUnwrap(
-            fixture.rows[(index + 1)...].first {
-                if case .message = $0.content { return true }
-                return false
-            })
-        guard case .message(let user) = userRow.content else { return XCTFail("Expected user row") }
-        XCTAssertFalse(fixture.visible.contains(userRow.id))
-        XCTAssertNotNil(MarkdownContentCache.shared.peek(id: user.id, source: user.text))
-        XCTAssertNotNil(fixture.preparedSegment(for: neighbour), "Cold upcoming content is prepared in advance")
-        let identity = fixture.preparedSegment(for: neighbour)?.preparationID
-        fixture.updateSwiftUIVisibility([neighbour.id], viewportHeight: 780)
-        await fixture.prepareRequestedRows()
-        XCTAssertEqual(fixture.preparedSegment(for: neighbour)?.preparationID, identity)
-        fixture.updateSwiftUIVisibility([], viewportHeight: 780)
-        await fixture.prepareRequestedRows()
-        if case .markdown(let message, _, _) = neighbour.content {
-            XCTAssertNil(fixture.preparation(for: message.id).document)
-        }
-    }
-    @MainActor func testComparisonPreparesNeighbouringRowsTogetherAndReusesScrollBack() async throws {
-        let fixture = TranscriptComparisonFixture()
-        defer { fixture.stopPreparation() }
-        try await fixture.seed(rounds: 1)
-        let neighbours = fixture.rows.filter {
-            if case .markdown = $0.content { return true }
-            return false
-        }
-        XCTAssertGreaterThanOrEqual(neighbours.count, 2)
-        let first = try XCTUnwrap(neighbours.first)
-        let second = neighbours[1]
-        fixture.documents.removeAll()
-        await fixture.markdown.removeAll()
-        fixture.visible = [first.id, second.id]
-        await fixture.prepareRequestedRows()
-        let firstID = try XCTUnwrap(fixture.preparedSegment(for: first)?.preparationID)
-        let secondID = try XCTUnwrap(fixture.preparedSegment(for: second)?.preparationID)
-        let count = await fixture.markdown.snapshot().parseCount
-        // Recreating either row does not issue a narrower request or discard its neighbour.
-        fixture.visible = [second.id]
-        await fixture.prepareRequestedRows()
-        fixture.visible = []
-        await fixture.prepareRequestedRows()
-        fixture.visible = [first.id, second.id]
-        XCTAssertEqual(fixture.preparedSegment(for: first)?.preparationID, firstID)
-        XCTAssertEqual(fixture.preparedSegment(for: second)?.preparationID, secondID)
-        await fixture.prepareRequestedRows()
-        let after = await fixture.markdown.snapshot().parseCount
-        XCTAssertEqual(after, count)
-    }
-
-    @MainActor func testUserPreparationDiscardsAReplacedMessageAfterAwaiting() async throws {
-        let fixture = TranscriptComparisonFixture()
-        defer { fixture.stopPreparation() }
-        try await fixture.seed(rounds: 1)
-        let row = try XCTUnwrap(
-            fixture.rows.first {
-                if case .message = $0.content { return true }
-                return false
-            })
-        guard case .message(let message) = row.content else { return XCTFail("Expected user row") }
-        fixture.visible = [row.id]
-        let originalSource = message.text
-        XCTAssertNil(MarkdownContentCache.shared.peek(id: message.id, source: originalSource))
-        await fixture.prepareRequestedRows { _, source in
-            await Task.yield()
-            let replacement = ChatMessage(role: message.role, id: message.id)
-            replacement.text = "Replaced while preparation awaited"
-            row.content = .message(replacement)
-            return .parsed(PreparedMarkdownContent(value: MarkdownContent(source)))
-        }
-        XCTAssertNil(MarkdownContentCache.shared.peek(id: message.id, source: originalSource))
-    }
-
-    @MainActor func testUserPreparationCancellationStopsBeforeTheNextRow() async throws {
-        let fixture = TranscriptComparisonFixture()
-        defer { fixture.stopPreparation() }
-        try await fixture.seed(rounds: 3)
-        let users = fixture.rows.filter {
-            if case .message = $0.content { return true }
-            return false
-        }
-        XCTAssertEqual(users.count, 3)
-        fixture.visible = Set(users.map(\.id))
-        var calls = 0
-        let task = Task { @MainActor in
-            await fixture.prepareRequestedRows { _, source in
-                calls += 1
-                await Task.yield()
-                withUnsafeCurrentTask { $0?.cancel() }
-                return .parsed(PreparedMarkdownContent(value: MarkdownContent(source)))
-            }
-        }
-        await task.value
-        XCTAssertEqual(calls, 1, "Cancelled preparation must not await more rows")
-        for row in users {
-            guard case .message(let message) = row.content else { continue }
-            XCTAssertNil(MarkdownContentCache.shared.peek(id: message.id, source: message.text))
-        }
-    }
-
-    @MainActor func testFrameSamplingUsesTheCurrentClipOrigin() throws {
-        let fixture = TranscriptComparisonFixture()
-        defer { fixture.stopPreparation() }
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 800, height: 600), styleMask: [], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
-        let document = ComparisonFrameSamplingDocument(frame: NSRect(x: 0, y: 0, width: 800, height: 2_000))
-        let row = NSView(frame: NSRect(x: 0, y: 600, width: 800, height: 200))
-        document.addSubview(row)
-        scroll.documentView = document
-        window.contentView = scroll
-        defer {
-            window.contentView = nil
-            window.close()
-        }
-        fixture.registerFrameView(row, id: "row")
-        fixture.following = false
-        fixture.recordReaderGeometry(width: scroll.contentView.bounds.width, font: AppModel.shared.chatFontSize)
-        fixture.observeSwiftUIReader()
-        fixture.sampleFrames()
-        let before = try XCTUnwrap(fixture.frames["row"])
-        scroll.contentView.scroll(to: NSPoint(x: 0, y: 60))
-        fixture.sampleFrames()
-        let after = try XCTUnwrap(fixture.frames["row"])
-        XCTAssertEqual(after.minY - before.minY, -60, accuracy: 0.01)
-        XCTAssertEqual(fixture.capturedReader?.id, "row")
-        XCTAssertEqual(try XCTUnwrap(fixture.capturedReader?.offset), after.minY, accuracy: 0.01)
-        XCTAssertEqual(try XCTUnwrap(fixture.readerRestoreOffset(id: "row", offset: before.minY)), 0, accuracy: 0.01)
-        row.frame.origin.y += 100
-        XCTAssertEqual(try XCTUnwrap(fixture.readerRestoreOffset(id: "row", offset: after.minY)), 160, accuracy: 0.01)
-        let font = AppModel.shared.chatFontSize
-        defer { AppModel.shared.chatFontSize = font }
-        AppModel.shared.chatFontSize = font + 1
-        scroll.contentView.scroll(to: NSPoint(x: 0, y: 100))
-        XCTAssertEqual(
-            try XCTUnwrap(fixture.capturedReader?.offset), after.minY, accuracy: 0.01,
-            "A reflow notification must not replace the pre-reflow reader anchor")
-        fixture.unregisterFrameView(row, id: "row")
-        fixture.sampleFrames()
-        XCTAssertNil(fixture.frames["row"])
-    }
-
-    @MainActor func testHistoricalPreparationDoesNotObserveLivePublications() async throws {
-        let fixture = TranscriptComparisonFixture()
-        defer { fixture.stopPreparation() }
-        try await fixture.seed(rounds: 1)
-        let row = try XCTUnwrap(
-            fixture.rows.first {
-                if case .markdown = $0.content { return true }
-                return false
-            })
-        let invalidated = XCTestExpectation(description: "Historical document must not be invalidated")
-        invalidated.isInverted = true
-        withObservationTracking {
-            _ = fixture.preparedSegment(for: row)
-        } onChange: {
-            invalidated.fulfill()
-        }
-        try await fixture.append("A live **answer**.", reasoning: false)
-        XCTAssertNotNil(fixture.preparation(for: fixture.active.id).document)
-        await fulfillment(of: [invalidated], timeout: 0.05)
-        fixture.following = false
-        try await fixture.append(" Offscreen growth.", reasoning: false)
-        XCTAssertNil(
-            fixture.preparation(for: fixture.active.id).document,
-            "An offscreen unfollowed message must release its working document")
-    }
-
-}
-
-@MainActor private final class ComparisonFrameSamplingDocument: NSView {
-    override var isFlipped: Bool { true }
 }

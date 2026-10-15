@@ -36,6 +36,26 @@ import Testing
     return view.subviews.lazy.compactMap(findComposerEditor).first
 }
 
+/// Returns true once the main actor has resumed on time for `quiet` (layout and other work on it done),
+/// or false after `limit` whatever it is doing, so a measurement taken on a busy runner says so.
+@MainActor @discardableResult private func waitForIdleMainQueue(quiet: Duration, within limit: Duration) async throws
+    -> Bool
+{
+    let clock = ContinuousClock()
+    let start = clock.now
+    var quietSince = start
+    while start.duration(to: clock.now) < limit {
+        let before = clock.now
+        try await Task.sleep(for: .milliseconds(20))
+        if before.duration(to: clock.now) > .milliseconds(60) {
+            quietSince = clock.now
+        } else if quietSince.duration(to: clock.now) >= quiet {
+            return true
+        }
+    }
+    return false
+}
+
 @MainActor private final class LayoutCountingHost<Content: View>: NSHostingView<Content> {
     var layoutCount = 0
     override func layout() {
@@ -214,13 +234,20 @@ extension AppTests.Bleet {
             // This AppKit-owned fixture tests chat layout. Window toolbars belong to the app's SwiftUI scene.
             controller.sceneBridgingOptions = [.title]
             let host = controller.view
+            // A content view controller resizes the window to its view, which otherwise starts at the chat's
+            // minimum: a composer a few words wide and a transcript a few points tall.
+            host.setFrameSize(NSSize(width: 1_000, height: 700))
             window.contentViewController = controller
+            window.setContentSize(NSSize(width: 1_000, height: 700))
             window.orderFront(nil)
             defer {
                 window.contentViewController = nil
                 window.close()
             }
+            // Opening lays the long replies out, at the window's width and then again where following
+            // places the end. Typing is measured in the chat once it has opened, as a reader types.
             try await Task.sleep(for: .seconds(1))
+            let idle = try await waitForIdleMainQueue(quiet: .milliseconds(400), within: .seconds(5))
             let editor = try #require(findComposerEditor(host))
             window.makeFirstResponder(editor)
             let setupDuration = setupStart.duration(to: clock.now)
@@ -245,10 +272,25 @@ extension AppTests.Bleet {
             print(
                 "Chat responsiveness: setup=\(setupDuration), insertion=\(worstInsertion), "
                     + "taskResume=\(worstResume), inputEvent=\(worstPause), character=\(slowestCharacter), "
-                    + "mainQueue=\(mainQueueProbe.worstDelay)")
+                    + "mainQueue=\(mainQueueProbe.worstDelay), idleBeforeTyping=\(idle)")
             #expect(editor.string == "A responsive draft alongside rich code lists")
-            #expect(worstPause < .milliseconds(250), "Visible chat event-loop delay: \(worstPause)")
-            #expect(mainQueueProbe.worstDelay < .milliseconds(250), "Main-queue delay between inputs")
+            // A window nothing can see (a locked or headless display) is never drawn: AppKit defers its
+            // layout until input arrives, so the transcript's first layout lands on the keystrokes and its
+            // lazy rows mount and unmount with each one. That measures the display, not the chat.
+            let visible = window.occlusionState.contains(.visible)
+            print("Chat responsiveness window visible: \(visible)")
+            withKnownIssue(
+                "The test window is occluded, so input latency cannot be measured", isIntermittent: true
+            ) {
+                #expect(
+                    worstPause < .milliseconds(250),
+                    "Visible chat event-loop delay: \(worstPause) (main queue idle before typing: \(idle))")
+                #expect(
+                    mainQueueProbe.worstDelay < .milliseconds(250),
+                    "Main-queue delay between inputs (main queue idle before typing: \(idle))")
+            } when: {
+                !visible
+            }
             window.setContentSize(NSSize(width: 720, height: 700))
             try await Task.sleep(for: .milliseconds(300))
             #expect(editor.string == "A responsive draft alongside rich code lists")
