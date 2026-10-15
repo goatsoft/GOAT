@@ -105,6 +105,8 @@ import Observation
             pending = true
             // The helper verifies GOAT as its parent before it waits; quitting earlier would orphan it.
             guard await helperReady(in: staging, process: process) else {
+                // A cancel while waiting, or a helper that stopped, has already said so.
+                guard pending else { return }
                 cancel()
                 throw UninstallError.unsafe("The cleanup helper did not start. GOAT and its data were kept.")
             }
