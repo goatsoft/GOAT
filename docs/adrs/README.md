@@ -107,7 +107,7 @@ Older records retain the package and type names used when accepted. [ADR-0054](0
 | [0095](0095-parallel-verification-and-preview-diagnostics.md) | Parallel verification and preview diagnostics | Accepted, amended |
 
 | [0098](0098-shared-oklab-colour-picker.md) | Shared OKLab colour picker | Accepted · refines 0022 |
-| [0099](0099-virtualized-transcript-list.md) | Virtualized transcript list | Accepted · completed by 0104 in 0.1.4 · would supersede 0091 windowing and 0094 §4; retains 0097 ownership; refines 0002 and 0028 |
+| [0099](0099-virtualized-transcript-list.md) | Virtualized transcript list | Accepted · completed by 0104 in 0.1.4 · supersedes 0091 windowing and 0094 §4; retains 0097 ownership; refines 0002 and 0028 |
 | [0100](0100-synchronous-markdown-block-spacing.md) | Synchronous Markdown block spacing | Proposed |
 
 | [0101](0101-bounded-inline-artifacts.md) | Bounded inline artifact lifetimes and literal math | Proposed · refines 0010, 0015 and 0091 |

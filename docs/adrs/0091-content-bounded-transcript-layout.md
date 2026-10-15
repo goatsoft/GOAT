@@ -1,6 +1,6 @@
 # ADR-0091: Content-bounded transcript layout
 
-Status: Accepted · 2026-09-20 · Amended 2026-09-22 · Segmented rendering amendment implemented
+Status: Accepted · 2026-09-20 · Amended 2026-09-22 · Segmented rendering amendment implemented · Windowing superseded by [ADR-0104](0104-single-stack-transcript.md) in 0.1.4
 
 Refines [ADR-0056](0056-bounded-rendering-and-responsive-io.md) and
 [ADR-0074](0074-grouped-transcript-tool-activity.md). Qualification is tracked in

@@ -1,8 +1,9 @@
 # Transcript container comparison
 
-> Historical. The comparison harness was removed on 2026-10-15 when 0.1.4 shipped the lazy transcript
-> ([ADR-0099 shipping amendment](../adrs/0099-virtualized-transcript-list.md#shipping-amendment-2026-10-15)).
-> The measurements below remain as the evidence for that decision.
+> Historical. The comparison harness was removed on 2026-10-15 when 0.1.4 shipped the single-stack
+> transcript ([ADR-0104](../adrs/0104-single-stack-transcript.md), completing
+> [ADR-0099](../adrs/0099-virtualized-transcript-list.md)). The measurements below remain as the
+> evidence for that decision.
 
 ## Supported-OS follow-up result (2026-10-13)
 

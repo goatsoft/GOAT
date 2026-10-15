@@ -15,9 +15,9 @@ open issues. Closing the original audit records this transfer; Deliveries 3–6 
 
 The dated evidence below remains historical. References there to gates being open in #60 now
 resolve through this ownership table. No unchecked acceptance is certified by the transfer.
-The maintenance release retains its separate [release checklist](../RELEASE-CHECKLIST.md);
-ADR-0099 remains Proposed. Since 0.1.4 the shipping transcript is one lazy stack of items (ADR-0104);
-see [Single-stack Delivery 3](#single-stack-delivery-3-2026-10-15) below.
+The maintenance release retains its separate [release checklist](../RELEASE-CHECKLIST.md).
+ADR-0099 is accepted, completed by ADR-0104: since 0.1.4 the shipping transcript is one lazy stack of
+items; see [Single-stack Delivery 3](#single-stack-delivery-3-2026-10-15) below.
 
 ## Single-stack Delivery 3 (2026-10-15)
 
@@ -207,18 +207,21 @@ settings and background load with each local receipt. Retain raw profiles
 privately; public reports should contain synthetic findings only.
 
 The workload is an investigation aid, not complete acceptance. Also exercise
-composer typing, selection/copy, tool and reasoning disclosures, Earlier/Later
-navigation, keyboard, narrow widths, font changes and reader
+composer typing, selection/copy, tool and reasoning disclosures, history loading
+at both ends, keyboard, narrow widths, font changes and reader
 position. Use the existing transcript layout and reflow tests for regression
 coverage. Repeat runtime qualification on Tahoe 26 and Golden Gate 27. Passing
 tests or a faster scheduling proxy does not establish those interactive results.
 
 ## Presentation bounds
 
-The transcript admits at most 40 messages and approximately 16 KiB of source
-cost per window. At least one message is always admitted. Earlier/Later paging
-keeps every message reachable; a reader-owned window holds its range during
-incoming output. Latest or a new user turn restores following.
+Since 0.1.4 the transcript lays every loaded message out as items of one lazy
+stack (ADR-0104): only items near the viewport are laid out, so the layout cost
+is bounded by the viewport, not by the chat. An idle transcript holds a page
+cache of about 120 records (ADR-0102); stored history loads at either end as
+the reader approaches it, keeping their place, and a turn loads the chat's
+complete context. A reader who scrolls up owns the viewport during incoming
+output; the jump button or a new user turn restores following.
 
 Responses through 2 MiB render as rich Markdown segments split at valid block
 boundaries ([ADR-0091](../adrs/0091-content-bounded-transcript-layout.md)).
