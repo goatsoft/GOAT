@@ -19,9 +19,9 @@ struct DataManagementPreviewView: View {
             Divider()
             if uninstall.pending {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Waiting for GOAT to close").font(.headline)
+                    Text("GOAT is quitting to finish the uninstall").font(.headline)
                     Text(
-                        "Finish all work, then quit GOAT normally. Cleanup starts only after GOAT has closed. You can cancel before quitting. The request expires after one hour."
+                        "Cleanup starts as soon as GOAT has closed, then the recovery folder opens. If GOAT is still open, quit it or cancel the uninstall. The request expires after one hour."
                     )
                     .font(.callout)
                     if let recovery = uninstall.recovery {
@@ -69,9 +69,9 @@ struct DataManagementPreviewView: View {
             }
             Text(
                 reviewing
-                    ? "Removal starts after you finish work and quit GOAT. You can cancel before quitting."
+                    ? "Uninstall quits GOAT, then removes what you selected and opens the recovery folder."
                     : plan.action == .uninstall
-                        ? "Review what to remove. Automatic removal waits until you have finished your work and closed GOAT."
+                        ? "Review what to remove. Uninstall needs no running work or pending approvals, and quits GOAT to finish."
                         : "Reset the preferences listed below. Your data stays in place and GOAT stays open."
             )
             .font(.callout).foregroundStyle(.secondary)
