@@ -212,30 +212,27 @@ extension AppTests.Bleet {
                 guard object.responds(to: selector) else { return nil }
                 return object.perform(selector)?.takeUnretainedValue()
             }
-            func disclosure() -> NSObject? {
+            /// The first accessibility element, depth first, whose label or value satisfies `matches`.
+            func element(_ matches: @escaping (String) -> Bool) -> NSObject? {
                 var visited = Set<ObjectIdentifier>()
                 func find(_ object: Any) -> NSObject? {
                     guard let object = object as? NSObject, visited.insert(ObjectIdentifier(object)).inserted
                     else { return nil }
-                    let identifier = object.accessibilityAttributeValue(.identifier) as? String
-                    let label =
-                        object.accessibilityAttributeValue(.title) as? String
-                        ?? object.accessibilityAttributeValue(.description) as? String
-                        ?? value(object, "accessibilityLabel") as? String ?? ""
-                    let state = object.accessibilityAttributeValue(.value) as? String
-                    if identifier == "tool-event-" + toolID
-                        || (label.contains("App.swift") && (state == "Collapsed" || state == "Expanded"))
-                    {
-                        return object
-                    }
+                    let texts = [
+                        object.accessibilityAttributeValue(.title) as? String,
+                        object.accessibilityAttributeValue(.description) as? String,
+                        object.accessibilityAttributeValue(.value) as? String,
+                        value(object, "accessibilityLabel") as? String,
+                    ]
+                    if texts.contains(where: { $0.map(matches) ?? false }) { return object }
                     let children = value(object, "accessibilityChildren") as? [Any] ?? []
                     return children.lazy.compactMap(find).first
                 }
                 return find(host)
             }
-            func state() -> String? {
-                disclosure().flatMap { $0.accessibilityAttributeValue(.value) as? String }
-            }
+            // The tool's button reads its action and file; its result shows only while it is expanded.
+            func disclosure() -> NSObject? { element { $0.contains("App.swift") } }
+            func state() -> String { element { $0.contains("Read successfully") } == nil ? "Collapsed" : "Expanded" }
             func relayout(toFont font: CGFloat) async throws {
                 model.chatFontSize = font
                 try await Task.sleep(for: .milliseconds(600))

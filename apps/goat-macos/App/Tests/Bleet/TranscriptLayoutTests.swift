@@ -1171,11 +1171,12 @@ extension AppTests.Bleet {
 
             // The reader moves between the two steps: their position stands. The transcript attributes a
             // move without an input event before the second step; here the reader's move says so.
-            var readerMoved = false
-            executor.layoutContent { !readerMoved }
+            final class Moved { var value = false }
+            let readerMoved = Moved()
+            executor.layoutContent { !readerMoved.value }
             scroll.contentView.scroll(to: NSPoint(x: 0, y: 1_600))
             scroll.reflectScrolledClipView(scroll.contentView)
-            readerMoved = true
+            readerMoved.value = true
             try await Task.sleep(for: .milliseconds(60))
             #expect(offset == 1_600, "The nudge's return overrode the reader's move")
 
