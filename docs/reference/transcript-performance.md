@@ -16,8 +16,39 @@ open issues. Closing the original audit records this transfer; Deliveries 3–6 
 The dated evidence below remains historical. References there to gates being open in #60 now
 resolve through this ownership table. No unchecked acceptance is certified by the transfer.
 The maintenance release retains its separate [release checklist](../RELEASE-CHECKLIST.md);
-ADR-0099 remains Proposed. Since 0.1.4 the shipping transcript's outer stack is lazy (its shipping
-amendment): on the macOS 26 Mac Studio, Delivery 3 reasoning takes 19.4 s and 4.1 s CPU (main 153.6 s).
+ADR-0099 remains Proposed. Since 0.1.4 the shipping transcript is one lazy stack of items (ADR-0104);
+see [Single-stack Delivery 3](#single-stack-delivery-3-2026-10-15) below.
+
+## Single-stack Delivery 3 (2026-10-15)
+
+Mac Studio, macOS 26.6, Release, the opt-in `testInteractiveDelivery3Qualification` with autorun:
+
+| Phase (2 MiB) | Windowed lazy stack (#95) | Single stack, first cut | Single stack, shipped |
+| --- | --- | --- | --- |
+| Answer | 19.1 s wall, 5.5 s CPU, p95 10 ms | 24.9 s, 22.2 s, 115 ms | 22.4 to 23.9 s, 18.3 to 20.7 s, 85 to 113 ms |
+| Reasoning | 19.3 s wall, 4.1 s CPU, p95 10 ms | 47.3 s, 39.6 s, 861 ms | 24.0 to 24.3 s, 13.2 to 13.5 s, 170 to 179 ms |
+
+Shipped figures are the range over two runs of the final source.
+
+The windowed transcript laid out only a reply's latest two segments while it streamed, so most of
+each update's text was never shown. The single stack shows a full viewport of the reply, and this
+workload streams 16 KiB every 120 ms with a code fence every 100 bytes: every update scrolls to a
+screen of text, dense with code blocks, that was not there before. Text costs roughly the same to
+lay out as to draw, per byte, so the time follows the bytes newly laid out on each update, not the
+reply's length. Measured causes and fixes:
+
+- Dense reasoning past the fence parser's block bound is all prose, and 6 KB pieces made each newly
+  shown piece one expensive Text. Reasoning pieces are 2 KB, and reasoning items pack about 2 KB.
+- An answer segment coming into view prepared the newest text, adding items that came into view and
+  prepared again, so following laid out as fast as text could be prepared. It now parses at the text
+  already prepared, and the sampler alone brings in new text.
+- While output arrives faster than anyone reads (over 4 KB per sample), the transcript samples every
+  400 ms instead of 120 ms.
+- Segment items are built from values, so settled segments are not evaluated again on each update.
+
+Ruled out by measurement: the chat stack's ideal-size pass over the transcript, the reading column's
+placement height, animations, and per-item body evaluation (a few thousand over the run). Ordinary
+model output arrives at well under 1 KB per second, two orders of magnitude below this workload.
 
 ## Workload and measurements
 
@@ -204,10 +235,11 @@ preparation keeps the segments shown and three on each side parsed and releases
 the rest, so retained parses are bounded by what the reader sees, not by the reply.
 
 Open reasoning is split into items the same way through 2 MiB: its fence-aware
-blocks are split at line boundaries into segments of at most 6 KiB, each an item
-measured under the reasoning's own key. Reasoning is folded or full: there is no
+blocks are split at line boundaries into segments of at most 2 KiB, packed into items of
+about 2 KiB measured under the reasoning's own key. Reasoning is folded or full: there is no
 recent excerpt. It is
-prepared off the main actor from a 120 ms sample of its text revision. While the
+prepared off the main actor from a 120 ms sample of its text revision (400 ms while it
+arrives at more than 4 KiB per sample). While the
 revision only appends, the held segmentation lexes each appended character once,
 including within one long unfinished line, and a refresh copies at most one open
 piece and one chunk of segments, so total work grows linearly with the reasoning

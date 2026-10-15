@@ -162,9 +162,17 @@ struct TranscriptRevealRequest: Equatable, Sendable {
     /// A reader gesture ended. Only a gesture ending at the conversation's true bottom hands the
     /// viewport back to following; geometry alone never does.
     func readerSettled(atTrueBottom: Bool, anchor: Anchor?) {
+        // Where the gesture ended is the reader's place: a restore still pending from before it (a relayout
+        // putting the anchor back) must not take the viewport away again.
+        if let request, request.target != .bottom {
+            if Self.traces { note("settled over \(request.generation)") }
+            self.request = nil
+        }
         if atTrueBottom {
             autoFollow = true
             self.anchor = nil
+            // Settle on the items' real end, which a stale content estimate can leave below the viewport.
+            if request == nil { issue(.bottom) }
         } else if let anchor {
             self.anchor = anchor
         }
@@ -489,6 +497,12 @@ struct ChatTranscriptView: View {
                         }
                     }
                 }
+                // A move attributed to the reader after the rows report ends following with no further
+                // geometry change, so the jump button is updated here as well as on geometry.
+                .onChange(of: viewport.autoFollow) {
+                    let showsLatest = viewport.autoFollow || reader.isAtBottom
+                    if viewport.isScrolledToBottom != showsLatest { viewport.isScrolledToBottom = showsLatest }
+                }
                 .onChange(of: viewport.request) {
                     if viewport.request == nil {
                         placeInitiallyIfReady()
@@ -653,19 +667,11 @@ struct ChatTranscriptView: View {
                     .padding(.vertical, Caprine.Activity.inset)
                     .accessibilityAddTraits(.isHeader)
             }
-            TranscriptMessageRow(
-                message: message, session: session, part: item.part,
-                isLast: message.id == context.lastMessageID,
-                compactActivity: item.row.isContinuation,
-                joinsPreviousTools: item.row.joinsPreviousTools,
-                joinsNextTools: item.row.joinsNextTools,
-                activeToolID: message.id == context.activeAssistantID ? context.activeToolID : nil,
-                canDeleteCompaction: CompactionDeletion.canRestore(message, in: session.messages),
-                canEdit: message.role == .user && !session.isStreaming,
-                keyboardFocus: $focusedMessageID,
-                isKeyboardFocused: focusedMessageID == message.id
-            )
-            .equatable()
+            if let segment = segmentItem(item) {
+                segment.equatable()
+            } else {
+                messageRow(item, context: context)
+            }
         }
         // Align the item boundary without traversing completed Markdown.
         .alignmentGuide(.leading) { _ in 0 }
@@ -680,6 +686,44 @@ struct ChatTranscriptView: View {
             }
         )
         .id(item.id)
+    }
+
+    /// A reply's reasoning or answer segment that does not carry its avatar, built from values so a
+    /// streamed update leaves settled segments alone; nil for every other item.
+    private func segmentItem(_ item: TranscriptItem) -> ReplySegmentItem? {
+        let message = item.message
+        guard message.role == .assistant else { return nil }
+        let hasReasoning = TranscriptText.hasContent(message.thinking)
+        switch item.part {
+        case .reasoning(let index):
+            let last = index == TranscriptTexts.shared.reasoning(for: message).pieceCount - 1
+            return ReplySegmentItem(
+                message: message, part: item.part, topPadding: index == 0 ? Caprine.Activity.spacing : 0,
+                bottomPadding: last && TranscriptText.hasContent(message.text) ? Caprine.Activity.reasoningGap : 0)
+        case .answer(let index) where index > 0 || hasReasoning:
+            return ReplySegmentItem(
+                message: message, part: item.part,
+                topPadding: index == 0 && hasReasoning ? Caprine.Activity.spacing : 0, bottomPadding: 0)
+        default:
+            return nil
+        }
+    }
+
+    private func messageRow(_ item: TranscriptItem, context: ItemContext) -> some View {
+        let message = item.message
+        return TranscriptMessageRow(
+            message: message, session: session, part: item.part,
+            isLast: message.id == context.lastMessageID,
+            compactActivity: item.row.isContinuation,
+            joinsPreviousTools: item.row.joinsPreviousTools,
+            joinsNextTools: item.row.joinsNextTools,
+            activeToolID: message.id == context.activeAssistantID ? context.activeToolID : nil,
+            canDeleteCompaction: CompactionDeletion.canRestore(message, in: session.messages),
+            canEdit: message.role == .user && !session.isStreaming,
+            keyboardFocus: $focusedMessageID,
+            isKeyboardFocused: focusedMessageID == message.id
+        )
+        .equatable()
     }
 
     /// Every loaded message, as the items of the lazy stack (ADR-0104).
@@ -1221,6 +1265,13 @@ struct ChatTranscriptView: View {
         // Following reaches the end through the items' own estimate instead (`estimatedContentEnd`).
         guard viewport.readerOwnsViewport else { return }
         let items = transcriptItems
+        /// The item as far through the items as the viewport is through the content.
+        func itemAtReader() -> (id: TranscriptItem.ID, edge: UnitPoint)? {
+            guard metrics.contentHeight > 0 else { return items.first.map { ($0.id, .top) } }
+            let fraction = min(1, max(0, top / metrics.contentHeight))
+            let index = min(items.count - 1, Int(fraction * CGFloat(items.count)))
+            return items.indices.contains(index) ? (items[index].id, .top) : nil
+        }
         let target: (id: TranscriptItem.ID, edge: UnitPoint)?
         if atReader {
             let reach = metrics.layout.container.height
@@ -1241,12 +1292,8 @@ struct ChatTranscriptView: View {
             }
             if metrics.bottomGap <= reach {
                 target = items.last.map { ($0.id, .bottom) }
-            } else if metrics.contentHeight <= 0 {
-                target = items.first.map { ($0.id, .top) }
             } else {
-                let fraction = min(1, max(0, top / metrics.contentHeight))
-                let index = min(items.count - 1, Int(fraction * CGFloat(items.count)))
-                target = items.indices.contains(index) ? (items[index].id, .top) : nil
+                target = itemAtReader()
             }
         } else if let anchor = viewport.anchor,
             let item = items.first(where: {
@@ -1255,7 +1302,8 @@ struct ChatTranscriptView: View {
         {
             target = (item.id, .top)
         } else {
-            target = items.first.map { ($0.id, .top) }
+            // No anchor to return to: the item about where the reader is, never the top.
+            target = itemAtReader()
         }
         // At most once per interval: right after it the lazy stack re-estimates the content, and a
         // second rescue before that settles would chase the estimate.
@@ -1429,7 +1477,8 @@ struct ChatTranscriptView: View {
                 guard revision.utf8Count <= ReplyWindow.richLimit,
                     PreparedMarkdownDocumentCache.shared.document(for: message.id, revision: revision) == nil,
                     let document = await MarkdownSegmentCache.shared.prepare(
-                        id: message.id, source: source, revision: revision, isComplete: true, window: .latest)
+                        id: message.id, source: source, revision: revision, isComplete: true,
+                        window: AnswerText.window(forUnshown: revision.utf8Count))
                 else { continue }
                 PreparedMarkdownDocumentCache.shared.store(document, for: message.id)
             default:
@@ -1821,6 +1870,8 @@ struct ProxyLanding: Equatable {
         return segmentFrames[anchor.messageID]?[segment]
     }
 
+    static let anchorSlack: CGFloat = 2
+
     /// The reader's position: the topmost item still visible, and how far into it the viewport starts.
     func measuredAnchor() -> TranscriptViewport.Anchor? {
         let top = metrics.offset
@@ -1829,7 +1880,9 @@ struct ProxyLanding: Equatable {
         let bottom = top + metrics.layout.container.height
         var topmost: (key: UUID, segment: Int?, frame: CGRect)?
         func consider(_ key: UUID, _ segment: Int?, _ frame: CGRect) {
-            guard frame.maxY > top, frame.minY < bottom, frame.height > 0 else { return }
+            // An item showing only its last point or two is above the reader: the lazy stack shifts the
+            // offset by about that much as rows resolve, which must not move the anchor to it.
+            guard frame.maxY > top + Self.anchorSlack, frame.minY < bottom, frame.height > 0 else { return }
             if topmost.map({ frame.minY < $0.frame.minY }) ?? true { topmost = (key, segment, frame) }
         }
         for (key, frame) in rowFrames { consider(key, nil, frame) }

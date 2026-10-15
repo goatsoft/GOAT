@@ -129,7 +129,10 @@ extension AppTests.Bleet {
                 if !viewport.isScrolledToBottom { break }
                 try await Task.sleep(for: .milliseconds(20))
             }
-            try #require(!viewport.isScrolledToBottom, "Scroll-to-bottom button must be visible")
+            try #require(
+                !viewport.isScrolledToBottom,
+                "Scroll-to-bottom button must be visible; offset \(scroll.contentView.bounds.minY) of \(document.bounds.height), following \(viewport.autoFollow), request \(String(describing: viewport.request)), \(viewport.diagnostics.suffix(16))"
+            )
             #expect(
                 document.bounds.maxY - document.visibleRect.maxY > 500,
                 "Should be scrolled away from bottom; \(viewport.diagnostics.suffix(16))")
@@ -206,7 +209,10 @@ extension AppTests.Bleet {
             window.isReleasedWhenClosed = false
             // A reader who opened the reasoning reads all of it.
             ReasoningDisclosureStore.shared.set(.init(isOpen: true), for: assistant.id)
-            let host = NSHostingView(rootView: transcript(session))
+            let viewport = TranscriptViewport()
+            let host = NSHostingView(
+                rootView: ChatTranscriptView(session: session, viewport: viewport).id(session.id)
+                    .environment(AppModel.shared).frame(width: 700, height: 450))
             window.contentView = host
             defer {
                 window.contentView = nil
@@ -260,7 +266,7 @@ extension AppTests.Bleet {
             }
             #expect(
                 settled,
-                "Latest text renders and the bottom is reachable; answer \(shownAnswer()?.suffix(12) ?? "none"), reasoning \(shownReasoning()?.suffix(12) ?? "none")"
+                "Latest text renders and the bottom is reachable; answer \(shownAnswer()?.suffix(12) ?? "none"), reasoning \(shownReasoning()?.suffix(12) ?? "none"), document \(String(describing: findTranscriptScroll(host)?.documentView?.bounds)), visible \(String(describing: findTranscriptScroll(host)?.documentView?.visibleRect)), following \(viewport.autoFollow), request \(String(describing: viewport.request)), \(viewport.diagnostics.suffix(16))"
             )
         }
 
@@ -533,6 +539,33 @@ extension AppTests.Bleet {
 
         /// ADR-0104: short messages are one item; a long reply is a head, its open reasoning's segments, its
         /// answer's segments and a tail, so the lazy stack lays out only the segments near the viewport.
+        /// Dense reasoning (a code block every few lines) is a thinking segment per block: its items pack
+        /// consecutive segments to about one segment's target, tile them in order, and keep earlier groups
+        /// as the reasoning grows.
+        @Test func reasoningItemsPackSegmentsByBytes() {
+            func segment(_ index: Int, _ bytes: Int) -> ThinkingSegment {
+                ThinkingSegment(
+                    index: index, text: String(repeating: "x", count: bytes), language: nil, continuesPrevious: false,
+                    bytes: bytes)
+            }
+            let segments = ChunkedList((0..<1_000).map { segment($0, 100) })
+            let groups = ReasoningText.groups(segments, targetBytes: 1_000)
+            #expect(groups.count == 100)
+            #expect(groups.first == 0..<10 && groups.last == 990..<1_000)
+            #expect(zip(groups, groups.dropFirst()).allSatisfy { $0.upperBound == $1.lowerBound })
+            let grown = ReasoningText.groups(
+                ChunkedList((0..<1_005).map { segment($0, 100) }), targetBytes: 1_000)
+            #expect(Array(grown.prefix(100)) == groups && grown.last == 1_000..<1_005)
+            #expect(ReasoningText.groups(ChunkedList([ThinkingSegment]()), targetBytes: 1_000).isEmpty)
+        }
+
+        /// A stream is prepared every 120 ms, and every 400 ms only while it outpaces reading.
+        @Test func veryFastStreamsAreSampledLessOften() {
+            #expect(StreamSampling.interval(grewBy: 0) == .milliseconds(120))
+            #expect(StreamSampling.interval(grewBy: StreamSampling.readableBytes) == .milliseconds(120))
+            #expect(StreamSampling.interval(grewBy: StreamSampling.readableBytes + 1) == .milliseconds(400))
+        }
+
         /// Only the reply still arriving carries the caret, and it goes once that reply completes or the
         /// session stops streaming: an earlier reply, the user's message and reasoning never carry it.
         @Test @MainActor func onlyTheArrivingReplyCarriesTheCaret() {
@@ -596,14 +629,16 @@ extension AppTests.Bleet {
                     .whole, .whole,
                 ])
 
-            // Open reasoning adds one item per reasoning segment.
+            // Open reasoning adds its items: thinking segments packed to about one segment's target each.
             ReasoningDisclosureStore.shared.set(.init(isOpen: true), for: long.id)
             defer { ReasoningDisclosureStore.shared.set(.init(isOpen: false), for: long.id) }
             _ = texts.layout(of: long)
             for _ in 0..<200 where (texts.reasoning(for: long).thinking?.segments.count ?? 0) < 2 {
                 try await Task.sleep(for: .milliseconds(20))
             }
-            let reasoning = try #require(texts.reasoning(for: long).thinking?.segments.count)
+            let thinking = try #require(texts.reasoning(for: long).thinking)
+            let reasoning = texts.reasoning(for: long).groups.count
+            #expect(reasoning > 1 && reasoning < thinking.segments.count, "Segments are packed into items")
             parts = TranscriptItem.items(for: rows, texts: texts).filter { $0.message === long }.map(\.part)
             #expect(
                 parts == [.head] + (0..<reasoning).map { TranscriptItem.Part.reasoning($0) }
@@ -733,7 +768,7 @@ extension AppTests.Bleet {
             ReasoningDisclosureStore.shared.set(.init(isOpen: true), for: reply.id)
             session.messages = [reply]
             try await scrollsToBothEnds(session, key: TranscriptSegmentOwner.reasoning(of: reply.id)) {
-                TranscriptTexts.shared.reasoning(for: reply).thinking?.segments.count ?? 0
+                TranscriptTexts.shared.reasoning(for: reply).groups.count
             }
         }
 
@@ -762,11 +797,23 @@ extension AppTests.Bleet {
                 try await settle(viewport, host: host)
             }
             #expect(scroll.contentView.bounds.minY <= 1, "The top is reachable; \(trace())")
+            // The lazy stack lays the top out over its next updates; it must not stay blank. The reader stays
+            // at the top, which records where they are once something is laid out there.
+            for _ in 0..<50 where viewport.anchor == nil {
+                try await Task.sleep(for: .milliseconds(20))
+                for y: CGFloat in [4, 0] {
+                    scroll.contentView.scroll(to: NSPoint(x: 0, y: y))
+                    scroll.reflectScrolledClipView(scroll.contentView)
+                    try await settle(viewport, host: host)
+                }
+            }
             let top = try #require(viewport.anchor, "\(trace())")
-            // The reply's first item: its head (with reasoning), else its first answer segment.
+            // The reply's first item: its head, its first reasoning segment (the head is a short row above it
+            // whose frame the stack may still be resolving) or, with no reasoning, its first answer segment.
             #expect(
-                top.messageID == session.messages[0].id && (top.segment ?? 0) == 0, "The reply's first item; \(trace())"
-            )
+                TranscriptSegmentOwner.key(top.messageID, belongsTo: session.messages[0].id)
+                    && top.messageID != TranscriptSegmentOwner.tail(of: session.messages[0].id)
+                    && (top.segment ?? 0) == 0, "The reply's first item; \(trace())")
 
             for _ in 0..<60 {
                 let content = try #require(scroll.documentView)
@@ -1057,7 +1104,9 @@ extension AppTests.Bleet {
                     abs(host.bounds.width - width) <= 1 && abs(host.bounds.height - 450) <= 1,
                     "Requested viewport \(width) × 450, actual \(host.bounds)")
                 #expect(viewport.readerOwnsViewport, "Reflow never hands the viewport to following")
-                #expect(viewport.anchor?.messageID == anchorID, "Width \(width), font \(font)")
+                #expect(
+                    viewport.anchor?.messageID == anchorID,
+                    "Width \(width), font \(font): \(viewport.diagnostics.suffix(20))")
                 #expect(viewport.request == nil && viewport.abandonedRequests == 0, "Width \(width), font \(font)")
             }
         }

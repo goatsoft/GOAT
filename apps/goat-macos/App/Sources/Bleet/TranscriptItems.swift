@@ -202,7 +202,10 @@ enum TranscriptMessageLayout: Equatable {
     /// An answer item came into view.
     func appeared(_ index: Int) {
         shown[index, default: 0] += 1
-        prepare()
+        // Parse what came into view at the text already prepared. Taking the newest text here would add
+        // items, which appear and prepare again: following a stream would then lay out as fast as text
+        // is prepared instead of at the sampling interval.
+        if segment(index)?.isParsed != true { prepare(atPreparedText: !message.complete) }
     }
 
     /// An answer item left the view.
@@ -211,20 +214,35 @@ enum TranscriptMessageLayout: Equatable {
         if count <= 1 { shown[index] = nil } else { shown[index] = count - 1 }
     }
 
-    /// The segments to parse: those shown and a margin around them, or the latest while none is shown.
+    /// The segments to parse: every segment of a settled reply up to `wholeBytes`, else those shown and a
+    /// margin around them, or the latest while none is shown.
     private var window: SegmentWindow {
+        // Prewarming parses the same, so the two never take turns parsing and releasing its segments.
+        if message.complete, message.textRevision.utf8Count <= Self.wholeBytes { return .all }
         guard let lower = shown.keys.min(), let upper = shown.keys.max() else { return .latest }
         return .segments(max(0, lower - Self.margin)..<(upper + Self.margin + 1))
     }
 
-    /// Samples the text while it streams, like the reply view it replaces: at most every 120 ms.
+    /// A settled reply this short is parsed whole before it is shown, so its segments appear formatted
+    /// together instead of each parsing as it comes into view.
+    nonisolated static let wholeBytes = 32 * 1_024
+
+    nonisolated static func window(forUnshown bytes: Int) -> SegmentWindow {
+        bytes <= wholeBytes ? .all : .latest
+    }
+
+    /// Samples the text while it streams (`StreamSampling`).
     private func start() {
         prepare()
         guard !message.complete else { return }
         sampling = Task { @MainActor [weak self] in
+            var sampled = self?.message.textRevision.utf8Count ?? 0
             while let self, !self.message.complete {
                 self.prepare()
-                try? await Task.sleep(for: .milliseconds(120))
+                let bytes = self.message.textRevision.utf8Count
+                let interval = StreamSampling.interval(grewBy: bytes - sampled)
+                sampled = bytes
+                try? await Task.sleep(for: interval)
                 if Task.isCancelled { return }
             }
             self?.prepare()
@@ -233,13 +251,18 @@ enum TranscriptMessageLayout: Equatable {
 
     /// Prepares the current text for the current window, once at a time; a request while one runs
     /// runs after it.
-    func prepare() {
+    func prepare(atPreparedText: Bool = false) {
         guard preparation == nil else {
             pending = true
             return
         }
-        let revision = message.textRevision
-        let isComplete = message.complete
+        let current = (source: message.text, revision: message.textRevision, isComplete: message.complete)
+        let held = document.flatMap { document in
+            document.revision.map { (source: document.source, revision: $0, isComplete: document.isComplete) }
+        }
+        let text = atPreparedText ? held ?? current : current
+        let revision = text.revision
+        let isComplete = text.isComplete
         if isPlain {
             if let parts, prepared?.revision == revision, prepared?.isComplete == isComplete, !parts.isEmpty { return }
             let source = message.text
@@ -266,7 +289,7 @@ enum TranscriptMessageLayout: Equatable {
         {
             return
         }
-        let source = message.text
+        let source = text.source
         let id = message.id
         preparation = Task { @MainActor [weak self] in
             let result = await MarkdownSegmentCache.shared.prepare(
@@ -302,8 +325,15 @@ enum TranscriptMessageLayout: Equatable {
 /// only while its disclosure is open.
 @MainActor @Observable final class ReasoningText {
     @ObservationIgnored let message: ChatMessage
-    private(set) var thinking: PreparedThinking?
+    private(set) var thinking: PreparedThinking? {
+        didSet { groups = thinking.map { Self.groups($0.segments) } ?? [] }
+    }
     private(set) var parts: [String]?
+    /// The thinking segments each reasoning item lays out. Reasoning breaks into a segment at every code
+    /// block, so dense reasoning has a segment every few lines: items pack consecutive segments to about
+    /// `groupBytes`, keeping the lazy stack's item count proportional to the reasoning's bytes while the
+    /// streaming item, laid out again on every update, stays small.
+    private(set) var groups: [Range<Int>] = []
 
     @ObservationIgnored private var preparation: Task<Void, Never>?
     @ObservationIgnored private var sampling: Task<Void, Never>?
@@ -317,6 +347,7 @@ enum TranscriptMessageLayout: Equatable {
             thinking =
                 cache.thinking(for: message.id, revision: message.thinkingRevision)
                 ?? (message.complete ? nil : cache.latest(for: message.id))
+            groups = thinking.map { Self.groups($0.segments) } ?? []
         } else {
             parts = TranscriptPartsCache.shared.parts(for: partsKey, source: source)
         }
@@ -330,7 +361,29 @@ enum TranscriptMessageLayout: Equatable {
     var pieceCount: Int {
         request()
         if isPlain { return parts?.count ?? 1 }
-        return thinking?.segments.count ?? 1
+        return max(1, groups.count)
+    }
+
+    /// Consecutive segments packed until each group reaches `targetBytes`. Earlier groups depend only on
+    /// the segments before them, so they stay the same while the reasoning grows.
+    nonisolated static let groupBytes = 2 * 1_024
+
+    nonisolated static func groups(
+        _ segments: ChunkedList<ThinkingSegment>, targetBytes: Int = groupBytes
+    ) -> [Range<Int>] {
+        var groups: [Range<Int>] = []
+        var lower = 0
+        var bytes = 0
+        for index in 0..<segments.count {
+            bytes += segments[index].bytes
+            if bytes >= targetBytes {
+                groups.append(lower..<(index + 1))
+                lower = index + 1
+                bytes = 0
+            }
+        }
+        if lower < segments.count { groups.append(lower..<segments.count) }
+        return groups
     }
 
     /// Starts preparing, and sampling while the reasoning streams, the first time it is needed.
@@ -340,9 +393,13 @@ enum TranscriptMessageLayout: Equatable {
         prepare()
         guard !message.complete else { return }
         sampling = Task { @MainActor [weak self] in
+            var sampled = self?.message.thinkingRevision.utf8Count ?? 0
             while let self, !self.message.complete {
                 self.prepare()
-                try? await Task.sleep(for: .milliseconds(120))
+                let bytes = self.message.thinkingRevision.utf8Count
+                let interval = StreamSampling.interval(grewBy: bytes - sampled)
+                sampled = bytes
+                try? await Task.sleep(for: interval)
                 if Task.isCancelled { return }
             }
             self?.prepare()
@@ -399,6 +456,18 @@ enum TranscriptMessageLayout: Equatable {
     func segment(_ index: Int) -> ThinkingSegment? {
         guard let thinking, thinking.segments.indices.contains(index) else { return nil }
         return thinking.segments[index]
+    }
+}
+
+/// How often streaming text is prepared and laid out again: every 120 ms, as before, or every 400 ms
+/// while output arrives faster than anyone reads (more than 4 KB since the last sample). Following a
+/// stream lays out the newest screen of text on each update, so a very fast stream would otherwise lay
+/// out screen after screen that is gone before it can be read.
+enum StreamSampling {
+    static let readableBytes = 4 * 1_024
+
+    static func interval(grewBy bytes: Int) -> Duration {
+        bytes > readableBytes ? .milliseconds(400) : .milliseconds(120)
     }
 }
 

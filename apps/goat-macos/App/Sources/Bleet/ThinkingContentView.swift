@@ -137,7 +137,9 @@ struct ThinkingSegment: Equatable, Sendable {
 /// Splits parsed reasoning into bounded segments (#60 A1, ADR-0091). Joining the segments' text
 /// reproduces the blocks' text exactly.
 enum ThinkingSegmenter {
-    static let targetBytes = MarkdownSegmenter.targetBytes
+    /// Smaller than an answer segment: a reasoning piece is one plain Text, typeset whole whenever it is
+    /// laid out or drawn, and the newest one is laid out again on every streamed update.
+    static let targetBytes = 2 * 1_024
     static let maximumLanguageCharacters = 32
     static let maximumLanguageScalars = 128
 
@@ -927,11 +929,15 @@ struct ThinkingSegmentsView: View {
     }
 }
 
-struct ThinkingSegmentView: View {
+struct ThinkingSegmentView: View, Equatable {
     let segment: ThinkingSegment
     /// The next segment continues this one, so the line break ending this one is where they join.
     let joinsNext: Bool
     @Environment(AppModel.self) private var model
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.segment == rhs.segment && lhs.joinsNext == rhs.joinsNext
+    }
 
     var body: some View {
         let text = joinsNext && segment.text.hasSuffix("\n") ? String(segment.text.dropLast()) : segment.text
