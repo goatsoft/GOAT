@@ -1356,7 +1356,9 @@ struct ChatTranscriptView: View {
                 viewport.note("layout offset \(Int(previousOffset))->\(Int(offset))")
             } else {
                 viewport.note("reader offset \(Int(previousOffset))->\(Int(offset))")
-                if viewport.readerOwnsViewport || !reader.isAtBottom {
+                // A move up by more than the bottom tolerance is the reader's even when rows resolving
+                // above leave the viewport near the new bottom.
+                if viewport.readerOwnsViewport || !reader.isAtBottom || previousOffset - offset > Self.bottomTolerance {
                     viewport.readerMoved(currentRange: messageRange, anchor: anchorAfter, replacingUnknown: true)
                 }
             }
