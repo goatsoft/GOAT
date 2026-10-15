@@ -7,7 +7,7 @@ extension AppTests.Bleet {
     /// What remains of reply windows after ADR-0104: the segments a reply prepares before any of its
     /// items has been shown, and the windows the segment cache parses. Nothing here bounds what the
     /// reader sees.
-    @Suite struct TranscriptWindowTests {
+    @Suite struct ReplyWindowTests {
         @Test func latestSegmentsFitTheBudgetOrAreOneSegment() {
             let costs = [2_000, 16_384, 3_000, 3_000, 16_384, 16_384, 1_000, 1_000, 6_000, 6_000, 6_000, 500]
             let latest = ReplyWindow.latest(count: costs.count, cost: { costs[$0] })
