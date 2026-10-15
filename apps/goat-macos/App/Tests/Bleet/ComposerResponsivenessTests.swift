@@ -36,6 +36,23 @@ import Testing
     return view.subviews.lazy.compactMap(findComposerEditor).first
 }
 
+/// Returns once the main actor has resumed on time for `quiet` (layout and other work on it done), or
+/// after `limit` whatever it is doing.
+@MainActor private func waitForIdleMainQueue(quiet: Duration, within limit: Duration) async throws {
+    let clock = ContinuousClock()
+    let start = clock.now
+    var quietSince = start
+    while start.duration(to: clock.now) < limit {
+        let before = clock.now
+        try await Task.sleep(for: .milliseconds(20))
+        if before.duration(to: clock.now) > .milliseconds(60) {
+            quietSince = clock.now
+        } else if quietSince.duration(to: clock.now) >= quiet {
+            return
+        }
+    }
+}
+
 @MainActor private final class LayoutCountingHost<Content: View>: NSHostingView<Content> {
     var layoutCount = 0
     override func layout() {
@@ -214,13 +231,20 @@ extension AppTests.Bleet {
             // This AppKit-owned fixture tests chat layout. Window toolbars belong to the app's SwiftUI scene.
             controller.sceneBridgingOptions = [.title]
             let host = controller.view
+            // A content view controller resizes the window to its view, which otherwise starts at the chat's
+            // minimum: a composer a few words wide and a transcript a few points tall.
+            host.setFrameSize(NSSize(width: 1_000, height: 700))
             window.contentViewController = controller
+            window.setContentSize(NSSize(width: 1_000, height: 700))
             window.orderFront(nil)
             defer {
                 window.contentViewController = nil
                 window.close()
             }
+            // Opening lays the long replies out, at the window's width and then again where following
+            // places the end. Typing is measured in the chat once it has opened, as a reader types.
             try await Task.sleep(for: .seconds(1))
+            try await waitForIdleMainQueue(quiet: .milliseconds(400), within: .seconds(5))
             let editor = try #require(findComposerEditor(host))
             window.makeFirstResponder(editor)
             let setupDuration = setupStart.duration(to: clock.now)

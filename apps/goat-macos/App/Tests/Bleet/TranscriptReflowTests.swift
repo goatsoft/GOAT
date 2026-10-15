@@ -137,18 +137,29 @@ extension AppTests.Bleet {
                         abs(scroll.frame.width - host.bounds.width) <= 1,
                         "The transcript must fill its host: scroll \(scroll.frame), host \(host.bounds)")
                     let viewport = host
-                    let bitmap = try #require(viewport.bitmapImageRepForCachingDisplay(in: viewport.bounds))
-                    viewport.cacheDisplay(in: viewport.bounds, to: bitmap)
-                    var ink = 0
-                    for y in stride(from: 10, to: bitmap.pixelsHigh - 10, by: 3) {
-                        for x in stride(from: 20, to: bitmap.pixelsWide - 20, by: 3) {
-                            if let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
-                                color.alphaComponent > 0.9, color.redComponent < 0.6, color.greenComponent < 0.6,
-                                color.blueComponent < 0.6
-                            {
-                                ink += 1
+                    func inkOnScreen() throws -> Int {
+                        let bitmap = try #require(viewport.bitmapImageRepForCachingDisplay(in: viewport.bounds))
+                        viewport.cacheDisplay(in: viewport.bounds, to: bitmap)
+                        var ink = 0
+                        for y in stride(from: 10, to: bitmap.pixelsHigh - 10, by: 3) {
+                            for x in stride(from: 20, to: bitmap.pixelsWide - 20, by: 3) {
+                                if let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB),
+                                    color.alphaComponent > 0.9, color.redComponent < 0.6, color.greenComponent < 0.6,
+                                    color.blueComponent < 0.6
+                                {
+                                    ink += 1
+                                }
                             }
                         }
+                        return ink
+                    }
+                    // A drastic reflow can leave the lazy stack's estimate past its rows for a moment; the
+                    // transcript must show text again within a second of the scroll settling.
+                    var ink = try inkOnScreen()
+                    for _ in 0..<20 where ink <= 100 {
+                        try await Task.sleep(for: .milliseconds(50))
+                        host.layoutSubtreeIfNeeded()
+                        ink = try inkOnScreen()
                     }
                     let document = String(describing: scroll.documentView?.frame)
                     let clip = "clip \(scroll.contentView.bounds), document \(document)"

@@ -1007,6 +1007,10 @@ struct ChatTranscriptView: View {
                     // resolve while the executor restores the reader's anchor. The restore continues and is
                     // checked against where the rows now are. Following yields to any move.
                     viewport.note("unprompted offset \(Int(previous.offset))->\(Int(metrics.offset))")
+                case .other where abs(metrics.offset - previous.offset) <= 2 && !reader.executor.lastMoveFollowedInput:
+                    // A point or two with no reader input is the lazy stack settling its rows; a reader's
+                    // keyboard or scroller moves a line or more.
+                    viewport.note("settling offset \(Int(previous.offset))->\(Int(metrics.offset))")
                 case .other:
                     // The keyboard, a scroller or another direct move without a gesture phase, or the lazy
                     // stack moving the offset with its content as row estimates resolve. Only the first
@@ -1189,6 +1193,15 @@ struct ChatTranscriptView: View {
                 // above leave the viewport near the new bottom.
                 if viewport.readerOwnsViewport || !reader.isAtBottom || previousOffset - offset > Self.bottomTolerance {
                     viewport.readerMoved(anchor: anchorAfter, replacingUnknown: true)
+                    // A direct move (keyboard, scroller) that landed where nothing is laid out is rescued
+                    // there, as a gesture's end is, once the rows have had a moment to report.
+                    if anchorAfter == nil {
+                        Task { @MainActor in
+                            try? await Task.sleep(for: .milliseconds(60))
+                            guard !reader.isScrolling, viewport.readerOwnsViewport else { return }
+                            rescueBlankViewport(atReader: true)
+                        }
+                    }
                 }
             }
             executePendingRequest()
@@ -1294,8 +1307,23 @@ struct ChatTranscriptView: View {
         let bottom = top + metrics.layout.container.height
         guard !reader.itemFrames.contains(where: { $0.frame.maxY > top && $0.frame.minY < bottom }) else { return }
         let items = transcriptItems
-        /// The item as far through the items as the viewport is through the content.
+        /// The item about where the reader is: counted on from the nearest items still laid out at their
+        /// average height, or else as far through the items as the viewport is through the content. A
+        /// proportional guess lands thousands of points from the reader when item heights vary.
         func itemAtReader() -> (id: TranscriptItem.ID, edge: UnitPoint)? {
+            let laidOut = Self.ordered(
+                items.enumerated().compactMap { index, item in frame(of: item).map { (index, $0) } })
+            let average = laidOut.isEmpty ? 0 : laidOut.map(\.1.height).reduce(0, +) / CGFloat(laidOut.count)
+            if average > 1 {
+                if let above = laidOut.last(where: { $0.1.maxY <= top }) {
+                    let index = min(items.count - 1, above.0 + 1 + Int((top - above.1.maxY) / average))
+                    return (items[index].id, .top)
+                }
+                if let below = laidOut.first(where: { $0.1.minY >= bottom }) {
+                    let index = max(0, below.0 - Int(((below.1.minY - top) / average).rounded(.up)))
+                    return (items[index].id, .top)
+                }
+            }
             guard metrics.contentHeight > 0 else { return items.first.map { ($0.id, .top) } }
             let fraction = min(1, max(0, top / metrics.contentHeight))
             let index = min(items.count - 1, Int(fraction * CGFloat(items.count)))
@@ -1321,12 +1349,17 @@ struct ChatTranscriptView: View {
                 return
             }
             if metrics.topGap <= reach {
-                viewport.note("rescue blank viewport at \(Int(top)) to the top")
-                reader.executor.scroll(toY: 0)
-                reader.syncGeometry()
-                return
-            }
-            if metrics.bottomGap <= reach {
+                // Already at the top with nothing laid out there: only a SwiftUI scroll to the first item
+                // makes the lazy stack lay it out.
+                if metrics.topGap <= 1 {
+                    target = items.first.map { ($0.id, .top) }
+                } else {
+                    viewport.note("rescue blank viewport at \(Int(top)) to the top")
+                    reader.executor.scroll(toY: 0)
+                    reader.syncGeometry()
+                    return
+                }
+            } else if metrics.bottomGap <= reach {
                 target = items.last.map { ($0.id, .bottom) }
             } else {
                 target = itemAtReader()
@@ -1344,7 +1377,17 @@ struct ChatTranscriptView: View {
         // At most once per interval: right after it the lazy stack re-estimates the content, and a
         // second rescue before that settles would chase the estimate.
         let now = ContinuousClock.now
-        if let last = reader.lastRescue, now - last < .milliseconds(500) { return }
+        if let last = reader.lastRescue, now - last < .milliseconds(500) {
+            // Look again once the estimate has settled: a viewport still blank then is rescued then.
+            guard reader.rescueRetry == nil else { return }
+            reader.rescueRetry = Task { @MainActor in
+                do { try await Task.sleep(for: .milliseconds(500) - (now - last)) } catch { return }
+                reader.rescueRetry = nil
+                guard !reader.isScrolling, viewport.request == nil else { return }
+                rescueBlankViewport(atReader: atReader)
+            }
+            return
+        }
         guard let target, let proxy = reader.proxy else { return }
         reader.lastRescue = now
         viewport.note("rescue blank viewport at \(Int(top)) to \(target.id.message.uuidString.prefix(4))")
@@ -1881,6 +1924,8 @@ struct ProxyLanding: Equatable {
     var followRescue: ContinuousClock.Instant?
     /// When recent bottom requests began, to tell a chase of a moving end from following.
     var bottomChase: [ContinuousClock.Instant] = []
+    /// A rescue held back by the rescue interval, to look again once it has passed.
+    var rescueRetry: Task<Void, Never>?
     /// The offsets the current request's reveals moved to.
     var revealsTried: [CGFloat] = []
     /// The reading column's width the lazy stack was last identified for.
