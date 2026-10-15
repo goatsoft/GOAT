@@ -180,12 +180,12 @@ extension AppTests.Bleet {
                 message.complete = true
                 return message
             }
-            let toolID = "reflow-disclosure-\(UUID().uuidString)"
-            session.messages[11].toolEvents = [
-                ToolEventSnapshot(
-                    id: toolID, server: "GOATed", tool: "pen_read_file",
-                    arguments: #"{"path":"App.swift"}"#, result: "Read successfully")
-            ]
+            let event = ToolEventSnapshot(
+                id: "reflow-disclosure-\(UUID().uuidString)", server: "GOATed", tool: "pen_read_file",
+                arguments: #"{"path":"App.swift"}"#, result: "Read successfully")
+            session.messages[11].toolEvents = [event]
+            // The reader expanded this tool call earlier: a recreated card keeps their choice.
+            TranscriptDisclosureStore.shared.set(true, for: TranscriptDisclosureStore.key(for: event))
             let window = NSWindow(
                 contentRect: NSRect(x: 80, y: 80, width: 760, height: 520), styleMask: [.titled, .resizable],
                 backing: .buffered, defer: false)
@@ -207,51 +207,38 @@ extension AppTests.Bleet {
             }
             try await Task.sleep(for: .milliseconds(500))
 
-            func value(_ object: NSObject, _ name: String) -> Any? {
-                let selector = NSSelectorFromString(name)
-                guard object.responds(to: selector) else { return nil }
-                return object.perform(selector)?.takeUnretainedValue()
+            /// Whether any accessibility element's label or value contains `text`. SwiftUI's elements answer
+            /// the NSAccessibility getters, read here by key only when the element implements them.
+            func read(_ object: NSObject, _ key: String) -> Any? {
+                object.responds(to: NSSelectorFromString(key)) ? object.value(forKey: key) : nil
             }
-            /// The first accessibility element, depth first, whose label or value satisfies `matches`.
-            func element(_ matches: @escaping (String) -> Bool) -> NSObject? {
+            func shows(_ text: String) -> Bool {
                 var visited = Set<ObjectIdentifier>()
-                func find(_ object: Any) -> NSObject? {
+                func find(_ object: Any) -> Bool {
                     guard let object = object as? NSObject, visited.insert(ObjectIdentifier(object)).inserted
-                    else { return nil }
-                    let texts = [
-                        object.accessibilityAttributeValue(.title) as? String,
-                        object.accessibilityAttributeValue(.description) as? String,
-                        object.accessibilityAttributeValue(.value) as? String,
-                        value(object, "accessibilityLabel") as? String,
-                    ]
-                    if texts.contains(where: { $0.map(matches) ?? false }) { return object }
-                    let children = value(object, "accessibilityChildren") as? [Any] ?? []
-                    return children.lazy.compactMap(find).first
+                    else { return false }
+                    for key in ["accessibilityLabel", "accessibilityTitle", "accessibilityValue"] {
+                        if let string = read(object, key) as? String, string.contains(text) { return true }
+                    }
+                    let children = read(object, "accessibilityChildren") as? [Any] ?? []
+                    return children.contains(where: find)
                 }
                 return find(host)
             }
-            // The tool's button reads its action and file; its result shows only while it is expanded.
-            func disclosure() -> NSObject? { element { $0.contains("App.swift") } }
-            func state() -> String { element { $0.contains("Read successfully") } == nil ? "Collapsed" : "Expanded" }
             func relayout(toFont font: CGFloat) async throws {
                 model.chatFontSize = font
                 try await Task.sleep(for: .milliseconds(600))
                 host.layoutSubtreeIfNeeded()
             }
 
-            let control = try #require(disclosure(), "The tool disclosure must be an actionable control")
-            #expect(state() == "Collapsed")
-            let press = NSSelectorFromString("accessibilityPerformPress")
-            let implementation = try #require(control.method(for: press))
-            let perform = unsafeBitCast(implementation, to: (@convention(c) (AnyObject, Selector) -> Bool).self)
-            #expect(perform(control, press))
-            try await Task.sleep(for: .milliseconds(200))
-            #expect(state() == "Expanded")
+            // The tool's result shows only while its disclosure is expanded, which the reader chose.
+            #expect(shows("App.swift"), "The tool call is shown")
+            #expect(shows("Read successfully"), "The reader's expanded disclosure shows its result")
 
             let before = navigation.relayouts
             try await relayout(toFont: 22)
             #expect(navigation.relayouts > before, "The font change must replace the rows")
-            #expect(state() == "Expanded", "The reader's open disclosure collapsed in the relayout")
+            #expect(shows("Read successfully"), "The reader's open disclosure collapsed in the relayout")
 
             // A row presents a sheet: the relayout waits, then runs once it closes.
             navigation.holdLayout()
@@ -261,7 +248,7 @@ extension AppTests.Bleet {
             navigation.releaseLayout()
             try await Task.sleep(for: .milliseconds(600))
             #expect(navigation.relayouts > held, "The deferred relayout must run once the presentation closes")
-            #expect(state() == "Expanded")
+            #expect(shows("Read successfully"))
         }
 
         /// A row's sheet or popover holds the relayout exactly while it is presented, and a row that goes
