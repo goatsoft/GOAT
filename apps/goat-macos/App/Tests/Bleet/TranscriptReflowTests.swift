@@ -152,7 +152,7 @@ extension AppTests.Bleet {
                     }
                     let document = String(describing: scroll.documentView?.frame)
                     let clip = "clip \(scroll.contentView.bounds), document \(document)"
-                    let owner = "held \(String(describing: navigation.heldRange)), following \(navigation.autoFollow)"
+                    let owner = "anchor \(String(describing: navigation.anchor)), following \(navigation.autoFollow)"
                     let recent = Array(navigation.diagnostics.suffix(10))
                     let trace = "request \(String(describing: navigation.request)), \(recent)"
                     let hostGeometry =

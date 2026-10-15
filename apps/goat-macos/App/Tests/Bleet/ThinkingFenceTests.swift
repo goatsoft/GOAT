@@ -80,9 +80,9 @@ extension AppTests.Bleet {
             #expect(ThinkingSegmenter.pieces("short") == ["short"])
         }
 
-        /// #60 A1: expanded reasoning is prepared without its boundary blank lines, lays out a bounded
-        /// window of its latest segments, and is cached by revision under a byte budget.
-        @Test @MainActor func expandedReasoningPreparesABoundedWindow() async throws {
+        /// #60 A1: reasoning is prepared without its boundary blank lines, as bounded segments that the
+        /// transcript lays out as items (ADR-0104), and is cached by revision under a byte budget.
+        @Test @MainActor func reasoningPreparesBoundedSegments() async throws {
             let message = ChatMessage(role: .assistant)
             let prose = (0..<400).map { "Reasoning paragraph \($0) weighs one more consideration.\n" }.joined()
             message.appendStream(text: "", thinking: "\n\n" + prose + "\n\n")
@@ -92,10 +92,8 @@ extension AppTests.Bleet {
                 prepared.segments.map(\.text).joined() == TranscriptText.removingBoundaryBlankLines(message.thinking))
             #expect(prepared.bytes == prepared.segments.reduce(0) { $0 + $1.bytes })
             #expect(prepared.cost == prepared.segments.reduce(0) { $0 + $1.cost } && prepared.cost > prepared.bytes)
-            let latest = try #require(prepared.resolve(.latest), "Reasoning over the budget lays out a window")
-            #expect(latest.upperBound == prepared.segments.count && latest.lowerBound > 0)
-            #expect(latest.reduce(0) { $0 + prepared.segments[$1].bytes } <= ReplyWindow.budget)
-            #expect(prepared.resolve(.all) == nil)
+            #expect(prepared.segments.count > 1, "Long reasoning is several segments")
+            #expect(prepared.segments.allSatisfy { $0.bytes <= MarkdownSegmenter.maximumBytes })
 
             let cache = PreparedThinkingCache(maximumEntries: 2)
             #expect(cache.store(prepared, for: message.id))

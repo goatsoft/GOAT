@@ -122,7 +122,7 @@ extension AppTests.Bleet {
             NotificationCenter.default.post(name: NSView.boundsDidChangeNotification, object: scroll.contentView)
             host.layoutSubtreeIfNeeded()
 
-            // Paging and the visibility observer publish asynchronously. Click only
+            // Attribution and the visibility observer publish asynchronously. Click only
             // after the real button is available, without bypassing its action.
             for _ in 0..<100 {
                 host.layoutSubtreeIfNeeded()
@@ -137,7 +137,6 @@ extension AppTests.Bleet {
             click(at: clickPoint, in: host, window: window)
 
             #expect(viewport.autoFollow, "One click must invoke the bottom action")
-            #expect(viewport.heldRange == nil, "One click must restore the latest page")
 
             // Wait for scroll to settle at the bottom
             var reachedBottom = false
@@ -157,143 +156,27 @@ extension AppTests.Bleet {
                 "A single click on the scroll-to-bottom button must bring the viewport to the end; \(trace)")
         }
 
-        @Test @MainActor func repeatedPagingBoundsMessageCountAndBudgetWhilePreservingReaderPosition() async throws {
-            let session = ChatSession(effort: .trot, modelID: nil)
-            session.messagesLoaded = true
-            session.messages = (0..<120).map { index in
-                let message = ChatMessage(role: index.isMultiple(of: 2) ? .user : .assistant)
-                message.text = "Message \(index)\n\n" + String(repeating: "- A transcript line.\n", count: 6)
-                message.complete = true
-                return message
-            }
-
-            let viewport = TranscriptViewport()
-            let view = ChatTranscriptView(session: session, viewport: viewport)
-            let cost: (Int) -> Int = { TranscriptWindow.displayCost(session.messages[$0]) }
-
-            // Initial window is at the bottom
-            var current = viewport.messageRange(count: session.messages.count, cost: cost)
-            #expect(current.upperBound == 120)
-            #expect(current.count <= TranscriptWindow.capacity)
-            #expect(view.visibleMessageRange == current)
-
-            // Page earlier all the way to index 0
-            while current.lowerBound > 0 {
-                let previous = current
-                let result = try #require(viewport.pageEarlier(count: session.messages.count, cost: cost))
-                current = result.range
-                #expect(current.lowerBound < previous.lowerBound, "Earlier page moves lower bound towards 0")
-                #expect(current.upperBound < previous.upperBound, "Earlier page evicts opposite edge (upper bound)")
-                #expect(current.count <= TranscriptWindow.capacity, "Message count is strictly bounded")
-                #expect(current.contains(result.anchor), "Visible anchor preserved across paging")
-                #expect(viewport.readerOwnsViewport == true, "Paging claims viewport ownership for reader")
-                #expect(viewport.autoFollow == false, "Auto-follow is disabled when reader pages")
-            }
-            #expect(current.lowerBound == 0, "Reached the earliest message in the transcript")
-
-            // Now page later all the way to the end
-            while current.upperBound < session.messages.count {
-                let previous = current
-                let result = try #require(viewport.pageLater(count: session.messages.count, cost: cost))
-                current = result.range
-                #expect(current.upperBound > previous.upperBound, "Later page moves upper bound towards end")
-                #expect(current.lowerBound > previous.lowerBound, "Later page evicts opposite edge (lower bound)")
-                #expect(current.count <= TranscriptWindow.capacity, "Message count is strictly bounded")
-                #expect(current.contains(result.anchor), "Visible anchor preserved across paging")
-                #expect(viewport.readerOwnsViewport == true, "Viewport still owned by reader upon reaching final page")
-                #expect(
-                    viewport.autoFollow == false,
-                    "Loading final page does NOT re-enable auto-follow or snap to bottom")
-            }
-            #expect(current.upperBound == session.messages.count, "Reached the latest message")
-        }
-
-        @Test @MainActor func sourceBudgetIsAppliedEvenBelowMessageCountLimit() async throws {
-            let session = ChatSession(effort: .trot, modelID: nil)
-            session.messagesLoaded = true
-            session.messages = (0..<20).map { index in
-                let msg = ChatMessage(role: index.isMultiple(of: 2) ? .user : .assistant)
-                msg.text = String(repeating: "a", count: 5_000)
-                msg.complete = true
-                return msg
-            }
-
-            let viewport = TranscriptViewport()
-            let cost: (Int) -> Int = { TranscriptWindow.displayCost(session.messages[$0]) }
-
-            let range = viewport.messageRange(count: session.messages.count, cost: cost)
-            #expect(range.count < 20, "Short chats with heavy messages must still be bounded by source budget")
-            let totalCost = range.reduce(0) { $0 + cost($1) }
-            #expect(totalCost <= TranscriptWindow.sourceBudget, "Total display cost must not exceed source budget")
-
-            let view = ChatTranscriptView(session: session, initiallyFollowing: false)
-            #expect(view.visibleMessageRange.count < 20)
-            let restoredCost = view.visibleMessageRange.reduce(0) { $0 + cost($1) }
-            #expect(restoredCost <= TranscriptWindow.sourceBudget)
-        }
-
-        @Test @MainActor func pagingAcrossNonOverlappingOversizedMessagesPreservesValidAnchor() async throws {
-            let count = 100
-            // 20,000 bytes per message exceeds sourceBudget (16,384), yielding 1-message non-overlapping pages
-            let cost: (Int) -> Int = { _ in 20_000 }
-            let viewport = TranscriptViewport()
-
-            let initial = viewport.messageRange(count: count, cost: cost)
-            #expect(initial == 99..<100)
-
-            // Paging earlier must produce 98..<99 and anchor 98 inside that new page
-            let earlier = try #require(viewport.pageEarlier(count: count, cost: cost))
-            #expect(earlier.range == 98..<99)
-            #expect(earlier.anchor == 98)
-            #expect(earlier.range.contains(earlier.anchor))
-            let restoredEarlier = viewport.messageRange(count: count, anchor: earlier.anchor, cost: cost)
-            #expect(restoredEarlier == 98..<99, "Restoring with anchor must not revert to previous page")
-
-            // Paging earlier again
-            let earlier2 = try #require(viewport.pageEarlier(count: count, cost: cost))
-            #expect(earlier2.range == 97..<98)
-            #expect(earlier2.anchor == 97)
-            #expect(earlier2.range.contains(earlier2.anchor))
-
-            // Paging later must produce 98..<99 and anchor 98 inside that new page
-            let later = try #require(viewport.pageLater(count: count, cost: cost))
-            #expect(later.range == 98..<99)
-            #expect(later.anchor == 98)
-            #expect(later.range.contains(later.anchor))
-            let restoredLater = viewport.messageRange(count: count, anchor: later.anchor, cost: cost)
-            #expect(restoredLater == 98..<99, "Restoring with anchor must not revert to previous page")
-        }
-
-        /// Regression for PR 66: a parts view must re-split when its source keeps growing past 8 KiB.
-        @Test @MainActor func textPartsViewUpdatesWhenSourceGrowsAfterSplitting() async throws {
+        /// Regression for PR 66: text above the parts threshold re-splits as it grows, and each part is an
+        /// item of its own (ADR-0104), so the parts are all reachable with no control to page between them.
+        @Test @MainActor func plainPartsGrowWithTheirSource() async throws {
             let line = String(repeating: "x", count: 99) + "\n"  // 100 bytes
             func source(_ kib: Int) -> String { String(repeating: line, count: kib * 1_024 / 100) }
-            func parts(_ source: String) -> some View {
-                TranscriptTextPartsView(source: source, fontSize: 13)
-                    .frame(width: 500)
-                    .environment(AppModel.shared)
-            }
-            let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 500, height: 400),
-                styleMask: [.titled], backing: .buffered, defer: false)
-            window.isReleasedWhenClosed = false
-            let host = NSHostingView(rootView: parts(source(10)))
-            window.contentView = host
-            defer {
-                window.contentView = nil
-                window.close()
-            }
-            func settledHeight() async throws -> CGFloat {
-                try await Task.sleep(for: .milliseconds(300))
-                host.layoutSubtreeIfNeeded()
-                return host.fittingSize.height
-            }
-            // 10 KiB splits into 8 KiB + 2 KiB; the last (short) part is shown.
-            let short = try await settledHeight()
-            // 16 KiB splits into 8 KiB + 8 KiB; the shown last part must grow to 8 KiB.
-            host.rootView = parts(source(16))
-            let full = try await settledHeight()
-            #expect(full > short * 2, "The visible part must re-split as the source grows (\(short) -> \(full))")
+            let message = ChatMessage(role: .user)
+            message.text = source(10)
+            message.complete = true
+            let texts = TranscriptTexts()
+            let answer = texts.answer(for: message)
+            #expect(answer.isPlain)
+            for _ in 0..<100 where answer.parts?.count != 2 { try await Task.sleep(for: .milliseconds(20)) }
+            #expect(answer.parts?.count == 2, "10 KiB is two 8 KiB parts")
+            #expect(texts.layout(of: message) == .split(head: false, reasoning: 0, answer: 2, tail: true))
+
+            message.text = source(20)
+            answer.prepare()
+            for _ in 0..<100 where answer.parts?.count != 3 { try await Task.sleep(for: .milliseconds(20)) }
+            #expect(answer.parts?.count == 3, "The parts re-split as the source grows")
+            #expect(answer.parts?.joined() == message.text, "The parts hold every byte")
+            #expect(texts.layout(of: message) == .split(head: false, reasoning: 0, answer: 3, tail: true))
         }
 
         /// Issue #60 C0: a reply whose answer and reasoning both pass 8 KiB completes while streaming.
@@ -321,7 +204,9 @@ extension AppTests.Bleet {
                 contentRect: NSRect(x: 0, y: 0, width: 700, height: 450),
                 styleMask: [.titled], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
-            let host = NSHostingView(rootView: transcript(session).environment(\.reasoningStartsExpanded, true))
+            // A reader who opened the reasoning reads all of it.
+            ReasoningDisclosureStore.shared.set(.init(isOpen: true), for: assistant.id)
+            let host = NSHostingView(rootView: transcript(session))
             window.contentView = host
             defer {
                 window.contentView = nil
@@ -344,19 +229,18 @@ extension AppTests.Bleet {
             assistant.complete = true
             session.isStreaming = false
 
-            // The answer and the expanded reasoning both lay out their latest segments (#60 A1).
+            // The answer and the open reasoning both reach their last segments (#60 A1, ADR-0104).
             func shownAnswer() -> String? {
-                let cache = PreparedMarkdownDocumentCache.shared
-                guard let document = cache.document(for: assistant.id, revision: assistant.textRevision),
-                    document.isComplete, let last = document.shownSegments.last,
-                    last == document.segments.count - 1, document.segments[last].isParsed
+                let text = TranscriptTexts.shared.answer(for: assistant)
+                guard let document = text.document, document.isComplete,
+                    let last = document.segments.indices.last, document.segments[last].isParsed
                 else { return nil }
                 return document.segments[last].text
             }
             func shownReasoning() -> String? {
-                let cache = PreparedThinkingCache.shared
-                guard let thinking = cache.thinking(for: assistant.id, revision: assistant.thinkingRevision),
-                    let last = thinking.shownSegments.last, last == thinking.segments.count - 1
+                let reasoning = TranscriptTexts.shared.reasoning(for: assistant)
+                guard let thinking = reasoning.thinking, thinking.revision == assistant.thinkingRevision,
+                    let last = thinking.segments.indices.last
                 else { return nil }
                 return thinking.segments[last].text
             }
@@ -580,9 +464,9 @@ extension AppTests.Bleet {
             #expect(viewport.request == bottom, "Equal requests coalesce")
 
             let anchor = Anchor(messageID: UUID(), offset: 12)
-            viewport.readerMoved(currentRange: 0..<10, anchor: anchor)
+            viewport.readerMoved(anchor: anchor)
             #expect(viewport.request == nil, "Reader input cancels a pending scroll")
-            #expect(viewport.readerOwnsViewport && viewport.heldRange == 0..<10)
+            #expect(viewport.readerOwnsViewport && viewport.anchor == anchor)
             viewport.fulfilled(bottom)
             #expect(viewport.request == nil, "A stale completion changes nothing")
 
@@ -592,13 +476,12 @@ extension AppTests.Bleet {
             viewport.readerSettled(atTrueBottom: false, anchor: nil)
             #expect(viewport.readerOwnsViewport)
             viewport.readerSettled(atTrueBottom: true, anchor: nil)
-            #expect(viewport.autoFollow && viewport.heldRange == nil && viewport.anchor == nil)
+            #expect(viewport.autoFollow && viewport.anchor == nil)
         }
 
         @Test @MainActor func aReplacedRequestIgnoresItsCompletion() throws {
             let viewport = TranscriptViewport(
-                initiallyFollowing: false, initialHeldRange: 0..<5,
-                initialAnchor: Anchor(messageID: UUID(), offset: 0))
+                initiallyFollowing: false, initialAnchor: Anchor(messageID: UUID(), offset: 0))
             let restoring = try #require(viewport.request)
             viewport.jumpToLatest()
             let bottom = try #require(viewport.request)
@@ -614,108 +497,91 @@ extension AppTests.Bleet {
             #expect(viewport.request == nil && viewport.abandonedRequests == 1)
         }
 
-        @Test @MainActor func finalPageKeepsOwnershipAndRemovalKeepsAnAnchor() throws {
-            var ids = (0..<100).map { _ in UUID() }
-            let cost: (Int) -> Int = { _ in 1_000 }
+        /// History loads put the reader's anchor back, and following keeps following. Removing the anchor's
+        /// message (compaction) continues the reader at the given surviving message; a surviving anchor is
+        /// kept as it was.
+        @Test @MainActor func historyLoadsAndRemovalKeepTheReadersPlace() throws {
+            let following = TranscriptViewport()
+            following.historyRebased()
+            #expect(following.autoFollow && following.request?.target == .bottom)
+
             let viewport = TranscriptViewport()
-            while viewport.pageEarlier(count: ids.count, cost: cost) != nil {}
-            while viewport.pageLater(count: ids.count, cost: cost) != nil {}
-            #expect(viewport.readerOwnsViewport, "Loading the final page must not enable following")
+            let anchor = Anchor(messageID: UUID(), offset: 30, segment: 4)
+            viewport.readerMoved(anchor: anchor)
+            viewport.historyRebased()
+            #expect(viewport.readerOwnsViewport && viewport.request?.target == .anchor(anchor))
 
-            viewport.restore(Anchor(messageID: ids[95], offset: 30))
-            // Compaction removes the anchor's message: the reader continues at a surviving message.
-            ids.removeSubrange(90..<97)
-            viewport.messagesRemoved(count: ids.count, anchorIndex: nil, messageID: { ids[$0] }, cost: cost)
-            let range = try #require(viewport.heldRange)
-            #expect(range.upperBound <= ids.count && !range.isEmpty)
-            let anchor = try #require(viewport.anchor)
-            #expect(anchor == Anchor(messageID: ids[range.lowerBound], offset: 0))
-            #expect(viewport.request?.target == .anchor(anchor))
-
-            // A surviving anchor is kept as it was.
-            let kept = Anchor(messageID: ids[range.lowerBound], offset: 7)
-            viewport.restore(kept)
-            ids.removeLast()
-            viewport.messagesRemoved(
-                count: ids.count, anchorIndex: range.lowerBound, messageID: { ids[$0] }, cost: cost)
-            #expect(viewport.anchor == kept)
+            let fallback = UUID()
+            viewport.messagesRemoved(anchorSurvives: true, fallback: fallback)
+            #expect(viewport.anchor == anchor, "A surviving anchor is kept")
+            viewport.messagesRemoved(anchorSurvives: false, fallback: fallback)
+            #expect(viewport.anchor == Anchor(messageID: fallback, offset: 0))
+            #expect(viewport.request?.target == .anchor(Anchor(messageID: fallback, offset: 0)))
         }
 
-        /// #60 A1 step 3: a long reply's segment window belongs to the navigation owner. Paging it makes
-        /// the reader the owner and restores a segment anchor; only a window short of the reply's current
-        /// end keeps the transcript's bottom from being its end, and following clears every held window.
-        @Test @MainActor func segmentPagingIsAnOwnerTransition() throws {
-            let reply = UUID()
-            let viewport = TranscriptViewport()
-            #expect(viewport.segmentWindow(for: reply) == nil)
-            let kept = Anchor(messageID: reply, offset: 14, segment: 40)
-            viewport.pageSegments(of: reply, to: 30..<41, segmentCount: 52, currentRange: 0..<3, keeping: kept)
-            #expect(viewport.readerOwnsViewport && viewport.heldRange == 0..<3)
-            #expect(viewport.segmentWindow(for: reply) == 30..<41 && viewport.holdsEarlierSegments(of: reply))
-            #expect(viewport.anchor == kept && viewport.request?.target == .anchor(kept))
-            viewport.readerMoved(currentRange: 0..<3)
-            #expect(viewport.request == nil, "Reader input cancels the segment restore like any other")
-
-            viewport.pageSegments(
-                of: reply, to: 40..<52, segmentCount: 52, currentRange: 0..<3,
-                keeping: Anchor(messageID: reply, offset: 0, segment: 40))
-            #expect(viewport.segmentWindow(for: reply) == 40..<52 && !viewport.holdsEarlierSegments(of: reply))
-            #expect(viewport.readerOwnsViewport)
-            // The reply streams on: the held window no longer reaches its end, so the transcript's
-            // bottom is not the reply's end and settling there must not resume following.
-            viewport.recordSegmentCount(55, of: reply)
-            #expect(
-                viewport.holdsEarlierSegments(of: reply), "A window that reached the end goes stale as the reply grows")
-            viewport.recordSegmentCount(3, of: UUID())
-            #expect(viewport.segmentWindows.count == 1, "Only held replies record a count")
-
-            // A reply the reader kept by scrolling, not paging, is held the same way.
-            let kept2 = UUID()
-            viewport.holdSegments(of: kept2, at: 20..<30, segmentCount: 30)
-            #expect(viewport.segmentWindow(for: kept2) == 20..<30 && !viewport.holdsEarlierSegments(of: kept2))
-            viewport.recordSegmentCount(33, of: kept2)
-            #expect(viewport.holdsEarlierSegments(of: kept2), "A kept window goes stale as the reply grows")
-            viewport.holdSegments(of: kept2, at: 0..<5, segmentCount: 33)
-            #expect(viewport.segmentWindow(for: kept2) == 20..<30, "A held window is not replaced by a kept one")
-            viewport.readerSettled(atTrueBottom: true, anchor: nil)
-            #expect(viewport.autoFollow && viewport.segmentWindows.isEmpty, "Following shows latest segments again")
-
-            for index in 0...TranscriptViewport.maximumSegmentWindows {
-                viewport.pageSegments(of: UUID(), to: 0..<1, segmentCount: 2, currentRange: 0..<3, keeping: kept)
-                #expect(viewport.segmentWindows.count <= TranscriptViewport.maximumSegmentWindows, "\(index)")
-            }
-            viewport.jumpToLatest()
-            #expect(viewport.segmentWindows.isEmpty && viewport.autoFollow)
-            viewport.holdSegments(of: UUID(), at: 0..<1, segmentCount: 1)
-            #expect(viewport.segmentWindows.isEmpty, "While following, no reply is kept")
-        }
-
-        /// #60 A1: expanded reasoning pages under its own key, so its window and the answer's are held,
-        /// counted and cleared independently, and an anchor in either belongs to the same message.
-        @Test @MainActor func reasoningSegmentsPageUnderTheirOwnKey() throws {
+        /// ADR-0104: a message's items are measured under keys that all belong to it.
+        @Test @MainActor func itemKeysBelongToTheirMessage() throws {
             let reply = UUID()
             let reasoning = TranscriptSegmentOwner.reasoning(of: reply)
-            #expect(reasoning != reply && TranscriptSegmentOwner.reasoning(of: reasoning) == reply)
-            #expect(TranscriptSegmentOwner.key(reasoning, belongsTo: reply))
-            #expect(TranscriptSegmentOwner.key(reply, belongsTo: reply))
+            let tail = TranscriptSegmentOwner.tail(of: reply)
+            #expect(reasoning != reply && tail != reply && reasoning != tail)
+            #expect(TranscriptSegmentOwner.reasoning(of: reasoning) == reply)
+            #expect(TranscriptSegmentOwner.tail(of: tail) == reply)
+            for key in [reply, reasoning, tail] { #expect(TranscriptSegmentOwner.key(key, belongsTo: reply)) }
             #expect(!TranscriptSegmentOwner.key(UUID(), belongsTo: reply))
-
-            let viewport = TranscriptViewport()
-            let kept = Anchor(messageID: reasoning, offset: 6, segment: 12)
-            viewport.pageSegments(of: reasoning, to: 4..<13, segmentCount: 30, currentRange: 0..<3, keeping: kept)
-            #expect(viewport.segmentWindow(for: reasoning) == 4..<13 && viewport.segmentWindow(for: reply) == nil)
-            #expect(viewport.holdsEarlierSegments(of: reasoning) && !viewport.holdsEarlierSegments(of: reply))
-            #expect(viewport.request?.target == .anchor(kept))
-            viewport.holdSegments(of: reply, at: 20..<24, segmentCount: 24)
-            #expect(viewport.segmentWindow(for: reply) == 20..<24 && viewport.segmentWindow(for: reasoning) == 4..<13)
-            viewport.readerSettled(atTrueBottom: true, anchor: nil)
-            #expect(viewport.segmentWindows.isEmpty, "Following shows the latest reasoning and answer again")
         }
 
-        /// #78: a reader who scrolls up without paging keeps a streaming reply's shown segments, and
-        /// the owner holds them, so newer output below does not let the transcript's bottom count as
-        /// the reply's end.
-        @Test @MainActor func scrollingUpHoldsAStreamingReplysSegmentsWithTheOwner() async throws {
+        /// ADR-0104: short messages are one item; a long reply is a head, its open reasoning's segments, its
+        /// answer's segments and a tail, so the lazy stack lays out only the segments near the viewport.
+        @Test @MainActor func longRepliesSplitIntoItemsAndShortOnesStayWhole() async throws {
+            let folds = AppModel.shared.foldsCompletedReasoning
+            AppModel.shared.foldsCompletedReasoning = true
+            defer { AppModel.shared.foldsCompletedReasoning = folds }
+            let user = ChatMessage(role: .user)
+            user.text = "A question."
+            user.complete = true
+            let short = ChatMessage(role: .assistant)
+            short.text = "A short answer."
+            short.complete = true
+            let long = ChatMessage(role: .assistant)
+            long.appendStream(
+                text: (0..<900).map { "Paragraph \($0) of a long reply, with words enough to wrap." }
+                    .joined(separator: "\n\n"),
+                thinking: (0..<900).map { "Reasoning step \($0), with words enough to wrap." }
+                    .joined(separator: "\n\n"))
+            long.complete = true
+            let texts = TranscriptTexts()
+            let rows = TranscriptActivity.rows([user, short, long][...])
+            for _ in 0..<200 where (texts.answer(for: long).document?.segments.count ?? 0) < 2 {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            let segments = try #require(texts.answer(for: long).document?.segments.count)
+            #expect(segments > 5)
+            // Folded reasoning: a head (its "Thought" line), the answer's segments and a tail.
+            var parts = TranscriptItem.items(for: rows, texts: texts).filter { $0.message === long }.map(\.part)
+            #expect(parts == [.head] + (0..<segments).map { TranscriptItem.Part.answer($0) } + [.tail])
+            #expect(
+                TranscriptItem.items(for: rows, texts: texts).filter { $0.message !== long }.map(\.part) == [
+                    .whole, .whole,
+                ])
+
+            // Open reasoning adds one item per reasoning segment.
+            ReasoningDisclosureStore.shared.set(.init(isOpen: true), for: long.id)
+            defer { ReasoningDisclosureStore.shared.set(.init(isOpen: false), for: long.id) }
+            _ = texts.layout(of: long)
+            for _ in 0..<200 where (texts.reasoning(for: long).thinking?.segments.count ?? 0) < 2 {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            let reasoning = try #require(texts.reasoning(for: long).thinking?.segments.count)
+            parts = TranscriptItem.items(for: rows, texts: texts).filter { $0.message === long }.map(\.part)
+            #expect(
+                parts == [.head] + (0..<reasoning).map { TranscriptItem.Part.reasoning($0) }
+                    + (0..<segments).map { TranscriptItem.Part.answer($0) } + [.tail])
+        }
+
+        /// #78: a reader who scrolls up while a long reply streams stays where they are as output arrives
+        /// below, and stays the owner (ADR-0104).
+        @Test @MainActor func aReaderAboveAStreamingReplyStaysWhereTheyAre() async throws {
             let session = ChatSession(effort: .trot, modelID: nil)
             session.messagesLoaded = true
             let reply = ChatMessage(role: .assistant)
@@ -723,49 +589,47 @@ extension AppTests.Bleet {
                 .joined(separator: "\n\n")
             reply.complete = false
             session.messages = [reply]
+            session.isStreaming = true
+            defer { session.isStreaming = false }
             let viewport = TranscriptViewport()
             let (window, host) = hostedWindow(session, viewport: viewport)
             defer {
                 window.contentView = nil
                 window.close()
             }
-            func prepared() -> PreparedMarkdownDocument? {
-                PreparedMarkdownDocumentCache.shared.document(for: reply.id, revision: reply.textRevision)
-            }
-            for _ in 0..<150 where prepared()?.window == nil {
+            for _ in 0..<150 where (TranscriptTexts.shared.answer(for: reply).document?.segments.count ?? 0) < 2 {
                 try await Task.sleep(for: .milliseconds(20))
                 host.layoutSubtreeIfNeeded()
             }
             try await settle(viewport, host: host)
-            let document = try #require(prepared())
-            try #require(document.window?.upperBound == document.segments.count, "The latest segments are shown")
             let scroll = try #require(findTranscriptScroll(host))
 
-            // The reader moves up a little, short of the earlier loader at the top of the reply.
-            let up = min(200, scroll.contentView.bounds.minY / 3)
+            // The reader moves up a few screens.
+            let up = min(1_500, scroll.contentView.bounds.minY / 2)
             scroll.contentView.scroll(to: NSPoint(x: 0, y: scroll.contentView.bounds.minY - up))
             scroll.reflectScrolledClipView(scroll.contentView)
             try await settle(viewport, host: host)
             let trace = { viewport.diagnostics.suffix(16) }
             #expect(viewport.readerOwnsViewport, "\(trace())")
-            #expect(
-                viewport.segmentWindow(for: reply.id) == document.window,
-                "The owner holds the kept segments; \(trace())")
-            #expect(!viewport.holdsEarlierSegments(of: reply.id), "They reach the reply's end so far")
+            let anchor = try #require(viewport.anchor, "\(trace())")
+            let offset = scroll.contentView.bounds.minY
 
-            // More output arrives below the kept segments.
-            reply.text += (900..<1_000).map { "\n\nParagraph \($0), streamed after the reader moved up." }.joined()
-            for _ in 0..<150 where !viewport.holdsEarlierSegments(of: reply.id) {
-                try await Task.sleep(for: .milliseconds(20))
+            // More output arrives below the reader.
+            for batch in 0..<4 {
+                reply.text += (0..<40).map { "\n\nParagraph \(900 + batch * 40 + $0), streamed below the reader." }
+                    .joined()
+                try await Task.sleep(for: .milliseconds(200))
                 host.layoutSubtreeIfNeeded()
             }
-            #expect(viewport.holdsEarlierSegments(of: reply.id), "Newer segments are hidden below; \(trace())")
-            #expect(viewport.readerOwnsViewport && viewport.segmentWindow(for: reply.id) == document.window)
+            try await settle(viewport, host: host)
+            #expect(viewport.readerOwnsViewport && viewport.anchor == anchor, "\(trace())")
+            #expect(abs(scroll.contentView.bounds.minY - offset) <= 2, "The reader's view moved; \(trace())")
+            #expect(viewport.abandonedRequests == 0, "\(trace())")
         }
 
-        /// Paging earlier keeps the reader's view in place: the message at the top of the old window
-        /// stays at the same position on screen (within 1 pt), so every pixel below it is unchanged.
-        @Test @MainActor func pagingEarlierKeepsTheReadersViewInPlace() async throws {
+        /// ADR-0104: every loaded message is in the one lazy stack. Scrolling to the top shows the first
+        /// message, with nothing loading or paging, and the view stays put once there.
+        @Test @MainActor func reachingTheTopShowsTheFirstMessageWithoutPaging() async throws {
             let session = distinctSession(count: 120)
             let viewport = TranscriptViewport()
             let window = NSWindow(
@@ -785,56 +649,32 @@ extension AppTests.Bleet {
             }
             try await settle(viewport, host: host)
             let scroll = try #require(findTranscriptScroll(host))
-
-            // Reveal the earlier loader. Paging starts from its visibility callback, after this frame.
-            scroll.contentView.scroll(to: NSPoint(x: 0, y: 0))
-            scroll.reflectScrolledClipView(scroll.contentView)
-            host.layoutSubtreeIfNeeded()
-            let before = try snapshot(host)
-            let windowBefore = viewport.heldRange
-
-            for _ in 0..<100 where viewport.heldRange == windowBefore || viewport.request != nil {
-                try await Task.sleep(for: .milliseconds(20))
-                host.layoutSubtreeIfNeeded()
+            for _ in 0..<20 where scroll.contentView.bounds.minY > 1 {
+                scroll.contentView.scroll(to: NSPoint(x: 0, y: 0))
+                scroll.reflectScrolledClipView(scroll.contentView)
+                try await settle(viewport, host: host)
             }
+            let trace = { viewport.diagnostics.suffix(16) }
+            #expect(scroll.contentView.bounds.minY <= 1, "\(trace())")
+            #expect(viewport.anchor?.messageID == session.messages[0].id, "The first message is shown; \(trace())")
+            let before = try snapshot(host)
+            try await Task.sleep(for: .milliseconds(500))
             try await settle(viewport, host: host)
-            #expect(viewport.heldRange != windowBefore, "The earlier page loaded; \(viewport.diagnostics.suffix(16))")
-            #expect(viewport.abandonedRequests == 0)
             let after = try snapshot(host)
-
-            // Below the loader and above the jump button, the view must be identical.
-            let scale = CGFloat(before.pixelsHigh) / before.size.height
-            let top = Int(90 * scale)
-            let bottom = before.pixelsHigh - Int(70 * scale)
             var changed = 0
-            var region = (minX: Int.max, maxX: Int.min, minY: Int.max, maxY: Int.min)
-            var bands: [ClosedRange<Int>] = []
-            for y in stride(from: top, to: bottom - 4, by: 4) {
+            for y in stride(from: 0, to: before.pixelsHigh - 4, by: 4) {
                 for x in stride(from: 0, to: min(before.pixelsWide, after.pixelsWide) - 4, by: 8)
                 where visiblyDiffers(before, after, x: x, y: y) {
                     changed += 1
-                    region = (min(region.minX, x), max(region.maxX, x), min(region.minY, y), max(region.maxY, y))
-                    if bands.last.map({ y - $0.upperBound > 4 }) ?? true {
-                        bands.append(y...y)
-                    } else if let last = bands.last {
-                        bands[bands.count - 1] = last.lowerBound...y
-                    }
                 }
             }
-            // Content moved by a point changes hundreds of blocks.
-            #expect(
-                changed <= 4,
-                """
-                The reader's view moved while paging earlier: \(changed) pixels in x \(region.minX)...\(region.maxX) \
-                y \(region.minY)...\(region.maxY) of \(before.pixelsWide)x\(before.pixelsHigh), bands \(bands); \
-                \(viewport.diagnostics.suffix(16))
-                """)
+            #expect(changed <= 4, "The view changed at the top: \(changed) blocks; \(trace())")
+            #expect(viewport.abandonedRequests == 0, "\(trace())")
         }
 
-        /// #60 A1 step 3: a long reply renders rich as a bounded window of its latest segments, never as
-        /// text parts. Paging earlier inside it keeps the reader's segment where it was on screen (every
-        /// pixel below it unchanged), and paging later reaches the reply's end again.
-        @Test @MainActor func pagingInsideALongReplyKeepsTheReadersViewInPlace() async throws {
+        /// ADR-0104: a long reply scrolls virtually, segment by segment, from its first line to its last,
+        /// with no window and no control to page. Its segments prepare as they come into view.
+        @Test @MainActor func aLongReplyScrollsVirtuallyToBothEnds() async throws {
             let session = ChatSession(effort: .trot, modelID: nil)
             session.messagesLoaded = true
             let reply = ChatMessage(role: .assistant)
@@ -842,105 +682,14 @@ extension AppTests.Bleet {
                 .joined(separator: "\n\n")
             reply.complete = true
             session.messages = [reply]
-            let viewport = TranscriptViewport()
-            let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 700, height: 450), styleMask: [.titled],
-                backing: .buffered, defer: false)
-            window.isReleasedWhenClosed = false
-            let host = NSHostingView(
-                rootView: ChatTranscriptView(session: session, viewport: viewport)
-                    .environment(AppModel.shared).environment(\.colorScheme, .light)
-                    .frame(width: 700, height: 450))
-            host.appearance = NSAppearance(named: .aqua)
-            window.contentView = host
-            window.orderFront(nil)
-            defer {
-                window.contentView = nil
-                window.close()
+            try await scrollsToBothEnds(session, key: reply.id) {
+                TranscriptTexts.shared.answer(for: reply).document?.segments.count ?? 0
             }
-            func prepared() -> PreparedMarkdownDocument? {
-                PreparedMarkdownDocumentCache.shared.document(for: reply.id, revision: reply.textRevision)
-            }
-            for _ in 0..<150 where prepared()?.window == nil {
-                try await Task.sleep(for: .milliseconds(20))
-                host.layoutSubtreeIfNeeded()
-            }
-            try await settle(viewport, host: host)
-            let document = try #require(prepared())
-            let shown = try #require(document.window, "A long reply lays out a window of its segments")
-            #expect(shown.upperBound == document.segments.count && shown.lowerBound > 0)
-            #expect(document.shownBytes <= ReplyWindow.budget)
             #expect(TranscriptPartsCache.shared.parts(for: "\(reply.id.uuidString):text", source: reply.text) == nil)
-            let scroll = try #require(findTranscriptScroll(host))
-
-            // Reveal the reply's earlier loader. Paging starts from its visibility callback.
-            scroll.contentView.scroll(to: NSPoint(x: 0, y: 0))
-            scroll.reflectScrolledClipView(scroll.contentView)
-            host.layoutSubtreeIfNeeded()
-            let before = try snapshot(host)
-            let commands = viewport.scrollCommands
-            // Paging is done when the owner holds an earlier window, the reply has prepared and laid it
-            // out, and the owner's restore of the kept segment has ended. Moving up alone already makes
-            // the owner hold the shown window, so holding a window is not enough.
-            func pagedAndPlaced() -> Bool {
-                guard let held = viewport.segmentWindow(for: reply.id), held.lowerBound < shown.lowerBound else {
-                    return false
-                }
-                return prepared()?.window == held && viewport.request == nil
-            }
-            for _ in 0..<150 where !pagedAndPlaced() {
-                try await Task.sleep(for: .milliseconds(20))
-                host.layoutSubtreeIfNeeded()
-            }
-            try await settle(viewport, host: host)
-            try #require(
-                pagedAndPlaced(), "The earlier segments loaded and were placed; \(viewport.diagnostics.suffix(16))")
-            let paged = try #require(viewport.segmentWindow(for: reply.id))
-            #expect(paged.lowerBound < shown.lowerBound && paged.contains(shown.lowerBound))
-            #expect(viewport.abandonedRequests == 0, "\(viewport.diagnostics.suffix(16))")
-            let after = try snapshot(host)
-
-            // Below the loader and message header, and above the jump button, the view is identical.
-            let scale = CGFloat(before.pixelsHigh) / before.size.height
-            let top = Int(150 * scale)
-            let bottom = before.pixelsHigh - Int(70 * scale)
-            var changed = 0
-            for y in stride(from: top, to: bottom - 4, by: 4) {
-                for x in stride(from: 0, to: min(before.pixelsWide, after.pixelsWide) - 4, by: 8)
-                where visiblyDiffers(before, after, x: x, y: y) {
-                    changed += 1
-                }
-            }
-            let commandsWhilePaging = viewport.scrollCommands - commands
-            // Content moved by a point changes hundreds of blocks.
-            #expect(
-                changed <= 4,
-                "The reader's view moved while paging the reply: \(changed) pixels, \(commandsWhilePaging) commands; \(viewport.diagnostics.suffix(16))"
-            )
-            if changed > 0 {
-                for (name, image) in [("before", before), ("after", after)] {
-                    if let png = image.representation(using: .png, properties: [:]) {
-                        Attachment.record(png, named: "paging-reply-\(name).png")
-                    }
-                }
-            }
-
-            // Reading down pages later until the reply's end is shown again.
-            for _ in 0..<40 where viewport.holdsEarlierSegments(of: reply.id) {
-                let content = try #require(scroll.documentView)
-                let end = content.bounds.height - scroll.contentView.bounds.height
-                scroll.contentView.scroll(to: NSPoint(x: 0, y: end))
-                scroll.reflectScrolledClipView(scroll.contentView)
-                try await settle(viewport, host: host)
-            }
-            #expect(!viewport.holdsEarlierSegments(of: reply.id), "\(viewport.diagnostics.suffix(16))")
-            #expect(viewport.abandonedRequests == 0, "\(viewport.diagnostics.suffix(16))")
         }
 
-        /// #60 A1: expanded reasoning renders as a bounded window of its latest segments, never as text
-        /// parts, and pages through the navigation owner under its own key. Paging earlier keeps the
-        /// reader's segment where it was on screen, and paging later reaches the reasoning's end again.
-        @Test @MainActor func pagingInsideLongReasoningKeepsTheReadersViewInPlace() async throws {
+        /// ADR-0104: open reasoning scrolls virtually the same way, under its own key.
+        @Test @MainActor func longReasoningScrollsVirtuallyToBothEnds() async throws {
             let session = ChatSession(effort: .trot, modelID: nil)
             session.messagesLoaded = true
             let reply = ChatMessage(role: .assistant)
@@ -949,101 +698,58 @@ extension AppTests.Bleet {
                 thinking: (0..<900).map { "Reasoning step \($0), with words enough to wrap once or twice." }
                     .joined(separator: "\n\n"))
             reply.complete = true
-            // A reader who chose to read all of the reasoning.
-            ReasoningDisclosureStore.shared.set(.init(isOpen: true, showsAll: true), for: reply.id)
+            // A reader who opened the reasoning reads all of it.
+            ReasoningDisclosureStore.shared.set(.init(isOpen: true), for: reply.id)
             session.messages = [reply]
+            try await scrollsToBothEnds(session, key: TranscriptSegmentOwner.reasoning(of: reply.id)) {
+                TranscriptTexts.shared.reasoning(for: reply).thinking?.segments.count ?? 0
+            }
+        }
+
+        /// Scrolls `session`'s only reply from its end to its top and back, checking that the reader
+        /// reaches its first and last segments (measured under `key`) and that nothing is abandoned.
+        @MainActor private func scrollsToBothEnds(
+            _ session: ChatSession, key: UUID, segments: @escaping @MainActor () -> Int
+        ) async throws {
             let viewport = TranscriptViewport()
-            let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 700, height: 450), styleMask: [.titled],
-                backing: .buffered, defer: false)
-            window.isReleasedWhenClosed = false
-            let host = NSHostingView(
-                rootView: ChatTranscriptView(session: session, viewport: viewport)
-                    .environment(AppModel.shared).environment(\.colorScheme, .light)
-                    .frame(width: 700, height: 450))
-            host.appearance = NSAppearance(named: .aqua)
-            window.contentView = host
-            window.orderFront(nil)
+            let (window, host) = hostedWindow(session, viewport: viewport)
             defer {
                 window.contentView = nil
                 window.close()
             }
-            let key = TranscriptSegmentOwner.reasoning(of: reply.id)
-            func prepared() -> PreparedThinking? {
-                PreparedThinkingCache.shared.thinking(for: reply.id, revision: reply.thinkingRevision)
-            }
-            for _ in 0..<150 where prepared()?.window == nil {
+            for _ in 0..<200 where segments() < 2 {
                 try await Task.sleep(for: .milliseconds(20))
                 host.layoutSubtreeIfNeeded()
             }
+            try #require(segments() > 5, "A long text is several segments")
             try await settle(viewport, host: host)
-            let thinking = try #require(prepared())
-            let shown = try #require(thinking.window, "Long reasoning lays out a window of its segments")
-            #expect(shown.upperBound == thinking.segments.count && shown.lowerBound > 0)
-            #expect(shown.reduce(0) { $0 + thinking.segments[$1].bytes } <= ReplyWindow.budget)
             let scroll = try #require(findTranscriptScroll(host))
-
-            // Reveal the reasoning's earlier loader. Paging starts from its visibility callback.
-            scroll.contentView.scroll(to: NSPoint(x: 0, y: 0))
-            scroll.reflectScrolledClipView(scroll.contentView)
-            host.layoutSubtreeIfNeeded()
-            let before = try snapshot(host)
-            // Paging is done when the owner holds an earlier window, the reasoning has laid it out, and
-            // the owner's restore of the kept segment has ended.
-            func pagedAndPlaced() -> Bool {
-                guard let held = viewport.segmentWindow(for: key), held.lowerBound < shown.lowerBound else {
-                    return false
-                }
-                return prepared()?.window == held && viewport.request == nil
-            }
-            for _ in 0..<150 where !pagedAndPlaced() {
-                try await Task.sleep(for: .milliseconds(20))
-                host.layoutSubtreeIfNeeded()
-            }
-            try await settle(viewport, host: host)
-            try #require(
-                pagedAndPlaced(), "The earlier reasoning loaded and was placed; \(viewport.diagnostics.suffix(16))")
-            let paged = try #require(viewport.segmentWindow(for: key))
-            #expect(paged.lowerBound < shown.lowerBound && paged.contains(shown.lowerBound))
-            #expect(viewport.segmentWindow(for: reply.id) == nil, "The answer's window is not the reasoning's")
-            #expect(viewport.abandonedRequests == 0, "\(viewport.diagnostics.suffix(16))")
-            let after = try snapshot(host)
-
-            // Below the loader, message and disclosure headers, and above the jump button, the view is
-            // identical.
-            let scale = CGFloat(before.pixelsHigh) / before.size.height
-            let top = Int(180 * scale)
-            let bottom = before.pixelsHigh - Int(70 * scale)
-            var changed = 0
-            for y in stride(from: top, to: bottom - 4, by: 4) {
-                for x in stride(from: 0, to: min(before.pixelsWide, after.pixelsWide) - 4, by: 8)
-                where visiblyDiffers(before, after, x: x, y: y) {
-                    changed += 1
-                }
-            }
-            // Content moved by a point changes hundreds of blocks.
-            #expect(
-                changed <= 4,
-                "The reader's view moved while paging the reasoning: \(changed) pixels; \(viewport.diagnostics.suffix(16))"
-            )
-            if changed > 0 {
-                for (name, image) in [("before", before), ("after", after)] {
-                    if let png = image.representation(using: .png, properties: [:]) {
-                        Attachment.record(png, named: "paging-reasoning-\(name).png")
-                    }
-                }
-            }
-
-            // Reading down pages later until the reasoning's end is shown again.
-            for _ in 0..<40 where viewport.holdsEarlierSegments(of: key) {
-                let content = try #require(scroll.documentView)
-                let end = content.bounds.height - scroll.contentView.bounds.height
-                scroll.contentView.scroll(to: NSPoint(x: 0, y: end))
+            let trace = { viewport.diagnostics.suffix(16) }
+            for _ in 0..<40 where scroll.contentView.bounds.minY > 1 {
+                scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, scroll.contentView.bounds.minY - 2_000)))
                 scroll.reflectScrolledClipView(scroll.contentView)
                 try await settle(viewport, host: host)
             }
-            #expect(!viewport.holdsEarlierSegments(of: key), "\(viewport.diagnostics.suffix(16))")
-            #expect(viewport.abandonedRequests == 0, "\(viewport.diagnostics.suffix(16))")
+            #expect(scroll.contentView.bounds.minY <= 1, "The top is reachable; \(trace())")
+            let top = try #require(viewport.anchor, "\(trace())")
+            // The reply's first item: its head (with reasoning), else its first answer segment.
+            #expect(
+                top.messageID == session.messages[0].id && (top.segment ?? 0) == 0, "The reply's first item; \(trace())"
+            )
+
+            for _ in 0..<60 {
+                let content = try #require(scroll.documentView)
+                let end = content.bounds.height - scroll.contentView.bounds.height
+                if end - scroll.contentView.bounds.minY <= 1 { break }
+                scroll.contentView.scroll(to: NSPoint(x: 0, y: min(end, scroll.contentView.bounds.minY + 2_000)))
+                scroll.reflectScrolledClipView(scroll.contentView)
+                try await settle(viewport, host: host)
+            }
+            let content = try #require(scroll.documentView)
+            #expect(
+                content.bounds.height - scroll.contentView.bounds.maxY <= 1,
+                "The end is reachable; \(trace())")
+            #expect(viewport.abandonedRequests == 0, "\(trace())")
         }
 
         /// A reader who takes the viewport cancels a pending programmatic scroll before it runs.
@@ -1064,10 +770,9 @@ extension AppTests.Bleet {
                 window.close()
             }
             try await settle(viewport, host: host)
-            let range = viewport.messageRange(count: session.messages.count, cost: { _ in 0 })
             let commands = viewport.scrollCommands
-            viewport.restore(Anchor(messageID: session.messages[range.lowerBound].id, offset: 0))
-            viewport.readerMoved(currentRange: range)
+            viewport.restore(Anchor(messageID: session.messages[0].id, offset: 0))
+            viewport.readerMoved()
             try await Task.sleep(for: .milliseconds(300))
             #expect(viewport.request == nil)
             #expect(viewport.scrollCommands == commands, "A cancelled target must never scroll")
@@ -1085,15 +790,14 @@ extension AppTests.Bleet {
             }
             try await settle(viewport, host: host)
             let scroll = try #require(findTranscriptScroll(host))
-            let range = viewport.messageRange(count: session.messages.count, cost: { _ in 0 })
             let commands = viewport.scrollCommands
-            viewport.restore(Anchor(messageID: session.messages[range.lowerBound].id, offset: 0))
+            viewport.restore(Anchor(messageID: session.messages[0].id, offset: 0))
             for _ in 0..<100 where viewport.scrollCommands == commands {
                 try await Task.sleep(for: .milliseconds(5))
             }
             try #require(viewport.scrollCommands > commands, "The command was issued")
             // The reader interrupts it and moves directly before the command's move lands.
-            viewport.readerMoved(currentRange: range)
+            viewport.readerMoved()
             let target = (scroll.documentView?.bounds.height ?? 0) / 2
             scroll.contentView.scroll(to: NSPoint(x: 0, y: target))
             scroll.reflectScrolledClipView(scroll.contentView)
@@ -1260,7 +964,7 @@ extension AppTests.Bleet {
             #expect(viewport.anchor?.messageID == late.id, "\(trace)")
         }
 
-        /// Restoration anchors to a row the held window renders: a non-rendering message gives way to
+        /// Restoration anchors to a message that renders: a non-rendering message gives way to
         /// its nearest row, and a missing one restores no anchor.
         @Test @MainActor func initialRestorationResolvesToARenderedRow() throws {
             let session = distinctSession(count: 60)
@@ -1287,11 +991,7 @@ extension AppTests.Bleet {
             let session = distinctSession(count: 60)
             let anchorID = session.messages[20].id
             let viewport = TranscriptViewport(
-                initiallyFollowing: false,
-                initialHeldRange: TranscriptWindow.range(
-                    count: session.messages.count, startingAt: 20,
-                    cost: { TranscriptWindow.displayCost(session.messages[$0]) }),
-                initialAnchor: Anchor(messageID: anchorID, offset: 0))
+                initiallyFollowing: false, initialAnchor: Anchor(messageID: anchorID, offset: 0))
             let host = NSHostingView(
                 rootView: ChatTranscriptView(
                     session: session, initiallyFollowing: false, initialVisibleMessageID: anchorID, viewport: viewport
@@ -1490,7 +1190,7 @@ extension AppTests.Bleet {
             let foldedHeight = folded.fittingSize.height
             foldedWindow.close()
 
-            ReasoningDisclosureStore.shared.set(.init(isOpen: true, showsAll: false), for: message.id)
+            ReasoningDisclosureStore.shared.set(.init(isOpen: true), for: message.id)
             let (openWindow, open) = try await mounted(message)
             defer { openWindow.close() }
             #expect(open.fittingSize.height > foldedHeight + 60, "The reopened reasoning stays open when remounted")
@@ -1499,7 +1199,7 @@ extension AppTests.Bleet {
         @Test @MainActor func choicesAreBounded() {
             let store = ReasoningDisclosureStore(limit: 2)
             let ids = (0..<3).map { _ in UUID() }
-            for id in ids { store.set(.init(isOpen: true, showsAll: false), for: id) }
+            for id in ids { store.set(.init(isOpen: true), for: id) }
             #expect(store.choice(for: ids[0]) == nil)
             #expect(store.choice(for: ids[2])?.isOpen == true)
         }

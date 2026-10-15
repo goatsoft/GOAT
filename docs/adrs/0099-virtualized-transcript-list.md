@@ -1,6 +1,6 @@
 # ADR-0099: Virtualized transcript list
 
-Status: Proposed · 2026-09-27
+Status: Accepted · proposed 2026-09-27 · completed by [ADR-0104](0104-single-stack-transcript.md) in 0.1.4
 If accepted, supersedes the admission window and endless paging of
 [ADR-0091](0091-content-bounded-transcript-layout.md) (its decision, its 2026-09-22 amendment and
 the segment-level windowing of its segmented rendering amendment), section 4 of

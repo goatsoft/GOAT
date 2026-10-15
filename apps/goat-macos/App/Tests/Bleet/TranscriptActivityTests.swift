@@ -327,16 +327,11 @@ extension AppTests.Bleet {
         @Test @MainActor func searchNavigationUsesTheViewportOwnerAndCanReturnToLatest() {
             let viewport = TranscriptViewport()
             let id = UUID()
-            viewport.reveal(
-                .init(messageID: id, offset: 0, segment: 12), messageWindow: 40..<41, segment: 12, segmentCount: 90)
-            #expect(viewport.readerOwnsViewport)
-            #expect(viewport.heldRange == 40..<41)
-            #expect(viewport.segmentWindow(for: id) == 12..<13)
+            viewport.reveal(.init(messageID: id, offset: 0, segment: 12))
+            #expect(viewport.readerOwnsViewport && !viewport.isScrolledToBottom)
             #expect(viewport.request?.target == .anchor(.init(messageID: id, offset: 0, segment: 12)))
             viewport.jumpToLatest()
             #expect(viewport.autoFollow)
-            #expect(viewport.heldRange == nil)
-            #expect(viewport.segmentWindow(for: id) == nil)
             #expect(viewport.request?.target == .bottom)
         }
         @Test @MainActor func dayBoundariesBreakAssistantContinuations() throws {
@@ -481,21 +476,13 @@ extension AppTests.Bleet {
             #expect(after[1].messages[0].thinking == "Inspect the entry point first.")
         }
 
-        @Test @MainActor func activityPagingStaysBoundedWithoutLosingToolsAcrossWindows() {
+        /// ADR-0104: every loaded message is laid out as items, tools included, with none left out.
+        @Test @MainActor func everyMessageAndToolIsAnItem() {
             let messages = (0..<105).map { _ in activityMessage() }
-            var visited = Set<UUID>()
-            var end = messages.count
-            repeat {
-                let range = TranscriptWindow.range(count: messages.count, end: end)
-                let rows = TranscriptActivity.rows(messages[range])
-                let visible = rows.flatMap(\.messages)
-                #expect(visible.count <= TranscriptWindow.capacity)
-                #expect(visible.map(\.id) == messages[range].map(\.id))
-                visited.formUnion(visible.map(\.id))
-                if range.lowerBound == 0 { break }
-                end = range.lowerBound + TranscriptWindow.step
-            } while true
-            #expect(visited == Set(messages.map(\.id)))
+            let rows = TranscriptActivity.rows(messages[...])
+            let items = TranscriptItem.items(for: rows, texts: TranscriptTexts())
+            #expect(Set(items.map(\.message.id)) == Set(messages.map(\.id)))
+            #expect(items.flatMap(\.message.toolEvents).count == messages.flatMap(\.toolEvents).count)
         }
 
         @Test @MainActor func toolTreeConnectsAdjacentActionsButNeverCrossesReasoningOrLead() {
@@ -635,14 +622,7 @@ extension AppTests.Bleet {
 
         }
 
-        @MainActor @Test func reasoningPreviewKeepsRecentContentAndElapsedClockKeepsSeconds() {
-            #expect(ReasoningPreview("Inspect the file.").text == "Inspect the file.")
-            #expect(!ReasoningPreview("Inspect the file.").hasEarlierText)
-            let long = String(repeating: "Earlier thoughts. ", count: 500) + "Latest decision."
-            let preview = ReasoningPreview(long)
-            #expect(preview.hasEarlierText)
-            #expect(preview.text.count == ReasoningPreview.characterLimit)
-            #expect(preview.text.hasSuffix("Latest decision."))
+        @MainActor @Test func elapsedClockKeepsSeconds() {
             #expect(AssistantStatusRow<EmptyView>.elapsedLabel(125) == "2m 5s")
             #expect(AssistantStatusRow<EmptyView>.elapsedLabel(3_665) == "1h 1m 5s")
         }
@@ -861,7 +841,7 @@ extension TranscriptHistoryPagingTests {
         session.messagesLoaded = false
         await model.loadMessages(for: session)
         let anchor = TranscriptViewport.Anchor(messageID: session.messages[5].id, offset: 13)
-        let navigation = TranscriptViewport(initiallyFollowing: false, initialHeldRange: 0..<40, initialAnchor: anchor)
+        let navigation = TranscriptViewport(initiallyFollowing: false, initialAnchor: anchor)
         let host = NSHostingView(
             rootView: ChatTranscriptView(session: session, viewport: navigation).environment(model)
                 .environment(\.scenePhase, .active).allowsHitTesting(false))
@@ -918,14 +898,15 @@ extension TranscriptHistoryPagingTests {
 }
 
 extension TranscriptHistoryPagingTests {
-    func testShortReasoningCanBePagedWithoutScrollingFirst() async throws {
+    /// ADR-0104: open reasoning shows all of it, with no control to page through it.
+    func testOpenReasoningShowsAllOfItWithNoPagingControl() async throws {
         let session = ChatSession(effort: .trot, modelID: nil)
         session.messagesLoaded = true
         let message = ChatMessage(role: .assistant)
         message.thinking = "First paragraph.\n\n```swift\nlet choice = 42\n```\n\nLast paragraph."
         message.complete = true
         session.messages = [message]
-        ReasoningDisclosureStore.shared.set(.init(isOpen: true, showsAll: true), for: message.id)
+        ReasoningDisclosureStore.shared.set(.init(isOpen: true), for: message.id)
         let owner = TranscriptViewport()
         let enhancedUI = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
         let previousEnhancedUI = NSApp.accessibilityAttributeValue(enhancedUI)
@@ -967,7 +948,12 @@ extension TranscriptHistoryPagingTests {
             let role =
                 value(object, "accessibilityRole") as? String
                 ?? object.accessibilityAttributeValue(.role) as? String
-            if name == "Earlier reasoning", role == NSAccessibility.Role.button.rawValue { return object }
+            if let name,
+                ["Earlier reasoning", "Later reasoning", "Show all reasoning", "Show recent reasoning"]
+                    .contains(name), role == NSAccessibility.Role.button.rawValue
+            {
+                return object
+            }
             let children =
                 value(object, "accessibilityChildren") as? [Any]
                 ?? object.accessibilityAttributeValue(.children) as? [Any] ?? []
@@ -976,18 +962,11 @@ extension TranscriptHistoryPagingTests {
             }
             return nil
         }
-        let earlier = try XCTUnwrap(find(host), "Earlier reasoning must be an actionable control")
-        // SwiftUI's AX node exposes the modern Objective-C action without declaring the
-        // NSAccessibilityButton protocol. Call that BOOL-returning method with its correct ABI;
-        // NSObject's deprecated accessibilityPerformAction implementation is a no-op here.
-        let press = NSSelectorFromString("accessibilityPerformPress")
-        XCTAssertTrue(earlier.responds(to: press))
-        let implementation = try XCTUnwrap(earlier.method(for: press))
-        let performPress = unsafeBitCast(implementation, to: (@convention(c) (AnyObject, Selector) -> Bool).self)
-        XCTAssertTrue(performPress(earlier, press))
-        try await Task.sleep(for: .milliseconds(300))
-        XCTAssertTrue(owner.readerOwnsViewport)
-        let key = TranscriptSegmentOwner.reasoning(of: message.id)
-        XCTAssertEqual(owner.segmentWindow(for: key)?.lowerBound, 0, "The first paragraph must remain reachable")
+        XCTAssertNil(find(host), "Reasoning has no control to page through it")
+        XCTAssertEqual(TranscriptTexts.shared.layout(of: message), .whole, "Short reasoning stays in its row")
+        let reasoning = TranscriptTexts.shared.reasoning(for: message)
+        let segments = try XCTUnwrap(reasoning.thinking?.segments)
+        XCTAssertEqual(segments.first?.text.hasPrefix("First paragraph."), true)
+        XCTAssertEqual(segments[segments.count - 1].text.hasSuffix("Last paragraph."), true)
     }
 }

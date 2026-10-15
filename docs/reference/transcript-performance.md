@@ -92,16 +92,16 @@ retention or actual input-latency measurement and does not qualify the macOS 26 
 
 ### Reader follow-up implementation
 
-The reader adds day boundaries that remain stable across admitted windows, an empty
-conversation state, explicit Earlier/Later controls, and a Latest shortcut that respects Reduce
-Motion and the animation setting. Find searches message text off the main actor, returns at most
+The reader adds day boundaries that remain stable as history loads, an empty conversation
+state, and a Latest shortcut that respects Reduce Motion and the animation setting. There are no
+paging controls: every loaded message is in the one lazy stack, and stored history loads at either
+end as the reader approaches it (ADR-0104). Find searches message text off the main actor, returns at most
 200 highlighted message excerpts, and sends selection through the existing viewport owner. Rich
-replies are paged to the segment containing the match. The selected source excerpt remains
-visible above the reader, including matches inside collapsed code. Oversized plain-text replies
-currently open at their message boundary. Find (Command-F) and copy-last-reply (Shift-Command-C)
-route through the focused chat window. Segment paging controls are real buttons, so a short
-window can reach earlier text without requiring a preceding scroll gesture.
-Focus conversation (Option-Command-Up) moves keyboard focus to the current reading window;
+replies are revealed at the segment item containing the match. The selected source excerpt remains
+visible above the reader, including matches inside collapsed code. Plain-text parts are revealed at the part
+containing the match. Find (Command-F) and copy-last-reply (Shift-Command-C)
+route through the focused chat window.
+Focus conversation (Option-Command-Up) moves keyboard focus to the message the reader sees;
 Focus composer (Option-Command-Down) returns to the draft. Focusing the conversation is reader
 input and cancels pending automatic restoration through the existing navigation owner.
 
@@ -197,17 +197,16 @@ final rendering style while the provisional tail streams: completion does not ch
 segment's preview or streaming style at once. Complete HTML/SVG/Mermaid fences can preview when
 their segment settles; oversized fence pieces stay source-only because their closures are
 synthetic. The
-`MarkdownSegmentParse` signpost marks each segment parse. A long response lays
-out a window of at most two segments and 16 KiB of rendered bytes: its latest
-segments while following, or those the reader pages to. Loaders at the window's
-edges page it as they come into view, keeping the reader's segment in place. Only
-the window's segments (and two on each side) keep their parses. The message
-window charges a prepared response the bytes of its shown segments, including
-repeated reference definitions.
+`MarkdownSegmentParse` signpost marks each segment parse. A long response is
+split into items, one per segment (ADR-0104), so the lazy stack lays out only the
+segments near the viewport. Each segment parses as its item comes into view;
+preparation keeps the segments shown and three on each side parsed and releases
+the rest, so retained parses are bounded by what the reader sees, not by the reply.
 
-Reasoning shown in full is windowed the same way through 2 MiB: its fence-aware
-blocks are split at line boundaries into segments of at most 6 KiB, and a window
-of at most two segments and 16 KiB is laid out, paged under its own key. It is
+Open reasoning is split into items the same way through 2 MiB: its fence-aware
+blocks are split at line boundaries into segments of at most 6 KiB, each an item
+measured under the reasoning's own key. Reasoning is folded or full: there is no
+recent excerpt. It is
 prepared off the main actor from a 120 ms sample of its text revision. While the
 revision only appends, the held segmentation lexes each appended character once,
 including within one long unfinished line, and a refresh copies at most one open
@@ -215,10 +214,9 @@ piece and one chunk of segments, so total work grows linearly with the reasoning
 (`streamingPreparationWorkGrowsLinearly` checks completed lines, unbroken prose,
 one long code line and long fence info through 2 MiB).
 
-A response or expanded reasoning above 2 MiB is presented as
-selectable plain-text parts, prepared off the main actor. Earlier text and Later
-text navigate those parts; Latest text follows the newest part. Choosing an
-older part holds that choice as output arrives. Copy retains the full original
+A response or open reasoning above 2 MiB (and user text above 8 KiB) is
+presented as selectable plain-text parts, prepared off the main actor, each part
+an item of the lazy stack. Copy retains the full original
 source, including Markdown fences and whitespace. These are presentation bounds;
 persistence and model context retain the complete content.
 

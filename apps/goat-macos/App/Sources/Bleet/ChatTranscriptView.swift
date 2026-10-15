@@ -19,64 +19,34 @@ extension EnvironmentValues {
     }
 }
 
-/// Segment paging and frame reports from long replies to the transcript's navigation owner. Equal
-/// for the same owner, so a transcript update does not invalidate every reply: the actions read the
-/// transcript's state when they run.
-struct TranscriptSegmentNavigation: Equatable, Sendable {
-    var viewport: TranscriptViewport?
-    /// Shows `window` of a reply's segments, keeping segment `kept` where the reader sees it. The
-    /// reply has `segmentCount` segments now.
-    var page: @MainActor @Sendable (_ messageID: UUID, _ window: Range<Int>, _ kept: Int, _ segmentCount: Int) -> Void =
-        { _, _, _, _ in }
-    /// Short windows use explicit buttons; mounting the opposite boundary must not reverse a page.
-    var canAutomaticallyPage: @MainActor @Sendable () -> Bool = { true }
-    /// Whether a loader seen now can page, keeping `segment` of `messageID` in place: the reader owns
-    /// the viewport, no move is pending or being attributed, and that segment has reported where it is.
-    /// A loader seen while one of these is still settling waits for it, within a bound.
-    var readyToPage: @MainActor @Sendable (_ messageID: UUID, _ segment: Int) -> Bool = { _, _ in true }
-    /// A reply's segment count changed as it streamed.
-    var recordSegmentCount: @MainActor @Sendable (_ messageID: UUID, _ segmentCount: Int) -> Void = { _, _ in }
-    /// The reader took the viewport while a reply showed `window` of its `segmentCount` segments,
-    /// which it keeps.
-    var hold: @MainActor @Sendable (_ messageID: UUID, _ window: Range<Int>, _ segmentCount: Int) -> Void = {
-        _, _, _ in
-    }
-    /// A shown segment's frame in content coordinates, or nil when it is no longer laid out, and the
-    /// window of segments that layout shows.
-    /// `instance` identifies the mounted view that measured it.
-    var recordFrame:
-        @MainActor @Sendable (
-            _ messageID: UUID, _ segment: Int, _ frame: CGRect?, _ window: Range<Int>, _ instance: UUID
-        ) -> Void = { _, _, _, _, _ in }
-
-    static func == (lhs: Self, rhs: Self) -> Bool { lhs.viewport === rhs.viewport }
-}
-
-extension EnvironmentValues {
-    @Entry var transcriptSegments = TranscriptSegmentNavigation()
-}
-
-/// The keys long text pages under with the navigation owner (#60 A1). A reply's answer uses its
-/// message ID; its expanded reasoning pages independently under a key derived from that ID.
+/// The keys a message's items are measured under (ADR-0104). A message's first item and its answer
+/// segments use its ID; its reasoning segments and its tail use keys derived from that ID.
 enum TranscriptSegmentOwner {
-    /// The key a message's expanded reasoning pages under. Applying it twice gives the message ID back.
+    /// The key a message's reasoning segments are measured under. Applying it twice gives the ID back.
     static func reasoning(of messageID: UUID) -> UUID {
         var bytes = messageID.uuid
         bytes.15 ^= 0xA5
         return UUID(uuid: bytes)
     }
 
-    /// Whether `key` is the message itself or its reasoning.
+    /// The key a split message's tail is measured under. Applying it twice gives the ID back.
+    static func tail(of messageID: UUID) -> UUID {
+        var bytes = messageID.uuid
+        bytes.15 ^= 0x5A
+        return UUID(uuid: bytes)
+    }
+
+    /// Whether `key` is the message itself, its reasoning or its tail.
     static func key(_ key: UUID, belongsTo messageID: UUID) -> Bool {
-        key == messageID || key == reasoning(of: messageID)
+        key == messageID || key == reasoning(of: messageID) || key == tail(of: messageID)
     }
 }
 
+/// Loading a database page of history at one end, while it runs.
 private enum TranscriptPagingPhase: Equatable, Sendable {
     case idle
     case pagingEarlier
     case pagingLater
-    case pagingSegments
 }
 
 struct TranscriptRevealRequest: Equatable, Sendable {
@@ -86,18 +56,19 @@ struct TranscriptRevealRequest: Equatable, Sendable {
     var match: TranscriptText.SearchMatch? = nil
 }
 
-/// The transcript's single navigation owner (#54 section 2, #60 A1).
+/// The transcript's single navigation owner (#54 section 2, #60 A1, ADR-0104).
 ///
-/// It holds the admitted message window, who owns the viewport, the reader's anchor and at most one
-/// pending scroll request. Reader gestures, paging, restoration, compaction, jumps to the latest
-/// output and content changes arrive as explicit events. `ChatTranscriptView` performs each request
-/// with one mechanism (`TranscriptScrollExecutor`) and reports when the geometry shows it fulfilled.
-/// Raw scroll measurements stay in the view's non-observable reader state.
+/// It holds who owns the viewport, the reader's anchor and at most one pending scroll request. Reader
+/// gestures, history loads, restoration, compaction, jumps to the latest output and content changes
+/// arrive as explicit events. `ChatTranscriptView` performs each request with one mechanism
+/// (`TranscriptScrollExecutor`) and reports when the geometry shows it fulfilled. Raw scroll measurements
+/// stay in the view's non-observable reader state. Nothing is windowed: every loaded message is an item
+/// of the transcript's lazy stack.
 @MainActor @Observable final class TranscriptViewport {
-    /// A reading position: a message, and how far the viewport's top edge is below the message's top
-    /// edge. A negative offset leaves space above the message. In a long reply shown as a window of
-    /// segments the offset is measured from a segment's top edge instead, so it survives the window
-    /// moving above it.
+    /// A reading position: an item, and how far the viewport's top edge is below the item's top edge. A
+    /// negative offset leaves space above it. The item is a message's first item (`segment` nil), or a
+    /// segment of its answer or reasoning (`messageID` is then the message or its reasoning key), or a
+    /// split message's tail (its tail key).
     struct Anchor: Equatable, Sendable {
         var messageID: UUID
         var offset: CGFloat
@@ -116,25 +87,18 @@ struct TranscriptRevealRequest: Equatable, Sendable {
         let generation: UInt64
     }
 
-    private(set) var heldRange: Range<Int>?
     /// True while the viewport follows the latest output; false while the reader owns it.
     private(set) var autoFollow: Bool
     var readerOwnsViewport: Bool { !autoFollow }
     /// Presentation only: false shows the jump-to-latest button.
     var isScrolledToBottom: Bool
     @ObservationIgnored weak var historySession: ChatSession?
+    /// The message an anchor's key belongs to: reasoning and tail keys map back to their message.
+    @ObservationIgnored var messageForKey: (UUID) -> UUID? = { $0 }
     private(set) var anchor: Anchor? {
-        didSet { historySession?.historyAnchorID = anchor?.messageID }
+        didSet { historySession?.historyAnchorID = anchor.flatMap { messageForKey($0.messageID) } }
     }
     private(set) var request: Request?
-    /// Segment windows the reader paged long replies to, by message. Following clears them.
-    private(set) var segmentWindows: [UUID: Range<Int>] = [:] {
-        didSet { segmentCounts = segmentCounts.filter { segmentWindows[$0.key] != nil } }
-    }
-    /// The current segment count of each held reply, which grows while it streams. Read only when a
-    /// gesture settles, so a streaming refresh does not invalidate every reply.
-    @ObservationIgnored private var segmentCounts: [UUID: Int] = [:]
-    static let maximumSegmentWindows = 16
     private var generation: UInt64 = 0
     /// Scroll commands issued and requests abandoned after the bounded attempts, for instrumentation.
     @ObservationIgnored private(set) var scrollCommands = 0
@@ -159,77 +123,24 @@ struct TranscriptRevealRequest: Equatable, Sendable {
         if diagnostics.count > 40 { diagnostics.removeFirst(diagnostics.count - 40) }
     }
 
-    init(initiallyFollowing: Bool = true, initialHeldRange: Range<Int>? = nil, initialAnchor: Anchor? = nil) {
+    init(initiallyFollowing: Bool = true, initialAnchor: Anchor? = nil) {
         autoFollow = initiallyFollowing
         isScrolledToBottom = initiallyFollowing
-        heldRange = initialHeldRange
         if !initiallyFollowing, let initialAnchor { restore(initialAnchor) }
     }
 
-    func messageRange(count: Int, anchor: Int? = nil, cost: (Int) -> Int) -> Range<Int> {
-        if let heldRange {
-            return TranscriptWindow.clamped(heldRange, count: count, anchor: anchor, cost: cost)
-        }
-        return TranscriptWindow.range(count: count, end: nil, cost: cost)
-    }
-
-    /// The window the reader paged a long reply to, if any. Without one a reply shows its latest
-    /// segments, or keeps those shown while the reader owns the viewport.
-    func segmentWindow(for messageID: UUID) -> Range<Int>? { segmentWindows[messageID] }
-
-    /// Whether the reader holds `messageID` short of its current end, so the transcript's bottom is
-    /// not the reply's end. A window that reached the end stops reaching it as the reply grows.
-    func holdsEarlierSegments(of messageID: UUID) -> Bool {
-        guard let window = segmentWindows[messageID] else { return false }
-        // Without a known count, never treat the held window as the end.
-        guard let count = segmentCounts[messageID] else { return true }
-        return window.upperBound < count
-    }
-
-    /// The reader paged a long reply of `segmentCount` segments to `window`. The reader owns the
-    /// viewport and keeps `anchor`, a segment inside both windows.
-    func pageSegments(
-        of messageID: UUID, to window: Range<Int>, segmentCount: Int, currentRange: Range<Int>, keeping anchor: Anchor
-    ) {
-        readerMoved(currentRange: currentRange)
-        if segmentWindows[messageID] == nil, segmentWindows.count >= Self.maximumSegmentWindows {
-            segmentWindows.removeAll()
-        }
-        segmentWindows[messageID] = window
-        segmentCounts[messageID] = segmentCount
-        restore(anchor)
-    }
-
-    /// The reader took the viewport while `messageID` showed `window` of its `segmentCount` segments.
-    /// The reply keeps them, as the message window keeps its messages, so the owner holds them as if
-    /// paged there, without a scroll: otherwise, once more output arrives, settling at the bottom of
-    /// the kept segments would resume following with newer ones hidden.
-    func holdSegments(of messageID: UUID, at window: Range<Int>, segmentCount: Int) {
-        guard readerOwnsViewport, segmentWindows[messageID] == nil else { return }
-        if segmentWindows.count >= Self.maximumSegmentWindows { segmentWindows.removeAll() }
-        segmentWindows[messageID] = window
-        segmentCounts[messageID] = segmentCount
-    }
-
-    /// A held reply now has `segmentCount` segments. Replies without a held window are not recorded.
-    func recordSegmentCount(_ segmentCount: Int, of messageID: UUID) {
-        guard segmentWindows[messageID] != nil else { return }
-        segmentCounts[messageID] = segmentCount
-    }
-
-    /// A reader gesture, keyboard or scroller movement, or an inspection took the viewport. The
-    /// reader's input always wins, so any pending scroll is cancelled.
     /// How many times the reader took the viewport, so a deferred correction can tell it was overtaken.
     @ObservationIgnored private(set) var readerMoves = 0
 
-    func readerMoved(currentRange: Range<Int>, anchor: Anchor? = nil, replacingUnknown: Bool = false) {
+    /// A reader gesture, keyboard or scroller movement, or an inspection took the viewport. The
+    /// reader's input always wins, so any pending scroll is cancelled.
+    func readerMoved(anchor: Anchor? = nil, replacingUnknown: Bool = false) {
         readerMoves &+= 1
         if Self.traces {
             note(
-                "readerMoved \(currentRange) anchor \(anchor.map { "\($0.messageID.uuidString.prefix(4))+\(Int($0.offset))" } ?? "nil")"
+                "readerMoved anchor \(anchor.map { "\($0.messageID.uuidString.prefix(4))+\(Int($0.offset))" } ?? "nil")"
             )
         }
-        if heldRange == nil { heldRange = currentRange }
         autoFollow = false
         if let anchor {
             self.anchor = anchor
@@ -248,18 +159,12 @@ struct TranscriptRevealRequest: Equatable, Sendable {
         self.anchor = anchor
     }
 
-    func claimViewport(currentRange: Range<Int>) {
-        readerMoved(currentRange: currentRange)
-    }
-
     /// A reader gesture ended. Only a gesture ending at the conversation's true bottom hands the
     /// viewport back to following; geometry alone never does.
     func readerSettled(atTrueBottom: Bool, anchor: Anchor?) {
         if atTrueBottom {
-            heldRange = nil
             autoFollow = true
             self.anchor = nil
-            segmentWindows.removeAll()
         } else if let anchor {
             self.anchor = anchor
         }
@@ -267,25 +172,23 @@ struct TranscriptRevealRequest: Equatable, Sendable {
 
     /// The jump-to-latest action, or a new user turn: follow and scroll to the bottom.
     func jumpToLatest() {
-        heldRange = nil
         autoFollow = true
         isScrolledToBottom = true
         anchor = nil
-        segmentWindows.removeAll()
         issue(.bottom)
     }
 
     /// Content grew, regrouped or reflowed. Following asks for the bottom. A reader's position needs no
     /// request: the lazy stack keeps its topmost visible row in place as rows above, below or within the
     /// viewport change size (WWDC26 "Dive into lazy stacks and scrolling with SwiftUI"), and the explicit
-    /// restores (paging, restoration, reveal, compaction) issue their own. An equal pending request is
-    /// kept, so repeated changes coalesce.
+    /// restores (history loads, restoration, reveal, compaction) issue their own. An equal pending request
+    /// is kept, so repeated changes coalesce.
     func contentChanged() {
         guard autoFollow, request?.target != .bottom else { return }
         issue(.bottom)
     }
 
-    /// Makes `anchor` the reader's position and scrolls to it (paging, restoration, compaction).
+    /// Makes `anchor` the reader's position and scrolls to it (history loads, restoration, compaction).
     func restore(_ anchor: Anchor) {
         if Self.traces {
             note(
@@ -297,60 +200,27 @@ struct TranscriptRevealRequest: Equatable, Sendable {
         issue(.anchor(anchor))
     }
 
-    func reveal(_ anchor: Anchor, messageWindow: Range<Int>, segment: Int?, segmentCount: Int) {
-        heldRange = messageWindow
-        segmentWindows.removeAll()
-        if let segment {
-            segmentWindows[anchor.messageID] = segment..<min(segmentCount, segment + 1)
-            segmentCounts[anchor.messageID] = segmentCount
-        }
+    /// Shows `anchor` (find, a link to a message).
+    func reveal(_ anchor: Anchor) {
         isScrolledToBottom = false
         restore(anchor)
     }
 
-    /// Database pages and complete-context hydration change array indices, not message identity.
-    func historyRebased(count: Int, anchorIndex: Int?, cost: (Int) -> Int) {
-        guard readerOwnsViewport, let anchorIndex else {
+    /// Records were added or evicted around the reader (a history page). Their items moved, not their
+    /// identity: the reader's anchor is put back where it was. Following follows.
+    func historyRebased() {
+        guard readerOwnsViewport, let anchor else {
             contentChanged()
             return
         }
-        heldRange = TranscriptWindow.range(count: count, startingAt: anchorIndex, cost: cost)
-        // The window moved under the reader: verify their row is where it was.
-        if let anchor { restore(anchor) }
+        restore(anchor)
     }
 
-    /// Messages were removed (compaction, deletion). The held window keeps the anchor's message
-    /// when it survives; otherwise the reader continues at the first surviving message.
-    func messagesRemoved(count: Int, anchorIndex: Int?, messageID: (Int) -> UUID, cost: (Int) -> Int) {
-        guard let heldRange else { return }
-        let surviving = TranscriptWindow.clamped(heldRange, count: count, anchor: anchorIndex, cost: cost)
-        self.heldRange = surviving
-        if anchorIndex == nil, let first = surviving.first, readerOwnsViewport {
-            restore(Anchor(messageID: messageID(first), offset: 0))
-        }
-    }
-
-    @discardableResult
-    func pageEarlier(count: Int, cost: (Int) -> Int) -> (range: Range<Int>, anchor: Int)? {
-        let current = messageRange(count: count, cost: cost)
-        guard current.lowerBound > 0 else { return nil }
-        let previous = TranscriptWindow.earlier(current, count: count, cost: cost)
-        let anchor = previous.contains(current.lowerBound) ? current.lowerBound : max(0, previous.upperBound - 1)
-        readerMoved(currentRange: previous)
-        heldRange = previous
-        return (previous, anchor)
-    }
-
-    @discardableResult
-    func pageLater(count: Int, cost: (Int) -> Int) -> (range: Range<Int>, anchor: Int)? {
-        let current = messageRange(count: count, cost: cost)
-        guard current.upperBound < count else { return nil }
-        let next = TranscriptWindow.later(current, count: count, cost: cost)
-        let oldAnchor = max(0, current.upperBound - 1)
-        let anchor = next.contains(oldAnchor) ? oldAnchor : next.lowerBound
-        readerMoved(currentRange: next)
-        heldRange = next
-        return (next, anchor)
+    /// Messages were removed (compaction, deletion). A reader whose anchor's message went continues at
+    /// `fallback`, the first surviving message at their place.
+    func messagesRemoved(anchorSurvives: Bool, fallback: UUID?) {
+        guard readerOwnsViewport, !anchorSurvives, let fallback else { return }
+        restore(Anchor(messageID: fallback, offset: 0))
     }
 
     /// The executor saw `request` fulfilled. A replaced request leaves the newer one pending.
@@ -419,42 +289,24 @@ struct ChatTranscriptView: View {
         self.session = session
         self.revealRequest = revealRequest
         self.focusRequest = focusRequest
-        let initialHeld: Range<Int>?
+        // Restoration anchors to a message that renders: a missing or removed message shows the latest
+        // output, and a tool result or empty message gives way to its nearest rendered message.
         let start =
             initiallyFollowing
             ? nil : initialVisibleMessageID.flatMap { id in session.messages.firstIndex(where: { $0.id == id }) }
-        if !initiallyFollowing {
-            initialHeld =
-                start.map { start in
-                    TranscriptWindow.range(
-                        count: session.messages.count,
-                        startingAt: start,
-                        cost: { TranscriptWindow.displayCost(session.messages[$0]) })
-                }
-                ?? TranscriptWindow.range(
-                    count: session.messages.count,
-                    end: nil,
-                    cost: { TranscriptWindow.displayCost(session.messages[$0]) })
-        } else {
-            initialHeld = nil
-        }
-        // Restoration anchors to a row that renders in the held window: a missing or removed message
-        // shows the latest page, and a tool result or empty message gives way to its nearest row.
-        let restoredAnchor = start.flatMap { start in
-            initialHeld.flatMap { Self.renderedMessageID(near: start, in: $0, of: session.messages) }
-        }
+        let restoredAnchor = start.flatMap { Self.renderedMessageID(near: $0, of: session.messages) }
         _viewport = State(
             initialValue: viewport
                 ?? TranscriptViewport(
                     initiallyFollowing: initiallyFollowing,
-                    initialHeldRange: initialHeld,
                     initialAnchor: restoredAnchor.map { TranscriptViewport.Anchor(messageID: $0, offset: 0) }
                 ))
     }
 
     @State private var historyTask: Task<Void, Never>?
-    @State private var earlierLoaderVisible = false
-    @State private var laterLoaderVisible = false
+    /// The message whose edit sheet, or response details, the transcript presents.
+    @State private var editing: ChatMessage?
+    @State private var detailing: ChatMessage?
 
     var body: some View {
         if session.isLoadingMessages || (!session.messagesLoaded && session.messageLoadError == nil) {
@@ -489,116 +341,34 @@ struct ChatTranscriptView: View {
                 ScrollView {
                     // One centred reading column shared with the composer (#60 D3).
                     BoundedWidthLayout(maximumWidth: readingColumn) {
-                        // Lazy: only rows near the viewport are laid out. A plain stack re-measured every row,
-                        // including the scroll view's ideal-size pass, on each streamed update (#85, ADR-0099).
-                        // Everything sits in the one lazy stack: a plain stack around it measured it in full
-                        // again (Delivery 3 reasoning on macOS 26: 19 s became 78 s). Paging restores the kept
-                        // row explicitly, so a loader the stack anchors to never moves what the reader sees.
+                        // Lazy: only items near the viewport are laid out. A plain stack re-measured every
+                        // row, including the scroll view's ideal-size pass, on each streamed update (#85,
+                        // ADR-0099). Everything sits in the one lazy stack: a plain stack around it measured
+                        // it in full again (Delivery 3 reasoning on macOS 26: 19 s became 78 s). Long replies
+                        // are split into items, so the stack lays out only their segments near the
+                        // viewport (ADR-0104).
                         LazyVStack(alignment: .leading, spacing: 0) {
-                            if session.isPagingHistory { ProgressView().controlSize(.small) }
-                            if let error = session.historyPageError {
-                                Text(error).font(.caption).foregroundStyle(Caprine.Semantic.warning)
-                            }
-                            if messageRange.lowerBound > 0 || session.historyHasEarlier {
-                                Button("Earlier messages", systemImage: "arrow.up") {
-                                    viewport.claimViewport(currentRange: messageRange)
-                                    loadEarlierMessages()
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.vertical, 8)
-                                .id("earlier-messages-loader")
-                                .onScrollVisibilityChange(threshold: 0.01) { visible in
-                                    // Never inside the layout pass that revealed the loader: the scroll that
-                                    // revealed it is attributed first.
-                                    earlierLoaderVisible = visible
-                                    guard visible else { return }
-                                    Task { @MainActor in
-                                        await Task.yield()
-                                        pageThroughVisibleLoader()
-                                    }
-                                }
-                            }
-                            let precedingDate =
-                                session.messages[..<messageRange.lowerBound].last {
-                                    $0.role != .tool && !TranscriptActivity.isEmpty($0)
-                                }?.createdAt ?? session.historyPrecedingDate
-                            let rows = TranscriptActivity.rows(
-                                session.messages[messageRange], precedingDate: precedingDate)
-                            let lastMessageID = TranscriptActivity.lastVisibleID(in: session.messages)
-                            let activeAssistant =
-                                session.isStreaming
-                                ? session.messages.last(where: { $0.role == .assistant }) : nil
-                            let activeAssistantID = activeAssistant?.id
-                            let activeToolID: String? = {
-                                guard let activeAssistant else { return nil }
-                                return TranscriptActivity.summary(
-                                    [activeAssistant], activeAssistantID: activeAssistant.id
-                                )
-                                .current?.id
-                            }()
-                            ForEach(rows) { row in
-                                // Each message retains its identity and ancestry as tool events arrive.
-                                // Keep projection inside the existing bounded, fully measured window.
-                                VStack(alignment: .leading, spacing: 0) {
-                                    if let message = row.messages.first {
-                                        if row.startsDay {
-                                            Text(message.createdAt, format: .dateTime.year().month(.wide).day())
-                                                .font(Caprine.Activity.font)
-                                                .foregroundStyle(.secondary)
-                                                .frame(maxWidth: .infinity)
-                                                .padding(.vertical, Caprine.Activity.inset)
-                                                .accessibilityAddTraits(.isHeader)
-                                        }
-                                        TranscriptMessageRow(
-                                            message: message, session: session, isLast: message.id == lastMessageID,
-                                            compactActivity: row.isContinuation,
-                                            joinsPreviousTools: row.joinsPreviousTools,
-                                            joinsNextTools: row.joinsNextTools,
-                                            activeToolID: message.id == activeAssistantID ? activeToolID : nil,
-                                            canDeleteCompaction: CompactionDeletion.canRestore(
-                                                message, in: session.messages),
-                                            canEdit: message.role == .user && !session.isStreaming,
-                                            keyboardFocus: $focusedMessageID,
-                                            isKeyboardFocused: focusedMessageID == message.id
-                                        )
-                                        .equatable()
-                                    }
-                                }
-                                // Align the row boundary without traversing completed Markdown.
-                                .alignmentGuide(.leading) { _ in 0 }
-                                .fixedSize(horizontal: false, vertical: true)
-                                .padding(
-                                    .top,
-                                    row.joinsPreviousTools || row.messages.allSatisfy(TranscriptActivity.isEmpty)
-                                        ? 0 : Caprine.Activity.messageSpacing
-                                )
-                                // Row frames in content coordinates locate anchors; they are raw measurements,
-                                // kept out of observable state.
-                                .modifier(
-                                    TranscriptFrameReport(label: "row \(row.id.uuidString.prefix(4))") {
-                                        instance, frame in
-                                        recordFrame(frame, of: row.id, instance: instance)
-                                    }
-                                )
-                                .id(row.id)
-                            }
-                            if messageRange.upperBound < session.messages.count || session.historyHasLater {
-                                Button("Later messages", systemImage: "arrow.down") { loadLaterMessages() }
-                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            if pagingPhase == .pagingEarlier || session.isPagingHistory && session.historyHasEarlier {
+                                ProgressView().controlSize(.small)
+                                    .frame(maxWidth: .infinity)
                                     .padding(.vertical, 8)
-                                    .id("later-messages-loader")
-                                    .onScrollVisibilityChange(threshold: 0.01) { visible in
-                                        // Never inside the layout pass that revealed the loader: the scroll that
-                                        // revealed it is attributed first.
-                                        laterLoaderVisible = visible
-                                        guard visible else { return }
-                                        Task { @MainActor in
-                                            await Task.yield()
-                                            pageThroughVisibleLoader()
-                                        }
-                                    }
                             }
-                            if session.isStreaming && messageRange.upperBound == session.messages.count {
+                            if let error = session.historyPageError {
+                                HStack {
+                                    Text(error).font(.caption).foregroundStyle(Caprine.Semantic.warning)
+                                    Button("Retry") { loadHistoryIfNear(force: true) }.font(.caption)
+                                }
+                            }
+                            let context = itemContext
+                            ForEach(transcriptItems) { item in
+                                itemView(item, context: context)
+                            }
+                            if pagingPhase == .pagingLater || session.isPagingHistory && session.historyHasLater {
+                                ProgressView().controlSize(.small)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 8)
+                            }
+                            if session.isStreaming && !session.historyHasLater {
                                 AgentProgressView(session: session)
                                     .padding(.top, Caprine.Activity.spacing)
                             }
@@ -661,34 +431,27 @@ struct ChatTranscriptView: View {
                         value: viewport.isScrolledToBottom)
                 }
                 .environment(\.transcriptViewport, viewport)
+                .environment(\.transcriptStreamingReplyID, streamingReplyID)
                 .environment(
                     \.transcriptInspection,
                     TranscriptInspectionAction {
-                        viewport.readerMoved(currentRange: messageRange, anchor: reader.measuredAnchor())
+                        viewport.readerMoved(anchor: reader.measuredAnchor())
                     }
                 )
                 .environment(
-                    \.transcriptSegments,
-                    TranscriptSegmentNavigation(
-                        viewport: viewport,
-                        page: { id, window, kept, segmentCount in
-                            pageSegments(of: id, to: window, keeping: kept, segmentCount: segmentCount)
-                        },
-                        canAutomaticallyPage: {
-                            reader.metrics.contentHeight > reader.metrics.layout.container.height + 1
-                        },
-                        readyToPage: { id, segment in
-                            pagingPhase == .idle && viewport.readerOwnsViewport && viewport.request == nil
-                                && !reader.attributingMove && reader.segmentFrames[id]?[segment] != nil
-                        },
-                        recordSegmentCount: { id, segmentCount in viewport.recordSegmentCount(segmentCount, of: id) },
-                        hold: { id, window, segmentCount in
-                            viewport.holdSegments(of: id, at: window, segmentCount: segmentCount)
-                        },
-                        recordFrame: { id, segment, frame, window, instance in
-                            recordFrame(frame, of: id, segment: segment, laidOutIn: window, instance: instance)
-                        })
+                    \.transcriptPresenter,
+                    TranscriptPresenter(edit: { editing = $0 }, showDetails: { detailing = $0 })
                 )
+                // Presented here, outside the lazy stack: recreating the item that asked never dismisses
+                // them or discards an unsaved edit.
+                .sheet(item: $editing) { message in
+                    TranscriptMessageEditor(source: message.text) { text, original in
+                        await model.editAndResend(message, text: text, previousText: original, in: session)
+                    }
+                }
+                .sheet(item: $detailing) { message in
+                    ResponseDetailsView(message: message)
+                }
                 // No initial bottom offset: SwiftUI re-applies it on later size changes, which a lazy stack
                 // makes continuous as estimates resolve. Following places the transcript at its end through
                 // the executor, before the first placement shows it.
@@ -707,19 +470,16 @@ struct ChatTranscriptView: View {
                         if !reader.isScrolling { viewport.note("gesture \(phase)") }
                         reader.isScrolling = true
                         reader.proxyLanding = nil
-                        viewport.readerMoved(currentRange: messageRange, anchor: reader.measuredAnchor())
+                        viewport.readerMoved(anchor: reader.measuredAnchor())
                     } else if phase == .idle {
                         let readerFinishedScrolling = reader.isScrolling
                         reader.isScrolling = false
                         guard readerFinishedScrolling else { return }
                         viewport.note("gesture settled at \(Int(reader.metrics.offset))")
-                        // A last reply held on earlier segments is not the conversation's end.
-                        let holdsLastReply = session.messages.last.map { holdsEarlierSegments(of: $0) } ?? false
                         viewport.readerSettled(
-                            atTrueBottom: !session.historyHasLater && messageRange.upperBound == session.messages.count
-                                && reader.isAtBottom
-                                && !holdsLastReply,
-                            anchor: reader.measuredAnchor())
+                            atTrueBottom: !session.historyHasLater && reader.isAtBottom, anchor: reader.measuredAnchor()
+                        )
+                        loadHistoryIfNear()
                         // A scroll that ended where the lazy stack lays out nothing is rescued there, once the
                         // rows it does lay out have had a moment to report.
                         Task { @MainActor in
@@ -731,13 +491,11 @@ struct ChatTranscriptView: View {
                 }
                 .onChange(of: viewport.request) {
                     if viewport.request == nil {
-                        // A reader gesture that cancels a paging scroll also ends that page load.
-                        if pagingPhase != .idle { pagingPhase = .idle }
                         placeInitiallyIfReady()
-                        // A loader seen while the request ran pages once the reader is where it put them.
+                        // History near an end loads once the reader is where the request put them.
                         Task { @MainActor in
                             await Task.yield()
-                            pageThroughVisibleLoader()
+                            loadHistoryIfNear()
                         }
                     }
                     // A replaced request does not wait out its predecessor's frame deadline.
@@ -749,59 +507,59 @@ struct ChatTranscriptView: View {
                 .onChange(of: streamRevision) { viewport.contentChanged() }
                 .onAppear {
                     viewport.historySession = session
-                    session.historyAnchorID = viewport.anchor?.messageID
-                }
-                .onChange(of: session.historyRevision) {
-                    viewport.historyRebased(count: session.messages.count, anchorIndex: anchorIndex, cost: displayCost)
-                }
-                .onChange(of: pagingPhase) { _, phase in
-                    guard phase == .idle, session.historyPageError == nil else { return }
-                    Task { @MainActor in
-                        await Task.yield()
-                        pageThroughVisibleLoader()
+                    viewport.messageForKey = { [session] key in
+                        session.messages.first(where: { TranscriptSegmentOwner.key(key, belongsTo: $0.id) })?.id
                     }
+                    session.historyAnchorID = viewport.anchor.flatMap { viewport.messageForKey($0.messageID) }
                 }
+                .onChange(of: session.historyRevision) { viewport.historyRebased() }
                 .onChange(of: focusRequest) {
                     guard focusRequest != nil else { return }
                     let anchor = reader.measuredAnchor()
-                    guard let id = anchor?.messageID ?? renderedMessageID(near: messageRange.lowerBound) else { return }
-                    // Keyboard focus is reader input. Keep the current reading window and cancel
-                    // any pending automatic restore before native focus moves within that window.
-                    viewport.readerMoved(currentRange: messageRange, anchor: anchor)
+                    guard
+                        let id = anchor.flatMap({ viewport.messageForKey($0.messageID) })
+                            ?? Self.renderedMessageID(near: 0, of: session.messages)
+                    else { return }
+                    // Keyboard focus is reader input: cancel any pending automatic restore before native
+                    // focus moves.
+                    viewport.readerMoved(anchor: anchor)
                     focusedMessageID = id
                 }
                 .task(id: revealRequest) {
                     guard let revealRequest else { return }
                     guard await model.loadHistory(around: revealRequest.messageID, for: session), !Task.isCancelled,
-
                         let message = session.messages.first(where: { $0.id == revealRequest.messageID })
                     else { return }
                     let source = message.text
                     let complete = message.complete
-                    let isAssistant = message.role == .assistant && message.kind == .regular
-                    let richLimit = ReplyWindow.richLimit
-                    let worker = Task.detached(priority: .userInitiated) { () -> (Int?, Int) in
-                        guard isAssistant, source.utf8.count <= richLimit else { return (nil, 0) }
-                        let segments = MarkdownSegmenter.segment(source, isComplete: complete).segments
-                        let index = segments.firstIndex { $0.sourceRange.contains(revealRequest.byteOffset) }
-                        return (index, segments.count)
+                    let offset = revealRequest.byteOffset
+                    let plain = TranscriptTexts.shared.answer(for: message).isPlain
+                    let segmented = message.role == .assistant && message.kind == .regular && !plain
+                    // The item that holds the match: a segment of a rich answer, or a plain part.
+                    let worker = Task.detached(priority: .userInitiated) { () -> (index: Int?, count: Int) in
+                        if segmented {
+                            let segments = MarkdownSegmenter.segment(source, isComplete: complete).segments
+                            return (segments.firstIndex { $0.sourceRange.contains(offset) }, segments.count)
+                        }
+                        guard plain, let parts = try? TranscriptTextParts.split(source) else { return (nil, 0) }
+                        var end = 0
+                        for (index, part) in parts.enumerated() {
+                            end += part.utf8.count
+                            if offset < end { return (index, parts.count) }
+                        }
+                        return (parts.count - 1, parts.count)
                     }
-                    let (segment, count) = await withTaskCancellationHandler {
+                    let (index, count) = await withTaskCancellationHandler {
                         await worker.value
                     } onCancel: {
                         worker.cancel()
                     }
-                    guard !Task.isCancelled,
-                        let index = session.messages.firstIndex(where: { $0.id == revealRequest.messageID })
-                    else { return }
-                    pagingPhase = .idle
+                    guard !Task.isCancelled else { return }
                     reader.isScrolling = false
                     followThrottle.reset()
-                    viewport.reveal(
-                        .init(messageID: message.id, offset: 0, segment: segment),
-                        messageWindow: TranscriptWindow.range(
-                            count: session.messages.count, startingAt: index, cost: displayCost),
-                        segment: segment, segmentCount: count)
+                    // A message laid out whole has no segment items: its first item holds the match.
+                    let segment = (plain || count > 1) ? index : nil
+                    viewport.reveal(.init(messageID: message.id, offset: 0, segment: segment))
                 }
                 .onChange(of: session.isStreaming) { viewport.contentChanged() }
                 .onChange(of: ReflowKey(fontSize: model.chatFontSize, column: readingColumn)) { scheduleRelayout() }
@@ -811,17 +569,20 @@ struct ChatTranscriptView: View {
                     scheduleRelayout()
                 }
                 // Rows near the reader render formatted on their first frame when the lazy stack mounts them.
-                .task(id: TranscriptPrewarm.Key(range: messageRange, count: session.messages.count)) {
-                    let range = messageRange
-                    let focus = (anchorIndex ?? range.upperBound - 1) - range.lowerBound
-                    await TranscriptPrewarm.prepare(Array(session.messages[range]), around: focus)
+                .task(id: TranscriptPrewarm.Key(focus: anchorIndex, count: session.messages.count)) {
+                    let focus = anchorIndex ?? session.messages.count - 1
+                    let range =
+                        max(
+                            0, focus - TranscriptPrewarm.reach)..<min(
+                            session.messages.count, focus + TranscriptPrewarm.reach + 1)
+                    await TranscriptPrewarm.prepare(Array(session.messages[range]), around: focus - range.lowerBound)
                 }
                 // A newly sent turn always re-arms following and jumps to the bottom.
                 .onChange(of: session.messages.count) { previousCount, count in
-                    if count < previousCount, session.hasCompleteHistory, viewport.heldRange != nil {
+                    if count < previousCount, session.hasCompleteHistory {
                         viewport.messagesRemoved(
-                            count: count, anchorIndex: anchorIndex,
-                            messageID: { renderedMessageID(near: $0) ?? session.messages[$0].id }, cost: displayCost)
+                            anchorSurvives: anchorIndex != nil,
+                            fallback: Self.renderedMessageID(near: 0, of: session.messages))
                     }
                     if session.isStreaming && session.messages.last?.role == .user {
                         jumpToLatest()
@@ -858,20 +619,103 @@ struct ChatTranscriptView: View {
             fontID: model.effectiveChatFontID, size: model.chatFontSize, presentation: model.presentation.isEnabled)
     }
 
-    var visibleMessageRange: Range<Int> { messageRange }
+    /// What every item needs to know about the transcript, computed once per update.
+    private struct ItemContext {
+        let lastMessageID: UUID?
+        let activeAssistantID: UUID?
+        let activeToolID: String?
+    }
+
+    private var itemContext: ItemContext {
+        let activeAssistant: ChatMessage? =
+            session.isStreaming ? session.messages.last(where: { $0.role == .assistant }) : nil
+        let activeToolID = activeAssistant.flatMap { assistant in
+            TranscriptActivity.summary([assistant], activeAssistantID: assistant.id).current?.id
+        }
+        return ItemContext(
+            lastMessageID: TranscriptActivity.lastVisibleID(in: session.messages),
+            activeAssistantID: activeAssistant?.id, activeToolID: activeToolID)
+    }
+
+    /// A message's date heads its first item when it starts a day.
+    private func showsDate(_ item: TranscriptItem) -> Bool {
+        item.row.startsDay && topPadding(of: item, ignoringJoins: true) > 0
+    }
+
+    private func itemView(_ item: TranscriptItem, context: ItemContext) -> some View {
+        let message = item.message
+        return VStack(alignment: .leading, spacing: 0) {
+            if showsDate(item) {
+                Text(message.createdAt, format: .dateTime.year().month(.wide).day())
+                    .font(Caprine.Activity.font)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, Caprine.Activity.inset)
+                    .accessibilityAddTraits(.isHeader)
+            }
+            TranscriptMessageRow(
+                message: message, session: session, part: item.part,
+                isLast: message.id == context.lastMessageID,
+                compactActivity: item.row.isContinuation,
+                joinsPreviousTools: item.row.joinsPreviousTools,
+                joinsNextTools: item.row.joinsNextTools,
+                activeToolID: message.id == context.activeAssistantID ? context.activeToolID : nil,
+                canDeleteCompaction: CompactionDeletion.canRestore(message, in: session.messages),
+                canEdit: message.role == .user && !session.isStreaming,
+                keyboardFocus: $focusedMessageID,
+                isKeyboardFocused: focusedMessageID == message.id
+            )
+            .equatable()
+        }
+        // Align the item boundary without traversing completed Markdown.
+        .alignmentGuide(.leading) { _ in 0 }
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.top, topPadding(of: item))
+        // Item frames in content coordinates locate anchors; they are raw measurements, kept out of
+        // observable state.
+        .modifier(
+            TranscriptFrameReport(label: "item \(message.id.uuidString.prefix(4)) \(item.part)") { instance, frame in
+                let key = item.frameKey
+                recordFrame(frame, of: key.key, segment: key.segment, instance: instance)
+            }
+        )
+        .id(item.id)
+    }
+
+    /// Every loaded message, as the items of the lazy stack (ADR-0104).
+    private var transcriptItems: [TranscriptItem] {
+        let rows = TranscriptActivity.rows(session.messages[...], precedingDate: session.historyPrecedingDate)
+        return TranscriptItem.items(for: rows, texts: .shared)
+    }
+
+    /// Space above an item: a message's first item is spaced from the message before it; its other items
+    /// continue it.
+    private func topPadding(of item: TranscriptItem, ignoringJoins: Bool = false) -> CGFloat {
+        let message = item.message
+        let leads: Bool =
+            switch item.part {
+            case .whole, .head: true
+            case .answer(0):
+                message.role == .user
+                    ? message.attachmentPaths.isEmpty : !TranscriptText.hasContent(message.thinking)
+            case .reasoning, .answer, .tail: false
+            }
+        guard leads else { return 0 }
+        if ignoringJoins { return 1 }
+        return item.row.joinsPreviousTools || item.row.messages.allSatisfy(TranscriptActivity.isEmpty)
+            ? 0 : Caprine.Activity.messageSpacing
+    }
+
+    /// The reply whose output is still arriving, which alone shows the streaming caret.
+    private var streamingReplyID: UUID? {
+        guard session.isStreaming else { return nil }
+        return session.messages.last(where: { $0.role == .assistant })?.id
+    }
 
     private var anchorIndex: Int? {
         viewport.anchor.flatMap { anchor in
             session.messages.firstIndex(where: { TranscriptSegmentOwner.key(anchor.messageID, belongsTo: $0.id) })
         }
-    }
-
-    private var messageRange: Range<Int> {
-        viewport.messageRange(count: session.messages.count, anchor: anchorIndex, cost: displayCost)
-    }
-
-    private func displayCost(_ index: Int) -> Int {
-        TranscriptWindow.displayCost(session.messages[index])
     }
 
     /// Bumps once per visible publication without scanning the accumulated response.
@@ -893,154 +737,79 @@ struct ChatTranscriptView: View {
         pagingPhase = .idle
         followThrottle.reset()
         reader.isScrolling = false
-        // Not in an animation transaction: the window change would cross-fade every row it replaces.
+        // Not in an animation transaction: the change would cross-fade every row it replaces.
         viewport.jumpToLatest()
     }
 
-    /// Pages through a loader the reader scrolled to. A loader is also seen for a moment while a
-    /// restoration, page or jump is still moving the viewport, or before the first placement: paging
-    /// then would cancel that move, so it waits until the move ends and the loader is still visible.
-    /// The page also waits, within a bound, for the row it keeps in place to report where it is: the
-    /// lazy stack lays that row out after the move that revealed the loader.
-    private func pageThroughVisibleLoader(attempt: Int = 0) {
-        guard initiallyPlaced, viewport.request == nil, pagingPhase == .idle,
-            earlierLoaderVisible || laterLoaderVisible
+    /// Loads the adjacent page of stored history when the viewport is within a viewport of an end of the
+    /// loaded records (ADR-0102, ADR-0104). There is no control to press: the reader scrolls on, and their
+    /// place is kept as records are added and evicted. Not while a move is pending or being attributed, a
+    /// gesture is under way, or before the first placement: loading then could pull the reader.
+    private func loadHistoryIfNear(force: Bool = false) {
+        guard initiallyPlaced, pagingPhase == .idle, !session.isPagingHistory, !session.isStreaming,
+            viewport.request == nil, !reader.attributingMove, !reader.isScrolling,
+            force || session.historyPageError == nil
         else { return }
-        // SwiftUI reports a loader leaving the viewport with its next update: confirm from the scroll
-        // view that the viewport is still at that end, so a reader who moved on is not paged.
         reader.syncGeometry()
         let reach = reader.metrics.layout.container.height
-        guard earlierLoaderVisible ? reader.metrics.topGap <= reach : reader.metrics.bottomGap <= reach else { return }
-        let range = messageRange
-        let kept = renderedMessageID(near: earlierLoaderVisible ? range.lowerBound : range.upperBound - 1)
-        let keptMeasured = kept.map { reader.rowFrames[$0] != nil } ?? true
-        if !keptMeasured, attempt < Self.maximumScrollAttempts {
-            Task { @MainActor in
-                try? await Task.sleep(for: Self.frameRetryInterval)
-                pageThroughVisibleLoader(attempt: attempt + 1)
-            }
-            return
-        }
-        if earlierLoaderVisible {
-            loadEarlierMessages()
-        } else {
-            loadLaterMessages()
-        }
-    }
-
-    /// Pages earlier while keeping the message at the top of the window where the reader sees it.
-    /// Only a reader pages earlier: while the transcript follows, the earlier loader can be seen for a
-    /// moment during layout (a reply still preparing is short), and paging then would leave the latest
-    /// output.
-    private func loadEarlierMessages() {
-        guard pagingPhase == .idle, viewport.readerOwnsViewport else { return }
-        if messageRange.lowerBound == 0, session.historyHasEarlier {
+        guard reach > 0 else { return }
+        if session.historyHasEarlier, reader.metrics.topGap <= reach {
             fetchHistory(earlier: true)
-            return
-        }
-        // The first row the reader sees in the window: a tool result or an empty message renders nothing.
-        guard messageRange.lowerBound > 0, let kept = renderedMessageID(near: messageRange.lowerBound) else { return }
-        let keptOffset = reader.offset(of: kept)
-        let seen = reader.measuredAnchor()
-        guard let result = viewport.pageEarlier(count: session.messages.count, cost: displayCost) else { return }
-        pagingPhase = .pagingEarlier
-        restorePagingAnchor(result.anchor, kept: kept, keptOffset: keptOffset, seen: seen)
-    }
-
-    /// Pages later while keeping the message at the end of the window where the reader sees it.
-    private func loadLaterMessages() {
-        guard pagingPhase == .idle else { return }
-        if messageRange.upperBound == session.messages.count, session.historyHasLater {
+        } else if session.historyHasLater, reader.metrics.bottomGap <= reach {
             fetchHistory(earlier: false)
-            return
         }
-        guard messageRange.upperBound < session.messages.count,
-            let kept = renderedMessageID(near: messageRange.upperBound - 1)
-        else { return }
-        let keptOffset = reader.offset(of: kept)
-        let seen = reader.measuredAnchor()
-        guard let result = viewport.pageLater(count: session.messages.count, cost: displayCost) else { return }
-        pagingPhase = .pagingLater
-        restorePagingAnchor(result.anchor, kept: kept, keptOffset: keptOffset, seen: seen)
     }
 
     private func fetchHistory(earlier: Bool) {
         guard !session.isPagingHistory, !session.isStreaming else { return }
-        let anchor = reader.measuredAnchor() ?? viewport.anchor
-        if let anchor { viewport.readerMoved(currentRange: messageRange, anchor: anchor) }
+        // The reader's place is kept across the load; following keeps following.
+        if viewport.readerOwnsViewport, let anchor = reader.measuredAnchor() ?? viewport.anchor {
+            viewport.readerMoved(anchor: anchor)
+        }
+        viewport.note("load \(earlier ? "earlier" : "later") history")
         pagingPhase = earlier ? .pagingEarlier : .pagingLater
         historyTask = Task { @MainActor in
             let loaded = await model.pageHistory(for: session, earlier: earlier)
             guard !Task.isCancelled else { return }
             pagingPhase = .idle
             guard loaded else { return }
-            viewport.historyRebased(count: session.messages.count, anchorIndex: anchorIndex, cost: displayCost)
-            if earlier { loadEarlierMessages() } else { loadLaterMessages() }
+            viewport.historyRebased()
         }
     }
 
-    /// Resolves the page's anchor index to a stable message identity before scrolling. When pages
-    /// overlap it is the kept message at its measured offset; otherwise the top of the new page.
-    /// `seen` is what the reader saw at the viewport's top before paging: it stays exactly there whenever
-    /// the new window still holds it. Otherwise the window's edge row `kept` stays where it was.
-    private func restorePagingAnchor(_ index: Int, kept: UUID, keptOffset: CGFloat?, seen: TranscriptViewport.Anchor?) {
-        if let seen,
-            let seenIndex = session.messages.firstIndex(where: {
-                TranscriptSegmentOwner.key(seen.messageID, belongsTo: $0.id)
-            }),
-            messageRange.contains(seenIndex)
-        {
-            viewport.restore(seen)
-            return
-        }
-        guard session.messages.indices.contains(index) else {
-            pagingPhase = .idle
-            return
-        }
-        guard let id = renderedMessageID(near: index) else {
-            pagingPhase = .idle
-            return
-        }
-        viewport.restore(TranscriptViewport.Anchor(messageID: id, offset: id == kept ? keptOffset ?? 0 : 0))
-    }
-
-    /// Whether the reader holds `message` short of its end: its answer, or its reasoning while no
-    /// answer follows it.
-    private func holdsEarlierSegments(of message: ChatMessage) -> Bool {
-        if viewport.holdsEarlierSegments(of: message.id) { return true }
-        guard message.textRevision.utf8Count == 0 else { return false }
-        return viewport.holdsEarlierSegments(of: TranscriptSegmentOwner.reasoning(of: message.id))
-    }
-
-    /// Moves a long reply's segment window, keeping segment `kept` where the reader sees it.
-    /// Only a reader pages a reply: while following, a loader seen during layout is transient.
-    private func pageSegments(of id: UUID, to window: Range<Int>, keeping kept: Int, segmentCount: Int) {
-        guard pagingPhase == .idle, viewport.readerOwnsViewport else { return }
-        let offset = reader.offset(of: id, segment: kept) ?? 0
-        pagingPhase = .pagingSegments
-        viewport.pageSegments(
-            of: id, to: window, segmentCount: segmentCount, currentRange: messageRange,
-            keeping: TranscriptViewport.Anchor(messageID: id, offset: offset, segment: kept))
-    }
-
-    /// The nearest message at or after `index` in the window (else before it) that renders a row.
-    /// Tool results and empty assistant messages have no row to anchor to.
-    private func renderedMessageID(near index: Int) -> UUID? {
-        Self.renderedMessageID(near: index, in: messageRange, of: session.messages)
-    }
-
-    private static func renderedMessageID(near index: Int, in range: Range<Int>, of messages: [ChatMessage]) -> UUID? {
+    /// The nearest message at or after `index` (else before it) that renders. Tool results and empty
+    /// assistant messages have nothing to anchor to.
+    static func renderedMessageID(near index: Int, of messages: [ChatMessage]) -> UUID? {
         let rendered = { (index: Int) in
             messages[index].role != .tool && !TranscriptActivity.isEmpty(messages[index])
         }
-        let start = min(max(index, range.lowerBound), range.upperBound)
-        let found =
-            (start..<range.upperBound).first(where: rendered)
-            ?? (range.lowerBound..<start).last(where: rendered)
+        let start = min(max(index, 0), messages.count)
+        let found = (start..<messages.count).first(where: rendered) ?? (0..<start).last(where: rendered)
         return found.map { messages[$0].id }
     }
 
-    private func recordFrame(_ frame: CGRect?, of id: UUID, instance: UUID) {
+    /// An item's frame in content coordinates, or nil when it is no longer laid out. A message's first
+    /// item and a split message's tail are measured by key alone; segments by key and index.
+    private func recordFrame(_ frame: CGRect?, of key: UUID, segment: Int?, instance: UUID) {
+        guard let segment else {
+            recordRowFrame(frame, of: key, instance: instance)
+            return
+        }
+        if frame == nil, reader.segmentInstances[key]?[segment] != instance { return }
+        reader.segmentInstances[key, default: [:]][segment] = frame == nil ? nil : instance
+        if reader.segmentInstances[key]?.isEmpty == true { reader.segmentInstances[key] = nil }
+        let previous = reader.segmentFrames[key]?[segment]
+        reader.segmentFrames[key, default: [:]][segment] = frame
+        if reader.segmentFrames[key]?.isEmpty == true { reader.segmentFrames[key] = nil }
+        if let previous, let frame, previous.minY != frame.minY, viewport.anchor?.messageID == key,
+            viewport.anchor?.segment == segment
+        {
+            keepAnchorInPlace(previousTop: previous.minY)
+        }
+        arrived(frame, key: key)
+    }
+
+    private func recordRowFrame(_ frame: CGRect?, of id: UUID, instance: UUID) {
         guard let frame else {
             // Only the instance whose frame is held clears it: a lazy stack can mount a row's
             // replacement, which reports its frame, before the replaced instance disappears.
@@ -1058,43 +827,21 @@ struct ChatTranscriptView: View {
         {
             keepAnchorInPlace(previousTop: previous.minY)
         }
+        arrived(frame, key: id)
+    }
+
+    /// A reported frame may locate a reader who has no anchor yet, or be the awaited target.
+    private func arrived(_ frame: CGRect?, key: UUID) {
+        guard frame != nil else { return }
         if viewport.anchor == nil, viewport.readerOwnsViewport, !reader.isScrolling,
             let anchor = reader.measuredAnchor()
         {
             viewport.adoptAnchor(anchor)
         }
-        if case .anchor(let anchor) = viewport.request?.target, anchor.messageID == id {
-            // The awaited row arrived: run now rather than at the retry.
-            cancelFrameWait()
-            executePendingRequest()
-        }
-    }
-
-    private func recordFrame(
-        _ frame: CGRect?, of id: UUID, segment: Int, laidOutIn window: Range<Int>, instance: UUID
-    ) {
-        if frame == nil, reader.segmentInstances[id]?[segment] != instance { return }
-        reader.segmentInstances[id, default: [:]][segment] = frame == nil ? nil : instance
-        if reader.segmentInstances[id]?.isEmpty == true { reader.segmentInstances[id] = nil }
-        let previous = reader.segmentFrames[id]?[segment]
-        if TranscriptViewport.traces {
-            viewport.note(
-                "segment \(id.uuidString.prefix(4)) \(segment) in \(window) at \(frame.map { "\(Int($0.minY))" } ?? "gone")"
-            )
-        }
-        reader.segmentFrames[id, default: [:]][segment] = frame
-        if let previous, let frame, previous.minY != frame.minY, viewport.anchor?.messageID == id,
-            viewport.anchor?.segment == segment
+        if case .anchor(let anchor) = viewport.request?.target,
+            let message = viewport.messageForKey(anchor.messageID), TranscriptSegmentOwner.key(key, belongsTo: message)
         {
-            keepAnchorInPlace(previousTop: previous.minY)
-        }
-        if frame != nil { reader.segmentFrameWindows[id] = window }
-        if reader.segmentFrames[id]?.isEmpty == true {
-            reader.segmentFrames[id] = nil
-            reader.segmentFrameWindows[id] = nil
-        }
-        if frame != nil, case .anchor(let anchor) = viewport.request?.target, anchor.messageID == id {
-            // The awaited segment arrived: run now rather than at the retry.
+            // The awaited item arrived: run now rather than at the retry.
             cancelFrameWait()
             executePendingRequest()
         }
@@ -1129,10 +876,18 @@ struct ChatTranscriptView: View {
                     + "cause \(reader.executor.cause(ofOffset: metrics.offset).map { "\($0)" } ?? "nil") anchor row \(anchorTop)"
             )
         }
-        let atBottom =
-            !session.historyHasLater && metrics.distanceFromBottom <= Self.bottomTolerance
-            && messageRange.upperBound == session.messages.count
+        let atBottom = !session.historyHasLater && metrics.distanceFromBottom <= Self.bottomTolerance
         reader.isAtBottom = atBottom
+        // Near an end of the loaded records, the next page loads (never inside the geometry callback).
+        if !reader.isScrolling, pagingPhase == .idle,
+            session.historyHasEarlier && metrics.topGap <= metrics.layout.container.height
+                || session.historyHasLater && metrics.bottomGap <= metrics.layout.container.height
+        {
+            Task { @MainActor in
+                await Task.yield()
+                loadHistoryIfNear()
+            }
+        }
         if !reader.isScrolling, metrics.contentHeight > metrics.layout.container.height,
             metrics.offset > metrics.contentHeight - metrics.layout.container.height + 1
         {
@@ -1256,7 +1011,7 @@ struct ChatTranscriptView: View {
             guard !Task.isCancelled, viewport.request == request, !reader.isScrolling, !reader.attributingMove
             else { return }
             reader.syncGeometry()
-            if reader.shows(request.target, heldWindow: viewport.segmentWindow(for:)) {
+            if reader.shows(request.target) {
                 viewport.note("fulfilled \(request.generation) at \(Int(reader.metrics.offset))")
                 if reader.proxyLanding?.request == request.generation { reader.proxyLanding = nil }
                 viewport.fulfilled(request)
@@ -1288,10 +1043,7 @@ struct ChatTranscriptView: View {
             case .anchor(let anchor):
                 // Not laid out yet: the row's or segment's first geometry report runs this again, else a
                 // retry does, within the same bound.
-                // A segment's frame counts only once the reply lays out the window the owner holds: right
-                // after paging it is still the previous window's, which the anchor was measured from.
-                guard let frame = reader.frame(of: anchor, heldWindow: viewport.segmentWindow(for: anchor.messageID))
-                else {
+                guard let frame = reader.frame(of: anchor) else {
                     revealIfUnmounted(anchor)
                     return awaitLayout(request, for: anchor.segment == nil ? "row" : "segment")
                 }
@@ -1359,7 +1111,7 @@ struct ChatTranscriptView: View {
                 // A move up by more than the bottom tolerance is the reader's even when rows resolving
                 // above leave the viewport near the new bottom.
                 if viewport.readerOwnsViewport || !reader.isAtBottom || previousOffset - offset > Self.bottomTolerance {
-                    viewport.readerMoved(currentRange: messageRange, anchor: anchorAfter, replacingUnknown: true)
+                    viewport.readerMoved(anchor: anchorAfter, replacingUnknown: true)
                 }
             }
             executePendingRequest()
@@ -1371,20 +1123,19 @@ struct ChatTranscriptView: View {
     /// rows that are laid out; the row's layout there then gives the exact offset on a later attempt. A
     /// SwiftUI scroll is not used: it lands after the request returns and can override a reader's move.
     private func revealIfUnmounted(_ anchor: TranscriptViewport.Anchor) {
-        guard
-            let message = session.messages.first(where: {
-                TranscriptSegmentOwner.key(anchor.messageID, belongsTo: $0.id)
-            }), reader.rowFrames[message.id] == nil
+        let items = transcriptItems
+        guard reader.frame(of: anchor) == nil,
+            let target = items.firstIndex(where: {
+                $0.frameKey.key == anchor.messageID && $0.frameKey.segment == anchor.segment
+            })
         else { return }
-        let order = TranscriptActivity.rows(session.messages[messageRange]).map(\.id)
-        guard let target = order.firstIndex(of: message.id) else { return }
         reader.syncGeometry()
         // Only frames near the viewport are current: the lazy stack laid them out for where it is.
         let reach = 4 * reader.metrics.layout.container.height
         let near = (reader.metrics.offset - reach)...(reader.metrics.offset + reach)
         let laidOut = Self.ordered(
-            order.enumerated().compactMap { index, id in
-                reader.rowFrames[id].flatMap { near.overlaps($0.minY...$0.maxY) ? (index, $0) : nil }
+            items.enumerated().compactMap { index, item in
+                frame(of: item).flatMap { near.overlaps($0.minY...$0.maxY) ? (index, $0) : nil }
             })
         guard let nearest = laidOut.min(by: { abs($0.0 - target) < abs($1.0 - target) }) else { return }
         let averageHeight = laidOut.map(\.1.height).reduce(0, +) / CGFloat(max(laidOut.count, 1))
@@ -1394,12 +1145,12 @@ struct ChatTranscriptView: View {
             : nearest.1.maxY + CGFloat(target - nearest.0 - 1) * averageHeight
         let metrics = reader.metrics
         var y = min(max(estimate + anchor.offset, metrics.offset - metrics.topGap), metrics.offset + metrics.bottomGap)
-        // An estimate from few rows can be far off, and one past the rows shows nothing: move at most a few
-        // viewports per attempt, so the rows on the way lay out and the next estimate starts from them.
+        // An estimate from few items can be far off, and one past the items shows nothing: move at most a
+        // few viewports per attempt, so the items on the way lay out and the next estimate starts from them.
         let maximumMove = 3 * metrics.layout.container.height
         y = min(max(y, metrics.offset - maximumMove), metrics.offset + maximumMove)
         // An estimate that keeps the viewport where it is would wait forever: step a viewport toward the
-        // row, so the rows there lay out and the next estimate starts from them.
+        // item, so the items there lay out and the next estimate starts from them.
         if abs(y - metrics.offset) < 1 {
             let step = metrics.layout.container.height
             y =
@@ -1407,27 +1158,32 @@ struct ChatTranscriptView: View {
                 ? max(metrics.offset - metrics.topGap, metrics.offset - step)
                 : min(metrics.offset + metrics.bottomGap, metrics.offset + step)
         }
-        // Estimates that return to a place already tried are not converging: the rows laid out do not
-        // place the target (a window rebased under the reveal renumbers them). SwiftUI knows where the
-        // row is in what it renders; its scroll lands on a later update, and the executor then places
-        // the target exactly.
+        // Estimates that return to a place already tried are not converging. SwiftUI knows where the item
+        // is in what it renders; its scroll lands on a later update, and the executor then places the
+        // target exactly.
         if reader.revealsTried.contains(where: { abs($0 - y) < 1 }), let proxy = reader.proxy {
-            viewport.note("reveal row \(target) through SwiftUI after \(reader.revealsTried.count) estimates")
+            viewport.note("reveal item \(target) through SwiftUI after \(reader.revealsTried.count) estimates")
             reader.proxyLanding = .init(request: viewport.request?.generation)
-            proxy.scrollTo(rowID(containing: message.id) ?? message.id, anchor: .top)
+            proxy.scrollTo(items[target].id, anchor: .top)
             viewport.recordScrollCommand()
             verifyAfterScroll()
             return
         }
         reader.revealsTried.append(y)
         viewport.note(
-            "reveal row \(target) near \(nearest.0) at \(Int(y)) from \(Int(metrics.offset)) gap "
+            "reveal item \(target) near \(nearest.0) at \(Int(y)) from \(Int(metrics.offset)) gap "
                 + "\(Int(metrics.topGap))/\(Int(metrics.bottomGap)) laid out "
                 + laidOut.map { "\($0.0)@\(Int($0.1.minY))" }.joined(separator: ","))
         reader.executor.scroll(toY: y)
         reader.syncGeometry()
         viewport.recordScrollCommand()
         verifyAfterScroll()
+    }
+
+    /// An item's frame, when laid out.
+    private func frame(of item: TranscriptItem) -> CGRect? {
+        let key = item.frameKey
+        return key.segment.map { reader.segmentFrames[key.key]?[$0] } ?? reader.rowFrames[key.key]
     }
 
     /// The reader's anchor moved with layout. The lazy stack keeps its topmost visible row in place,
@@ -1440,7 +1196,7 @@ struct ChatTranscriptView: View {
         guard viewport.readerOwnsViewport, viewport.request == nil, !reader.isScrolling, !reader.attributingMove,
             pagingPhase == .idle, let anchor = viewport.anchor,
             abs(previousTop + anchor.offset - reader.metrics.offset) <= 1,
-            let frame = reader.frame(of: anchor, heldWindow: viewport.segmentWindow(for: anchor.messageID)),
+            let frame = reader.frame(of: anchor),
             abs(frame.minY + anchor.offset - reader.metrics.offset) > 1
         else { return }
         viewport.note("anchor drifted \(Int(frame.minY + anchor.offset - reader.metrics.offset))")
@@ -1459,18 +1215,18 @@ struct ChatTranscriptView: View {
         let metrics = reader.metrics
         let top = metrics.offset
         let bottom = top + metrics.layout.container.height
-        guard !reader.rowFrames.values.contains(where: { $0.maxY > top && $0.minY < bottom }) else { return }
-        // Following reaches the end through the rows' own estimate instead (`estimatedContentEnd`).
+        guard !reader.itemFrames.contains(where: { $0.frame.maxY > top && $0.frame.minY < bottom }) else { return }
+        // Following reaches the end through the items' own estimate instead (`estimatedContentEnd`).
         guard viewport.readerOwnsViewport else { return }
-        let rows = TranscriptActivity.rows(session.messages[messageRange])
-        let target: (id: UUID, edge: UnitPoint)?
+        let items = transcriptItems
+        let target: (id: TranscriptItem.ID, edge: UnitPoint)?
         if atReader {
             let reach = metrics.layout.container.height
-            // At either end the rows' own estimate, or the top itself, is where the rows are: SwiftUI
-            // places a row by its estimate of the content, which is what left the viewport blank.
+            // At either end the items' own estimate, or the top itself, is where the items are: SwiftUI
+            // places an item by its estimate of the content, which is what left the viewport blank.
             if metrics.bottomGap <= reach, let end = estimatedContentEnd(), end < top + reach {
                 let y = max(0, end - reach)
-                viewport.note("rescue blank viewport at \(Int(top)) to the rows' end \(Int(y))")
+                viewport.note("rescue blank viewport at \(Int(top)) to the items' end \(Int(y))")
                 reader.executor.scroll(toY: y)
                 reader.syncGeometry()
                 return
@@ -1482,18 +1238,22 @@ struct ChatTranscriptView: View {
                 return
             }
             if metrics.bottomGap <= reach {
-                target = rows.last.map { ($0.id, .bottom) }
+                target = items.last.map { ($0.id, .bottom) }
             } else if metrics.contentHeight <= 0 {
-                target = rows.first.map { ($0.id, .top) }
+                target = items.first.map { ($0.id, .top) }
             } else {
                 let fraction = min(1, max(0, top / metrics.contentHeight))
-                let index = min(rows.count - 1, Int(fraction * CGFloat(rows.count)))
-                target = rows.indices.contains(index) ? (rows[index].id, .top) : nil
+                let index = min(items.count - 1, Int(fraction * CGFloat(items.count)))
+                target = items.indices.contains(index) ? (items[index].id, .top) : nil
             }
-        } else if let anchor = viewport.anchor, let row = rowID(containing: anchor.messageID) {
-            target = (row, .top)
+        } else if let anchor = viewport.anchor,
+            let item = items.first(where: {
+                $0.frameKey.key == anchor.messageID && $0.frameKey.segment == anchor.segment
+            })
+        {
+            target = (item.id, .top)
         } else {
-            target = rows.first.map { ($0.id, .top) }
+            target = items.first.map { ($0.id, .top) }
         }
         // At most once per interval: right after it the lazy stack re-estimates the content, and a
         // second rescue before that settles would chase the estimate.
@@ -1501,25 +1261,24 @@ struct ChatTranscriptView: View {
         if let last = reader.lastRescue, now - last < .milliseconds(500) { return }
         guard let target, let proxy = reader.proxy else { return }
         reader.lastRescue = now
-        viewport.note("rescue blank viewport at \(Int(top)) to \(target.id.uuidString.prefix(4))")
+        viewport.note("rescue blank viewport at \(Int(top)) to \(target.id.message.uuidString.prefix(4))")
         // It lands on a later update, as a move the scroll view did not record: the next one is this
-        // scroll's, not the reader's. Its landing at the last row's end is the bottom while following:
-        // a further bottom request would chase the content's estimate past the rows.
+        // scroll's, not the reader's. Its landing at the last item's end is the bottom while following:
+        // a further bottom request would chase the content's estimate past the items.
         reader.proxyLanding = .init(request: viewport.request?.generation)
         proxy.scrollTo(target.id, anchor: target.edge)
     }
 
-    /// Where the content ends, estimated from the rows laid out, while the last row is not laid out;
+    /// Where the content ends, estimated from the items laid out, while the last item is not laid out;
     /// nil when it is, or when nothing is laid out to estimate from.
     private func estimatedContentEnd() -> CGFloat? {
-        let order = TranscriptActivity.rows(session.messages[messageRange]).map(\.id)
-        guard let last = order.last, reader.rowFrames[last] == nil else { return nil }
-        let laidOut = Self.ordered(
-            order.enumerated().compactMap { index, id in reader.rowFrames[id].map { (index, $0) } })
+        let items = transcriptItems
+        guard let last = items.last, frame(of: last) == nil else { return nil }
+        let laidOut = Self.ordered(items.enumerated().compactMap { index, item in frame(of: item).map { (index, $0) } })
         guard let nearest = laidOut.last else { return nil }
         let averageHeight = laidOut.map(\.1.height).reduce(0, +) / CGFloat(laidOut.count)
-        // Rows after the nearest one, then the trailing space and anything below it.
-        return nearest.1.maxY + CGFloat(order.count - 1 - nearest.0) * averageHeight
+        // Items after the nearest one, then the trailing space and anything below it.
+        return nearest.1.maxY + CGFloat(items.count - 1 - nearest.0) * averageHeight
             + Caprine.Activity.doubleLineHeight + 1 + 64
     }
 
@@ -1547,7 +1306,6 @@ struct ChatTranscriptView: View {
             reader.rowInstances.removeAll()
             reader.segmentFrames.removeAll()
             reader.segmentInstances.removeAll()
-            reader.segmentFrameWindows.removeAll()
             viewport.note("relayout \(layoutGeneration)")
             if viewport.readerOwnsViewport, let anchor = viewport.anchor {
                 viewport.restore(anchor)
@@ -1555,13 +1313,6 @@ struct ChatTranscriptView: View {
                 viewport.contentChanged()
             }
         }
-    }
-
-    /// The identity of the row that shows `key`, a message or its reasoning.
-    private func rowID(containing key: UUID) -> UUID? {
-        TranscriptActivity.rows(session.messages[messageRange]).first { row in
-            row.messages.contains { TranscriptSegmentOwner.key(key, belongsTo: $0.id) }
-        }?.id
     }
 
     /// The longest run of frames whose positions agree with their order, so a frame left from an earlier
@@ -1605,7 +1356,7 @@ struct ChatTranscriptView: View {
         // drastic size change while unmounted, the lazy stack can keep a row's old place and lay out
         // nothing where the viewport is; only a SwiftUI scroll to the row makes it lay that row out.
         // The reader sees nothing then, so there is no reader position for it to override.
-        if reader.rowFrames.isEmpty {
+        if reader.rowFrames.isEmpty && reader.segmentFrames.isEmpty {
             if reader.attempts >= 2 {
                 rescueBlankViewport()
             } else {
@@ -1616,7 +1367,7 @@ struct ChatTranscriptView: View {
         viewport.note(
             "awaiting \(missing) \(request.generation)"
                 + (TranscriptViewport.traces
-                    ? " rows \(reader.rowFrames.count) at \(Int(reader.metrics.offset)) of \(Int(reader.metrics.contentHeight))"
+                    ? " items \(reader.rowFrames.count + reader.segmentFrames.count) at \(Int(reader.metrics.offset)) of \(Int(reader.metrics.contentHeight))"
                     : ""))
         reader.awaitingFrame = true
         reader.executorTask = Task { @MainActor in
@@ -1643,15 +1394,17 @@ struct ChatTranscriptView: View {
     }
 }
 
-/// Prepares the formatted text of the admitted window's settled messages off the main actor, nearest
-/// the reader first. The lazy stack mounts a row only as it nears the viewport, and a row's own
-/// preparation is cancelled if it leaves first, so without this a row coming back into view would show
-/// its placeholder for a frame and then change height (ADR-0099).
+/// Prepares the formatted text of the settled messages near the reader off the main actor, nearest first.
+/// The lazy stack mounts an item only as it nears the viewport, so without this an item coming back into
+/// view would show its placeholder for a frame and then change height (ADR-0099).
 @MainActor enum TranscriptPrewarm {
     struct Key: Equatable {
-        let range: Range<Int>
+        let focus: Int?
         let count: Int
     }
+
+    /// Messages prepared on each side of the reader's.
+    static let reach = 20
 
     static func prepare(_ messages: [ChatMessage], around focus: Int) async {
         let order = messages.indices.sorted { abs($0 - focus) < abs($1 - focus) }
@@ -2004,16 +1757,13 @@ struct ProxyLanding: Equatable {
     var isAtBottom = true
     var isScrolling = false
     var metrics = TranscriptScrollMetrics()
-    /// Row frames in content coordinates, keyed by message identity, for rows laid out now.
+    /// Frames of a message's first item, or a split message's tail, in content coordinates, by key.
     var rowFrames: [UUID: CGRect] = [:]
     /// The mounted instance that reported each row's and segment's frame.
     var rowInstances: [UUID: UUID] = [:]
     var segmentInstances: [UUID: [Int: UUID]] = [:]
-    /// Frames of the shown segments of windowed long replies in content coordinates, by message and
-    /// segment index.
+    /// Frames of segment items in content coordinates, by key (a message or its reasoning) and segment.
     var segmentFrames: [UUID: [Int: CGRect]] = [:]
-    /// The window of segments each reply's reported frames were laid out in.
-    var segmentFrameWindows: [UUID: Range<Int>] = [:]
     /// The transcript's only scroll writer.
     let executor = TranscriptScrollExecutor()
     var executorTask: Task<Void, Never>?
@@ -2063,50 +1813,46 @@ struct ProxyLanding: Equatable {
         segmentFrames[id]?[segment].map { metrics.offset - $0.minY }
     }
 
-    /// The frame an anchor is measured from: its segment's when it names one, else its row's. A
-    /// segment's frame is used only when laid out in `heldWindow`, the window the owner holds for the
-    /// reply, if any.
-    func frame(of anchor: TranscriptViewport.Anchor, heldWindow: Range<Int>?) -> CGRect? {
+    /// The frame an anchor is measured from: its segment's when it names one, else its item's.
+    func frame(of anchor: TranscriptViewport.Anchor) -> CGRect? {
         guard let segment = anchor.segment else { return rowFrames[anchor.messageID] }
-        if let heldWindow, segmentFrameWindows[anchor.messageID] != heldWindow { return nil }
         return segmentFrames[anchor.messageID]?[segment]
     }
 
-    /// The reader's position: the topmost row still visible, and how far into it the viewport starts.
-    /// In a windowed long reply or expanded reasoning, the topmost segment still visible.
+    /// The reader's position: the topmost item still visible, and how far into it the viewport starts.
     func measuredAnchor() -> TranscriptViewport.Anchor? {
         let top = metrics.offset
-        // A lazy stack keeps rows it laid out elsewhere until they disappear: only a row on screen
+        // A lazy stack keeps items it laid out elsewhere until they disappear: only an item on screen
         // locates the reader.
         let bottom = top + metrics.layout.container.height
-        guard
-            let row = rowFrames.filter({ $0.value.maxY > top && $0.value.minY < bottom })
-                .min(by: { $0.value.minY < $1.value.minY })
-        else { return nil }
-        var topmost: (key: UUID, segment: Int, frame: CGRect)?
-        for key in [row.key, TranscriptSegmentOwner.reasoning(of: row.key)] {
-            for (segment, frame) in segmentFrames[key] ?? [:] where frame.maxY > top {
-                if topmost.map({ frame.minY < $0.frame.minY }) ?? true {
-                    topmost = (key: key, segment: segment, frame: frame)
-                }
-            }
+        var topmost: (key: UUID, segment: Int?, frame: CGRect)?
+        func consider(_ key: UUID, _ segment: Int?, _ frame: CGRect) {
+            guard frame.maxY > top, frame.minY < bottom, frame.height > 0 else { return }
+            if topmost.map({ frame.minY < $0.frame.minY }) ?? true { topmost = (key, segment, frame) }
         }
-        if let topmost {
-            return TranscriptViewport.Anchor(
-                messageID: topmost.key, offset: top - topmost.frame.minY, segment: topmost.segment)
+        for (key, frame) in rowFrames { consider(key, nil, frame) }
+        for (key, frames) in segmentFrames {
+            for (segment, frame) in frames { consider(key, segment, frame) }
         }
-        return TranscriptViewport.Anchor(messageID: row.key, offset: top - row.value.minY)
+        guard let topmost else { return nil }
+        return TranscriptViewport.Anchor(
+            messageID: topmost.key, offset: top - topmost.frame.minY, segment: topmost.segment)
+    }
+
+    /// Every laid-out item's frame, by key and segment.
+    var itemFrames: [(key: UUID, segment: Int?, frame: CGRect)] {
+        rowFrames.map { ($0.key, nil, $0.value) }
+            + segmentFrames.flatMap { key, frames in frames.map { (key, Optional($0.key), $0.value) } }
     }
 
     /// Whether the viewport already shows `target`: the anchor's top within 1 pt of its offset, or
     /// scrolled as far as the content allows toward it.
-    /// A segment anchor is never acknowledged against a window other than the one the owner holds.
-    func shows(_ target: TranscriptViewport.Target, heldWindow: (UUID) -> Range<Int>?) -> Bool {
+    func shows(_ target: TranscriptViewport.Target) -> Bool {
         switch target {
         case .bottom:
             return metrics.distanceFromBottom <= 1
         case .anchor(let anchor):
-            guard let frame = frame(of: anchor, heldWindow: heldWindow(anchor.messageID)) else { return false }
+            guard let frame = frame(of: anchor) else { return false }
             let error = frame.minY - metrics.offset + anchor.offset
             if abs(error) <= 1 { return true }
             // The target lies past an end of the scrollable range: the nearest end is fulfilment.
@@ -2120,6 +1866,7 @@ struct ProxyLanding: Equatable {
 private struct TranscriptMessageRow: View, Equatable {
     let message: ChatMessage
     let session: ChatSession
+    let part: TranscriptItem.Part
     let isLast: Bool
     let compactActivity: Bool
     let joinsPreviousTools: Bool
@@ -2132,7 +1879,7 @@ private struct TranscriptMessageRow: View, Equatable {
     @Environment(AppModel.self) private var model
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.message === rhs.message && lhs.session === rhs.session && lhs.isLast == rhs.isLast
+        lhs.message === rhs.message && lhs.session === rhs.session && lhs.part == rhs.part && lhs.isLast == rhs.isLast
             && lhs.compactActivity == rhs.compactActivity && lhs.joinsPreviousTools == rhs.joinsPreviousTools
             && lhs.joinsNextTools == rhs.joinsNextTools && lhs.activeToolID == rhs.activeToolID
             && lhs.canDeleteCompaction == rhs.canDeleteCompaction && lhs.canEdit == rhs.canEdit
@@ -2150,6 +1897,7 @@ private struct TranscriptMessageRow: View, Equatable {
             editMessage: canEdit
                 ? { text, original in
                     await model.editAndResend(message, text: text, previousText: original, in: session)
-                } : nil)
+                } : nil,
+            part: part)
     }
 }
