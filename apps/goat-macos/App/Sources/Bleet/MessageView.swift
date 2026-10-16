@@ -61,13 +61,14 @@ struct MessageView: View {
         }
     }
 
+    /// Focus reveals the row's actions instead of drawing the system focus ring around it.
     @ViewBuilder private var focusableContent: some View {
         if !leadsMessage {
             content
         } else if let transcriptKeyboardFocus {
-            content.focusable().focused(transcriptKeyboardFocus, equals: message.id)
+            content.focusable().focused(transcriptKeyboardFocus, equals: message.id).focusEffectDisabled()
         } else {
-            content.focusable().focused($keyboardFocused)
+            content.focusable().focused($keyboardFocused).focusEffectDisabled()
         }
     }
 

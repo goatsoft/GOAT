@@ -390,6 +390,7 @@ struct CodeBlockView: View {
         }
         .focusable(interactions: .activate)
         .focused($keyboardFocused)
+        .focusEffectDisabled()
         .onChange(of: keyboardFocused) {
             if keyboardFocused { keyboardNavigation = true }
         }
