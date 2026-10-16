@@ -123,12 +123,17 @@ actor CodeSyntaxHighlighter {
     /// Bounded per-source count of preparations started; lets tests prove a warm consumer skipped the work.
     private var preparationCounts: [Int: Int] = [:]
     private var themes: [SyntaxPalette: HighlightTheme] = [:]
+    static let plainLanguages: Set<String> = ["text", "plain", "plaintext"]
 
     func preparations(of source: String) -> Int { preparationCounts[source.hashValue, default: 0] }
 
-    func render(_ source: String, language: String?, dark: Bool, palette: SyntaxPalette? = nil) async throws
-        -> AttributedString
-    {
+    /// Highlights `source` in `language`. `text`, `plain` and `plaintext` ask for no highlighting. Without a
+    /// language the code is auto-detected, which runs every grammar over it, so a caller whose code is still
+    /// growing passes `detectsLanguage: false` and gets plain text until it is complete: detecting again
+    /// on every streamed token pegged a CPU and could change the detected language, and its colours, mid-block.
+    func render(
+        _ source: String, language: String?, dark: Bool, palette: SyntaxPalette? = nil, detectsLanguage: Bool = true
+    ) async throws -> AttributedString {
         try Task.checkCancellation()
         if preparationCounts.count >= 512 { preparationCounts.removeAll(keepingCapacity: true) }
         preparationCounts[source.hashValue, default: 0] += 1
@@ -142,10 +147,13 @@ actor CodeSyntaxHighlighter {
         let alias = language?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
 
         let result: HighlightResult
-        if let alias, !alias.isEmpty, !["text", "plain", "plaintext"].contains(alias) {
+        if let alias, !alias.isEmpty {
+            guard !Self.plainLanguages.contains(alias) else { return AttributedString(source) }
             result = Highlighter.shared.highlight(core, as: alias)
-        } else {
+        } else if detectsLanguage {
             result = await Highlighter.shared.highlightAuto(core)
+        } else {
+            return AttributedString(source)
         }
 
         // Once tokenized, the result is returned even if its caller was superseded: colouring is cheap
@@ -433,7 +441,7 @@ struct PreparedCodeText: View {
                 }
                 do {
                     let result = try await CodeSyntaxHighlighter.shared.render(
-                        code, language: language, dark: dark, palette: palette)
+                        code, language: language, dark: dark, palette: palette, detectsLanguage: !isStreaming)
                     // Recorded even when newer text superseded this task: it still colours this
                     // prefix, so highlighting keeps up while tokens arrive faster than it runs.
                     if isStreaming {

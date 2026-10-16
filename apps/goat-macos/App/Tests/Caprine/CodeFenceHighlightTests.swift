@@ -299,6 +299,25 @@ extension AppTests.Caprine {
             #expect(String(pastureText.characters) == code, "Highlighting never changes the code")
         }
 
+        /// `text`, `plain` and `plaintext` mean no highlighting. An untagged fence is detected only once it is
+        /// complete: detecting on every streamed token ran every grammar over the growing block.
+        @Test func plainAndStreamingUntaggedCodeSkipDetection() async throws {
+            let code = "func greet() -> String {\n    let name = \"goat\"\n    return name\n}"
+            func colored(_ text: AttributedString) -> Bool { text.runs.contains { $0.appKit.foregroundColor != nil } }
+            for plain in ["text", "plain", "plaintext", " Plaintext "] {
+                let output = try await CodeSyntaxHighlighter.shared.render(code, language: plain, dark: false)
+                #expect(String(output.characters) == code)
+                #expect(!colored(output), "\(plain) is not highlighted")
+            }
+            let streaming = try await CodeSyntaxHighlighter.shared.render(
+                code, language: nil, dark: false, detectsLanguage: false)
+            #expect(String(streaming.characters) == code)
+            #expect(!colored(streaming), "A streaming untagged fence is not auto-detected")
+            let complete = try await CodeSyntaxHighlighter.shared.render(code, language: nil, dark: false)
+            #expect(String(complete.characters) == code)
+            #expect(colored(complete), "A complete untagged fence is auto-detected")
+        }
+
         /// The transcript rebuilds a streaming fence's view as text arrives. A rebuilt view has no
         /// highlighting of its own, so it starts from the block's latest recorded colours instead of
         /// flashing plain source on every token.
