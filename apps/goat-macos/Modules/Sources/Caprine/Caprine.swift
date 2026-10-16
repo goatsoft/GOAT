@@ -230,6 +230,9 @@ public struct NeonRing: View {
             TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
                 let phase = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 3) / 3
                 ring(start: .degrees(phase * 360), opacity: 1, lineWidth: 1.5)
+                    // Rasterized on the GPU: CoreGraphics drew the conic sweep on the main thread every frame, a
+                    // fifth of its time while a reply streamed on an M1 (0.1.4 RC).
+                    .drawingGroup()
                     .shadow(color: tokens.glow.opacity(0.55), radius: 7)
             }
         } else {
