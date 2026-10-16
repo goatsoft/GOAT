@@ -8,9 +8,9 @@ The current release identity comes from [release.json](../apps/goat-macos/releas
 
 | Surface | Current release value |
 |---|---|
-| About and Activity Log, either presentation mode | <!--stamp:label-->`0.1.3 (Kid)`<!--/stamp:label--> |
-| Website label and GitHub release title | <!--stamp:title-->`GOAT 0.1.3 (Kid)`<!--/stamp:title--> |
-| Bundle version / tag / DMG filename | <!--stamp:identity-->`0.1.3` / `v0.1.3` / `GOAT-0.1.3.dmg`<!--/stamp:identity--> |
+| About and Activity Log, either presentation mode | <!--stamp:label-->`0.1.4 (Kid)`<!--/stamp:label--> |
+| Website label and GitHub release title | <!--stamp:title-->`GOAT 0.1.4 (Kid)`<!--/stamp:title--> |
+| Bundle version / tag / DMG filename | <!--stamp:identity-->`0.1.4` / `v0.1.4` / `GOAT-0.1.4.dmg`<!--/stamp:identity--> |
 | Secondary UI diagnostics | `Development · build <number>` or `Candidate · build <number>` |
 
 Only a zero patch is omitted from display; a nonzero patch is shown in full. Choose codenames from [CODENAMES.md](CODENAMES.md). Patch candidates preserve their release-line codename. Versions change for releases, not milestones or rebuilds.

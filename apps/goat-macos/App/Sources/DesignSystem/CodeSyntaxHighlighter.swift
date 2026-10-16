@@ -123,12 +123,17 @@ actor CodeSyntaxHighlighter {
     /// Bounded per-source count of preparations started; lets tests prove a warm consumer skipped the work.
     private var preparationCounts: [Int: Int] = [:]
     private var themes: [SyntaxPalette: HighlightTheme] = [:]
+    static let plainLanguages: Set<String> = ["text", "plain", "plaintext"]
 
     func preparations(of source: String) -> Int { preparationCounts[source.hashValue, default: 0] }
 
-    func render(_ source: String, language: String?, dark: Bool, palette: SyntaxPalette? = nil) async throws
-        -> AttributedString
-    {
+    /// Highlights `source` in `language`. `text`, `plain` and `plaintext` ask for no highlighting. Without a
+    /// language the code is auto-detected, which runs every grammar over it, so a caller whose code is still
+    /// growing passes `detectsLanguage: false` and gets plain text until it is complete: detecting again
+    /// on every streamed token pegged a CPU and could change the detected language, and its colours, mid-block.
+    func render(
+        _ source: String, language: String?, dark: Bool, palette: SyntaxPalette? = nil, detectsLanguage: Bool = true
+    ) async throws -> AttributedString {
         try Task.checkCancellation()
         if preparationCounts.count >= 512 { preparationCounts.removeAll(keepingCapacity: true) }
         preparationCounts[source.hashValue, default: 0] += 1
@@ -142,13 +147,18 @@ actor CodeSyntaxHighlighter {
         let alias = language?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
 
         let result: HighlightResult
-        if let alias, !alias.isEmpty, !["text", "plain", "plaintext"].contains(alias) {
+        if let alias, !alias.isEmpty {
+            guard !Self.plainLanguages.contains(alias) else { return AttributedString(source) }
             result = Highlighter.shared.highlight(core, as: alias)
-        } else {
+        } else if detectsLanguage {
             result = await Highlighter.shared.highlightAuto(core)
+        } else {
+            return AttributedString(source)
         }
 
-        try Task.checkCancellation()
+        // Once tokenized, the result is returned even if its caller was superseded: colouring is cheap
+        // next to tokenizing, and a streaming block keeps it as its latest colours. Callers check
+        // cancellation before using it as their own.
 
         let ns = NSMutableAttributedString(string: core)
         let fullLength = (core as NSString).length
@@ -242,9 +252,50 @@ final class HighlightCache {
         return count
     }
 
+    /// The latest highlighting of each block while it streams. The transcript rebuilds a streaming
+    /// fence's view as text arrives, and a rebuilt view has no highlighting of its own: without this it
+    /// would show plain source until the next highlight returned, so the colours flashed on and off
+    /// with every token. A block that grows from a recorded prefix shows that prefix coloured and only
+    /// the new tail plain. Bounded; a block's newer prefix replaces its older one.
+    struct StreamingPrefix: Sendable {
+        let code: String
+        let language: String?
+        let dark: Bool
+        let palette: SyntaxPalette?
+        let text: AttributedString
+    }
+
+    static let streamingPrefixLimit = 8
+    private var streamingPrefixes: [StreamingPrefix] = []
+
+    func noteStreaming(
+        code: String, language: String?, dark: Bool, palette: SyntaxPalette? = nil, text: AttributedString
+    ) {
+        streamingPrefixes.removeAll {
+            $0.language == language && $0.dark == dark && $0.palette == palette && code.hasPrefix($0.code)
+        }
+        streamingPrefixes.append(
+            StreamingPrefix(code: code, language: language, dark: dark, palette: palette, text: text))
+        if streamingPrefixes.count > Self.streamingPrefixLimit {
+            streamingPrefixes.removeFirst(streamingPrefixes.count - Self.streamingPrefixLimit)
+        }
+    }
+
+    /// The longest recorded highlighting of a prefix of `code` in the same language and colours.
+    func streamingPrefix(of code: String, language: String?, dark: Bool, palette: SyntaxPalette? = nil)
+        -> StreamingPrefix?
+    {
+        streamingPrefixes
+            .filter {
+                $0.language == language && $0.dark == dark && $0.palette == palette && code.hasPrefix($0.code)
+            }
+            .max { $0.code.utf8.count < $1.code.utf8.count }
+    }
+
     func removeAll() {
         cache.removeAllObjects()
         lineCounts.removeAllObjects()
+        streamingPrefixes.removeAll()
     }
 }
 
@@ -288,9 +339,40 @@ struct PreparedCodeText: View {
         {
             return cached.text
         }
+        // A view rebuilt while its block streams starts from the block's latest colours.
+        if renderedKey != key,
+            let prefix = HighlightCache.shared.streamingPrefix(
+                of: code, language: language, dark: dark, palette: palette),
+            prefix.code.utf8.count
+                > coloredLength(
+                    of: code, language: language, dark: dark, palette: palette, rendered: rendered,
+                    renderedKey: renderedKey)
+        {
+            var combined = prefix.text
+            combined.append(AttributedString(code.dropFirst(prefix.code.count)))
+            return combined
+        }
         return resolveText(
             code: code, language: language, dark: dark, palette: palette, rendered: rendered,
             renderedKey: renderedKey)
+    }
+
+    /// How many leading UTF-8 bytes of `code` the view's own highlighting colours, as `resolveText`
+    /// would show it.
+    static func coloredLength(
+        of code: String,
+        language: String?,
+        dark: Bool,
+        palette: SyntaxPalette?,
+        rendered: AttributedString?,
+        renderedKey: CacheKey?
+    ) -> Int {
+        guard rendered != nil, let prevKey = renderedKey, prevKey.language == language else { return 0 }
+        if prevKey.code == code { return code.utf8.count }
+        if prevKey.dark == dark, prevKey.palette == palette, code.hasPrefix(prevKey.code) {
+            return prevKey.code.utf8.count
+        }
+        return 0
     }
 
     static func resolveText(
@@ -359,7 +441,12 @@ struct PreparedCodeText: View {
                 }
                 do {
                     let result = try await CodeSyntaxHighlighter.shared.render(
-                        code, language: language, dark: dark, palette: palette)
+                        code, language: language, dark: dark, palette: palette, detectsLanguage: !isStreaming)
+                    // Recorded even when newer text superseded this task: it still colours this
+                    // prefix, so highlighting keeps up while tokens arrive faster than it runs.
+                    if isStreaming {
+                        cache.noteStreaming(code: code, language: language, dark: dark, palette: palette, text: result)
+                    }
                     try Task.checkCancellation()
                     if !isStreaming {
                         let lines = cache.lineCount(for: code)

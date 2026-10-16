@@ -238,8 +238,19 @@ struct ToolDiffView: View {
     let rawJSON: String
     var maxHeight: CGFloat = 220
     var allowsRawToggle: Bool = true
+    /// Keeps the reader's diff or raw choice in `TranscriptDisclosureStore`, so a transcript row that
+    /// unmounts while scrolled away shows the same view when it comes back.
+    var choiceKey: String? = nil
 
-    @State private var showRaw = false
+    @State private var showRawChoice: Bool?
+    private var showRaw: Bool {
+        showRawChoice ?? choiceKey.flatMap(TranscriptDisclosureStore.shared.isOpen) ?? false
+    }
+
+    private func setShowRaw(_ shows: Bool) {
+        showRawChoice = shows
+        if let choiceKey { TranscriptDisclosureStore.shared.set(shows, for: choiceKey) }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -282,7 +293,7 @@ struct ToolDiffView: View {
 
             if allowsRawToggle {
                 Button {
-                    showRaw.toggle()
+                    setShowRaw(!showRaw)
                 } label: {
                     Image(systemName: showRaw ? "doc.text.magnifyingglass" : "curlybraces")
                         .font(Caprine.Activity.badgeFont)
@@ -322,7 +333,7 @@ struct ToolDiffView: View {
             Text("Diff truncated to first \(diff.lines.count) of \(diff.totalLinesCount) lines.")
             if allowsRawToggle {
                 Button("Show raw") {
-                    showRaw = true
+                    setShowRaw(true)
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(model.theme.tokens.tint)

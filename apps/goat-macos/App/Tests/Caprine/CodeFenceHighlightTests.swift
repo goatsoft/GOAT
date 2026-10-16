@@ -299,6 +299,73 @@ extension AppTests.Caprine {
             #expect(String(pastureText.characters) == code, "Highlighting never changes the code")
         }
 
+        /// `text`, `plain` and `plaintext` mean no highlighting. An untagged fence is detected only once it is
+        /// complete: detecting on every streamed token ran every grammar over the growing block.
+        @Test func plainAndStreamingUntaggedCodeSkipDetection() async throws {
+            let code = "func greet() -> String {\n    let name = \"goat\"\n    return name\n}"
+            func colored(_ text: AttributedString) -> Bool { text.runs.contains { $0.appKit.foregroundColor != nil } }
+            for plain in ["text", "plain", "plaintext", " Plaintext "] {
+                let output = try await CodeSyntaxHighlighter.shared.render(code, language: plain, dark: false)
+                #expect(String(output.characters) == code)
+                #expect(!colored(output), "\(plain) is not highlighted")
+            }
+            let streaming = try await CodeSyntaxHighlighter.shared.render(
+                code, language: nil, dark: false, detectsLanguage: false)
+            #expect(String(streaming.characters) == code)
+            #expect(!colored(streaming), "A streaming untagged fence is not auto-detected")
+            let complete = try await CodeSyntaxHighlighter.shared.render(code, language: nil, dark: false)
+            #expect(String(complete.characters) == code)
+            #expect(colored(complete), "A complete untagged fence is auto-detected")
+        }
+
+        /// The transcript rebuilds a streaming fence's view as text arrives. A rebuilt view has no
+        /// highlighting of its own, so it starts from the block's latest recorded colours instead of
+        /// flashing plain source on every token.
+        @Test @MainActor func aRebuiltStreamingBlockKeepsItsLatestColours() throws {
+            let light = SyntaxPalette(theme: try Self.theme("light"))
+            let marker = UUID().uuidString
+            let first = "let a = \"\(marker)\"\n"
+            let firstText = AttributedString("coloured first line\n")
+            HighlightCache.shared.noteStreaming(
+                code: first, language: "swift", dark: false, palette: light, text: firstText)
+            defer { HighlightCache.shared.removeAll() }
+
+            let grown = first + "let b = 2"
+            let rebuilt = PreparedCodeText.displayText(
+                code: grown, language: "swift", dark: false, palette: light, isStreaming: true, rendered: nil,
+                renderedKey: nil)
+            #expect(String(rebuilt.characters) == "coloured first line\nlet b = 2")
+
+            // A longer own highlighting wins over a shorter record.
+            let ownKey = PreparedCodeText.CacheKey(code: grown, language: "swift", dark: false, palette: light)
+            let own = AttributedString("own")
+            #expect(
+                PreparedCodeText.displayText(
+                    code: grown + "\n", language: "swift", dark: false, palette: light, isStreaming: true,
+                    rendered: own, renderedKey: ownKey) == own + AttributedString("\n"))
+
+            // A newer prefix replaces the older one; other languages and schemes never match.
+            let grownText = AttributedString("coloured both lines")
+            HighlightCache.shared.noteStreaming(
+                code: grown, language: "swift", dark: false, palette: light, text: grownText)
+            #expect(
+                HighlightCache.shared.streamingPrefix(
+                    of: grown + "\n", language: "swift", dark: false, palette: light)?.text == grownText)
+            #expect(
+                HighlightCache.shared.streamingPrefix(of: grown, language: "python", dark: false, palette: light)
+                    == nil)
+            #expect(
+                HighlightCache.shared.streamingPrefix(of: grown, language: "swift", dark: true, palette: light)
+                    == nil)
+            // Text that no longer extends the record (an edit or a replacement) shows its own source.
+            #expect(
+                String(
+                    PreparedCodeText.displayText(
+                        code: "let c = 3", language: "swift", dark: false, palette: light, isStreaming: true,
+                        rendered: nil, renderedKey: nil
+                    ).characters) == "let c = 3")
+        }
+
         /// The cache keys on the palette; a theme change keeps the previous colours on the first frame
         /// until the new ones are ready, and an evicted entry falls back to source.
         @Test @MainActor func highlightCacheSeparatesPalettesAndReusesTheFirstFrame() throws {

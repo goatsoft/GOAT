@@ -1,5 +1,66 @@
 # Release notes
 
+## Kid 0.1.4
+
+GOAT 0.1.4 makes long replies and long conversations easier to read and work with. Large answers keep their formatting, stored chats open with recent messages first, and code, tool edits and themes are clearer. It also adds a bounded way for a model to hand a read-only investigation to a smaller local worker.
+
+This release keeps **oMLX 0.6.4** as the qualified baseline.
+
+### Faster transcripts
+
+- The whole conversation scrolls as one continuous transcript, from the first message to the end of the longest reply, with nothing to page through. Only what is near the screen is laid out, so long chats and long replies stay responsive while a reply streams. On a Mac Studio running macOS 26, streaming 2 MiB of open reasoning took about 24 seconds instead of about 154.
+- Your place is kept when earlier messages load above it, when a reply grows below it and when the window is resized.
+- The streaming cursor shows only on the reply that is still arriving.
+
+### Long replies keep their formatting
+
+- Answers up to 2 MiB render as formatted Markdown instead of plain text after 8 KiB, and longer text stays selectable plain text. All of it scrolls in place.
+- A finishing reply no longer jumps. Its footer, **Regenerate** and **Continue response** are laid out while it streams.
+- Reasoning is folded or shown in full: finished reasoning folds to one "Thought for 12s" line, and opening it shows all of it in place. Your choice is remembered. **Fold reasoning after replies** in Appearance settings turns this off.
+- Prose keeps a comfortable reading width in a centred column. Wide tables scroll sideways, and display math appears as labelled, selectable source.
+
+### Long conversations open at the latest messages
+
+- A stored chat opens with its latest 40 messages and loads more as you scroll, keeping your place. Generating, retrying and editing still use the full conversation.
+- **Find in conversation…** searches the whole chat and shows a highlighted excerpt for each match.
+- New reader actions include **Copy last reply**, **Export Markdown…**, editing a sent message with **Resend**, and **Retry reply**. **Regenerate** now works on replies that used tools.
+- Command-F opens Find, Shift-Command-C copies the last reply, Command-End jumps to the latest message, and Option-Command-Up/Down move between the conversation and the composer.
+
+### Clearer code, tool edits and colours
+
+- Code is highlighted natively, including while it streams, in colours taken from your theme and adjusted to stay readable.
+- Code blocks have a compact header with language, filename, line count and copy. Blocks over 40 lines collapse. **Wrap code** in Appearance settings sets the default, and each block can override it.
+- File edits from tools appear as line diffs in the transcript and approval sheets, with a toggle back to the raw request. **Tool diffs** in Appearance settings turns this off.
+- User themes gain **Edit Colours…** with a picker for each colour. Pens use the same picker. Existing colours are unchanged.
+
+### Bounded read-only delegation
+
+- With **Subagents** set up under **Settings → GOATed → Extensions**, a model can hand a read-only investigation of the current Pen to a local worker model and continue with its summary and verified citations. The worker can only list, read and search files.
+- Delegation has fixed limits on time, rounds and output. If the worker is missing or not loaded, GOAT says so instead of switching models.
+- The composer supports macOS **Writing Tools** when you invoke them.
+
+### Testing and developer experience
+
+- CI runs package tests, app tests and the Release build in parallel and reuses Xcode's compilation cache. A warm verification run takes about 6 minutes instead of about 19.
+- Hosted test runs summarise known WebKit framework messages and keep complete logs. `make lint` rejects raw colours in transcript code.
+- An opt-in macOS 26 qualification job measures transcript streaming, paging and reflow.
+
+### Installation and upgrade
+
+GOAT 0.1.4 requires Apple Silicon and macOS 26 or later. Download the signed, notarized [latest release](https://github.com/goatsoft/GOAT/releases/latest) with its manifest and checksums.
+
+An ordinary upgrade replaces the app without resetting chats, engine profiles, memory, permissions or Pens. Finish active work before quitting GOAT to install the update, and keep a [backup of local data](reference/STORAGE.md#back-up-safely).
+
+Confirming **Uninstall** under **Settings → General → Manage** now quits GOAT itself, as **Quit GOAT** does, and removal starts once it has closed. Previously GOAT stayed open and waited for you to quit, which looked as if nothing had happened. GOAT still refuses to uninstall while a reply is streaming, a Lead is queued, an approval is pending or extensions are changing.
+
+### Qualification and known limits
+
+The official Release-channel package is built from the immutable `v0.1.4` source. The release workflow verifies the complete Release suite, website and docs, Developer ID publisher identity, hardened runtime, notarization, stapling and artifact checksums. See the [release metadata](https://github.com/goatsoft/GOAT/releases/latest) for the exact source revision and artifact hashes.
+
+On macOS 26, the reader is slow when reasoning is expanded while a very large (multi-MiB) reply streams. CI measured about 180 to 260 seconds for 2 MiB of expanded reasoning. The default collapsed reasoning view is not affected. Inline previews reload when you scroll back to them, so interactive page state is not kept. Subagent delegation needs a supported Qwen worker, loaded and pinned, on a local or LAN engine. Writing Tools is a macOS feature and, depending on your system settings, may process text outside GOAT. Full keyboard and VoiceOver qualification of the new reader is still open; see [Known issues](KNOWN-ISSUES.md).
+
+The previously reported difference between a 37 tok/s server reading and a 2-3 tok/s live display has not been reproduced. This release does not claim an engine-speed improvement. Model and tool results apply to the tested configurations, including stable oMLX 0.6.4, rather than every compatible server or workload.
+
 ## Kid 0.1.3
 
 GOAT 0.1.3 makes local-model work easier to set up, easier to follow and more dependable over a long session. It brings model management into the app, keeps large conversations responsive and gives coding workflows clearer recovery when a model or engine has a difficult turn.
