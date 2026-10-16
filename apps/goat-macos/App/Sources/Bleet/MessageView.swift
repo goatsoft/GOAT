@@ -838,7 +838,7 @@ private struct ExternalToolCallCard: View {
             .accessibilityIdentifier("tool-event-" + event.id)
             .help("\(event.server) · \(event.tool)")
             if expanded {
-                ToolCallDetails(event: event, penName: penName)
+                ToolCallDetails(event: event, messageID: messageID, penName: penName)
             }
         }
         .padding(.vertical, 4)
@@ -965,6 +965,8 @@ private struct ToolCallStateIndicator: View {
 private struct ToolCallDetails: View {
     @Environment(AppModel.self) private var model
     let event: ToolEventSnapshot
+    /// The reply holding the call, so the reader's diff or raw choice survives row recreation.
+    var messageID: UUID? = nil
     var penName: String? = nil
 
     private var presentation: ToolEventPresentation {
@@ -990,7 +992,9 @@ private struct ToolCallDetails: View {
                 if hasArguments {
                     labeled("Arguments")
                     if model.showToolDiffs, let diff = presentation.diff {
-                        ToolDiffView(diff: diff, rawJSON: event.arguments)
+                        ToolDiffView(
+                            diff: diff, rawJSON: event.arguments,
+                            choiceKey: messageID.map { TranscriptDisclosureStore.key(for: event, in: $0) + " raw" })
                     } else {
                         JSONTreeView(raw: event.arguments)
                     }
