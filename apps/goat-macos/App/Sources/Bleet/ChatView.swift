@@ -143,9 +143,11 @@ struct ChatView: View {
             if let match = revealRequest?.match {
                 TranscriptSearchResultBanner(match: match) { revealRequest = nil }
             }
-            ChatTranscriptView(
-                session: session, revealRequest: revealRequest, focusRequest: transcriptFocusRequest
-            ).id(session.id)
+            TranscriptViewportLayout {
+                ChatTranscriptView(
+                    session: session, revealRequest: revealRequest, focusRequest: transcriptFocusRequest
+                ).id(session.id)
+            }
             Composer(
                 session: session,
                 draft: $draft,
@@ -1185,5 +1187,22 @@ private struct TranscriptSearchResultBanner: View {
 
     private func singleLine(_ text: String) -> String {
         text.components(separatedBy: .newlines).joined(separator: " ")
+    }
+}
+
+/// Gives the transcript the space its column offers without measuring it. A scroll view's size depends
+/// on its content, so every row the lazy stack mounted while the reader scrolled invalidated the chat
+/// column's stack, which measured the transcript again under several trial proposals and laid out its
+/// visible rows each time (a fifth of main-thread time while scrolling the 0.1.4 RC). The transcript only
+/// ever fills what it is given, so its size never depends on its rows.
+struct TranscriptViewportLayout: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        CGSize(width: proposal.width ?? 0, height: proposal.height ?? 0)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for subview in subviews {
+            subview.place(at: bounds.origin, anchor: .topLeading, proposal: ProposedViewSize(bounds.size))
+        }
     }
 }
