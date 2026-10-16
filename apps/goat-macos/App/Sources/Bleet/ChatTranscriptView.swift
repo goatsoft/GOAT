@@ -279,6 +279,10 @@ struct ChatTranscriptView: View {
     @State private var layoutGeneration = 0
     /// A relayout waiting for the sheets and popovers rows present to close.
     @State private var relayoutDeferred = false
+    /// A window resize drag is in progress: rows reflow to each width, but the relayout that rebuilds them
+    /// waits for the release, so a slow drag never rebuilds the transcript mid-drag.
+    @State private var windowInLiveResize = false
+    @State private var relayoutAfterResize = false
     @State private var reflowTask: Task<Void, Never>?
 
     /// Distance from the bottom within which the latest content counts as shown, for both the
@@ -599,6 +603,15 @@ struct ChatTranscriptView: View {
                 }
                 .onChange(of: session.isStreaming) { viewport.contentChanged() }
                 .onChange(of: ReflowKey(fontSize: model.chatFontSize, column: readingColumn)) { scheduleRelayout() }
+                .onReceive(NotificationCenter.default.publisher(for: NSWindow.willStartLiveResizeNotification)) { _ in
+                    windowInLiveResize = true
+                }
+                .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEndLiveResizeNotification)) { _ in
+                    windowInLiveResize = false
+                    guard relayoutAfterResize else { return }
+                    relayoutAfterResize = false
+                    scheduleRelayout()
+                }
                 .onChange(of: viewport.layoutHolds) {
                     guard viewport.layoutHolds == 0, relayoutDeferred else { return }
                     relayoutDeferred = false
@@ -1504,11 +1517,19 @@ struct ChatTranscriptView: View {
     }
 
     /// Gives the lazy stack a new identity once a reflow settles, then puts the reader's anchor back
-    /// or follows to the end. A window resize settles after its last change.
+    /// or follows to the end. A window resize drag lays out again once, on release.
     private func scheduleRelayout() {
         reflowTask?.cancel()
+        guard !windowInLiveResize else {
+            relayoutAfterResize = true
+            return
+        }
         reflowTask = Task { @MainActor in
             do { try await Task.sleep(for: .milliseconds(150)) } catch { return }
+            guard !windowInLiveResize else {
+                relayoutAfterResize = true
+                return
+            }
             guard !reader.isScrolling else { return }
             guard viewport.layoutHolds == 0 else {
                 relayoutDeferred = true
